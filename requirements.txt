@@ -1,5 +1,5 @@
 requests
-python-dotenv 
+python-dotenv==0.19.2
 beautifulsoup4
 mysql-connector-python
 openai
