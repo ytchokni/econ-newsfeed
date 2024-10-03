@@ -31,50 +31,60 @@ class Database:
                 conn.close()
 
     @staticmethod
+    def get_connection():
+        """
+        Create and return a new database connection.
+        """
+        try:
+            conn = mysql.connector.connect(**db_config)
+            return conn
+        except Error as e:
+            logging.error(f"Error connecting to the database: {e}")
+            return None
+
+    @staticmethod
     def execute_query(query, params=None):
         """
         Execute a query with optional parameters and commit the changes.
-        Returns the last inserted row ID.
+        Returns the last inserted row ID or None if there's an error.
         """
         try:
-            
-            with mysql.connector.connect(**db_config) as conn:
+            with Database.get_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute(query, params)
                     conn.commit()
                     return cursor.lastrowid
         except Error as e:
-            logging.error(f"Database error: {e}")
+            logging.error(f"Database error in execute_query: {e}")
             return None
 
     @staticmethod
     def fetch_all(query, params=None):
         """
         Execute a query with optional parameters and fetch all results.
-        Returns a list of tuples containing the results.
+        Returns a list of tuples containing the results or an empty list if there's an error.
         """
         try:
-            with mysql.connector.connect(**db_config) as conn:
+            with Database.get_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute(query, params)
                     return cursor.fetchall()
         except Error as e:
-            logging.error(f"Database error: {e}")
+            logging.error(f"Database error in fetch_all: {e}")
             return []
 
     @staticmethod
     def fetch_one(query, params=None):
         """
-        Execute a query with optional parameters and fetch one result.
-        Returns a tuple containing the result.
+        Execute a SELECT query and fetch one result.
         """
         try:
-            with mysql.connector.connect(**db_config) as conn:
+            with Database.get_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute(query, params)
                     return cursor.fetchone()
         except Error as e:
-            logging.error(f"Database error: {e}")
+            logging.error(f"Database error in fetch_one: {e}")
             return None
 
     @staticmethod
@@ -106,7 +116,6 @@ class Database:
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     url VARCHAR(255),
                     title TEXT,
-                    authors TEXT,
                     year VARCHAR(4),
                     venue TEXT,
                     timestamp DATETIME
@@ -123,6 +132,16 @@ class Database:
                     researcher_id INT,
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id),
                     FOREIGN KEY (url_id) REFERENCES researcher_urls(id)
+                )
+            """,
+            "authorship": """
+                CREATE TABLE IF NOT EXISTS authorship (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    researcher_id INT,
+                    publication_id INT,
+                    author_order INT,
+                    FOREIGN KEY (researcher_id) REFERENCES researchers(id),
+                    FOREIGN KEY (publication_id) REFERENCES publications(id)
                 )
             """
         }
@@ -142,10 +161,10 @@ class Database:
             WHERE first_name = %s AND last_name = %s
         """
         params = (first_name, last_name)
-        result = Database.fetch_all(query, params)
+        result = Database.fetch_one(query, params)
 
         if result:
-            return result[0][0]
+            return result[0]
         else:
             insert_query = """
                 INSERT INTO researchers (first_name, last_name, position, affiliation)

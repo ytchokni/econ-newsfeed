@@ -15,25 +15,28 @@ def import_data():
 def download_htmls():
     """Download HTML content for all URLs in the researcher_urls table."""
     researcher_urls = Researcher.get_all_researcher_urls()
-    for url_id, researcher_id, url in researcher_urls:
-        logging.info(f"Downloading HTML for URL ID: {url_id}, URL: {url}")
-        HTMLFetcher.fetch_and_save_if_changed(url_id, url, researcher_id)
+    for id, researcher_id, url, page_type in researcher_urls:
+        logging.info(f"Downloading HTML for URL ID: {id}, URL: {url}, Page Type: {page_type}")
+        HTMLFetcher.fetch_and_save_if_changed(id, url, researcher_id)
 
 def extract_data_from_htmls():
     """Extract publication data from downloaded HTML content."""
     researcher_urls = Researcher.get_all_researcher_urls()
-    for url_id, researcher_id, url in researcher_urls:
-        logging.info(f"Extracting data from HTML for URL ID: {url_id}, URL: {url}")
-        html_content = HTMLFetcher.get_latest_html(url_id)
-        if html_content:
-            extracted_publications = Publication.extract_publications(html_content, url)
-            if extracted_publications:
-                Publication.save_publications(url, extracted_publications, researcher_id)
+    for id, researcher_id, url, page_type in researcher_urls:
+        if page_type in ["PUB", "WP"]:
+            logging.info(f"Extracting data from HTML for URL ID: {id}, URL: {url}, Page Type: {page_type}")
+            html_content = HTMLFetcher.get_latest_text(id)
+            if html_content:
+                extracted_publications = Publication.extract_publications(html_content, url)
+                if extracted_publications:
+                    Publication.save_publications(url, extracted_publications)
+                else:
+                    logging.warning(f"No publications extracted for URL ID: {id}, URL: {url}")
             else:
-                logging.warning(f"No publications extracted for URL ID: {url_id}, URL: {url}")
+                logging.error(f"No HTML content found for URL ID: {id}, URL: {url}")
         else:
-            logging.error(f"No HTML content found for URL ID: {url_id}, URL: {url}")
-
+            logging.info(f"Skipping extraction for URL ID: {id}, URL: {url}, Page Type: {page_type}")
+2
 def main():
     """Main function to handle user input and execute the appropriate actions."""
     actions = {

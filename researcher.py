@@ -1,3 +1,4 @@
+import logging
 from database import Database
 
 class Researcher:
@@ -35,10 +36,7 @@ class Researcher:
     @staticmethod
     def get_all_researcher_urls():
         """Retrieve all researcher URLs from the database."""
-        query = """
-            SELECT id, researcher_id, url
-            FROM researcher_urls
-        """
+        query = "SELECT id, researcher_id, url, page_type FROM researcher_urls"
         return Database.fetch_all(query)
 
     @staticmethod
@@ -53,6 +51,15 @@ class Researcher:
 
     @staticmethod
     def add_url_to_researcher(researcher_id, url):
-        """Associate a URL with a researcher in the database."""
-        query = "INSERT INTO researcher_urls (researcher_id, url) VALUES (%s, %s) RETURNING id"
-        return Database.execute_query(query, (researcher_id, url))
+        """Associate a URL with a researcher in the database, preventing duplication."""
+        # First, check if the URL already exists for this researcher
+        check_query = "SELECT id FROM researcher_urls WHERE researcher_id = %s AND url = %s"
+        existing_url = Database.fetch_one(check_query, (researcher_id, url))
+        
+        if existing_url:
+            logging.info(f"URL {url} already exists for researcher {researcher_id}. Skipping insertion.")
+            return existing_url[0]
+        else:
+            # If the URL doesn't exist, insert it
+            insert_query = "INSERT INTO researcher_urls (researcher_id, url) VALUES (%s, %s) RETURNING id"
+            return Database.execute_query(insert_query, (researcher_id, url))

@@ -5,65 +5,62 @@ from openai import OpenAI
 import json
 import re
 import logging
-from db_config import db_config
+import os 
 
 class Publication:
-    def __init__(self, id, title, authors, year, venue, url, researcher_id):
+    def __init__(self, id, title, authors, year, venue, url):
         self.id = id
         self.title = title
         self.authors = authors
         self.year = year
         self.venue = venue
         self.url = url
-        self.researcher_id = researcher_id
 
     @staticmethod
-    def get_or_create_publication_record(url, researcher_id):
-        """Get or create a publication record and return its ID."""
-        query = """
-            SELECT id FROM publications
-            WHERE url = %s AND researcher_id = %s
-        """
-        result = Database.fetch_one(query, (url, researcher_id))
-        if result:
-            return result[0]
-        else:
-            return Publication.create_publication_record(url, researcher_id)
-
-    @staticmethod
-    def create_publication_record(url, researcher_id):
-        """Create a new publication record and return its ID."""
-        query = """
-            INSERT INTO publications (url, researcher_id, timestamp)
-            VALUES (%s, %s, %s)
-            RETURNING id
-        """
-        return Database.execute_query(query, (url, researcher_id, datetime.now()))
-
-    @staticmethod
-    def extract_publications(html_content, url):
-        """Extract publication information from HTML content using OpenAI."""
-        text_content = Publication.extract_relevant_html(html_content)
-        return Publication.extract_publications_with_openai(text_content, url)
-
-    @staticmethod
-    def save_publications(url, publications, researcher_id):
+    def save_publications(url, publications):
         """Save extracted publications to the database."""
-        query = """
-            INSERT INTO publications (url, researcher_id, title, authors, year, venue, timestamp)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-        """
         for pub in publications:
-            Database.execute_query(query, (
-                url,
-                researcher_id,
-                pub.get('title', ''),
-                pub.get('authors', ''),
-                pub.get('year', ''),
-                pub.get('venue', ''),
-                datetime.now()
-            ))
-        logging.info(f"{len(publications)} publications saved successfully for {url}")
+            try:
+                # Start a transaction
+                with Database.get_connection() as conn:
+                    cursor = conn.cursor()
+
+                    # Insert publication
+                    query = """
+                    INSERT INTO publications (url, title, year, venue, timestamp)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """
+                    params = (url, pub['title'], pub['year'], pub['venue'], datetime.now())
+                    cursor.execute(query, params)
+
+                    # Get the last inserted ID
+                    publication_id = cursor.lastrowid
+
+                    # Process authors
+                    for author_order, author in enumerate(pub['authors'], start=1):
+                        first_name, last_name = author
+                        # Get or create researcher
+                        author_id = Database.get_researcher_id(first_name, last_name)
+                        
+                        # Create authorship entry
+                        authorship_query = """
+                        INSERT INTO authorship (researcher_id, publication_id, author_order)
+                        VALUES (%s, %s, %s)
+                        """
+                        authorship_params = (author_id, publication_id, author_order)
+                        cursor.execute(authorship_query, authorship_params)
+
+                    # Commit the transaction
+                    conn.commit()
+                    logging.info(f"Publication saved successfully: {pub['title']}")
+
+            except Exception as e:
+                logging.error(f"Error saving publication: {str(e)}")
+                # If there's an error, rollback the transaction
+                if 'conn' in locals():
+                    conn.rollback()
+
+        logging.info(f"{len(publications)} publications processed for {url}")
 
     @staticmethod
     def extract_relevant_html(html_content):
@@ -75,12 +72,12 @@ class Publication:
         return main_content.get_text(separator='\n', strip=True)
 
     @staticmethod
-    def extract_publications_with_openai(text_content, url):
+    def extract_publications(text_content, url):
         """Use OpenAI to extract publication details from text content."""
         prompt = f"""
         Extract all the publications from the following content from {url}. For each publication, provide:
         - Title
-        - Authors
+        - Authors as a list of lists: [first name, last name]
         - Year
         - Venue (e.g., journal or conference name)
 
@@ -88,15 +85,26 @@ class Publication:
         Content:
         {text_content[:4000]}  # Limit content to 4000 characters
         """
-
-        client = OpenAI(api_key=db_config['openai_api_key'])
-        chat_completion = client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model="gpt-3.5-turbo",
-        )
+        logging.info(f"Extracting publications from using openai {url}")
         
-        response = chat_completion.choices[0].message.content
-        return Publication.parse_openai_response(response)
+        client = OpenAI(api_key= os.environ.get('OPENAI_API_KEY'))
+        try:
+            chat_completion = client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model="gpt-3.5-turbo",
+            )
+            
+            response = chat_completion.choices[0].message.content
+            parsed_response = Publication.parse_openai_response(response)
+            
+            if parsed_response is None:
+                logging.error(f"Failed to parse OpenAI response for URL: {url}")
+                return []
+            
+            return parsed_response
+        except Exception as e:
+            logging.error(f"Error in OpenAI API call: {str(e)}")
+            return []
 
     @staticmethod
     def parse_openai_response(response):
@@ -110,8 +118,25 @@ class Publication:
             if Publication.is_valid_json(json_text):
                 return json.loads(json_text)
         
+        # Dump invalid JSON to a file
+        Publication.dump_invalid_json(response)
+        
         logging.error("Failed to extract valid JSON from OpenAI response")
         return None
+
+    @staticmethod
+    def dump_invalid_json(response):
+        """Dump invalid JSON responses to a text file."""
+        dump_dir = "invalid_json_dumps"
+        os.makedirs(dump_dir, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"invalid_json_{timestamp}.txt"
+        filepath = os.path.join(dump_dir, filename)
+        
+        with open(filepath, 'w', encoding='utf-8') as f:
+            f.write(response)
+        
+        logging.warning(f"Invalid JSON dumped to {filepath}")
 
     @staticmethod
     def is_valid_json(json_string):
@@ -127,25 +152,8 @@ class Publication:
     def get_all_publications():
         """Retrieve all publications from the database."""
         query = """
-            SELECT id, url, researcher_id
+            SELECT id, url, title, year, venue
             FROM publications
         """
         results = Database.fetch_all(query)
-        return [Publication(id=row[0], url=row[1], researcher_id=row[2], title=None, authors=None, year=None, venue=None) for row in results]
-
-    @staticmethod
-    def update_publication(publication_id, publication_data):
-        """Update a publication record with extracted data."""
-        query = """
-            UPDATE publications
-            SET title = %s, authors = %s, year = %s, venue = %s
-            WHERE id = %s
-        """
-        Database.execute_query(query, (
-            publication_data.get('title', ''),
-            publication_data.get('authors', ''),
-            publication_data.get('year', ''),
-            publication_data.get('venue', ''),
-            publication_id
-        ))
-        logging.info(f"Publication {publication_id} updated successfully")
+        return [Publication(id=row[0], url=row[1], title=row[2], year=row[3], venue=row[4], authors=None) for row in results]

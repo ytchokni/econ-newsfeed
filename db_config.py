@@ -11,10 +11,4 @@ db_config = {
     'database': os.environ.get('DB_NAME'),
 }
 
-# OpenAI API configuration
-openai_config = {
-    'api_key': os.environ.get('OPENAI_API_KEY')
-}
 
-
-print(db_config)

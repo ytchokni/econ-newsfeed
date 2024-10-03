@@ -12,3 +12,9 @@ debug.py
 
 # Ignore log files
 *.log
+
+# Add the following:
+config/.env
+__pycache__/
+*.pyc
+.pytest_cache/
