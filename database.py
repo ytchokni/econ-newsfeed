@@ -63,6 +63,21 @@ class Database:
             return []
 
     @staticmethod
+    def fetch_one(query, params=None):
+        """
+        Execute a query with optional parameters and fetch one result.
+        Returns a tuple containing the result.
+        """
+        try:
+            with mysql.connector.connect(**db_config) as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute(query, params)
+                    return cursor.fetchone()
+        except Error as e:
+            logging.error(f"Database error: {e}")
+            return None
+
+    @staticmethod
     def create_tables():
         """
         Create the necessary tables if they do not already exist.
@@ -100,14 +115,14 @@ class Database:
             "html_content": """
                 CREATE TABLE IF NOT EXISTS html_content (
                     id INT AUTO_INCREMENT PRIMARY KEY,
+                    url_id INT,
                     url VARCHAR(255),
                     content LONGTEXT,
+                    content_hash VARCHAR(64),
                     timestamp DATETIME,
                     researcher_id INT,
-                    publication_id INT,
-                    page_type VARCHAR(10),
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id),
-                    FOREIGN KEY (publication_id) REFERENCES publications(id)
+                    FOREIGN KEY (url_id) REFERENCES researcher_urls(id)
                 )
             """
         }

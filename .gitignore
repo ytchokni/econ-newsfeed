@@ -2,7 +2,10 @@
 .venv/
 
 # Ignore the config file
-db_config.py
+db_config.pyS
+test.ipynb
+debug.py
+.env
 
 # Ignore compiled Python files
 *.pyc
