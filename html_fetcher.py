@@ -3,6 +3,7 @@ import hashlib
 import logging
 from datetime import datetime
 from database import Database
+from bs4 import BeautifulSoup
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
@@ -34,54 +35,85 @@ class HTMLFetcher:
         return None
 
     @staticmethod
-    def hash_html_content(html_content):
+    def extract_text_content(html_content):
         """
-        Hash the HTML content using SHA-256.
+        Extract only the text content from HTML, ignoring scripts, styles, and HTML tags.
         """
-        return hashlib.sha256(html_content.encode('utf-8')).hexdigest()
+        soup = BeautifulSoup(html_content, 'html.parser')
+        for script in soup(["script", "style"]):
+            script.decompose()
+        return soup.get_text()
 
     @staticmethod
-    def save_html(url, html_content):
+    def hash_text_content(text_content):
         """
-        Save HTML content and its hash to the database.
+        Hash the text content using SHA-256.
         """
-        html_hash = HTMLFetcher.hash_html_content(html_content)
+        return hashlib.sha256(text_content.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def save_html(url_id, url, html_content, researcher_id):
+        """
+        Save HTML content and its text hash to the database, along with researcher_id and url_id.
+        """
+        text_content = HTMLFetcher.extract_text_content(html_content)
+        text_hash = HTMLFetcher.hash_text_content(text_content)
         query = """
-            INSERT INTO html_content (url, content, content_hash, timestamp)
-            VALUES (%s, %s, %s, %s)
+            INSERT INTO html_content (url_id, url, content, content_hash, timestamp, researcher_id)
+            VALUES (%s, %s, %s, %s, %s, %s)
         """
         try:
-            Database.execute_query(query, (url, html_content, html_hash, datetime.utcnow()))
-            logging.info(f"HTML content and hash saved successfully for {url}")
+            Database.execute_query(query, (url_id, url, html_content, text_hash, datetime.utcnow(), researcher_id))
+            logging.info(f"HTML content and text hash saved successfully for URL ID: {url_id}, URL: {url} (Researcher ID: {researcher_id})")
         except Exception as e:
-            logging.error(f"Error saving HTML content to database for {url}: {e}")
+            logging.error(f"Error saving HTML content to database for URL ID: {url_id}, URL: {url}: {e}")
 
     @staticmethod
-    def has_html_changed(url, new_html_content):
+    def has_text_changed(url_id, new_html_content):
         """
-        Compare the hash of the new HTML content to the stored hash to check for changes.
+        Compare the hash of the new text content to the stored hash to check for changes.
         """
-        new_html_hash = HTMLFetcher.hash_html_content(new_html_content)
+        new_text_content = HTMLFetcher.extract_text_content(new_html_content)
+        new_text_hash = HTMLFetcher.hash_text_content(new_text_content)
         
-        query = "SELECT content_hash FROM html_content WHERE url = %s ORDER BY timestamp DESC LIMIT 1"
-        result = Database.fetch_one(query, (url,))
+        query = """
+            SELECT content_hash 
+            FROM html_content 
+            WHERE url_id = %s 
+            ORDER BY timestamp DESC LIMIT 1
+        """
+        result = Database.fetch_one(query, (url_id,))
         
         if result:
-            old_html_hash = result[0]
-            return old_html_hash != new_html_hash  # Returns True if the content has changed
+            old_text_hash = result[0]
+            return old_text_hash != new_text_hash  # Returns True if the content has changed
         return True  # If no previous record exists, assume the content has changed
 
     @staticmethod
-    def fetch_and_save_if_changed(url):
+    def fetch_and_save_if_changed(url_id, url, researcher_id):
         """
-        Fetch HTML content from the given URL and save it if it has changed.
+        Fetch HTML content from the given URL and save it if the text content has changed.
         """
         html_content = HTMLFetcher.fetch_html(url)
         if html_content:
-            if HTMLFetcher.has_html_changed(url, html_content):
-                HTMLFetcher.save_html(url, html_content)
-                logging.info(f"New version of HTML saved for {url}")
+            if HTMLFetcher.has_text_changed(url_id, html_content):
+                HTMLFetcher.save_html(url_id, url, html_content, researcher_id)
+                logging.info(f"New version of HTML saved for URL ID: {url_id}, URL: {url} (Researcher ID: {researcher_id})")
             else:
-                logging.info(f"No changes detected for {url}")
+                logging.info(f"No text changes detected for URL ID: {url_id}, URL: {url} (Researcher ID: {researcher_id})")
         else:
-            logging.warning(f"Failed to fetch HTML content for {url}")
+            logging.warning(f"Failed to fetch HTML content for URL ID: {url_id}, URL: {url}")
+
+    @staticmethod
+    def get_latest_html(url_id):
+        """Retrieve the latest HTML content for a given URL ID."""
+        query = """
+            SELECT content
+            FROM html_content
+            WHERE url_id = %s
+            ORDER BY timestamp DESC
+            LIMIT 1
+        """
+        result = Database.fetch_one(query, (url_id,))
+        return result[0] if result else None
+
