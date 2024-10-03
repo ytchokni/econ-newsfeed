@@ -1,0 +1,11 @@
+# Ignore the virtual environment directory
+.venv/
+
+# Ignore the config file
+db_config.py
+
+# Ignore compiled Python files
+*.pyc
+
+# Ignore log files
+*.log
