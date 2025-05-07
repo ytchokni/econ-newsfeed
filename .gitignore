@@ -1,20 +1,21 @@
-# Ignore the virtual environment directory
+# Python
+__pycache__/
+
+# Virtual Environments
 .venv/
 
-# Ignore the config file
-db_config.pyS
+# Development and IDE files
+
+*.swp
+*.swo
+.DS_Store
+
+# Project specific
+db_config.py
 test.ipynb
 debug.py
 .env
+invalid_json_dumps/
 
-# Ignore compiled Python files
-*.pyc
-
-# Ignore log files
+# Logs and databases
 *.log
-
-# Add the following:
-config/.env
-__pycache__/
-*.pyc
-.pytest_cache/
