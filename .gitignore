@@ -11,7 +11,6 @@ __pycache__/
 .DS_Store
 
 # Project specific
-db_config.py
 test.ipynb
 debug.py
 .env
