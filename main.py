@@ -36,7 +36,7 @@ def extract_data_from_htmls():
                 logging.error(f"No HTML content found for URL ID: {id}, URL: {url}")
         else:
             logging.info(f"Skipping extraction for URL ID: {id}, URL: {url}, Page Type: {page_type}")
-2
+
 def main():
     """Main function to handle user input and execute the appropriate actions."""
     actions = {
