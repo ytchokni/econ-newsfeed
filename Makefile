@@ -18,7 +18,7 @@ reset-db:
 		import mysql.connector; \
 		conn = mysql.connector.connect(host=db_config['host'], user=db_config['user'], password=db_config['password']); \
 		cursor = conn.cursor(); \
-		cursor.execute('DROP DATABASE IF EXISTS ' + db_config['database']); \
+		cursor.execute('DROP DATABASE IF EXISTS `' + db_config['database'] + '`'); \
 		conn.close(); \
 		Database.create_database(); \
 		Database.create_tables(); \

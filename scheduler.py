@@ -43,11 +43,17 @@ def update_scrape_log(log_id, status, urls_checked=0, urls_changed=0, pubs_extra
     ))
 
 
-def run_scrape_job():
-    """Orchestrates a full scraping cycle. Skips if another scrape is running."""
-    if not _scrape_lock.acquire(blocking=False):
-        logger.warning("Scrape already in progress, skipping")
-        return
+def run_scrape_job(_lock_acquired=False):
+    """Orchestrates a full scraping cycle. Skips if another scrape is running.
+
+    Pass ``_lock_acquired=True`` when the caller has already acquired
+    ``_scrape_lock`` and wants to transfer ownership to this function so it
+    can be released in the ``finally`` block (avoids TOCTOU).
+    """
+    if not _lock_acquired:
+        if not _scrape_lock.acquire(blocking=False):
+            logger.warning("Scrape already in progress, skipping")
+            return
 
     log_id = None
     try:

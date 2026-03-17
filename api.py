@@ -1,4 +1,5 @@
 """FastAPI REST API for econ-newsfeed."""
+import hmac
 import math
 import os
 import threading
@@ -62,8 +63,8 @@ app = FastAPI(
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[FRONTEND_URL],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "OPTIONS"],
+    allow_headers=["Content-Type", "X-API-Key", "Authorization"],
 )
 
 
@@ -78,6 +79,8 @@ async def add_security_headers(request: Request, call_next):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Content-Security-Policy"] = "default-src 'self'"
     response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
+    response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     return response
 
 
@@ -387,27 +390,34 @@ async def get_researcher(researcher_id: int):
 
 @app.post("/api/scrape", status_code=201)
 async def trigger_scrape(request: Request):
-    # Authenticate
-    api_key = request.headers.get("X-API-Key")
-    scrape_api_key = os.environ.get("SCRAPE_API_KEY")
-    if not api_key or api_key != scrape_api_key:
+    # Authenticate — use constant-time comparison to prevent timing attacks
+    api_key = request.headers.get("X-API-Key", "")
+    scrape_api_key = os.environ.get("SCRAPE_API_KEY", "")
+    if not api_key or not hmac.compare_digest(api_key, scrape_api_key):
         raise HTTPException(status_code=401, detail="Missing or invalid API key")
 
-    # Check if a scrape is already running
+    # Acquire the lock here and keep it held — transfer ownership to the
+    # background thread so there is no TOCTOU window between this check and
+    # run_scrape_job's own acquire.
     if not scheduler._scrape_lock.acquire(blocking=False):
         raise HTTPException(
             status_code=409,
             detail="A scrape is already running. Wait for it to complete.",
         )
-    # Release immediately — run_scrape_job will re-acquire
-    scheduler._scrape_lock.release()
 
-    log_id = create_scrape_log()
-    started_at = datetime.now(timezone.utc)
+    try:
+        log_id = create_scrape_log()
+        started_at = datetime.now(timezone.utc)
 
-    # Run scrape in background thread
-    t = threading.Thread(target=run_scrape_job, daemon=True)
-    t.start()
+        # Run scrape in background thread; pass _lock_acquired=True so
+        # run_scrape_job skips re-acquiring and releases in its own finally block.
+        t = threading.Thread(
+            target=run_scrape_job, kwargs={"_lock_acquired": True}, daemon=True
+        )
+        t.start()
+    except Exception:
+        scheduler._scrape_lock.release()
+        raise
 
     return {
         "scrape_id": log_id,
