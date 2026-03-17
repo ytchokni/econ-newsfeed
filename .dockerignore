@@ -1,6 +1,13 @@
-.git
-node_modules
-.env
-__pycache__
-.venv
-app/
+# Whitelist approach: exclude everything, then explicitly allow only what
+# Dockerfile.api needs at build time.
+*
+
+!requirements.txt
+!api.py
+!database.py
+!db_config.py
+!html_fetcher.py
+!main.py
+!publication.py
+!researcher.py
+!scheduler.py

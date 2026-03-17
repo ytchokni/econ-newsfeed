@@ -1,5 +1,5 @@
 import os
-import sys
+import re
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -8,17 +8,23 @@ REQUIRED_ENV_VARS = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME', 'OPENAI_API
 
 _missing = [var for var in REQUIRED_ENV_VARS if not os.environ.get(var)]
 if _missing:
-    print(
-        f"ERROR: Missing required environment variables: {', '.join(_missing)}\n"
-        "Copy .env.example to .env and fill in all required values.",
-        file=sys.stderr,
+    raise EnvironmentError(
+        f"Missing required environment variables: {', '.join(_missing)}\n"
+        "Copy .env.example to .env and fill in all required values."
     )
-    sys.exit(1)
+
+_DB_NAME = os.environ['DB_NAME']
+_DB_NAME_RE = re.compile(r'^[a-zA-Z_][a-zA-Z0-9_]{0,63}$')
+if not _DB_NAME_RE.match(_DB_NAME):
+    raise EnvironmentError(
+        f"DB_NAME '{_DB_NAME}' is invalid. "
+        "Must match ^[a-zA-Z_][a-zA-Z0-9_]{0,63}$"
+    )
 
 # MySQL configuration
 db_config = {
     'host': os.environ['DB_HOST'],
     'user': os.environ['DB_USER'],
     'password': os.environ['DB_PASSWORD'],
-    'database': os.environ['DB_NAME'],
+    'database': _DB_NAME,
 }
