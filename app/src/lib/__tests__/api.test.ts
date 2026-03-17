@@ -11,6 +11,9 @@ const mockPublicationsResponse: PaginatedResponse<Publication> = {
       venue: "Journal of Labor Economics",
       source_url: "https://example.com/paper",
       discovered_at: "2026-03-15T14:30:00Z",
+      status: "published",
+      draft_url: null,
+      draft_available: false,
     },
   ],
   total: 1,
@@ -28,7 +31,9 @@ const mockResearchersResponse: { items: Researcher[] } = {
       position: "Professor",
       affiliation: "Freie Universität Berlin",
       urls: [{ id: 1, page_type: "PUB", url: "https://example.com" }],
+      website_url: null,
       publication_count: 23,
+      fields: [],
     },
   ],
 };
@@ -40,7 +45,9 @@ const mockResearcherDetail: ResearcherDetail = {
   position: "Professor",
   affiliation: "Freie Universität Berlin",
   urls: [],
+  website_url: null,
   publication_count: 5,
+  fields: [],
   publications: [
     {
       id: 1,
@@ -50,6 +57,9 @@ const mockResearcherDetail: ResearcherDetail = {
       venue: "Journal of Labor Economics",
       source_url: null,
       discovered_at: "2026-03-15T14:30:00Z",
+      status: null,
+      draft_url: null,
+      draft_available: false,
     },
   ],
 };

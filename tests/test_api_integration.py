@@ -40,6 +40,7 @@ class TestOpenAPI:
         assert "/api/publications/{publication_id}" in paths
         assert "/api/researchers" in paths
         assert "/api/researchers/{researcher_id}" in paths
+        assert "/api/fields" in paths
         assert "/api/scrape" in paths
         assert "/api/scrape/status" in paths
 
@@ -50,6 +51,7 @@ class TestOpenAPI:
         assert "get" in paths["/api/publications/{publication_id}"]
         assert "get" in paths["/api/researchers"]
         assert "get" in paths["/api/researchers/{researcher_id}"]
+        assert "get" in paths["/api/fields"]
         assert "post" in paths["/api/scrape"]
         assert "get" in paths["/api/scrape/status"]
 
@@ -58,10 +60,11 @@ class TestOpenAPI:
 # Task 5.3: Full request cycle integration test
 # ---------------------------------------------------------------------------
 
-SAMPLE_PUB = (1, "Trade and Wages", "2024", "JLE", "https://example.com/p", datetime(2026, 3, 15, 14, 30))
+SAMPLE_PUB = (1, "Trade and Wages", "2024", "JLE", "https://example.com/p", datetime(2026, 3, 15, 14, 30), "published", None)
 SAMPLE_AUTHORS = [(10, "Max Friedrich", "Steinhardt")]
 SAMPLE_RESEARCHER = (10, "Max Friedrich", "Steinhardt", "Professor", "FU Berlin")
 SAMPLE_URLS = [(1, "PUB", "https://example.com/pubs")]
+SAMPLE_FIELDS: list = []
 SAMPLE_SCRAPE = (1, "completed", datetime(2026, 3, 16, 10, 0), datetime(2026, 3, 16, 10, 5), 10, 2, 3)
 
 
@@ -93,7 +96,7 @@ class TestFullCycle:
             patch("api.Database.fetch_all") as mock_all,
             patch("api.Database.fetch_one", return_value=(5,)),
         ):
-            mock_all.side_effect = [[SAMPLE_RESEARCHER], SAMPLE_URLS]
+            mock_all.side_effect = [[SAMPLE_RESEARCHER], SAMPLE_URLS, SAMPLE_FIELDS]
             resp = client.get("/api/researchers")
         assert resp.status_code == 200
         assert len(resp.json()["items"]) == 1
@@ -104,7 +107,7 @@ class TestFullCycle:
             patch("api.Database.fetch_all") as mock_all,
         ):
             mock_one.side_effect = [SAMPLE_RESEARCHER, (5,)]
-            mock_all.side_effect = [SAMPLE_URLS, [SAMPLE_PUB], SAMPLE_AUTHORS]
+            mock_all.side_effect = [SAMPLE_URLS, SAMPLE_FIELDS, [SAMPLE_PUB], SAMPLE_AUTHORS]
             resp = client.get("/api/researchers/10")
         assert resp.status_code == 200
         assert resp.json()["first_name"] == "Max Friedrich"

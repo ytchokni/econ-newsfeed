@@ -1,6 +1,7 @@
 import type {
   PaginatedResponse,
   Publication,
+  ResearchField,
   Researcher,
   ResearcherDetail,
 } from "./types";
@@ -34,4 +35,11 @@ export async function getResearchers(): Promise<Researcher[]> {
 
 export async function getResearcher(id: number): Promise<ResearcherDetail> {
   return fetchJson(`${API_BASE_URL}/api/researchers/${id}`);
+}
+
+export async function getFields(): Promise<ResearchField[]> {
+  const data = await fetchJson<{ items: ResearchField[] }>(
+    `${API_BASE_URL}/api/fields`
+  );
+  return data.items;
 }
