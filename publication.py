@@ -2,10 +2,23 @@ from database import Database
 from datetime import datetime
 from bs4 import BeautifulSoup
 from openai import OpenAI
+from pydantic import BaseModel, ValidationError
+from typing import Optional
 import json
 import re
 import logging
-import os 
+import os
+
+OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
+_openai_client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+
+
+class PublicationExtraction(BaseModel):
+    title: str
+    authors: list[list[str]]  # [[first_name, last_name], ...]
+    year: Optional[str] = None
+    venue: Optional[str] = None
+
 
 class Publication:
     def __init__(self, id, title, authors, year, venue, url):
@@ -17,20 +30,34 @@ class Publication:
         self.url = url
 
     @staticmethod
+    def _normalize_title(title):
+        """Normalize a publication title for deduplication."""
+        return title.lower().strip() if title else ''
+
+    @staticmethod
     def save_publications(url, publications):
-        """Save extracted publications to the database."""
+        """Save extracted publications to the database, skipping duplicates."""
         for pub in publications:
             try:
-                # Start a transaction
+                normalized_title = Publication._normalize_title(pub['title'])
+
+                # Check for existing publication with same normalized title + URL
+                existing = Database.fetch_one(
+                    "SELECT id FROM publications WHERE LOWER(TRIM(title)) = %s AND url = %s",
+                    (normalized_title, url)
+                )
+                if existing:
+                    logging.info(f"Duplicate publication skipped: {pub['title']}")
+                    continue
+
                 with Database.get_connection() as conn:
                     cursor = conn.cursor()
 
-                    # Insert publication
                     query = """
                     INSERT INTO publications (url, title, year, venue, timestamp)
                     VALUES (%s, %s, %s, %s, %s)
                     """
-                    params = (url, pub['title'], pub['year'], pub['venue'], datetime.now())
+                    params = (url, pub['title'], pub.get('year'), pub.get('venue'), datetime.now())
                     cursor.execute(query, params)
 
                     # Get the last inserted ID
@@ -85,23 +112,30 @@ class Publication:
         Content:
         {text_content[:4000]}  # Limit content to 4000 characters
         """
-        logging.info(f"Extracting publications from using openai {url}")
-        
-        client = OpenAI(api_key= os.environ.get('OPENAI_API_KEY'))
+        logging.info(f"Extracting publications from {url} using OpenAI ({OPENAI_MODEL})")
+
         try:
-            chat_completion = client.chat.completions.create(
+            chat_completion = _openai_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
-                model="gpt-3.5-turbo",
+                model=OPENAI_MODEL,
             )
             
             response = chat_completion.choices[0].message.content
             parsed_response = Publication.parse_openai_response(response)
-            
+
             if parsed_response is None:
                 logging.error(f"Failed to parse OpenAI response for URL: {url}")
                 return []
-            
-            return parsed_response
+
+            # Validate each publication through Pydantic
+            validated = []
+            for item in parsed_response:
+                try:
+                    pub = PublicationExtraction(**item)
+                    validated.append(pub.model_dump())
+                except (ValidationError, TypeError) as e:
+                    logging.warning(f"Rejected malformed publication from LLM output: {e}")
+            return validated
         except Exception as e:
             logging.error(f"Error in OpenAI API call: {str(e)}")
             return []

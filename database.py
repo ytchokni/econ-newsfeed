@@ -99,37 +99,41 @@ class Database:
                     last_name VARCHAR(255) NOT NULL,
                     first_name VARCHAR(255) NOT NULL,
                     position VARCHAR(255),
-                    affiliation VARCHAR(255)
+                    affiliation VARCHAR(255),
+                    INDEX idx_name (last_name, first_name)
                 )
             """,
             "researcher_urls": """
                 CREATE TABLE IF NOT EXISTS researcher_urls (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    researcher_id INT,
+                    researcher_id INT NOT NULL,
                     page_type VARCHAR(255) NOT NULL,
-                    url VARCHAR(255) NOT NULL,
+                    url VARCHAR(2048) NOT NULL,
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id)
                 )
             """,
             "publications": """
                 CREATE TABLE IF NOT EXISTS publications (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    url VARCHAR(255),
+                    url VARCHAR(2048),
                     title TEXT,
                     year VARCHAR(4),
                     venue TEXT,
-                    timestamp DATETIME
+                    timestamp DATETIME,
+                    UNIQUE KEY uq_title_url (title(200), url(200)),
+                    INDEX idx_timestamp (timestamp)
                 )
             """,
             "html_content": """
                 CREATE TABLE IF NOT EXISTS html_content (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    url_id INT,
-                    url VARCHAR(255),
+                    url_id INT NOT NULL,
                     content LONGTEXT,
                     content_hash VARCHAR(64),
                     timestamp DATETIME,
                     researcher_id INT,
+                    UNIQUE KEY uq_url_id (url_id),
+                    INDEX idx_url_id_ts (url_id, timestamp),
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id),
                     FOREIGN KEY (url_id) REFERENCES researcher_urls(id)
                 )
@@ -137,11 +141,25 @@ class Database:
             "authorship": """
                 CREATE TABLE IF NOT EXISTS authorship (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    researcher_id INT,
-                    publication_id INT,
+                    researcher_id INT NOT NULL,
+                    publication_id INT NOT NULL,
                     author_order INT,
+                    INDEX idx_researcher (researcher_id),
+                    INDEX idx_publication (publication_id),
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id),
                     FOREIGN KEY (publication_id) REFERENCES publications(id)
+                )
+            """,
+            "scrape_log": """
+                CREATE TABLE IF NOT EXISTS scrape_log (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    started_at DATETIME NOT NULL,
+                    finished_at DATETIME,
+                    status ENUM('running', 'completed', 'failed') DEFAULT 'running',
+                    urls_checked INT DEFAULT 0,
+                    urls_changed INT DEFAULT 0,
+                    pubs_extracted INT DEFAULT 0,
+                    error_message TEXT
                 )
             """
         }
