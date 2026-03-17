@@ -3,7 +3,7 @@
 **Track ID:** rest-api_20260317
 **Spec:** [spec.md](./spec.md)
 **Created:** 2026-03-17
-**Status:** [~] In Progress
+**Status:** [x] Complete
 
 ## Overview
 
@@ -82,21 +82,21 @@ Ensure OpenAPI docs are correct, update dependencies, and verify all endpoints e
 
 ### Tasks
 
-- [ ] Task 5.1: Verify `/docs` renders with correct schemas for all endpoints
-- [ ] Task 5.2: Update `requirements.txt` with `fastapi`, `uvicorn[standard]`, `pydantic` (pinned versions)
-- [ ] Task 5.3: Write integration test — full request cycle across all endpoints with test database
-- [ ] Task 5.4: Verify lifespan handler runs `create_tables()` and starts scheduler on startup
+- [x] Task 5.1: Verify `/docs` renders with correct schemas for all endpoints
+- [x] Task 5.2: Update `requirements.txt` with `fastapi`, `uvicorn[standard]`, `pydantic` (pinned versions)
+- [x] Task 5.3: Write integration test — full request cycle across all endpoints with test database
+- [x] Task 5.4: Verify lifespan handler runs `create_tables()` and starts scheduler on startup
 
 ### Verification
 
-- [ ] All tests pass, OpenAPI docs render correctly, `uvicorn api:app` starts without errors
+- [x] All tests pass, OpenAPI docs render correctly, `uvicorn api:app` starts without errors
 
 ## Final Verification
 
-- [ ] All acceptance criteria met
-- [ ] Tests passing
-- [ ] `requirements.txt` updated
-- [ ] Ready for review
+- [x] All acceptance criteria met
+- [x] Tests passing
+- [x] `requirements.txt` updated
+- [x] Ready for review
 
 ---
 
