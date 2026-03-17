@@ -9,7 +9,9 @@ const researcher: Researcher = {
   position: "Professor",
   affiliation: "Freie Universität Berlin",
   urls: [],
+  website_url: null,
   publication_count: 23,
+  fields: [],
 };
 
 describe("ResearcherCard", () => {

@@ -24,6 +24,19 @@ export default function ResearcherCard({
       <p className="mt-1 text-sm text-gray-500">
         {researcher.publication_count} publications tracked
       </p>
+      {researcher.website_url && (
+        <p className="mt-2">
+          <a
+            href={researcher.website_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            onClick={(e) => e.stopPropagation()}
+            className="text-sm text-blue-700 hover:underline"
+          >
+            Personal website &rarr;
+          </a>
+        </p>
+      )}
     </Link>
   );
 }

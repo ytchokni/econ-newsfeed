@@ -10,7 +10,9 @@ const researchers: Researcher[] = [
     position: "Professor",
     affiliation: "Freie Universität Berlin",
     urls: [],
+    website_url: null,
     publication_count: 23,
+    fields: [],
   },
   {
     id: 2,
@@ -19,7 +21,9 @@ const researchers: Researcher[] = [
     position: "Assistant Professor",
     affiliation: "MIT",
     urls: [],
+    website_url: null,
     publication_count: 5,
+    fields: [],
   },
 ];
 

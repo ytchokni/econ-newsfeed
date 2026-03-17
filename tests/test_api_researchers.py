@@ -31,6 +31,7 @@ SAMPLE_URLS_R1 = [
     # (url_id, page_type, url)
     (10, "PUB", "https://example.com/steinhardt/pubs"),
     (11, "WP", "https://example.com/steinhardt/wp"),
+    (12, "homepage", "https://steinhardt.example.com"),
 ]
 
 SAMPLE_URLS_R2 = [
@@ -43,8 +44,13 @@ SAMPLE_PUB_COUNT_R2 = (5,)
 SAMPLE_RESEARCHER_DETAIL = (1, "Max Friedrich", "Steinhardt", "Professor", "Freie Universität Berlin")
 
 SAMPLE_PUBLICATIONS_R1 = [
-    # (pub.id, pub.title, pub.year, pub.venue, pub.url, pub.timestamp)
-    (1, "Trade and Wages", "2024", "JLE", "https://example.com/pub", datetime(2026, 3, 15, 14, 30)),
+    # (pub.id, pub.title, pub.year, pub.venue, pub.url, pub.timestamp, pub.status, pub.draft_url)
+    (1, "Trade and Wages", "2024", "JLE", "https://example.com/pub", datetime(2026, 3, 15, 14, 30), "published", None),
+]
+
+SAMPLE_FIELDS_R1 = [
+    # (field.id, field.name, field.slug)
+    (1, "Labour Economics", "labour-economics"),
 ]
 
 
@@ -60,7 +66,9 @@ class TestListResearchers:
             mock_fetch.side_effect = [
                 SAMPLE_RESEARCHERS,          # researchers query
                 SAMPLE_URLS_R1,              # urls for researcher 1
+                SAMPLE_FIELDS_R1,            # fields for researcher 1
                 SAMPLE_URLS_R2,              # urls for researcher 2
+                [],                          # fields for researcher 2
             ]
             with patch("api.Database.fetch_one") as mock_one:
                 mock_one.side_effect = [
@@ -74,11 +82,12 @@ class TestListResearchers:
         assert len(body["items"]) == 2
 
     def test_researcher_item_shape(self, client):
-        """Each researcher must have id, first_name, last_name, position, affiliation, urls, publication_count."""
+        """Each researcher must have id, first_name, last_name, position, affiliation, urls, website_url, publication_count, fields."""
         with patch("api.Database.fetch_all") as mock_fetch:
             mock_fetch.side_effect = [
                 [SAMPLE_RESEARCHERS[0]],
                 SAMPLE_URLS_R1,
+                SAMPLE_FIELDS_R1,
             ]
             with patch("api.Database.fetch_one", return_value=SAMPLE_PUB_COUNT_R1):
                 response = client.get("/api/researchers")
@@ -90,10 +99,13 @@ class TestListResearchers:
         assert item["position"] == "Professor"
         assert item["affiliation"] == "Freie Universität Berlin"
         assert item["publication_count"] == 23
-        assert len(item["urls"]) == 2
+        assert len(item["urls"]) == 3
         assert item["urls"][0]["id"] == 10
         assert item["urls"][0]["page_type"] == "PUB"
         assert item["urls"][0]["url"] == "https://example.com/steinhardt/pubs"
+        assert item["website_url"] == "https://steinhardt.example.com"
+        assert len(item["fields"]) == 1
+        assert item["fields"][0]["name"] == "Labour Economics"
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +126,7 @@ class TestGetResearcher:
             ]
             mock_fetch.side_effect = [
                 SAMPLE_URLS_R1,              # urls
+                SAMPLE_FIELDS_R1,            # fields
                 SAMPLE_PUBLICATIONS_R1,      # publications
                 [(1, "Max Friedrich", "Steinhardt")],  # authors for pub 1
             ]
@@ -125,6 +138,8 @@ class TestGetResearcher:
         assert body["first_name"] == "Max Friedrich"
         assert "publications" in body
         assert len(body["publications"]) == 1
+        assert body["website_url"] == "https://steinhardt.example.com"
+        assert len(body["fields"]) == 1
 
     def test_not_found_returns_404(self, client):
         with patch("api.Database.fetch_one", return_value=None):
