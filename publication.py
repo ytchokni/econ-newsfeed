@@ -2,7 +2,7 @@ from database import Database
 from datetime import datetime
 from bs4 import BeautifulSoup
 from openai import OpenAI
-from pydantic import BaseModel, ValidationError
+from pydantic import BaseModel, ValidationError, field_validator
 from typing import Optional
 import json
 import re
@@ -18,6 +18,13 @@ class PublicationExtraction(BaseModel):
     authors: list[list[str]]  # [[first_name, last_name], ...]
     year: Optional[str] = None
     venue: Optional[str] = None
+
+    @field_validator('year', mode='before')
+    @classmethod
+    def coerce_year_to_str(cls, v):
+        if v is not None:
+            return str(v)
+        return v
 
 
 class Publication:
