@@ -10,6 +10,9 @@ def client():
     """Create a test client with mocked database and scheduler."""
     with (
         patch("database.Database.create_tables"),
+        patch("database.Database.get_connection", return_value=None),
+        patch("database.Database.fetch_all", return_value=[]),
+        patch("database.Database.fetch_one", return_value=None),
         patch("scheduler.start_scheduler"),
         patch("scheduler.shutdown_scheduler"),
     ):
