@@ -239,17 +239,88 @@ async def get_publication(publication_id: int):
 
 
 # ---------------------------------------------------------------------------
-# Researcher endpoints (placeholder — Phase 3)
+# Researcher helpers
+# ---------------------------------------------------------------------------
+
+def _get_urls_for_researcher(researcher_id: int) -> list[dict]:
+    rows = Database.fetch_all(
+        "SELECT id, page_type, url FROM researcher_urls WHERE researcher_id = %s",
+        (researcher_id,),
+    )
+    return [{"id": r[0], "page_type": r[1], "url": r[2]} for r in rows]
+
+
+def _get_pub_count_for_researcher(researcher_id: int) -> int:
+    row = Database.fetch_one(
+        "SELECT COUNT(*) FROM authorship WHERE researcher_id = %s",
+        (researcher_id,),
+    )
+    return row[0] if row else 0
+
+
+# ---------------------------------------------------------------------------
+# Researcher endpoints
 # ---------------------------------------------------------------------------
 
 @app.get("/api/researchers")
 async def list_researchers():
-    return {"items": []}
+    rows = Database.fetch_all(
+        "SELECT id, first_name, last_name, position, affiliation FROM researchers"
+    )
+    items = []
+    for r in rows:
+        urls = _get_urls_for_researcher(r[0])
+        pub_count = _get_pub_count_for_researcher(r[0])
+        items.append({
+            "id": r[0],
+            "first_name": r[1],
+            "last_name": r[2],
+            "position": r[3],
+            "affiliation": r[4],
+            "urls": urls,
+            "publication_count": pub_count,
+        })
+    return {"items": items}
 
 
 @app.get("/api/researchers/{researcher_id}")
 async def get_researcher(researcher_id: int):
-    raise HTTPException(status_code=404, detail="Researcher not found")
+    row = Database.fetch_one(
+        "SELECT id, first_name, last_name, position, affiliation FROM researchers WHERE id = %s",
+        (researcher_id,),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Researcher not found")
+
+    urls = _get_urls_for_researcher(researcher_id)
+    pub_count = _get_pub_count_for_researcher(researcher_id)
+
+    # Fetch this researcher's publications
+    pub_rows = Database.fetch_all(
+        """
+        SELECT p.id, p.title, p.year, p.venue, p.url, p.timestamp
+        FROM publications p
+        JOIN authorship a ON a.publication_id = p.id
+        WHERE a.researcher_id = %s
+        ORDER BY p.timestamp DESC
+        """,
+        (researcher_id,),
+    )
+    publications = []
+    for pr in pub_rows:
+        authors = _get_authors_for_publication(pr[0])
+        publications.append(_format_publication(pr, authors))
+
+    return {
+        "id": row[0],
+        "first_name": row[1],
+        "last_name": row[2],
+        "position": row[3],
+        "affiliation": row[4],
+        "urls": urls,
+        "publication_count": pub_count,
+        "publications": publications,
+    }
 
 
 # ---------------------------------------------------------------------------

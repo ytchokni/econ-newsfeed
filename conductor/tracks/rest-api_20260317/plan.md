@@ -49,15 +49,15 @@ Implement researcher listing and detail endpoints.
 
 ### Tasks
 
-- [ ] Task 3.1: Define Pydantic response models (`ResearcherItem`, `ResearcherDetail`, `ResearcherUrl`)
-- [ ] Task 3.2: Write tests for `GET /api/researchers` — returns all researchers with URLs and publication counts
-- [ ] Task 3.3: Write tests for `GET /api/researchers/{id}` — found with publications, not found returns 404
-- [ ] Task 3.4: Implement `GET /api/researchers`
-- [ ] Task 3.5: Implement `GET /api/researchers/{id}`
+- [x] Task 3.1: Define Pydantic response models (`ResearcherItem`, `ResearcherDetail`, `ResearcherUrl`)
+- [x] Task 3.2: Write tests for `GET /api/researchers` — returns all researchers with URLs and publication counts
+- [x] Task 3.3: Write tests for `GET /api/researchers/{id}` — found with publications, not found returns 404
+- [x] Task 3.4: Implement `GET /api/researchers`
+- [x] Task 3.5: Implement `GET /api/researchers/{id}`
 
 ### Verification
 
-- [ ] All Phase 3 tests pass; researcher data includes nested URLs and publication counts
+- [x] All Phase 3 tests pass; researcher data includes nested URLs and publication counts
 
 ## Phase 4: Scrape Endpoints
 
