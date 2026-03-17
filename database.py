@@ -21,7 +21,7 @@ class Database:
                 password=db_config['password']
             )
             cursor = conn.cursor()
-            cursor.execute(f"CREATE DATABASE IF NOT EXISTS {db_config['database']}")
+            cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{db_config['database']}`")
             logging.info(f"Database '{db_config['database']}' created or already exists.")
         except Error as e:
             logging.error(f"Error creating database: {e}")
