@@ -52,57 +52,62 @@ class HTMLFetcher:
         return hashlib.sha256(text_content.encode('utf-8')).hexdigest()
 
     @staticmethod
-    def save_text(url_id, url, html_content, researcher_id):
+    def save_text(url_id, text_content, text_hash, researcher_id):
         """
-        Extract text content from HTML, hash it, and save to the database along with researcher_id and url_id.
+        Save pre-extracted text content and hash to the database using upsert.
         """
-        text_content = HTMLFetcher.extract_text_content(html_content)
-        text_hash = HTMLFetcher.hash_text_content(text_content)
         query = """
-            INSERT INTO html_content (url_id, url, content, content_hash, timestamp, researcher_id)
-            VALUES (%s, %s, %s, %s, %s, %s)
+            INSERT INTO html_content (url_id, content, content_hash, timestamp, researcher_id)
+            VALUES (%s, %s, %s, %s, %s)
+            ON DUPLICATE KEY UPDATE
+                content = VALUES(content),
+                content_hash = VALUES(content_hash),
+                timestamp = VALUES(timestamp)
         """
         try:
-            Database.execute_query(query, (url_id, url, text_content, text_hash, datetime.utcnow(), researcher_id))
-            logging.info(f"Text content and hash saved successfully for URL ID: {url_id}, URL: {url} (Researcher ID: {researcher_id})")
+            Database.execute_query(query, (url_id, text_content, text_hash, datetime.utcnow(), researcher_id))
+            logging.info(f"Text content saved for URL ID: {url_id} (Researcher ID: {researcher_id})")
         except Exception as e:
-            logging.error(f"Error saving text content to database for URL ID: {url_id}, URL: {url}: {e}")
+            logging.error(f"Error saving text content for URL ID: {url_id}: {e}")
 
     @staticmethod
-    def has_text_changed(url_id, new_html_content):
+    def has_text_changed(url_id, new_text_hash):
         """
         Compare the hash of the new text content to the stored hash to check for changes.
         """
-        new_text_content = HTMLFetcher.extract_text_content(new_html_content)
-        new_text_hash = HTMLFetcher.hash_text_content(new_text_content)
-        
         query = """
-            SELECT content_hash 
-            FROM html_content 
-            WHERE url_id = %s 
-            ORDER BY timestamp DESC LIMIT 1
+            SELECT content_hash
+            FROM html_content
+            WHERE url_id = %s
         """
         result = Database.fetch_one(query, (url_id,))
-        
+
         if result:
-            old_text_hash = result[0]
-            return old_text_hash != new_text_hash  # Returns True if the content has changed
-        return True  # If no previous record exists, assume the content has changed
+            return result[0] != new_text_hash
+        return True  # No previous record — treat as changed
 
     @staticmethod
     def fetch_and_save_if_changed(url_id, url, researcher_id):
         """
         Fetch HTML content from the given URL and save its text content if it has changed.
+        Returns True if content changed, False otherwise.
         """
         html_content = HTMLFetcher.fetch_html(url)
-        if html_content:
-            if HTMLFetcher.has_text_changed(url_id, html_content):
-                HTMLFetcher.save_text(url_id, url, html_content, researcher_id)
-                logging.info(f"New version of text content saved for URL ID: {url_id}, URL: {url} (Researcher ID: {researcher_id})")
-            else:
-                logging.info(f"No text changes detected for URL ID: {url_id}, URL: {url} (Researcher ID: {researcher_id})")
-        else:
+        if not html_content:
             logging.warning(f"Failed to fetch HTML content for URL ID: {url_id}, URL: {url}")
+            return False
+
+        # Parse HTML once, reuse for both comparison and storage
+        text_content = HTMLFetcher.extract_text_content(html_content)
+        text_hash = HTMLFetcher.hash_text_content(text_content)
+
+        if HTMLFetcher.has_text_changed(url_id, text_hash):
+            HTMLFetcher.save_text(url_id, text_content, text_hash, researcher_id)
+            logging.info(f"New version of text content saved for URL ID: {url_id}, URL: {url}")
+            return True
+
+        logging.info(f"No text changes detected for URL ID: {url_id}, URL: {url}")
+        return False
 
     @staticmethod
     def get_latest_text(url_id):
