@@ -118,7 +118,9 @@ class Database:
                     title TEXT,
                     year VARCHAR(4),
                     venue TEXT,
-                    timestamp DATETIME
+                    timestamp DATETIME,
+                    UNIQUE KEY uq_title_url (title(200), url(200)),
+                    INDEX idx_timestamp (timestamp)
                 )
             """,
             "html_content": """
