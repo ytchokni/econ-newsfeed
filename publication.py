@@ -186,7 +186,10 @@ class Publication:
         MAX_DUMP_FILES = 50
         existing = sorted(f for f in os.listdir(dump_dir) if f.endswith(".txt"))
         while len(existing) >= MAX_DUMP_FILES:
-            os.remove(os.path.join(dump_dir, existing.pop(0)))
+            try:
+                os.remove(os.path.join(dump_dir, existing.pop(0)))
+            except FileNotFoundError:
+                pass  # Another worker already removed this file
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"invalid_json_{timestamp}.txt"

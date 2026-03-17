@@ -399,28 +399,20 @@ async def trigger_scrape(request: Request):
     if not api_key or not hmac.compare_digest(api_key, scrape_api_key):
         raise HTTPException(status_code=401, detail="Missing or invalid API key")
 
-    # Acquire the lock here and keep it held — transfer ownership to the
-    # background thread so there is no TOCTOU window between this check and
-    # run_scrape_job's own acquire.
-    if not scheduler._scrape_lock.acquire(blocking=False):
+    # Check if a scrape is already running (DB advisory lock, works across workers)
+    if scheduler.is_scrape_running():
         raise HTTPException(
             status_code=409,
             detail="A scrape is already running. Wait for it to complete.",
         )
 
-    try:
-        log_id = create_scrape_log()
-        started_at = datetime.now(timezone.utc)
+    log_id = create_scrape_log()
+    started_at = datetime.now(timezone.utc)
 
-        # Run scrape in background thread; pass _lock_acquired=True so
-        # run_scrape_job skips re-acquiring and releases in its own finally block.
-        t = threading.Thread(
-            target=run_scrape_job, kwargs={"_lock_acquired": True}, daemon=True
-        )
-        t.start()
-    except Exception:
-        scheduler._scrape_lock.release()
-        raise
+    t = threading.Thread(
+        target=run_scrape_job, daemon=True
+    )
+    t.start()
 
     return {
         "scrape_id": log_id,
