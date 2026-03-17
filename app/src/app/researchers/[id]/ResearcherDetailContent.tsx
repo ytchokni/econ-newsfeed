@@ -1,37 +1,13 @@
 "use client";
 
-import { useState, useEffect } from "react";
-import { getResearcher } from "@/lib/api";
-import type { ResearcherDetail } from "@/lib/types";
+import { useResearcher } from "@/lib/api";
 import PublicationCard from "@/components/PublicationCard";
 import PublicationCardSkeleton from "@/components/PublicationCardSkeleton";
 import ErrorMessage from "@/components/ErrorMessage";
 import EmptyState from "@/components/EmptyState";
 
 export default function ResearcherDetailContent({ id }: { id: number }) {
-  const [researcher, setResearcher] = useState<ResearcherDetail | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const data = await getResearcher(id);
-        if (!cancelled) {
-          setResearcher(data);
-          setError(null);
-        }
-      } catch {
-        if (!cancelled) setError("Failed to load researcher.");
-      } finally {
-        if (!cancelled) setIsLoading(false);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [id]);
+  const { data: researcher, error, isLoading } = useResearcher(id);
 
   if (isLoading) {
     return (
@@ -45,7 +21,7 @@ export default function ResearcherDetailContent({ id }: { id: number }) {
   }
 
   if (error || !researcher) {
-    return <ErrorMessage message={error || "Researcher not found."} />;
+    return <ErrorMessage message={error?.message || "Researcher not found."} />;
   }
 
   return (
