@@ -6,7 +6,7 @@ import threading
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request, Response
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -192,6 +192,7 @@ def _format_publication(row, authors: list[dict]) -> dict:
 
 @app.get("/api/publications")
 async def list_publications(
+    response: Response,
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     year: str | None = Query(None),
@@ -242,6 +243,7 @@ async def list_publications(
         authors = _get_authors_for_publication(row[0])
         items.append(_format_publication(row, authors))
 
+    response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=600"
     return {
         "items": items,
         "total": total,
@@ -317,7 +319,7 @@ async def list_fields():
 
 
 @app.get("/api/researchers")
-async def list_researchers():
+async def list_researchers(response: Response):
     rows = Database.fetch_all(
         "SELECT id, first_name, last_name, position, affiliation FROM researchers"
     )
@@ -337,6 +339,7 @@ async def list_researchers():
             "publication_count": pub_count,
             "fields": fields,
         })
+    response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=600"
     return {"items": items}
 
 
