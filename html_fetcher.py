@@ -2,12 +2,16 @@ import difflib
 import ipaddress
 import os
 import time
+import socket
 import requests
 import hashlib
 import logging
-from datetime import datetime
+import urllib3
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
+from requests.adapters import HTTPAdapter
+from urllib3.poolmanager import PoolManager
 from database import Database
 from bs4 import BeautifulSoup
 
@@ -18,6 +22,62 @@ RATE_LIMIT_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_SECONDS', '2'))
 RATE_LIMIT_FAST_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_FAST_SECONDS', '0.5'))
 CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS', '4000'))
 CONTENT_MAX_BYTES = 1_000_000  # 1 MB response size limit
+SCRAPER_USER_AGENT = os.environ.get(
+    'SCRAPER_USER_AGENT', 'Mozilla/5.0 (compatible; HTMLFetcher/1.0)'
+)
+
+
+# ---------------------------------------------------------------------------
+# DNS-pinning transport adapter (SSRF DNS rebinding prevention)
+# ---------------------------------------------------------------------------
+
+class _PinnedPoolManager(PoolManager):
+    """Pool manager that connects to a pre-resolved IP, preventing DNS rebinding.
+
+    For HTTPS, the original hostname is preserved for SNI and certificate
+    verification so TLS still works correctly.
+    """
+
+    def __init__(self, hostname: str, resolved_ip: str, **kwargs):
+        super().__init__(**kwargs)
+        self._hostname = hostname
+        self._resolved_ip = resolved_ip
+
+    def connection_from_host(self, host, port=None, scheme='http', pool_kwargs=None):
+        if host == self._hostname:
+            pool_kwargs = (pool_kwargs or {}).copy()
+            if scheme == 'https':
+                # Keep original hostname for SNI handshake and cert verification
+                pool_kwargs.setdefault('assert_hostname', self._hostname)
+                pool_kwargs.setdefault('server_hostname', self._hostname)
+            return super().connection_from_host(
+                self._resolved_ip, port, scheme, pool_kwargs
+            )
+        return super().connection_from_host(host, port, scheme, pool_kwargs)
+
+
+class _PinnedIPAdapter(HTTPAdapter):
+    """Transport adapter that pins TCP connections to a pre-resolved IP.
+
+    Prevents DNS rebinding SSRF attacks: the TCP connection always goes to the
+    IP address validated at request time rather than performing a second DNS
+    lookup that an attacker could control via low-TTL records.
+    """
+
+    def __init__(self, hostname: str, resolved_ip: str, **kwargs):
+        self._hostname = hostname
+        self._resolved_ip = resolved_ip
+        super().__init__(**kwargs)
+
+    def init_poolmanager(self, connections, maxsize, block=False, **connection_pool_kw):
+        self.poolmanager = _PinnedPoolManager(
+            hostname=self._hostname,
+            resolved_ip=self._resolved_ip,
+            num_pools=connections,
+            maxsize=maxsize,
+            block=block,
+            **connection_pool_kw,
+        )
 
 # Large CDN/hosting platforms that can handle higher request rates
 FAST_DOMAINS = {
@@ -34,7 +94,7 @@ FAST_DOMAINS = {
 class HTMLFetcher:
     session = requests.Session()
     session.headers.update({
-        'User-Agent': 'Mozilla/5.0 (compatible; HTMLFetcher/1.0)'
+        'User-Agent': SCRAPER_USER_AGENT
     })
 
     # Per-domain rate limiting: domain -> last request timestamp
@@ -61,40 +121,44 @@ class HTMLFetcher:
     def validate_url(url):
         """
         Validate a URL for SSRF protection.
-        Rejects non-HTTP(S) schemes, private/reserved IPs, and AWS metadata endpoints.
-        Returns True if safe, False otherwise.
+        Rejects non-HTTP(S) schemes, private/reserved IPs, and cloud metadata endpoints.
+
+        Returns (True, resolved_ip) if safe, (False, None) otherwise.
+        The resolved_ip is returned so callers can pin the TCP connection to that
+        exact IP, preventing a second DNS resolution (DNS rebinding attack).
         """
         try:
             parsed = urlparse(url)
         except Exception:
-            return False
+            return False, None
 
         if parsed.scheme not in ('http', 'https'):
             logging.warning(f"Rejected URL with non-HTTP(S) scheme: {url}")
-            return False
+            return False, None
 
         hostname = parsed.hostname
         if not hostname:
-            return False
+            return False, None
 
-        # Reject AWS metadata endpoints
+        # Reject cloud metadata endpoints by hostname
         if hostname in ('169.254.169.254', 'metadata.google.internal'):
             logging.warning(f"Rejected metadata endpoint URL: {url}")
-            return False
+            return False, None
 
         # Resolve hostname and check for private/reserved IPs
-        import socket
         try:
             resolved_ip = socket.getaddrinfo(hostname, None)[0][4][0]
             ip = ipaddress.ip_address(resolved_ip)
             if ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local:
-                logging.warning(f"Rejected URL resolving to private/reserved IP: {url} -> {resolved_ip}")
-                return False
+                logging.warning(
+                    "Rejected URL resolving to private/reserved IP: %s -> [redacted]", url
+                )
+                return False, None
         except (socket.gaierror, ValueError):
             logging.warning(f"Could not resolve hostname for URL: {url}")
-            return False
+            return False, None
 
-        return True
+        return True, resolved_ip
 
     @staticmethod
     def _rate_limit(url):
@@ -110,17 +174,33 @@ class HTMLFetcher:
         HTMLFetcher._domain_last_request[domain] = time.time()
 
     @staticmethod
-    def fetch_html(url, timeout=10, max_retries=3):
+    def fetch_html(url, timeout=10, max_retries=3, resolved_ip=None):
         """
         Fetch HTML content from a given URL with exponential backoff.
         Retries on timeouts and 5xx server errors.
+
+        If resolved_ip is provided, the TCP connection is pinned to that IP to
+        prevent DNS rebinding (the IP must already be validated by validate_url).
+
         Returns the HTML content as a string, or None on failure.
         """
         HTMLFetcher._rate_limit(url)
 
+        if resolved_ip is not None:
+            # Use a per-request session with a pinned-IP adapter to prevent
+            # a second DNS resolution from returning a different (private) IP.
+            hostname = urlparse(url).hostname
+            session = requests.Session()
+            session.headers.update(HTMLFetcher.session.headers)
+            adapter = _PinnedIPAdapter(hostname=hostname, resolved_ip=resolved_ip)
+            session.mount('https://', adapter)
+            session.mount('http://', adapter)
+        else:
+            session = HTMLFetcher.session
+
         for attempt in range(max_retries):
             try:
-                response = HTMLFetcher.session.get(url, timeout=timeout)
+                response = session.get(url, timeout=timeout)
                 if response.status_code >= 500:
                     backoff = 2 ** attempt  # 1s, 2s, 4s
                     logging.warning(f"Server error {response.status_code} for {url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
@@ -138,7 +218,7 @@ class HTMLFetcher:
                 logging.warning(f"Timeout for {url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
                 time.sleep(backoff)
             except requests.exceptions.RequestException as e:
-                logging.error(f"Request exception for {url}: {e}")
+                logging.error("Request exception for %s: %s", url, type(e).__name__)
                 break  # Non-retryable error
         logging.error(f"Failed to fetch HTML content from {url} after {max_retries} attempts")
         return None
@@ -174,10 +254,10 @@ class HTMLFetcher:
                 timestamp = VALUES(timestamp)
         """
         try:
-            Database.execute_query(query, (url_id, text_content, text_hash, datetime.utcnow(), researcher_id))
+            Database.execute_query(query, (url_id, text_content, text_hash, datetime.now(timezone.utc), researcher_id))
             logging.info(f"Text content saved for URL ID: {url_id} (Researcher ID: {researcher_id})")
         except Exception as e:
-            logging.error(f"Error saving text content for URL ID: {url_id}: {e}")
+            logging.error("Error saving text content for URL ID %s: %s", url_id, type(e).__name__)
 
     @staticmethod
     def has_text_changed(url_id, new_text_hash):
@@ -201,14 +281,16 @@ class HTMLFetcher:
         Fetch HTML content from the given URL and save its text content if it has changed.
         Returns True if content changed, False otherwise.
         """
-        if not HTMLFetcher.validate_url(url):
+        valid, resolved_ip = HTMLFetcher.validate_url(url)
+        if not valid:
             logging.warning(f"URL failed SSRF validation, skipping: {url}")
             return False
 
         if not HTMLFetcher.is_allowed_by_robots(url):
             return False
 
-        html_content = HTMLFetcher.fetch_html(url)
+        # Pass the pre-resolved IP to avoid a second DNS lookup (DNS rebinding prevention)
+        html_content = HTMLFetcher.fetch_html(url, resolved_ip=resolved_ip)
         if not html_content:
             logging.warning(f"Failed to fetch HTML content for URL ID: {url_id}, URL: {url}")
             return False
@@ -260,4 +342,3 @@ class HTMLFetcher:
         # Extract only added lines (starting with '+' but not '+++')
         added_lines = [line[1:] for line in diff if line.startswith('+') and not line.startswith('+++')]
         return ''.join(added_lines) if added_lines else new_text
-
