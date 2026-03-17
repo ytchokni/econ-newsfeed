@@ -312,6 +312,39 @@ class HTMLFetcher:
         return False
 
     @staticmethod
+    def extract_bio(text_content: str, url: str) -> str | None:
+        """Extract a ≤2-sentence bio from text content using the LLM.
+
+        Returns the bio string, or None if no bio could be extracted.
+        Import is deferred to avoid circular dependency with publication.py.
+        """
+        try:
+            from publication import _openai_client, OPENAI_MODEL
+        except ImportError:
+            logging.error("Could not import OpenAI client for bio extraction")
+            return None
+
+        prompt = (
+            f"From the following text from a researcher's homepage at {url}, "
+            "extract a brief professional bio (at most 2 sentences) describing who this person is, "
+            "their research interests, and their current position/affiliation. "
+            "If no clear bio can be extracted, reply with exactly: null\n\n"
+            f"Content:\n{text_content[:3000]}"
+        )
+        try:
+            response = _openai_client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=OPENAI_MODEL,
+            )
+            bio = response.choices[0].message.content.strip()
+            if bio.lower() in ("null", "none", ""):
+                return None
+            return bio[:500]
+        except Exception as e:
+            logging.error(f"Error extracting bio from {url}: {e}")
+            return None
+
+    @staticmethod
     def get_latest_text(url_id):
         """Retrieve the latest text content for a given URL ID."""
         query = """

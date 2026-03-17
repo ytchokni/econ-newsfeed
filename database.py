@@ -109,6 +109,7 @@ class Database:
                     first_name VARCHAR(255) NOT NULL,
                     position VARCHAR(255),
                     affiliation VARCHAR(255),
+                    bio TEXT,
                     INDEX idx_name (last_name, first_name)
                 )
             """,
@@ -201,6 +202,11 @@ class Database:
             with conn.cursor() as cursor:
                 for table_query in table_definitions.values():
                     cursor.execute(table_query)
+
+        # Migration: add bio column to existing researchers tables
+        Database.execute_query(
+            "ALTER TABLE researchers ADD COLUMN IF NOT EXISTS bio TEXT"
+        )
         logging.info("All tables created successfully")
         Database.seed_research_fields()
 
@@ -365,6 +371,14 @@ class Database:
         """
         new_id = Database.execute_query(insert_query, (first_name, last_name, position, affiliation))
         return new_id
+
+    @staticmethod
+    def update_researcher_bio(researcher_id, bio):
+        """Update researcher bio only if the current bio is NULL."""
+        Database.execute_query(
+            "UPDATE researchers SET bio = %s WHERE id = %s AND bio IS NULL",
+            (bio, researcher_id),
+        )
 
     @staticmethod
     def add_researcher_url(researcher_id, page_type, url):
