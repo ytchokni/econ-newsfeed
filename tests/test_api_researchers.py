@@ -22,9 +22,9 @@ def client():
 
 # Sample DB return shapes
 SAMPLE_RESEARCHERS = [
-    # (id, first_name, last_name, position, affiliation)
-    (1, "Max Friedrich", "Steinhardt", "Professor", "Freie Universität Berlin"),
-    (2, "Jane", "Doe", "Assistant Professor", "MIT"),
+    # (id, first_name, last_name, position, affiliation, bio)
+    (1, "Max Friedrich", "Steinhardt", "Professor", "Freie Universität Berlin", "A leading researcher in trade economics."),
+    (2, "Jane", "Doe", "Assistant Professor", "MIT", None),
 ]
 
 SAMPLE_URLS_R1 = [
@@ -46,20 +46,27 @@ SAMPLE_PUB_COUNT_R2 = (5,)
 BATCH_URLS_ALL = [
     (1, 10, "PUB", "https://example.com/steinhardt/pubs"),
     (1, 11, "WP", "https://example.com/steinhardt/wp"),
+    (1, 12, "homepage", "https://steinhardt.example.com"),
     (2, 20, "PUB", "https://example.com/doe/pubs"),
 ]
 BATCH_URLS_R1 = [
     (1, 10, "PUB", "https://example.com/steinhardt/pubs"),
     (1, 11, "WP", "https://example.com/steinhardt/wp"),
+    (1, 12, "homepage", "https://steinhardt.example.com"),
+]
+BATCH_URLS_R2 = [
+    (2, 20, "PUB", "https://example.com/doe/pubs"),
 ]
 # (researcher_id, count)
 BATCH_PUB_COUNTS_ALL = [(1, 23), (2, 5)]
 BATCH_PUB_COUNTS_R1 = [(1, 23)]
+BATCH_PUB_COUNTS_R2 = [(2, 5)]
 # (researcher_id, field.id, field.name, field.slug)
 BATCH_FIELDS_ALL = [(1, 1, "Labour Economics", "labour-economics")]
 BATCH_FIELDS_R1 = [(1, 1, "Labour Economics", "labour-economics")]
+BATCH_FIELDS_R2 = []
 
-SAMPLE_RESEARCHER_DETAIL = (1, "Max Friedrich", "Steinhardt", "Professor", "Freie Universität Berlin")
+SAMPLE_RESEARCHER_DETAIL = (1, "Max Friedrich", "Steinhardt", "Professor", "Freie Universität Berlin", "A leading researcher in trade economics.")
 
 SAMPLE_PUBLICATIONS_R1 = [
     # (pub.id, pub.title, pub.year, pub.venue, pub.url, pub.timestamp, pub.status, pub.draft_url)
@@ -80,9 +87,15 @@ class TestListResearchers:
     """Tests for GET /api/researchers."""
 
     def test_returns_all_researchers(self, client):
-        with patch("api.Database.fetch_all") as mock_fetch:
+        with (
+            patch("api.Database.fetch_one") as mock_one,
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_one.side_effect = [
+                (2,),                    # total count
+            ]
             mock_fetch.side_effect = [
-                SAMPLE_RESEARCHERS,      # researchers query
+                SAMPLE_RESEARCHERS,      # paginated researchers
                 BATCH_URLS_ALL,          # batch URLs for all researchers
                 BATCH_PUB_COUNTS_ALL,    # batch pub counts for all researchers
                 BATCH_FIELDS_ALL,        # batch fields for all researchers
@@ -92,10 +105,20 @@ class TestListResearchers:
         assert response.status_code == 200
         body = response.json()
         assert len(body["items"]) == 2
+        assert "total" in body
+        assert "page" in body
+        assert "per_page" in body
+        assert "pages" in body
 
     def test_researcher_item_shape(self, client):
-        """Each researcher must have id, first_name, last_name, position, affiliation, urls, website_url, publication_count, fields."""
-        with patch("api.Database.fetch_all") as mock_fetch:
+        """Each researcher must have id, first_name, last_name, position, affiliation, bio, urls, website_url, publication_count, fields."""
+        with (
+            patch("api.Database.fetch_one") as mock_one,
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_one.side_effect = [
+                (1,),                # total count
+            ]
             mock_fetch.side_effect = [
                 [SAMPLE_RESEARCHERS[0]],
                 BATCH_URLS_R1,
@@ -111,6 +134,7 @@ class TestListResearchers:
         assert item["position"] == "Professor"
         assert item["affiliation"] == "Freie Universität Berlin"
         assert item["publication_count"] == 23
+        assert "bio" in item
         assert len(item["urls"]) == 3
         assert item["urls"][0]["id"] == 10
         assert item["urls"][0]["page_type"] == "PUB"
@@ -118,6 +142,140 @@ class TestListResearchers:
         assert item["website_url"] == "https://steinhardt.example.com"
         assert len(item["fields"]) == 1
         assert item["fields"][0]["name"] == "Labour Economics"
+
+    def test_default_pagination(self, client):
+        """Default page=1, per_page=20; response includes pagination metadata."""
+        with (
+            patch("api.Database.fetch_one") as mock_one,
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_one.side_effect = [
+                (2,),                    # total count
+            ]
+            mock_fetch.side_effect = [
+                SAMPLE_RESEARCHERS,      # paginated researchers
+                BATCH_URLS_ALL,          # batch URLs
+                BATCH_PUB_COUNTS_ALL,    # batch pub counts
+                BATCH_FIELDS_ALL,        # batch fields
+            ]
+            response = client.get("/api/researchers")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["page"] == 1
+        assert body["per_page"] == 20
+        assert body["total"] == 2
+        assert body["pages"] == 1
+
+    def test_custom_pagination(self, client):
+        """Custom page and per_page values."""
+        with (
+            patch("api.Database.fetch_one") as mock_one,
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_one.side_effect = [
+                (2,),                    # total count
+            ]
+            mock_fetch.side_effect = [
+                [SAMPLE_RESEARCHERS[1]], # paginated researchers (page 2)
+                BATCH_URLS_R2,           # batch URLs
+                BATCH_PUB_COUNTS_R2,     # batch pub counts
+                BATCH_FIELDS_R2,         # batch fields
+            ]
+            response = client.get("/api/researchers?page=2&per_page=1")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["page"] == 2
+        assert body["per_page"] == 1
+        assert body["pages"] == 2
+
+    def test_per_page_capped_at_100(self, client):
+        """per_page > 100 should be rejected as 400."""
+        response = client.get("/api/researchers?per_page=200")
+        assert response.status_code == 400
+
+    def test_invalid_page_returns_400(self, client):
+        response = client.get("/api/researchers?page=-1")
+        assert response.status_code == 400
+
+    def test_institution_filter(self, client):
+        """?institution= performs partial match on affiliation."""
+        with (
+            patch("api.Database.fetch_one") as mock_one,
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_one.side_effect = [
+                (1,),                    # total count
+            ]
+            mock_fetch.side_effect = [
+                [SAMPLE_RESEARCHERS[1]], # paginated researchers
+                BATCH_URLS_R2,           # batch URLs
+                BATCH_PUB_COUNTS_R2,     # batch pub counts
+                BATCH_FIELDS_R2,         # batch fields
+            ]
+            response = client.get("/api/researchers?institution=MIT")
+
+        assert response.status_code == 200
+        assert len(response.json()["items"]) == 1
+
+    def test_position_filter(self, client):
+        """?position= performs partial match on position."""
+        with (
+            patch("api.Database.fetch_one") as mock_one,
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_one.side_effect = [
+                (1,),                        # total count
+            ]
+            mock_fetch.side_effect = [
+                [SAMPLE_RESEARCHERS[0]],     # paginated researchers
+                BATCH_URLS_R1,               # batch URLs
+                BATCH_PUB_COUNTS_R1,         # batch pub counts
+                BATCH_FIELDS_R1,             # batch fields
+            ]
+            response = client.get("/api/researchers?position=Professor")
+
+        assert response.status_code == 200
+        assert len(response.json()["items"]) == 1
+
+    def test_preset_top20_accepted(self, client):
+        """?preset=top20 is accepted and returns 200."""
+        with (
+            patch("api.Database.fetch_one") as mock_one,
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_one.side_effect = [
+                (1,),                        # total count
+            ]
+            mock_fetch.side_effect = [
+                [SAMPLE_RESEARCHERS[1]],     # paginated researchers
+                BATCH_URLS_R2,               # batch URLs
+                BATCH_PUB_COUNTS_R2,         # batch pub counts
+                BATCH_FIELDS_R2,             # batch fields
+            ]
+            response = client.get("/api/researchers?preset=top20")
+
+        assert response.status_code == 200
+
+    def test_field_filter_stubbed(self, client):
+        """?field= is accepted without error (stubbed until taxonomy table lands)."""
+        with (
+            patch("api.Database.fetch_one") as mock_one,
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_one.side_effect = [
+                (2,),                    # total count
+            ]
+            mock_fetch.side_effect = [
+                SAMPLE_RESEARCHERS,      # paginated researchers
+                BATCH_URLS_ALL,          # batch URLs
+                BATCH_PUB_COUNTS_ALL,    # batch pub counts
+                BATCH_FIELDS_ALL,        # batch fields
+            ]
+            response = client.get("/api/researchers?field=labor")
+
+        assert response.status_code == 200
 
 
 # ---------------------------------------------------------------------------
@@ -148,6 +306,7 @@ class TestGetResearcher:
         body = response.json()
         assert body["id"] == 1
         assert body["first_name"] == "Max Friedrich"
+        assert "bio" in body
         assert "publications" in body
         assert len(body["publications"]) == 1
         assert body["website_url"] == "https://steinhardt.example.com"
