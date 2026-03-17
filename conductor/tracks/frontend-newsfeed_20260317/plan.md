@@ -3,7 +3,7 @@
 **Track ID:** frontend-newsfeed_20260317
 **Spec:** [spec.md](./spec.md)
 **Created:** 2026-03-17
-**Status:** [ ] Not Started
+**Status:** [x] Complete
 
 ## Overview
 
@@ -15,11 +15,11 @@ Upgrade Next.js, install SWR, remove spurious dependency, configure environment.
 
 ### Tasks
 
-- [ ] Task 1.1: Remove `@ts-morph/common` from `package.json`
-- [ ] Task 1.2: Upgrade `next` and `eslint-config-next` to latest 14.x patch
-- [ ] Task 1.3: Install `swr` as a dependency
-- [ ] Task 1.4: Create `.env.local.example` with `NEXT_PUBLIC_API_URL=http://localhost:8000`
-- [ ] Task 1.5: Define TypeScript types in `src/lib/types.ts` matching the API response shapes from DESIGN.md Section 4
+- [x] Task 1.1: Remove `@ts-morph/common` from `package.json`
+- [x] Task 1.2: Upgrade `next` and `eslint-config-next` to latest 14.x patch
+- [x] Task 1.3: Install `swr` as a dependency
+- [x] Task 1.4: Create `.env.local.example` with `NEXT_PUBLIC_API_URL=http://localhost:8000`
+- [x] Task 1.5: Define TypeScript types in `src/lib/types.ts` matching the API response shapes from DESIGN.md Section 4
 
 ### Verification
 
@@ -32,19 +32,19 @@ Build the data-fetching layer and reusable UI components.
 
 ### Tasks
 
-- [ ] Task 2.1: Write tests for `src/lib/api.ts` (fetch functions, error handling, URL construction)
-- [ ] Task 2.2: Create `src/lib/api.ts` with `getPublications()`, `getResearchers()`, `getResearcher(id)` using SWR
-- [ ] Task 2.3: Write tests for shared components (PublicationCard, ResearcherCard, Header, loading skeletons)
-- [ ] Task 2.4: Create `src/components/Header.tsx` — site title + navigation (Feed, Researchers)
-- [ ] Task 2.5: Create `src/components/PublicationCard.tsx` — title, authors (linked), venue, year, discovery date
-- [ ] Task 2.6: Create `src/components/ResearcherCard.tsx` — name, affiliation, publication count
-- [ ] Task 2.7: Create loading skeleton components (`PublicationCardSkeleton`, `ResearcherCardSkeleton`)
-- [ ] Task 2.8: Create `src/components/ErrorMessage.tsx` and `src/components/EmptyState.tsx`
+- [x] Task 2.1: Write tests for `src/lib/api.ts` (fetch functions, error handling, URL construction)
+- [x] Task 2.2: Create `src/lib/api.ts` with `getPublications()`, `getResearchers()`, `getResearcher(id)` using SWR
+- [x] Task 2.3: Write tests for shared components (PublicationCard, ResearcherCard, Header, loading skeletons)
+- [x] Task 2.4: Create `src/components/Header.tsx` — site title + navigation (Feed, Researchers)
+- [x] Task 2.5: Create `src/components/PublicationCard.tsx` — title, authors (linked), venue, year, discovery date
+- [x] Task 2.6: Create `src/components/ResearcherCard.tsx` — name, affiliation, publication count
+- [x] Task 2.7: Create loading skeleton components (`PublicationCardSkeleton`, `ResearcherCardSkeleton`)
+- [x] Task 2.8: Create `src/components/ErrorMessage.tsx` and `src/components/EmptyState.tsx`
 
 ### Verification
 
-- [ ] All component tests pass
-- [ ] `npm run build` succeeds
+- [x] All component tests pass
+- [x] `npm run build` succeeds
 
 ## Phase 3: Layout & Newsfeed Page
 
@@ -52,17 +52,17 @@ Replace the scaffold layout and build the main feed.
 
 ### Tasks
 
-- [ ] Task 3.1: Write tests for the newsfeed page (renders publications, groups by date, pagination)
-- [ ] Task 3.2: Update `src/app/layout.tsx` — metadata, Header component, clean academic styling
-- [ ] Task 3.3: Update `src/app/globals.css` — base styles for the academic look
-- [ ] Task 3.4: Replace `src/app/page.tsx` with newsfeed — fetches publications, renders PublicationCards grouped by discovery date
-- [ ] Task 3.5: Implement "Load more" button (client component) that appends next page of results
+- [x] Task 3.1: Write tests for the newsfeed page (renders publications, groups by date, pagination)
+- [x] Task 3.2: Update `src/app/layout.tsx` — metadata, Header component, clean academic styling
+- [x] Task 3.3: Update `src/app/globals.css` — base styles for the academic look
+- [x] Task 3.4: Replace `src/app/page.tsx` with newsfeed — fetches publications, renders PublicationCards grouped by discovery date
+- [x] Task 3.5: Implement "Load more" button (client component) that appends next page of results
 
 ### Verification
 
-- [ ] Newsfeed page renders with mock/real API data
-- [ ] Pagination loads additional publications
-- [ ] Loading, error, and empty states display correctly
+- [x] Newsfeed page renders with mock/real API data
+- [x] Pagination loads additional publications
+- [x] Loading, error, and empty states display correctly
 
 ## Phase 4: Researchers Pages
 
@@ -70,16 +70,16 @@ Build the directory and detail pages.
 
 ### Tasks
 
-- [ ] Task 4.1: Write tests for researchers page and researcher detail page
-- [ ] Task 4.2: Create `src/app/researchers/page.tsx` — lists all researchers using ResearcherCards
-- [ ] Task 4.3: Create `src/app/researchers/[id]/page.tsx` — researcher profile + their publications
-- [ ] Task 4.4: Ensure author names in PublicationCard link to `/researchers/[id]`
+- [x] Task 4.1: Write tests for researchers page and researcher detail page
+- [x] Task 4.2: Create `src/app/researchers/page.tsx` — lists all researchers using ResearcherCards
+- [x] Task 4.3: Create `src/app/researchers/[id]/page.tsx` — researcher profile + their publications
+- [x] Task 4.4: Ensure author names in PublicationCard link to `/researchers/[id]`
 
 ### Verification
 
-- [ ] Researcher directory lists all researchers
-- [ ] Clicking a researcher navigates to their detail page with publications
-- [ ] Loading, error, and empty states work on both pages
+- [x] Researcher directory lists all researchers
+- [x] Clicking a researcher navigates to their detail page with publications
+- [x] Loading, error, and empty states work on both pages
 
 ## Phase 5: Polish & Build Verification
 
@@ -87,22 +87,22 @@ Responsive design, final cleanup, build check.
 
 ### Tasks
 
-- [ ] Task 5.1: Verify responsive layout on mobile and desktop viewports
-- [ ] Task 5.2: Review all pages for consistent styling (spacing, typography, colors)
-- [ ] Task 5.3: Run `npm run build` and fix any TypeScript or lint errors
-- [ ] Task 5.4: Run `npm run lint` and fix any warnings
+- [x] Task 5.1: Verify responsive layout on mobile and desktop viewports
+- [x] Task 5.2: Review all pages for consistent styling (spacing, typography, colors)
+- [x] Task 5.3: Run `npm run build` and fix any TypeScript or lint errors
+- [x] Task 5.4: Run `npm run lint` and fix any warnings
 
 ### Verification
 
-- [ ] `npm run build` succeeds with zero errors
-- [ ] `npm run lint` passes clean
-- [ ] All tests pass
+- [x] `npm run build` succeeds with zero errors
+- [x] `npm run lint` passes clean
+- [x] All tests pass
 
 ## Final Verification
 
-- [ ] All acceptance criteria met
-- [ ] Tests passing
-- [ ] Ready for review
+- [x] All acceptance criteria met
+- [x] Tests passing
+- [x] Ready for review
 
 ---
 
