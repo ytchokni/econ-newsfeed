@@ -1,0 +1,16 @@
+{
+  "id": "pipeline-hardening_20260317",
+  "title": "Pipeline Hardening & Scraping Infrastructure",
+  "type": "feature",
+  "status": "pending",
+  "created": "2026-03-17T00:00:00Z",
+  "updated": "2026-03-17T00:00:00Z",
+  "phases": {
+    "total": 4,
+    "completed": 0
+  },
+  "tasks": {
+    "total": 24,
+    "completed": 0
+  }
+}
