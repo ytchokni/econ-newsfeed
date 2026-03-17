@@ -266,6 +266,7 @@ async def list_publications(
     year: str | None = Query(None),
     researcher_id: int | None = Query(None),
     status: str | None = Query(None),
+    since: str | None = Query(None),
 ):
     valid_statuses = {"published", "accepted", "revise_and_resubmit", "reject_and_resubmit"}
     if status and status not in valid_statuses:
@@ -283,6 +284,13 @@ async def list_publications(
     if status:
         conditions.append("p.status = %s")
         params.append(status)
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since.rstrip("Z"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid ?since= value; expected ISO8601 timestamp")
+        conditions.append("p.timestamp >= %s")
+        params.append(since_dt)
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -425,6 +433,27 @@ def _get_fields_for_researchers(researcher_ids: list[int]) -> dict[int, list[dic
     return result
 
 
+# Top-20 economics department keywords for preset filtering
+_TOP20_DEPT_KEYWORDS = [
+    "MIT", "Massachusetts Institute of Technology",
+    "Harvard", "Princeton", "Stanford",
+    "University of Chicago",
+    "UC Berkeley", "University of California, Berkeley",
+    "Columbia", "Yale", "Northwestern",
+    "University of Pennsylvania",
+    "New York University", "NYU",
+    "Duke",
+    "University of Michigan",
+    "University of Minnesota",
+    "Cornell",
+    "UCLA", "University of California, Los Angeles",
+    "UC San Diego", "University of California, San Diego",
+    "University of Wisconsin",
+    "Boston University",
+    "Carnegie Mellon",
+]
+
+
 # ---------------------------------------------------------------------------
 # Researcher endpoints
 # ---------------------------------------------------------------------------
@@ -438,10 +467,52 @@ async def list_fields(request: Request):
 
 @app.get("/api/researchers")
 @limiter.limit("60/minute")
-async def list_researchers(request: Request, response: Response):
-    rows = Database.fetch_all(
-        "SELECT id, first_name, last_name, position, affiliation FROM researchers"
+async def list_researchers(
+    request: Request,
+    response: Response,
+    page: int = Query(1, ge=1),
+    per_page: int = Query(20, ge=1, le=100),
+    institution: str | None = Query(None),
+    field: str | None = Query(None),
+    position: str | None = Query(None),
+    preset: str | None = Query(None),
+):
+    conditions = []
+    params: list = []
+
+    if institution:
+        conditions.append("r.affiliation LIKE %s")
+        params.append(f"%{institution}%")
+    if position:
+        conditions.append("r.position LIKE %s")
+        params.append(f"%{position}%")
+    if preset == "top20":
+        dept_conditions = " OR ".join(["r.affiliation LIKE %s"] * len(_TOP20_DEPT_KEYWORDS))
+        conditions.append(f"({dept_conditions})")
+        params.extend(f"%{kw}%" for kw in _TOP20_DEPT_KEYWORDS)
+    # ?field= filtering depends on the field taxonomy table (Issue #11); stubbed until that schema lands
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    # Total count
+    count_row = Database.fetch_one(
+        f"SELECT COUNT(*) FROM researchers r {where}", params or None
     )
+    total = count_row[0] if count_row else 0
+    pages = math.ceil(total / per_page) if total else 0
+
+    offset = (page - 1) * per_page
+    rows = Database.fetch_all(
+        f"""
+        SELECT r.id, r.first_name, r.last_name, r.position, r.affiliation, r.bio
+        FROM researchers r
+        {where}
+        ORDER BY r.last_name, r.first_name
+        LIMIT %s OFFSET %s
+        """,
+        (*params, per_page, offset),
+    )
+
     researcher_ids = [r[0] for r in rows]
     urls_by_researcher = _get_urls_for_researchers(researcher_ids)
     pub_counts = _get_pub_counts_for_researchers(researcher_ids)
@@ -453,6 +524,7 @@ async def list_researchers(request: Request, response: Response):
             "last_name": r[2],
             "position": r[3],
             "affiliation": r[4],
+            "bio": r[5],
             "urls": urls_by_researcher.get(r[0], []),
             "website_url": _get_website_url(urls_by_researcher.get(r[0], [])),
             "publication_count": pub_counts.get(r[0], 0),
@@ -461,14 +533,20 @@ async def list_researchers(request: Request, response: Response):
         for r in rows
     ]
     response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=600"
-    return {"items": items}
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "pages": pages,
+    }
 
 
 @app.get("/api/researchers/{researcher_id}")
 @limiter.limit("60/minute")
 async def get_researcher(request: Request, researcher_id: int):
     row = Database.fetch_one(
-        "SELECT id, first_name, last_name, position, affiliation FROM researchers WHERE id = %s",
+        "SELECT id, first_name, last_name, position, affiliation, bio FROM researchers WHERE id = %s",
         (researcher_id,),
     )
     if not row:
@@ -499,6 +577,7 @@ async def get_researcher(request: Request, researcher_id: int):
         "last_name": row[2],
         "position": row[3],
         "affiliation": row[4],
+        "bio": row[5],
         "urls": urls,
         "website_url": _get_website_url(urls),
         "publication_count": pub_count,

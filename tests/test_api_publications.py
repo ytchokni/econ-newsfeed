@@ -140,6 +140,27 @@ class TestListPublications:
         response = client.get("/api/publications?page=-1")
         assert response.status_code == 400
 
+    def test_since_filter(self, client):
+        """?since= filters publications discovered after the given timestamp."""
+        with (
+            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_fetch.side_effect = [
+                [SAMPLE_PUBLICATIONS[0]],
+                SAMPLE_AUTHORS_PUB1,
+            ]
+            response = client.get("/api/publications?since=2026-03-15T00:00:00Z")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body["items"]) == 1
+
+    def test_since_invalid_format_returns_400(self, client):
+        """Invalid ?since= value returns 400."""
+        response = client.get("/api/publications?since=not-a-date")
+        assert response.status_code == 400
+
     def test_publication_item_shape(self, client):
         """Each item must have id, title, authors, year, venue, source_url, discovered_at."""
         with (

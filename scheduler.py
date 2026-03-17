@@ -127,6 +127,18 @@ def run_scrape_job():
                         Publication.save_publications(url, pubs)
                         pubs_extracted += len(pubs)
 
+            # Extract bio from HOME pages only when bio is not yet set
+            if page_type == "HOME":
+                bio_row = Database.fetch_one(
+                    "SELECT bio FROM researchers WHERE id = %s", (researcher_id,)
+                )
+                if bio_row and bio_row[0] is None:
+                    page_text = HTMLFetcher.get_latest_text(url_id)
+                    if page_text:
+                        bio = HTMLFetcher.extract_bio(page_text, url)
+                        if bio:
+                            Database.update_researcher_bio(researcher_id, bio)
+
         update_scrape_log(log_id, "completed", urls_checked, urls_changed, pubs_extracted)
         logger.info(f"Scrape completed: {urls_checked} checked, {urls_changed} changed, {pubs_extracted} extracted")
 
