@@ -310,7 +310,13 @@ class Database:
                 data = json.loads(match.group(0))
                 match_id = data.get('match_id')
                 if match_id is not None:
-                    return int(match_id)
+                    candidate_ids = {c[0] for c in candidates}
+                    match_id_int = int(match_id)
+                    if match_id_int in candidate_ids:
+                        return match_id_int
+                    logging.warning(
+                        f"LLM returned match_id={match_id} not in candidate IDs {candidate_ids}; ignoring"
+                    )
         except Exception as e:
             logging.error(f"LLM researcher disambiguation error: {e}")
         return None
