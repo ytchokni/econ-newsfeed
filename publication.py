@@ -5,7 +5,11 @@ from openai import OpenAI
 import json
 import re
 import logging
-import os 
+import os
+
+OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
+_openai_client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+
 
 class Publication:
     def __init__(self, id, title, authors, year, venue, url):
@@ -85,13 +89,12 @@ class Publication:
         Content:
         {text_content[:4000]}  # Limit content to 4000 characters
         """
-        logging.info(f"Extracting publications from using openai {url}")
-        
-        client = OpenAI(api_key= os.environ.get('OPENAI_API_KEY'))
+        logging.info(f"Extracting publications from {url} using OpenAI ({OPENAI_MODEL})")
+
         try:
-            chat_completion = client.chat.completions.create(
+            chat_completion = _openai_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
-                model="gpt-3.5-turbo",
+                model=OPENAI_MODEL,
             )
             
             response = chat_completion.choices[0].message.content
