@@ -23,7 +23,7 @@ def extract_data_from_htmls():
     """Extract publication data from downloaded HTML content."""
     researcher_urls = Researcher.get_all_researcher_urls()
     for id, researcher_id, url, page_type in researcher_urls:
-        if page_type in ["PUB", "WP"]:
+        if page_type in ["PUB", "WP","RES"]:
             logging.info(f"Extracting data from HTML for URL ID: {id}, URL: {url}, Page Type: {page_type}")
             html_content = HTMLFetcher.get_latest_text(id)
             if html_content:
