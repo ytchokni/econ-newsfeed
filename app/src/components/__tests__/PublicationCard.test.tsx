@@ -13,6 +13,9 @@ const publication: Publication = {
   venue: "Journal of Labor Economics",
   source_url: "https://example.com/paper",
   discovered_at: "2026-03-15T14:30:00Z",
+  status: null,
+  draft_url: null,
+  draft_available: false,
 };
 
 describe("PublicationCard", () => {

@@ -22,10 +22,10 @@ def client():
 
 # Sample data that mimics Database.fetch_all / fetch_one return shapes
 SAMPLE_PUBLICATIONS = [
-    # (pub.id, pub.title, pub.year, pub.venue, pub.url, pub.timestamp)
-    (1, "Trade and Wages", "2024", "JLE", "https://example.com/pub", datetime(2026, 3, 15, 14, 30)),
-    (2, "Immigration Effects", "2023", "QJE", "https://example.com/pub2", datetime(2026, 3, 14, 10, 0)),
-    (3, "Labor Markets", "2024", "AER", "https://example.com/pub3", datetime(2026, 3, 13, 9, 0)),
+    # (pub.id, pub.title, pub.year, pub.venue, pub.url, pub.timestamp, pub.status, pub.draft_url)
+    (1, "Trade and Wages", "2024", "JLE", "https://example.com/pub", datetime(2026, 3, 15, 14, 30), "published", "https://ssrn.com/abstract=1"),
+    (2, "Immigration Effects", "2023", "QJE", "https://example.com/pub2", datetime(2026, 3, 14, 10, 0), "accepted", None),
+    (3, "Labor Markets", "2024", "AER", "https://example.com/pub3", datetime(2026, 3, 13, 9, 0), None, None),
 ]
 
 SAMPLE_AUTHORS_PUB1 = [
@@ -145,6 +145,9 @@ class TestListPublications:
         assert item["venue"] == "JLE"
         assert item["source_url"] == "https://example.com/pub"
         assert "discovered_at" in item
+        assert item["status"] == "published"
+        assert item["draft_url"] == "https://ssrn.com/abstract=1"
+        assert item["draft_available"] is True
         assert len(item["authors"]) == 2
         assert item["authors"][0]["id"] == 10
         assert item["authors"][0]["first_name"] == "Max Friedrich"

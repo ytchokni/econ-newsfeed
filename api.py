@@ -164,7 +164,11 @@ def _get_authors_for_publication(publication_id: int) -> list[dict]:
 
 
 def _format_publication(row, authors: list[dict]) -> dict:
-    """Format a publication DB row + authors into the API response shape."""
+    """Format a publication DB row + authors into the API response shape.
+
+    Expected row columns: id, title, year, venue, url, timestamp, status, draft_url
+    """
+    draft_url = row[7] if len(row) > 7 else None
     return {
         "id": row[0],
         "title": row[1],
@@ -173,6 +177,9 @@ def _format_publication(row, authors: list[dict]) -> dict:
         "venue": row[3],
         "source_url": row[4],
         "discovered_at": row[5].isoformat() + "Z" if row[5] else None,
+        "status": row[6] if len(row) > 6 else None,
+        "draft_url": draft_url,
+        "draft_available": draft_url is not None,
     }
 
 
@@ -186,7 +193,12 @@ async def list_publications(
     per_page: int = Query(20, ge=1, le=100),
     year: str | None = Query(None),
     researcher_id: int | None = Query(None),
+    status: str | None = Query(None),
 ):
+    valid_statuses = {"published", "accepted", "revise_and_resubmit", "reject_and_resubmit"}
+    if status and status not in valid_statuses:
+        raise HTTPException(status_code=400, detail=f"Invalid status value. Must be one of: {', '.join(sorted(valid_statuses))}")
+
     # Build WHERE clause
     conditions = []
     params: list = []
@@ -196,12 +208,15 @@ async def list_publications(
     if researcher_id:
         conditions.append("p.id IN (SELECT publication_id FROM authorship WHERE researcher_id = %s)")
         params.append(researcher_id)
+    if status:
+        conditions.append("p.status = %s")
+        params.append(status)
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
     # Total count
     count_row = Database.fetch_one(
-        f"SELECT COUNT(*) FROM publications p {where}", params or None
+        f"SELECT COUNT(*) FROM papers p {where}", params or None
     )
     total = count_row[0] if count_row else 0
     pages = math.ceil(total / per_page) if total else 0
@@ -210,8 +225,8 @@ async def list_publications(
     offset = (page - 1) * per_page
     rows = Database.fetch_all(
         f"""
-        SELECT p.id, p.title, p.year, p.venue, p.url, p.timestamp
-        FROM publications p
+        SELECT p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url
+        FROM papers p
         {where}
         ORDER BY p.timestamp DESC
         LIMIT %s OFFSET %s
@@ -236,7 +251,7 @@ async def list_publications(
 @app.get("/api/publications/{publication_id}")
 async def get_publication(publication_id: int):
     row = Database.fetch_one(
-        "SELECT id, title, year, venue, url, timestamp FROM publications WHERE id = %s",
+        "SELECT id, title, year, venue, url, timestamp, status, draft_url FROM papers WHERE id = %s",
         (publication_id,),
     )
     if not row:
@@ -258,6 +273,14 @@ def _get_urls_for_researcher(researcher_id: int) -> list[dict]:
     return [{"id": r[0], "page_type": r[1], "url": r[2]} for r in rows]
 
 
+def _get_website_url(urls: list[dict]) -> str | None:
+    """Return the homepage URL from a researcher's URL list, or None."""
+    for u in urls:
+        if u["page_type"].lower() == "homepage":
+            return u["url"]
+    return None
+
+
 def _get_pub_count_for_researcher(researcher_id: int) -> int:
     row = Database.fetch_one(
         "SELECT COUNT(*) FROM authorship WHERE researcher_id = %s",
@@ -266,9 +289,29 @@ def _get_pub_count_for_researcher(researcher_id: int) -> int:
     return row[0] if row else 0
 
 
+def _get_fields_for_researcher(researcher_id: int) -> list[dict]:
+    rows = Database.fetch_all(
+        """
+        SELECT rf.id, rf.name, rf.slug
+        FROM researcher_fields rf_link
+        JOIN research_fields rf ON rf.id = rf_link.field_id
+        WHERE rf_link.researcher_id = %s
+        ORDER BY rf.name
+        """,
+        (researcher_id,),
+    )
+    return [{"id": r[0], "name": r[1], "slug": r[2]} for r in rows]
+
+
 # ---------------------------------------------------------------------------
 # Researcher endpoints
 # ---------------------------------------------------------------------------
+
+@app.get("/api/fields")
+async def list_fields():
+    rows = Database.fetch_all("SELECT id, name, slug FROM research_fields ORDER BY name")
+    return {"items": [{"id": r[0], "name": r[1], "slug": r[2]} for r in rows]}
+
 
 @app.get("/api/researchers")
 async def list_researchers():
@@ -279,6 +322,7 @@ async def list_researchers():
     for r in rows:
         urls = _get_urls_for_researcher(r[0])
         pub_count = _get_pub_count_for_researcher(r[0])
+        fields = _get_fields_for_researcher(r[0])
         items.append({
             "id": r[0],
             "first_name": r[1],
@@ -286,7 +330,9 @@ async def list_researchers():
             "position": r[3],
             "affiliation": r[4],
             "urls": urls,
+            "website_url": _get_website_url(urls),
             "publication_count": pub_count,
+            "fields": fields,
         })
     return {"items": items}
 
@@ -303,11 +349,13 @@ async def get_researcher(researcher_id: int):
     urls = _get_urls_for_researcher(researcher_id)
     pub_count = _get_pub_count_for_researcher(researcher_id)
 
+    fields = _get_fields_for_researcher(researcher_id)
+
     # Fetch this researcher's publications
     pub_rows = Database.fetch_all(
         """
-        SELECT p.id, p.title, p.year, p.venue, p.url, p.timestamp
-        FROM publications p
+        SELECT p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url
+        FROM papers p
         JOIN authorship a ON a.publication_id = p.id
         WHERE a.researcher_id = %s
         ORDER BY p.timestamp DESC
@@ -326,7 +374,9 @@ async def get_researcher(researcher_id: int):
         "position": row[3],
         "affiliation": row[4],
         "urls": urls,
+        "website_url": _get_website_url(urls),
         "publication_count": pub_count,
+        "fields": fields,
         "publications": publications,
     }
 
