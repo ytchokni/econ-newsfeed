@@ -2,6 +2,8 @@ from database import Database
 from datetime import datetime
 from bs4 import BeautifulSoup
 from openai import OpenAI
+from pydantic import BaseModel, ValidationError
+from typing import Optional
 import json
 import re
 import logging
@@ -9,6 +11,13 @@ import os
 
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
 _openai_client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+
+
+class PublicationExtraction(BaseModel):
+    title: str
+    authors: list[list[str]]  # [[first_name, last_name], ...]
+    year: Optional[str] = None
+    venue: Optional[str] = None
 
 
 class Publication:
@@ -99,12 +108,20 @@ class Publication:
             
             response = chat_completion.choices[0].message.content
             parsed_response = Publication.parse_openai_response(response)
-            
+
             if parsed_response is None:
                 logging.error(f"Failed to parse OpenAI response for URL: {url}")
                 return []
-            
-            return parsed_response
+
+            # Validate each publication through Pydantic
+            validated = []
+            for item in parsed_response:
+                try:
+                    pub = PublicationExtraction(**item)
+                    validated.append(pub.model_dump())
+                except (ValidationError, TypeError) as e:
+                    logging.warning(f"Rejected malformed publication from LLM output: {e}")
+            return validated
         except Exception as e:
             logging.error(f"Error in OpenAI API call: {str(e)}")
             return []
