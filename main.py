@@ -23,7 +23,10 @@ def extract_data_from_htmls():
     """Extract publication data from downloaded HTML content."""
     researcher_urls = Researcher.get_all_researcher_urls()
     for id, researcher_id, url, page_type in researcher_urls:
-        if page_type in ["PUB", "WP","RES"]:
+        if page_type in ["PUB", "WP", "RES"]:
+            if not HTMLFetcher.needs_extraction(id):
+                logging.info(f"Skipping extraction for URL ID: {id}, URL: {url} (content unchanged since last extraction)")
+                continue
             logging.info(f"Extracting data from HTML for URL ID: {id}, URL: {url}, Page Type: {page_type}")
             html_content = HTMLFetcher.get_latest_text(id)
             if html_content:
@@ -32,6 +35,7 @@ def extract_data_from_htmls():
                     Publication.save_publications(url, extracted_publications)
                 else:
                     logging.warning(f"No publications extracted for URL ID: {id}, URL: {url}")
+                HTMLFetcher.mark_extracted(id)
             else:
                 logging.error(f"No HTML content found for URL ID: {id}, URL: {url}")
         else:
@@ -39,6 +43,8 @@ def extract_data_from_htmls():
 
 def main():
     """Main function to handle user input and execute the appropriate actions."""
+    Database.apply_schema_migrations()
+
     actions = {
         '1': ('Import data from a file', import_data),
         '2': ('Download HTML content', download_htmls),

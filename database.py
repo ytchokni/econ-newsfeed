@@ -136,6 +136,8 @@ class Database:
                     content_hash VARCHAR(64),
                     timestamp DATETIME,
                     researcher_id INT,
+                    extracted_at DATETIME,
+                    extracted_hash VARCHAR(64),
                     UNIQUE KEY uq_url_id (url_id),
                     INDEX idx_url_id_ts (url_id, timestamp),
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id),
@@ -214,6 +216,66 @@ class Database:
             )
 
     @staticmethod
+    def apply_schema_migrations():
+        """
+        Apply schema migrations to existing tables.
+        Safe to run on every startup — each step is idempotent.
+        """
+        # 1. Remove duplicate researcher_urls rows, keeping the lowest ID
+        Database.execute_query("""
+            DELETE r1 FROM researcher_urls r1
+            JOIN researcher_urls r2
+              ON r1.researcher_id = r2.researcher_id
+              AND r1.url = r2.url
+              AND r1.id > r2.id
+        """)
+
+        # 2. Add UNIQUE KEY to researcher_urls if not present
+        result = Database.fetch_one("""
+            SELECT COUNT(*)
+            FROM information_schema.TABLE_CONSTRAINTS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'researcher_urls'
+              AND CONSTRAINT_NAME = 'uq_researcher_url'
+        """)
+        if result and result[0] == 0:
+            Database.execute_query("""
+                ALTER TABLE researcher_urls
+                  ADD UNIQUE KEY uq_researcher_url (researcher_id, url(500))
+            """)
+            logging.info("Migration: added UNIQUE KEY uq_researcher_url to researcher_urls")
+
+        # 3. Add extracted_at column to html_content if not present
+        result = Database.fetch_one("""
+            SELECT COUNT(*)
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'html_content'
+              AND COLUMN_NAME = 'extracted_at'
+        """)
+        if result and result[0] == 0:
+            Database.execute_query("""
+                ALTER TABLE html_content ADD COLUMN extracted_at DATETIME
+            """)
+            logging.info("Migration: added extracted_at column to html_content")
+
+        # 4. Add extracted_hash column to html_content if not present
+        result = Database.fetch_one("""
+            SELECT COUNT(*)
+            FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE()
+              AND TABLE_NAME = 'html_content'
+              AND COLUMN_NAME = 'extracted_hash'
+        """)
+        if result and result[0] == 0:
+            Database.execute_query("""
+                ALTER TABLE html_content ADD COLUMN extracted_hash VARCHAR(64)
+            """)
+            logging.info("Migration: added extracted_hash column to html_content")
+
+        logging.info("Schema migrations applied successfully")
+
+    @staticmethod
     def get_researcher_id(first_name, last_name, position=None, affiliation=None):
         """
         Get the researcher ID based on the first name and last name.
@@ -274,4 +336,5 @@ class Database:
 if __name__ == "__main__":
     Database.create_database()  # Create the database before creating tables
     Database.create_tables()
+    Database.apply_schema_migrations()
     Database.import_data_from_file('urls.csv')
