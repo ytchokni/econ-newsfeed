@@ -124,12 +124,12 @@ class Database:
             "html_content": """
                 CREATE TABLE IF NOT EXISTS html_content (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    url_id INT,
-                    url VARCHAR(255),
+                    url_id INT NOT NULL,
                     content LONGTEXT,
                     content_hash VARCHAR(64),
                     timestamp DATETIME,
                     researcher_id INT,
+                    UNIQUE KEY uq_url_id (url_id),
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id),
                     FOREIGN KEY (url_id) REFERENCES researcher_urls(id)
                 )
