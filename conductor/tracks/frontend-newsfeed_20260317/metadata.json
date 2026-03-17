@@ -2,15 +2,28 @@
   "id": "frontend-newsfeed_20260317",
   "title": "Frontend Newsfeed UI",
   "type": "feature",
-  "status": "pending",
+  "status": "complete",
   "created": "2026-03-17T00:00:00Z",
-  "updated": "2026-03-17T00:00:00Z",
+  "updated": "2026-03-17T14:45:00Z",
+  "current_phase": 5,
+  "current_task": "5.4",
   "phases": {
     "total": 5,
-    "completed": 0
+    "completed": 5
   },
   "tasks": {
     "total": 22,
-    "completed": 0
-  }
+    "completed": 22
+  },
+  "commits": [
+    "24ee089: chore(deps): remove spurious @ts-morph/common dependency",
+    "1e69ccc: chore(deps): upgrade next and eslint-config-next to 14.2.35",
+    "69439ef: chore(deps): install swr for client-side data fetching",
+    "aca7029: chore: add .env.local.example with API URL template",
+    "b743145: feat(types): define TypeScript types matching API response shapes",
+    "7f0c259: feat(api): add API client with tests for publications and researchers",
+    "6e992c3: feat(components): add shared UI components with tests",
+    "adb9130: feat(newsfeed): add newsfeed page with date grouping and pagination",
+    "6f15fe5: feat(researchers): add researcher directory and detail pages with tests"
+  ]
 }
