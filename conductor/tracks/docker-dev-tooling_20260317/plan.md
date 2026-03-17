@@ -3,7 +3,7 @@
 **Track ID:** docker-dev-tooling_20260317
 **Spec:** [spec.md](./spec.md)
 **Created:** 2026-03-17
-**Status:** [ ] Not Started
+**Status:** [x] Complete
 
 ## Overview
 
@@ -15,10 +15,10 @@ Create Dockerfiles for the API and frontend services with .dockerignore files.
 
 ### Tasks
 
-- [ ] Task 1.1: Create root `.dockerignore` (excludes `.git`, `node_modules`, `.env`, `__pycache__`, `.venv`, `app/`)
-- [ ] Task 1.2: Create `Dockerfile.api` — Python 3.12-slim, non-root user, install requirements, copy source, expose 8000
-- [ ] Task 1.3: Create `app/.dockerignore` (excludes `.git`, `node_modules`, `.env`, `.next`)
-- [ ] Task 1.4: Create `app/Dockerfile` — Node 20-slim, non-root user, install deps, copy source, build, expose 3000
+- [x] Task 1.1: Create root `.dockerignore` (excludes `.git`, `node_modules`, `.env`, `__pycache__`, `.venv`, `app/`)
+- [x] Task 1.2: Create `Dockerfile.api` — Python 3.12-slim, non-root user, install requirements, copy source, expose 8000
+- [x] Task 1.3: Create `app/.dockerignore` (excludes `.git`, `node_modules`, `.env`, `.next`)
+- [x] Task 1.4: Create `app/Dockerfile` — Node 20-slim, non-root user, install deps, copy source, build, expose 3000
 
 ### Verification
 
@@ -32,10 +32,10 @@ Create docker-compose.yml orchestrating all three services.
 
 ### Tasks
 
-- [ ] Task 2.1: Create `docker-compose.yml` with MySQL 8 service — non-root app user via env vars, health check (`mysqladmin ping`), named volume for data persistence
-- [ ] Task 2.2: Add API service — builds from `Dockerfile.api`, depends on MySQL health check, passes DB env vars, exposes 8000
-- [ ] Task 2.3: Add frontend service — builds from `app/Dockerfile`, depends on API, passes `NEXT_PUBLIC_API_URL`, exposes 3000
-- [ ] Task 2.4: Create `.env.example` updates if needed to document Docker-specific defaults
+- [x] Task 2.1: Create `docker-compose.yml` with MySQL 8 service — non-root app user via env vars, health check (`mysqladmin ping`), named volume for data persistence
+- [x] Task 2.2: Add API service — builds from `Dockerfile.api`, depends on MySQL health check, passes DB env vars, exposes 8000
+- [x] Task 2.3: Add frontend service — builds from `app/Dockerfile`, depends on API, passes `NEXT_PUBLIC_API_URL`, exposes 3000
+- [x] Task 2.4: Create `.env.example` updates if needed to document Docker-specific defaults
 
 ### Verification
 
@@ -49,10 +49,10 @@ Create Makefile with local (non-Docker) development targets.
 
 ### Tasks
 
-- [ ] Task 3.1: Create `Makefile` with `setup` target — creates venv, installs Python deps, installs Node deps in `app/`
-- [ ] Task 3.2: Add `dev` target — starts API and frontend in parallel
-- [ ] Task 3.3: Add `seed` target — runs database seeding script
-- [ ] Task 3.4: Add `reset-db` target — drops and recreates database tables
+- [x] Task 3.1: Create `Makefile` with `setup` target — creates venv, installs Python deps, installs Node deps in `app/`
+- [x] Task 3.2: Add `dev` target — starts API and frontend in parallel
+- [x] Task 3.3: Add `seed` target — runs database seeding script
+- [x] Task 3.4: Add `reset-db` target — drops and recreates database tables
 
 ### Verification
 
