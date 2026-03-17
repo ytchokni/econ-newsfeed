@@ -1,7 +1,9 @@
 """FastAPI REST API for econ-newsfeed."""
 import math
 import os
+import threading
 from contextlib import asynccontextmanager
+from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
@@ -10,7 +12,13 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from database import Database
-from scheduler import start_scheduler, shutdown_scheduler
+import scheduler
+from scheduler import (
+    start_scheduler,
+    shutdown_scheduler,
+    create_scrape_log,
+    run_scrape_job,
+)
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
@@ -324,18 +332,70 @@ async def get_researcher(researcher_id: int):
 
 
 # ---------------------------------------------------------------------------
-# Scrape endpoints (placeholder — Phase 4)
+# Scrape endpoints
 # ---------------------------------------------------------------------------
 
 @app.post("/api/scrape", status_code=201)
 async def trigger_scrape(request: Request):
+    # Authenticate
     api_key = request.headers.get("X-API-Key")
     scrape_api_key = os.environ.get("SCRAPE_API_KEY")
     if not api_key or api_key != scrape_api_key:
         raise HTTPException(status_code=401, detail="Missing or invalid API key")
-    return {"scrape_id": 0, "status": "running", "started_at": None}
+
+    # Check if a scrape is already running
+    if not scheduler._scrape_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="A scrape is already running. Wait for it to complete.",
+        )
+    # Release immediately — run_scrape_job will re-acquire
+    scheduler._scrape_lock.release()
+
+    log_id = create_scrape_log()
+    started_at = datetime.now(timezone.utc)
+
+    # Run scrape in background thread
+    t = threading.Thread(target=run_scrape_job, daemon=True)
+    t.start()
+
+    return {
+        "scrape_id": log_id,
+        "status": "running",
+        "started_at": started_at.isoformat() + "Z",
+    }
 
 
 @app.get("/api/scrape/status")
 async def scrape_status():
-    return {"last_scrape": None, "next_scrape_at": None, "interval_hours": 24}
+    row = Database.fetch_one(
+        """
+        SELECT id, status, started_at, finished_at,
+               urls_checked, urls_changed, pubs_extracted
+        FROM scrape_log
+        ORDER BY id DESC
+        LIMIT 1
+        """
+    )
+
+    interval = scheduler.SCRAPE_INTERVAL_HOURS
+
+    if not row:
+        return {"last_scrape": None, "next_scrape_at": None, "interval_hours": interval}
+
+    started_at = row[2]
+    next_scrape = (started_at + timedelta(hours=interval)).isoformat() + "Z" if started_at else None
+
+    return {
+        "last_scrape": {
+            "id": row[0],
+            "status": row[1],
+            "started_at": row[2].isoformat() + "Z" if row[2] else None,
+            "finished_at": row[3].isoformat() + "Z" if row[3] else None,
+            "urls_checked": row[4],
+            "urls_changed": row[5],
+            "pubs_extracted": row[6],
+        },
+        "next_scrape_at": next_scrape,
+        "interval_hours": interval,
+    }
