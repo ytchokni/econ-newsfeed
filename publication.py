@@ -55,53 +55,60 @@ class Publication:
     def save_publications(url, publications):
         """Save extracted publications to the database, skipping duplicates."""
         for pub in publications:
+            conn = None
             try:
+                # Normalize title before insertion so the uq_title_url index is used for dedup
                 normalized_title = Publication._normalize_title(pub['title'])
-
-                # Check for existing publication with same normalized title + URL
-                existing = Database.fetch_one(
-                    "SELECT id FROM papers WHERE LOWER(TRIM(title)) = %s AND url = %s",
-                    (normalized_title, url)
-                )
-                if existing:
-                    logging.info(f"Duplicate publication skipped: {pub['title']}")
-                    continue
 
                 with Database.get_connection() as conn:
                     cursor = conn.cursor()
 
-                    query = """
-                    INSERT INTO papers (url, title, year, venue, timestamp, status, draft_url)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s)
-                    """
-                    params = (url, pub['title'], pub.get('year'), pub.get('venue'), datetime.now(), pub.get('status'), pub.get('draft_url'))
-                    cursor.execute(query, params)
+                    # INSERT IGNORE leverages uq_title_url index — no full-table-scan pre-check needed
+                    cursor.execute(
+                        """
+                        INSERT IGNORE INTO papers (url, title, year, venue, timestamp, status, draft_url)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        """,
+                        (url, normalized_title, pub.get('year'), pub.get('venue'), datetime.now(), pub.get('status'), pub.get('draft_url')),
+                    )
 
-                    # Get the last inserted ID
-                    publication_id = cursor.lastrowid
+                    if cursor.lastrowid:
+                        publication_id = cursor.lastrowid
+                    else:
+                        # Duplicate ignored — fetch existing id via the indexed columns
+                        cursor.execute(
+                            "SELECT id FROM papers WHERE title = %s AND url = %s",
+                            (normalized_title, url),
+                        )
+                        row = cursor.fetchone()
+                        if not row:
+                            logging.error(f"Could not find publication after INSERT IGNORE: {pub['title']}")
+                            cursor.close()
+                            continue
+                        publication_id = row[0]
+                        logging.info(f"Duplicate publication skipped: {pub['title']}")
 
                     # Process authors
                     for author_order, author in enumerate(pub['authors'], start=1):
                         first_name, last_name = author
-                        # Get or create researcher
                         author_id = Database.get_researcher_id(first_name, last_name)
-                        
-                        # Create authorship entry
-                        authorship_query = """
-                        INSERT INTO authorship (researcher_id, publication_id, author_order)
-                        VALUES (%s, %s, %s)
-                        """
-                        authorship_params = (author_id, publication_id, author_order)
-                        cursor.execute(authorship_query, authorship_params)
 
-                    # Commit the transaction
+                        # INSERT IGNORE prevents duplicate authorship entries (uq_researcher_pub)
+                        cursor.execute(
+                            """
+                            INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order)
+                            VALUES (%s, %s, %s)
+                            """,
+                            (author_id, publication_id, author_order),
+                        )
+
                     conn.commit()
+                    cursor.close()
                     logging.info(f"Publication saved successfully: {pub['title']}")
 
             except Exception as e:
                 logging.error("Error saving publication: %s", type(e).__name__)
-                # If there's an error, rollback the transaction
-                if 'conn' in locals():
+                if conn is not None:
                     conn.rollback()
 
         logging.info(f"{len(publications)} publications processed for {url}")

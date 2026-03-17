@@ -29,13 +29,29 @@ SAMPLE_PUBLICATIONS = [
 ]
 
 SAMPLE_AUTHORS_PUB1 = [
-    # (researcher_id, first_name, last_name)
+    # (researcher_id, first_name, last_name) — used for single-pub endpoint
     (10, "Max Friedrich", "Steinhardt"),
     (11, "Jane", "Doe"),
 ]
 
 SAMPLE_AUTHORS_PUB2 = [
     (10, "Max Friedrich", "Steinhardt"),
+]
+
+# Batch author format: (publication_id, researcher_id, first_name, last_name)
+BATCH_AUTHORS_PUBS_1_2_3 = [
+    (1, 10, "Max Friedrich", "Steinhardt"),
+    (1, 11, "Jane", "Doe"),
+    (2, 10, "Max Friedrich", "Steinhardt"),
+]
+
+BATCH_AUTHORS_PUB1 = [
+    (1, 10, "Max Friedrich", "Steinhardt"),
+    (1, 11, "Jane", "Doe"),
+]
+
+BATCH_AUTHORS_PUB2 = [
+    (2, 10, "Max Friedrich", "Steinhardt"),
 ]
 
 
@@ -52,12 +68,10 @@ class TestListPublications:
             patch("api.Database.fetch_one", return_value=(3,)),  # total count
             patch("api.Database.fetch_all") as mock_fetch,
         ):
-            # First call: publications query; second+: authors per publication
+            # First call: publications; second: batch authors for all pubs
             mock_fetch.side_effect = [
                 SAMPLE_PUBLICATIONS,
-                SAMPLE_AUTHORS_PUB1,
-                SAMPLE_AUTHORS_PUB2,
-                [],  # pub3 has no authors in mock
+                BATCH_AUTHORS_PUBS_1_2_3,
             ]
             response = client.get("/api/publications")
 
@@ -77,7 +91,7 @@ class TestListPublications:
         ):
             mock_fetch.side_effect = [
                 [SAMPLE_PUBLICATIONS[1]],
-                SAMPLE_AUTHORS_PUB2,
+                BATCH_AUTHORS_PUB2,
             ]
             response = client.get("/api/publications?page=2&per_page=1")
 
@@ -100,7 +114,7 @@ class TestListPublications:
         ):
             mock_fetch.side_effect = [
                 [SAMPLE_PUBLICATIONS[0]],
-                SAMPLE_AUTHORS_PUB1,
+                BATCH_AUTHORS_PUB1,
             ]
             response = client.get("/api/publications?year=2024")
 
@@ -116,7 +130,7 @@ class TestListPublications:
         ):
             mock_fetch.side_effect = [
                 [SAMPLE_PUBLICATIONS[0]],
-                SAMPLE_AUTHORS_PUB1,
+                BATCH_AUTHORS_PUB1,
             ]
             response = client.get("/api/publications?researcher_id=10")
 
@@ -134,7 +148,7 @@ class TestListPublications:
         ):
             mock_fetch.side_effect = [
                 [SAMPLE_PUBLICATIONS[0]],
-                SAMPLE_AUTHORS_PUB1,
+                BATCH_AUTHORS_PUB1,
             ]
             response = client.get("/api/publications")
 
