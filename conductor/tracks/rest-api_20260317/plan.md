@@ -3,7 +3,7 @@
 **Track ID:** rest-api_20260317
 **Spec:** [spec.md](./spec.md)
 **Created:** 2026-03-17
-**Status:** [ ] Not Started
+**Status:** [~] In Progress
 
 ## Overview
 
@@ -15,17 +15,17 @@ Set up the FastAPI application skeleton with lifespan, CORS, security headers, a
 
 ### Tasks
 
-- [ ] Task 1.1: Write tests for security headers middleware (all four headers present on responses)
-- [ ] Task 1.2: Write tests for CORS middleware (allowed origin, rejected origin)
-- [ ] Task 1.3: Write tests for standard error envelope (400, 404, 422, 500 responses)
-- [ ] Task 1.4: Create `api.py` with FastAPI app, lifespan handler (`Database.create_tables()`, scheduler start)
-- [ ] Task 1.5: Add CORS middleware scoped to `FRONTEND_URL` env var
-- [ ] Task 1.6: Add security headers middleware (`X-Content-Type-Options`, `X-Frame-Options`, CSP, HSTS)
-- [ ] Task 1.7: Add standard error response model and exception handlers (400, 401, 404, 409, 422, 500)
+- [x] Task 1.1: Write tests for security headers middleware (all four headers present on responses)
+- [x] Task 1.2: Write tests for CORS middleware (allowed origin, rejected origin)
+- [x] Task 1.3: Write tests for standard error envelope (400, 404, 422, 500 responses)
+- [x] Task 1.4: Create `api.py` with FastAPI app, lifespan handler (`Database.create_tables()`, scheduler start)
+- [x] Task 1.5: Add CORS middleware scoped to `FRONTEND_URL` env var
+- [x] Task 1.6: Add security headers middleware (`X-Content-Type-Options`, `X-Frame-Options`, CSP, HSTS)
+- [x] Task 1.7: Add standard error response model and exception handlers (400, 401, 404, 409, 422, 500)
 
 ### Verification
 
-- [ ] All Phase 1 tests pass; security headers and error envelope confirmed via test client
+- [x] All Phase 1 tests pass; security headers and error envelope confirmed via test client
 
 ## Phase 2: Publication Endpoints
 
