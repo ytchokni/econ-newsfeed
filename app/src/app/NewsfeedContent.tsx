@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { getPublications } from "@/lib/api";
+import { useState } from "react";
+import { usePublications } from "@/lib/api";
 import type { Publication } from "@/lib/types";
 import PublicationCard from "@/components/PublicationCard";
 import PublicationCardSkeleton from "@/components/PublicationCardSkeleton";
@@ -32,39 +32,10 @@ function groupByDate(publications: Publication[]) {
 }
 
 export default function NewsfeedContent() {
-  const [publications, setPublications] = useState<Publication[]>([]);
   const [page, setPage] = useState(1);
-  const [hasMore, setHasMore] = useState(true);
-  const [isLoading, setIsLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const { data, error, isLoading } = usePublications(page);
 
-  const fetchPage = useCallback(async (pageNum: number) => {
-    setIsLoading(true);
-    try {
-      const data = await getPublications(pageNum);
-      setPublications((prev) => {
-        const existingIds = new Set(prev.map((p) => p.id));
-        const newItems = data.items.filter((p) => !existingIds.has(p.id));
-        return [...prev, ...newItems];
-      });
-      setHasMore(data.page < data.pages);
-      setError(null);
-    } catch {
-      setError("Failed to load publications.");
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    fetchPage(page);
-  }, [page, fetchPage]);
-
-  const loadMore = useCallback(() => {
-    setPage((p) => p + 1);
-  }, []);
-
-  if (isLoading && publications.length === 0) {
+  if (isLoading) {
     return (
       <div className="space-y-4">
         <p className="text-sm text-gray-500">Loading publications...</p>
@@ -75,15 +46,15 @@ export default function NewsfeedContent() {
     );
   }
 
-  if (error && publications.length === 0) {
-    return <ErrorMessage message={error} />;
+  if (error && !data) {
+    return <ErrorMessage message="Failed to load publications." />;
   }
 
-  if (!isLoading && publications.length === 0) {
+  if (!data || data.items.length === 0) {
     return <EmptyState message="No publications yet." />;
   }
 
-  const groups = groupByDate(publications);
+  const groups = groupByDate(data.items);
 
   return (
     <div className="space-y-6">
@@ -97,17 +68,26 @@ export default function NewsfeedContent() {
           </div>
         </section>
       ))}
-      {hasMore && (
-        <div className="text-center pt-2">
+      <div className="flex justify-between pt-2">
+        {page > 1 ? (
           <button
-            onClick={loadMore}
-            disabled={isLoading}
-            className="px-4 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 disabled:opacity-50 transition-colors"
+            onClick={() => setPage((p) => p - 1)}
+            className="px-4 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
           >
-            {isLoading ? "Loading..." : "Load more"}
+            Previous
           </button>
-        </div>
-      )}
+        ) : (
+          <span />
+        )}
+        {data.page < data.pages && (
+          <button
+            onClick={() => setPage((p) => p + 1)}
+            className="px-4 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+          >
+            Next
+          </button>
+        )}
+      </div>
     </div>
   );
 }

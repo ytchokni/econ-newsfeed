@@ -1,5 +1,6 @@
 import { render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { SWRConfig } from "swr";
 import NewsfeedContent from "../NewsfeedContent";
 import type { PaginatedResponse, Publication } from "@/lib/types";
 
@@ -57,6 +58,14 @@ const page2: PaginatedResponse<Publication> = {
   pages: 2,
 };
 
+function renderWithSWR(ui: React.ReactElement) {
+  return render(
+    <SWRConfig value={{ provider: () => new Map(), shouldRetryOnError: false }}>
+      {ui}
+    </SWRConfig>
+  );
+}
+
 beforeEach(() => {
   jest.resetAllMocks();
   global.fetch = jest.fn();
@@ -69,7 +78,7 @@ describe("NewsfeedContent", () => {
       json: async () => page1,
     });
 
-    render(<NewsfeedContent />);
+    renderWithSWR(<NewsfeedContent />);
 
     await waitFor(() => {
       expect(screen.getByText("Immigration and Wages")).toBeInTheDocument();
@@ -84,7 +93,7 @@ describe("NewsfeedContent", () => {
   it("shows loading skeletons initially", () => {
     (global.fetch as jest.Mock).mockReturnValueOnce(new Promise(() => {}));
 
-    render(<NewsfeedContent />);
+    renderWithSWR(<NewsfeedContent />);
     expect(screen.getByText(/Loading/i)).toBeInTheDocument();
   });
 
@@ -93,29 +102,29 @@ describe("NewsfeedContent", () => {
       new Error("Network error")
     );
 
-    render(<NewsfeedContent />);
+    renderWithSWR(<NewsfeedContent />);
 
     await waitFor(() => {
       expect(screen.getByText(/failed to load/i)).toBeInTheDocument();
     });
   });
 
-  it("shows Load more button when more pages exist", async () => {
+  it("shows Next button when more pages exist", async () => {
     (global.fetch as jest.Mock).mockResolvedValueOnce({
       ok: true,
       json: async () => page1,
     });
 
-    render(<NewsfeedContent />);
+    renderWithSWR(<NewsfeedContent />);
 
     await waitFor(() => {
       expect(screen.getByText("Immigration and Wages")).toBeInTheDocument();
     });
 
-    expect(screen.getByRole("button", { name: /load more/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument();
   });
 
-  it("loads more publications when button is clicked", async () => {
+  it("navigates to next page when Next button is clicked", async () => {
     (global.fetch as jest.Mock)
       .mockResolvedValueOnce({
         ok: true,
@@ -126,17 +135,20 @@ describe("NewsfeedContent", () => {
         json: async () => page2,
       });
 
-    render(<NewsfeedContent />);
+    renderWithSWR(<NewsfeedContent />);
 
     await waitFor(() => {
       expect(screen.getByText("Immigration and Wages")).toBeInTheDocument();
     });
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /load more/i }));
+    await user.click(screen.getByRole("button", { name: /next/i }));
 
     await waitFor(() => {
       expect(screen.getByText("Fiscal Policy in Europe")).toBeInTheDocument();
     });
+
+    // Page 1 items replaced by page 2
+    expect(screen.queryByText("Immigration and Wages")).not.toBeInTheDocument();
   });
 });
