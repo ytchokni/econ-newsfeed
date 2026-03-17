@@ -106,7 +106,7 @@ class Database:
             "researcher_urls": """
                 CREATE TABLE IF NOT EXISTS researcher_urls (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    researcher_id INT,
+                    researcher_id INT NOT NULL,
                     page_type VARCHAR(255) NOT NULL,
                     url VARCHAR(2048) NOT NULL,
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id)
@@ -141,8 +141,8 @@ class Database:
             "authorship": """
                 CREATE TABLE IF NOT EXISTS authorship (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    researcher_id INT,
-                    publication_id INT,
+                    researcher_id INT NOT NULL,
+                    publication_id INT NOT NULL,
                     author_order INT,
                     INDEX idx_researcher (researcher_id),
                     INDEX idx_publication (publication_id),
