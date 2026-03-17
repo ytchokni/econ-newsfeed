@@ -28,7 +28,7 @@ SAMPLE_RESEARCHERS = [
 ]
 
 SAMPLE_URLS_R1 = [
-    # (url_id, page_type, url)
+    # (url_id, page_type, url) — used for single-researcher endpoint
     (10, "PUB", "https://example.com/steinhardt/pubs"),
     (11, "WP", "https://example.com/steinhardt/wp"),
     (12, "homepage", "https://steinhardt.example.com"),
@@ -40,6 +40,24 @@ SAMPLE_URLS_R2 = [
 
 SAMPLE_PUB_COUNT_R1 = (23,)
 SAMPLE_PUB_COUNT_R2 = (5,)
+
+# Batch formats for list endpoint
+# (researcher_id, url_id, page_type, url)
+BATCH_URLS_ALL = [
+    (1, 10, "PUB", "https://example.com/steinhardt/pubs"),
+    (1, 11, "WP", "https://example.com/steinhardt/wp"),
+    (2, 20, "PUB", "https://example.com/doe/pubs"),
+]
+BATCH_URLS_R1 = [
+    (1, 10, "PUB", "https://example.com/steinhardt/pubs"),
+    (1, 11, "WP", "https://example.com/steinhardt/wp"),
+]
+# (researcher_id, count)
+BATCH_PUB_COUNTS_ALL = [(1, 23), (2, 5)]
+BATCH_PUB_COUNTS_R1 = [(1, 23)]
+# (researcher_id, field.id, field.name, field.slug)
+BATCH_FIELDS_ALL = [(1, 1, "Labour Economics", "labour-economics")]
+BATCH_FIELDS_R1 = [(1, 1, "Labour Economics", "labour-economics")]
 
 SAMPLE_RESEARCHER_DETAIL = (1, "Max Friedrich", "Steinhardt", "Professor", "Freie Universität Berlin")
 
@@ -64,18 +82,12 @@ class TestListResearchers:
     def test_returns_all_researchers(self, client):
         with patch("api.Database.fetch_all") as mock_fetch:
             mock_fetch.side_effect = [
-                SAMPLE_RESEARCHERS,          # researchers query
-                SAMPLE_URLS_R1,              # urls for researcher 1
-                SAMPLE_FIELDS_R1,            # fields for researcher 1
-                SAMPLE_URLS_R2,              # urls for researcher 2
-                [],                          # fields for researcher 2
+                SAMPLE_RESEARCHERS,      # researchers query
+                BATCH_URLS_ALL,          # batch URLs for all researchers
+                BATCH_PUB_COUNTS_ALL,    # batch pub counts for all researchers
+                BATCH_FIELDS_ALL,        # batch fields for all researchers
             ]
-            with patch("api.Database.fetch_one") as mock_one:
-                mock_one.side_effect = [
-                    SAMPLE_PUB_COUNT_R1,     # pub count for researcher 1
-                    SAMPLE_PUB_COUNT_R2,     # pub count for researcher 2
-                ]
-                response = client.get("/api/researchers")
+            response = client.get("/api/researchers")
 
         assert response.status_code == 200
         body = response.json()
@@ -86,11 +98,11 @@ class TestListResearchers:
         with patch("api.Database.fetch_all") as mock_fetch:
             mock_fetch.side_effect = [
                 [SAMPLE_RESEARCHERS[0]],
-                SAMPLE_URLS_R1,
-                SAMPLE_FIELDS_R1,
+                BATCH_URLS_R1,
+                BATCH_PUB_COUNTS_R1,
+                BATCH_FIELDS_R1,
             ]
-            with patch("api.Database.fetch_one", return_value=SAMPLE_PUB_COUNT_R1):
-                response = client.get("/api/researchers")
+            response = client.get("/api/researchers")
 
         item = response.json()["items"][0]
         assert item["id"] == 1
@@ -128,7 +140,7 @@ class TestGetResearcher:
                 SAMPLE_URLS_R1,              # urls
                 SAMPLE_FIELDS_R1,            # fields
                 SAMPLE_PUBLICATIONS_R1,      # publications
-                [(1, "Max Friedrich", "Steinhardt")],  # authors for pub 1
+                [(1, 1, "Max Friedrich", "Steinhardt")],  # batch authors: (pub_id, r_id, first, last)
             ]
             response = client.get("/api/researchers/1")
 
