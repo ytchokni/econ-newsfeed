@@ -246,3 +246,43 @@ class TestNoStackTraceLeakage:
         body = resp.json()
         assert body["error"]["message"] == "An unexpected error occurred."
         assert "internal detail" not in resp.text
+
+
+# ---------------------------------------------------------------------------
+# Rate limit handler — error envelope
+# ---------------------------------------------------------------------------
+
+class TestRateLimitErrorEnvelope:
+    """429 responses from slowapi must use the standard error envelope."""
+
+    def test_rate_limit_response_uses_error_envelope(self, client):
+        """Simulated RateLimitExceeded must return {"error": {"code": ..., "message": ...}}."""
+        from slowapi.errors import RateLimitExceeded
+        from starlette.requests import Request as StarletteRequest
+        from starlette.datastructures import Headers
+        from unittest.mock import AsyncMock
+
+        # Directly invoke the custom handler to verify its shape
+        import asyncio
+        from api import _rate_limit_handler
+
+        scope = {
+            "type": "http",
+            "method": "GET",
+            "path": "/api/publications",
+            "query_string": b"",
+            "headers": [],
+        }
+        req = StarletteRequest(scope)
+        exc = RateLimitExceeded("60 per 1 minute")
+
+        response = asyncio.get_event_loop().run_until_complete(
+            _rate_limit_handler(req, exc)
+        )
+        import json
+        body = json.loads(response.body)
+        assert response.status_code == 429
+        assert "error" in body
+        assert "code" in body["error"]
+        assert "message" in body["error"]
+        assert body["error"]["code"] == "rate_limit_exceeded"

@@ -65,11 +65,14 @@ app = FastAPI(
 )
 
 app.state.limiter = limiter
-async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+
+
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
     return JSONResponse(
         status_code=429,
         content={"error": {"code": "rate_limit_exceeded", "message": str(exc.detail)}},
     )
+
 
 app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
 
@@ -344,7 +347,8 @@ def _get_fields_for_researcher(researcher_id: int) -> list[dict]:
 # ---------------------------------------------------------------------------
 
 @app.get("/api/fields")
-async def list_fields():
+@limiter.limit("60/minute")
+async def list_fields(request: Request):
     rows = Database.fetch_all("SELECT id, name, slug FROM research_fields ORDER BY name")
     return {"items": [{"id": r[0], "name": r[1], "slug": r[2]} for r in rows]}
 
@@ -387,7 +391,6 @@ async def get_researcher(request: Request, researcher_id: int):
 
     urls = _get_urls_for_researcher(researcher_id)
     pub_count = _get_pub_count_for_researcher(researcher_id)
-
     fields = _get_fields_for_researcher(researcher_id)
 
     # Fetch this researcher's publications
