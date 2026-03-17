@@ -99,7 +99,8 @@ class Database:
                     last_name VARCHAR(255) NOT NULL,
                     first_name VARCHAR(255) NOT NULL,
                     position VARCHAR(255),
-                    affiliation VARCHAR(255)
+                    affiliation VARCHAR(255),
+                    INDEX idx_name (last_name, first_name)
                 )
             """,
             "researcher_urls": """
@@ -132,6 +133,7 @@ class Database:
                     timestamp DATETIME,
                     researcher_id INT,
                     UNIQUE KEY uq_url_id (url_id),
+                    INDEX idx_url_id_ts (url_id, timestamp),
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id),
                     FOREIGN KEY (url_id) REFERENCES researcher_urls(id)
                 )
@@ -142,6 +144,8 @@ class Database:
                     researcher_id INT,
                     publication_id INT,
                     author_order INT,
+                    INDEX idx_researcher (researcher_id),
+                    INDEX idx_publication (publication_id),
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id),
                     FOREIGN KEY (publication_id) REFERENCES publications(id)
                 )
