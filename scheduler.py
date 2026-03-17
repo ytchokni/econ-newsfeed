@@ -1,6 +1,9 @@
 import logging
+import os
 import threading
 from datetime import datetime
+
+from apscheduler.schedulers.background import BackgroundScheduler
 
 from database import Database
 from researcher import Researcher
@@ -11,6 +14,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 _scrape_lock = threading.Lock()
+_scheduler = None
+
+SCRAPE_INTERVAL_HOURS = int(os.environ.get('SCRAPE_INTERVAL_HOURS', '24'))
+SCRAPE_ON_STARTUP = os.environ.get('SCRAPE_ON_STARTUP', 'false').lower() == 'true'
 
 
 def create_scrape_log():
@@ -80,3 +87,34 @@ def run_scrape_job():
             update_scrape_log(log_id, "failed", error_message=str(e))
     finally:
         _scrape_lock.release()
+
+
+def start_scheduler():
+    """Start the APScheduler BackgroundScheduler with the configured interval."""
+    global _scheduler
+    if _scheduler is not None:
+        logger.warning("Scheduler already running")
+        return
+
+    _scheduler = BackgroundScheduler()
+    _scheduler.add_job(
+        run_scrape_job,
+        'interval',
+        hours=SCRAPE_INTERVAL_HOURS,
+        id='scrape_job',
+    )
+    _scheduler.start()
+    logger.info(f"Scheduler started: scraping every {SCRAPE_INTERVAL_HOURS} hours")
+
+    if SCRAPE_ON_STARTUP:
+        logger.info("SCRAPE_ON_STARTUP is true, triggering immediate scrape")
+        run_scrape_job()
+
+
+def shutdown_scheduler():
+    """Shut down the scheduler gracefully."""
+    global _scheduler
+    if _scheduler is not None:
+        _scheduler.shutdown(wait=False)
+        _scheduler = None
+        logger.info("Scheduler shut down")
