@@ -3,7 +3,7 @@
 **Track ID:** rest-api_20260317
 **Spec:** [spec.md](./spec.md)
 **Created:** 2026-03-17
-**Status:** [ ] Not Started
+**Status:** [x] Complete
 
 ## Overview
 
@@ -15,17 +15,17 @@ Set up the FastAPI application skeleton with lifespan, CORS, security headers, a
 
 ### Tasks
 
-- [ ] Task 1.1: Write tests for security headers middleware (all four headers present on responses)
-- [ ] Task 1.2: Write tests for CORS middleware (allowed origin, rejected origin)
-- [ ] Task 1.3: Write tests for standard error envelope (400, 404, 422, 500 responses)
-- [ ] Task 1.4: Create `api.py` with FastAPI app, lifespan handler (`Database.create_tables()`, scheduler start)
-- [ ] Task 1.5: Add CORS middleware scoped to `FRONTEND_URL` env var
-- [ ] Task 1.6: Add security headers middleware (`X-Content-Type-Options`, `X-Frame-Options`, CSP, HSTS)
-- [ ] Task 1.7: Add standard error response model and exception handlers (400, 401, 404, 409, 422, 500)
+- [x] Task 1.1: Write tests for security headers middleware (all four headers present on responses)
+- [x] Task 1.2: Write tests for CORS middleware (allowed origin, rejected origin)
+- [x] Task 1.3: Write tests for standard error envelope (400, 404, 422, 500 responses)
+- [x] Task 1.4: Create `api.py` with FastAPI app, lifespan handler (`Database.create_tables()`, scheduler start)
+- [x] Task 1.5: Add CORS middleware scoped to `FRONTEND_URL` env var
+- [x] Task 1.6: Add security headers middleware (`X-Content-Type-Options`, `X-Frame-Options`, CSP, HSTS)
+- [x] Task 1.7: Add standard error response model and exception handlers (400, 401, 404, 409, 422, 500)
 
 ### Verification
 
-- [ ] All Phase 1 tests pass; security headers and error envelope confirmed via test client
+- [x] All Phase 1 tests pass; security headers and error envelope confirmed via test client
 
 ## Phase 2: Publication Endpoints
 
@@ -33,15 +33,15 @@ Implement publication listing and detail endpoints with pagination and filtering
 
 ### Tasks
 
-- [ ] Task 2.1: Define Pydantic response models (`PublicationItem`, `AuthorSummary`, `PaginatedPublications`)
-- [ ] Task 2.2: Write tests for `GET /api/publications` — default pagination, custom `page`/`per_page`, `per_page` max 100 cap, `year` filter, `researcher_id` filter, invalid params return 400
-- [ ] Task 2.3: Write tests for `GET /api/publications/{id}` — found with authors, not found returns 404
-- [ ] Task 2.4: Implement `GET /api/publications` with pagination and filters
-- [ ] Task 2.5: Implement `GET /api/publications/{id}`
+- [x] Task 2.1: Define Pydantic response models (`PublicationItem`, `AuthorSummary`, `PaginatedPublications`)
+- [x] Task 2.2: Write tests for `GET /api/publications` — default pagination, custom `page`/`per_page`, `per_page` max 100 cap, `year` filter, `researcher_id` filter, invalid params return 400
+- [x] Task 2.3: Write tests for `GET /api/publications/{id}` — found with authors, not found returns 404
+- [x] Task 2.4: Implement `GET /api/publications` with pagination and filters
+- [x] Task 2.5: Implement `GET /api/publications/{id}`
 
 ### Verification
 
-- [ ] All Phase 2 tests pass; pagination math and filters verified
+- [x] All Phase 2 tests pass; pagination math and filters verified
 
 ## Phase 3: Researcher Endpoints
 
@@ -49,15 +49,15 @@ Implement researcher listing and detail endpoints.
 
 ### Tasks
 
-- [ ] Task 3.1: Define Pydantic response models (`ResearcherItem`, `ResearcherDetail`, `ResearcherUrl`)
-- [ ] Task 3.2: Write tests for `GET /api/researchers` — returns all researchers with URLs and publication counts
-- [ ] Task 3.3: Write tests for `GET /api/researchers/{id}` — found with publications, not found returns 404
-- [ ] Task 3.4: Implement `GET /api/researchers`
-- [ ] Task 3.5: Implement `GET /api/researchers/{id}`
+- [x] Task 3.1: Define Pydantic response models (`ResearcherItem`, `ResearcherDetail`, `ResearcherUrl`)
+- [x] Task 3.2: Write tests for `GET /api/researchers` — returns all researchers with URLs and publication counts
+- [x] Task 3.3: Write tests for `GET /api/researchers/{id}` — found with publications, not found returns 404
+- [x] Task 3.4: Implement `GET /api/researchers`
+- [x] Task 3.5: Implement `GET /api/researchers/{id}`
 
 ### Verification
 
-- [ ] All Phase 3 tests pass; researcher data includes nested URLs and publication counts
+- [x] All Phase 3 tests pass; researcher data includes nested URLs and publication counts
 
 ## Phase 4: Scrape Endpoints
 
@@ -65,16 +65,16 @@ Implement scrape trigger and status endpoints with API key auth.
 
 ### Tasks
 
-- [ ] Task 4.1: Define Pydantic response models (`ScrapeResponse`, `ScrapeStatusResponse`)
-- [ ] Task 4.2: Write tests for `POST /api/scrape` — missing key returns 401, invalid key returns 401, valid key returns 201, already running returns 409
-- [ ] Task 4.3: Write tests for `GET /api/scrape/status` — returns last scrape info and next scheduled time
-- [ ] Task 4.4: Implement API key dependency (validates `X-API-Key` against `SCRAPE_API_KEY` env var)
-- [ ] Task 4.5: Implement `POST /api/scrape` — triggers `run_scrape_job()` in background thread, returns 409 if lock held
-- [ ] Task 4.6: Implement `GET /api/scrape/status`
+- [x] Task 4.1: Define Pydantic response models (`ScrapeResponse`, `ScrapeStatusResponse`)
+- [x] Task 4.2: Write tests for `POST /api/scrape` — missing key returns 401, invalid key returns 401, valid key returns 201, already running returns 409
+- [x] Task 4.3: Write tests for `GET /api/scrape/status` — returns last scrape info and next scheduled time
+- [x] Task 4.4: Implement API key dependency (validates `X-API-Key` against `SCRAPE_API_KEY` env var)
+- [x] Task 4.5: Implement `POST /api/scrape` — triggers `run_scrape_job()` in background thread, returns 409 if lock held
+- [x] Task 4.6: Implement `GET /api/scrape/status`
 
 ### Verification
 
-- [ ] All Phase 4 tests pass; auth enforced, 409 conflict works, status reflects scrape_log data
+- [x] All Phase 4 tests pass; auth enforced, 409 conflict works, status reflects scrape_log data
 
 ## Phase 5: OpenAPI & Final Integration
 
@@ -82,21 +82,21 @@ Ensure OpenAPI docs are correct, update dependencies, and verify all endpoints e
 
 ### Tasks
 
-- [ ] Task 5.1: Verify `/docs` renders with correct schemas for all endpoints
-- [ ] Task 5.2: Update `requirements.txt` with `fastapi`, `uvicorn[standard]`, `pydantic` (pinned versions)
-- [ ] Task 5.3: Write integration test — full request cycle across all endpoints with test database
-- [ ] Task 5.4: Verify lifespan handler runs `create_tables()` and starts scheduler on startup
+- [x] Task 5.1: Verify `/docs` renders with correct schemas for all endpoints
+- [x] Task 5.2: Update `requirements.txt` with `fastapi`, `uvicorn[standard]`, `pydantic` (pinned versions)
+- [x] Task 5.3: Write integration test — full request cycle across all endpoints with test database
+- [x] Task 5.4: Verify lifespan handler runs `create_tables()` and starts scheduler on startup
 
 ### Verification
 
-- [ ] All tests pass, OpenAPI docs render correctly, `uvicorn api:app` starts without errors
+- [x] All tests pass, OpenAPI docs render correctly, `uvicorn api:app` starts without errors
 
 ## Final Verification
 
-- [ ] All acceptance criteria met
-- [ ] Tests passing
-- [ ] `requirements.txt` updated
-- [ ] Ready for review
+- [x] All acceptance criteria met
+- [x] Tests passing
+- [x] `requirements.txt` updated
+- [x] Ready for review
 
 ---
 

@@ -2,15 +2,23 @@
   "id": "rest-api_20260317",
   "title": "FastAPI REST API Layer",
   "type": "feature",
-  "status": "pending",
+  "status": "complete",
   "created": "2026-03-17T00:00:00Z",
   "updated": "2026-03-17T00:00:00Z",
+  "current_phase": 5,
+  "current_task": "5.4",
   "phases": {
     "total": 5,
-    "completed": 0
+    "completed": 5
   },
   "tasks": {
     "total": 22,
-    "completed": 0
-  }
+    "completed": 22
+  },
+  "commits": [
+    "5808c7f: feat(api): add FastAPI app skeleton with middleware and error handlers",
+    "3c844b3: feat(api): implement publication endpoints with pagination and filters",
+    "c4d8c7b: feat(api): implement researcher endpoints with URLs and publication counts",
+    "90eebc6: feat(api): implement scrape trigger and status endpoints with API key auth"
+  ]
 }
