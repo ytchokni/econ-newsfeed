@@ -15,8 +15,20 @@ from bs4 import BeautifulSoup
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 RATE_LIMIT_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_SECONDS', '2'))
+RATE_LIMIT_FAST_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_FAST_SECONDS', '0.5'))
 CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS', '4000'))
 CONTENT_MAX_BYTES = 1_000_000  # 1 MB response size limit
+
+# Large CDN/hosting platforms that can handle higher request rates
+FAST_DOMAINS = {
+    'sites.google.com',
+    'github.io',
+    'github.com',
+    'scholar.google.com',
+    'academia.edu',
+    'researchgate.net',
+    'ssrn.com',
+}
 
 
 class HTMLFetcher:
@@ -88,10 +100,11 @@ class HTMLFetcher:
     def _rate_limit(url):
         """Enforce per-domain rate limiting."""
         domain = urlparse(url).hostname
+        limit = RATE_LIMIT_FAST_SECONDS if domain in FAST_DOMAINS else RATE_LIMIT_SECONDS
         if domain in HTMLFetcher._domain_last_request:
             elapsed = time.time() - HTMLFetcher._domain_last_request[domain]
-            if elapsed < RATE_LIMIT_SECONDS:
-                wait = RATE_LIMIT_SECONDS - elapsed
+            if elapsed < limit:
+                wait = limit - elapsed
                 logging.info(f"Rate limiting: waiting {wait:.1f}s for {domain}")
                 time.sleep(wait)
         HTMLFetcher._domain_last_request[domain] = time.time()
