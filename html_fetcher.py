@@ -1,4 +1,6 @@
 import ipaddress
+import os
+import time
 import requests
 import hashlib
 import logging
@@ -10,11 +12,17 @@ from bs4 import BeautifulSoup
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
+RATE_LIMIT_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_SECONDS', '2'))
+
+
 class HTMLFetcher:
     session = requests.Session()
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (compatible; HTMLFetcher/1.0)'
     })
+
+    # Per-domain rate limiting: domain -> last request timestamp
+    _domain_last_request = {}
 
     @staticmethod
     def validate_url(url):
@@ -56,19 +64,41 @@ class HTMLFetcher:
         return True
 
     @staticmethod
+    def _rate_limit(url):
+        """Enforce per-domain rate limiting."""
+        domain = urlparse(url).hostname
+        if domain in HTMLFetcher._domain_last_request:
+            elapsed = time.time() - HTMLFetcher._domain_last_request[domain]
+            if elapsed < RATE_LIMIT_SECONDS:
+                wait = RATE_LIMIT_SECONDS - elapsed
+                logging.info(f"Rate limiting: waiting {wait:.1f}s for {domain}")
+                time.sleep(wait)
+        HTMLFetcher._domain_last_request[domain] = time.time()
+
+    @staticmethod
     def fetch_html(url, timeout=10, max_retries=3):
         """
-        Fetch HTML content from a given URL.
-        Returns the HTML content as a string.
+        Fetch HTML content from a given URL with exponential backoff.
+        Retries on timeouts and 5xx server errors.
+        Returns the HTML content as a string, or None on failure.
         """
+        HTMLFetcher._rate_limit(url)
+
         for attempt in range(max_retries):
             try:
                 response = HTMLFetcher.session.get(url, timeout=timeout)
+                if response.status_code >= 500:
+                    backoff = 2 ** attempt  # 1s, 2s, 4s
+                    logging.warning(f"Server error {response.status_code} for {url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
+                    time.sleep(backoff)
+                    continue
                 response.raise_for_status()
                 logging.info(f"Successfully fetched HTML content from {url}")
                 return response.text
             except requests.exceptions.Timeout:
-                logging.warning(f"Timeout occurred while fetching {url}. Attempt {attempt + 1} of {max_retries}")
+                backoff = 2 ** attempt
+                logging.warning(f"Timeout for {url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
+                time.sleep(backoff)
             except requests.exceptions.RequestException as e:
                 logging.error(f"Request exception for {url}: {e}")
                 break  # Non-retryable error
