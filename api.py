@@ -1,8 +1,10 @@
 """FastAPI REST API for econ-newsfeed."""
 import hmac
+import logging
 import math
 import os
 import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -48,7 +50,19 @@ class ErrorResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    Database.create_tables()
+    max_attempts = 10
+    for attempt in range(1, max_attempts + 1):
+        try:
+            Database.create_tables()
+            break
+        except Exception as e:
+            if attempt == max_attempts:
+                raise
+            wait = 2 ** (attempt - 1)
+            logging.warning(
+                f"create_tables failed (attempt {attempt}/{max_attempts}), retrying in {wait}s: {e}"
+            )
+            time.sleep(wait)
     start_scheduler()
     yield
     shutdown_scheduler()
@@ -183,7 +197,7 @@ async def generic_exception_handler(request: Request, exc: Exception):
 # ---------------------------------------------------------------------------
 
 def _get_authors_for_publication(publication_id: int) -> list[dict]:
-    """Fetch authors for a publication via the authorship table."""
+    """Fetch authors for a single publication via the authorship table."""
     rows = Database.fetch_all(
         """
         SELECT r.id, r.first_name, r.last_name
@@ -195,6 +209,27 @@ def _get_authors_for_publication(publication_id: int) -> list[dict]:
         (publication_id,),
     )
     return [{"id": r[0], "first_name": r[1], "last_name": r[2]} for r in rows]
+
+
+def _get_authors_for_publications(pub_ids: list[int]) -> dict[int, list[dict]]:
+    """Batch-fetch authors for multiple publications. Returns {pub_id: [author, ...]}."""
+    if not pub_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(pub_ids))
+    rows = Database.fetch_all(
+        f"""
+        SELECT a.publication_id, r.id, r.first_name, r.last_name
+        FROM authorship a
+        JOIN researchers r ON r.id = a.researcher_id
+        WHERE a.publication_id IN ({placeholders})
+        ORDER BY a.publication_id, a.author_order
+        """,
+        tuple(pub_ids),
+    )
+    result: dict[int, list[dict]] = {pid: [] for pid in pub_ids}
+    for row in rows:
+        result[row[0]].append({"id": row[1], "first_name": row[2], "last_name": row[3]})
+    return result
 
 
 def _format_publication(row, authors: list[dict]) -> dict:
@@ -271,10 +306,9 @@ async def list_publications(
         (*params, per_page, offset),
     )
 
-    items = []
-    for row in rows:
-        authors = _get_authors_for_publication(row[0])
-        items.append(_format_publication(row, authors))
+    pub_ids = [row[0] for row in rows]
+    authors_by_pub = _get_authors_for_publications(pub_ids)
+    items = [_format_publication(row, authors_by_pub.get(row[0], [])) for row in rows]
 
     response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=600"
     return {
@@ -342,6 +376,55 @@ def _get_fields_for_researcher(researcher_id: int) -> list[dict]:
     return [{"id": r[0], "name": r[1], "slug": r[2]} for r in rows]
 
 
+def _get_urls_for_researchers(researcher_ids: list[int]) -> dict[int, list[dict]]:
+    """Batch-fetch URLs for multiple researchers. Returns {researcher_id: [url, ...]}."""
+    if not researcher_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(researcher_ids))
+    rows = Database.fetch_all(
+        f"SELECT researcher_id, id, page_type, url FROM researcher_urls WHERE researcher_id IN ({placeholders})",
+        tuple(researcher_ids),
+    )
+    result: dict[int, list[dict]] = {rid: [] for rid in researcher_ids}
+    for row in rows:
+        result[row[0]].append({"id": row[1], "page_type": row[2], "url": row[3]})
+    return result
+
+
+def _get_pub_counts_for_researchers(researcher_ids: list[int]) -> dict[int, int]:
+    """Batch-fetch publication counts for multiple researchers. Returns {researcher_id: count}."""
+    if not researcher_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(researcher_ids))
+    rows = Database.fetch_all(
+        f"SELECT researcher_id, COUNT(*) FROM authorship WHERE researcher_id IN ({placeholders}) GROUP BY researcher_id",
+        tuple(researcher_ids),
+    )
+    result: dict[int, int] = {rid: 0 for rid in researcher_ids}
+    for row in rows:
+        result[row[0]] = row[1]
+    return result
+
+
+def _get_fields_for_researchers(researcher_ids: list[int]) -> dict[int, list[dict]]:
+    """Batch-fetch fields for multiple researchers. Returns {researcher_id: [field, ...]}."""
+    if not researcher_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(researcher_ids))
+    rows = Database.fetch_all(
+        f"""SELECT rf_link.researcher_id, rf.id, rf.name, rf.slug
+            FROM researcher_fields rf_link
+            JOIN research_fields rf ON rf.id = rf_link.field_id
+            WHERE rf_link.researcher_id IN ({placeholders})
+            ORDER BY rf.name""",
+        tuple(researcher_ids),
+    )
+    result: dict[int, list[dict]] = {rid: [] for rid in researcher_ids}
+    for row in rows:
+        result[row[0]].append({"id": row[1], "name": row[2], "slug": row[3]})
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Researcher endpoints
 # ---------------------------------------------------------------------------
@@ -359,22 +442,24 @@ async def list_researchers(request: Request, response: Response):
     rows = Database.fetch_all(
         "SELECT id, first_name, last_name, position, affiliation FROM researchers"
     )
-    items = []
-    for r in rows:
-        urls = _get_urls_for_researcher(r[0])
-        pub_count = _get_pub_count_for_researcher(r[0])
-        fields = _get_fields_for_researcher(r[0])
-        items.append({
+    researcher_ids = [r[0] for r in rows]
+    urls_by_researcher = _get_urls_for_researchers(researcher_ids)
+    pub_counts = _get_pub_counts_for_researchers(researcher_ids)
+    fields_by_researcher = _get_fields_for_researchers(researcher_ids)
+    items = [
+        {
             "id": r[0],
             "first_name": r[1],
             "last_name": r[2],
             "position": r[3],
             "affiliation": r[4],
-            "urls": urls,
-            "website_url": _get_website_url(urls),
-            "publication_count": pub_count,
-            "fields": fields,
-        })
+            "urls": urls_by_researcher.get(r[0], []),
+            "website_url": _get_website_url(urls_by_researcher.get(r[0], [])),
+            "publication_count": pub_counts.get(r[0], 0),
+            "fields": fields_by_researcher.get(r[0], []),
+        }
+        for r in rows
+    ]
     response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=600"
     return {"items": items}
 
@@ -404,10 +489,9 @@ async def get_researcher(request: Request, researcher_id: int):
         """,
         (researcher_id,),
     )
-    publications = []
-    for pr in pub_rows:
-        authors = _get_authors_for_publication(pr[0])
-        publications.append(_format_publication(pr, authors))
+    pub_ids = [pr[0] for pr in pub_rows]
+    authors_by_pub = _get_authors_for_publications(pub_ids)
+    publications = [_format_publication(pr, authors_by_pub.get(pr[0], [])) for pr in pub_rows]
 
     return {
         "id": row[0],

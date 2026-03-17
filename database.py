@@ -1,5 +1,6 @@
 import mysql.connector
 from mysql.connector import Error
+from mysql.connector.pooling import MySQLConnectionPool
 from db_config import db_config
 import csv
 import json
@@ -10,6 +11,16 @@ from datetime import datetime
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(message)s')
+
+_pool: "MySQLConnectionPool | None" = None
+
+
+def _get_pool() -> "MySQLConnectionPool":
+    global _pool
+    if _pool is None:
+        _pool = MySQLConnectionPool(pool_size=10, pool_name="econ_pool", **db_config)
+    return _pool
+
 
 class Database:
     @staticmethod
@@ -36,14 +47,9 @@ class Database:
     @staticmethod
     def get_connection():
         """
-        Create and return a new database connection.
+        Checkout and return a connection from the connection pool.
         """
-        try:
-            conn = mysql.connector.connect(**db_config)
-            return conn
-        except Error as e:
-            logging.error("Error connecting to the database: %s", type(e).__name__)
-            return None
+        return _get_pool().get_connection()
 
     @staticmethod
     def execute_query(query, params=None):
@@ -153,6 +159,7 @@ class Database:
                     researcher_id INT NOT NULL,
                     publication_id INT NOT NULL,
                     author_order INT,
+                    UNIQUE KEY uq_researcher_pub (researcher_id, publication_id),
                     INDEX idx_researcher (researcher_id),
                     INDEX idx_publication (publication_id),
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id),
@@ -190,8 +197,10 @@ class Database:
             """
         }
 
-        for table_name, table_query in table_definitions.items():
-            Database.execute_query(table_query)
+        with Database.get_connection() as conn:
+            with conn.cursor() as cursor:
+                for table_query in table_definitions.values():
+                    cursor.execute(table_query)
         logging.info("All tables created successfully")
         Database.seed_research_fields()
 
