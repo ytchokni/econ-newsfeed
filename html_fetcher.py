@@ -323,6 +323,38 @@ class HTMLFetcher:
         return result[0] if result else None
 
     @staticmethod
+    def needs_extraction(url_id):
+        """
+        Return True if LLM extraction is needed for this URL.
+        Extraction is needed when content_hash differs from extracted_hash
+        (content changed since last extraction, or never extracted).
+        Returns False if no HTML has been downloaded yet.
+        """
+        query = """
+            SELECT content_hash, extracted_hash
+            FROM html_content
+            WHERE url_id = %s
+        """
+        result = Database.fetch_one(query, (url_id,))
+        if not result:
+            return False  # No content downloaded yet — nothing to extract
+        content_hash, extracted_hash = result
+        return content_hash != extracted_hash
+
+    @staticmethod
+    def mark_extracted(url_id):
+        """
+        Record that extraction has been run on the current content by setting
+        extracted_hash = content_hash and extracted_at = now.
+        """
+        query = """
+            UPDATE html_content
+            SET extracted_at = %s, extracted_hash = content_hash
+            WHERE url_id = %s
+        """
+        Database.execute_query(query, (datetime.utcnow(), url_id))
+
+    @staticmethod
     def get_previous_text(url_id):
         """Retrieve the previous text content for a given URL ID (before current upsert).
         With upsert, there's only one row per url_id, so this returns the current stored
