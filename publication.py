@@ -121,7 +121,8 @@ class Publication:
         prompt = f"""
         Extract all the publications from the following content from {url}. For each publication, provide:
         - Title
-        - Authors as a list of lists: [first name, last name]
+        - Authors as a list of lists: [first name, last name]. Always use full first names when available \
+(e.g., "John Smith" not "J. Smith"). If only an initial appears in the source, use the initial as given.
         - Year
         - Venue (e.g., journal or conference name)
         - Status: one of "published", "accepted", "revise_and_resubmit", "reject_and_resubmit", or null if unknown

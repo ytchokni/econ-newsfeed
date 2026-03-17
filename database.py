@@ -2,7 +2,10 @@ import mysql.connector
 from mysql.connector import Error
 from db_config import db_config
 import csv
+import json
 import logging
+import os
+import re
 from datetime import datetime
 
 # Configure logging
@@ -276,28 +279,77 @@ class Database:
         logging.info("Schema migrations applied successfully")
 
     @staticmethod
+    def _disambiguate_researcher(first_name, last_name, candidates):
+        """
+        Use LLM to check if any same-last-name candidate is the same person as first_name last_name.
+        Returns the matching researcher id (int) or None if no match.
+        candidates: list of (id, first_name, last_name)
+        """
+        candidates_text = "\n".join(f"- ID {c[0]}: {c[1]} {c[2]}" for c in candidates)
+        prompt = (
+            f'You are disambiguating researcher names. A publication lists the author as: '
+            f'"{first_name} {last_name}"\n\n'
+            f'The database contains these existing researchers with the same last name:\n'
+            f'{candidates_text}\n\n'
+            f'Is the author the same person as any of these researchers? Consider:\n'
+            f'- "J. Smith" and "John Smith" are likely the same person\n'
+            f'- An abbreviated first name may match a full first name\n'
+            f'- Only match if you are confident\n\n'
+            f'Respond with JSON only: {{"match_id": <id or null>}}'
+        )
+        try:
+            from openai import OpenAI
+            client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+            response = client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=os.environ.get('OPENAI_MODEL', 'gpt-4o-mini'),
+            )
+            content = response.choices[0].message.content
+            match = re.search(r'\{.*?\}', content, re.DOTALL)
+            if match:
+                data = json.loads(match.group(0))
+                match_id = data.get('match_id')
+                if match_id is not None:
+                    return int(match_id)
+        except Exception as e:
+            logging.error(f"LLM researcher disambiguation error: {e}")
+        return None
+
+    @staticmethod
     def get_researcher_id(first_name, last_name, position=None, affiliation=None):
         """
         Get the researcher ID based on the first name and last name.
-        If the researcher does not exist, insert a new researcher and return the new ID.
+        If the researcher does not exist, query same-last-name candidates and use LLM
+        to disambiguate abbreviated vs full names before inserting a new row.
         """
-        query = """
-            SELECT id FROM researchers
-            WHERE first_name = %s AND last_name = %s
-        """
-        params = (first_name, last_name)
-        result = Database.fetch_one(query, params)
-
+        # 1. Exact match
+        result = Database.fetch_one(
+            "SELECT id FROM researchers WHERE first_name = %s AND last_name = %s",
+            (first_name, last_name),
+        )
         if result:
             return result[0]
-        else:
-            insert_query = """
-                INSERT INTO researchers (first_name, last_name, position, affiliation)
-                VALUES (%s, %s, %s, %s)
-            """
-            insert_params = (first_name, last_name, position, affiliation)
-            new_id = Database.execute_query(insert_query, insert_params)
-            return new_id
+
+        # 2. Same-last-name candidates — let LLM decide if any is the same person
+        candidates = Database.fetch_all(
+            "SELECT id, first_name, last_name FROM researchers WHERE last_name = %s",
+            (last_name,),
+        )
+        if candidates:
+            match_id = Database._disambiguate_researcher(first_name, last_name, candidates)
+            if match_id is not None:
+                logging.info(
+                    f"LLM matched '{first_name} {last_name}' to existing researcher id={match_id}"
+                )
+                return match_id
+
+        # 3. No match found — insert new researcher
+        insert_query = """
+            INSERT INTO researchers (first_name, last_name, position, affiliation)
+            VALUES (%s, %s, %s, %s)
+        """
+        new_id = Database.execute_query(insert_query, (first_name, last_name, position, affiliation))
+        return new_id
 
     @staticmethod
     def add_researcher_url(researcher_id, page_type, url):
