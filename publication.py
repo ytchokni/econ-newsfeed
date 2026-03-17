@@ -30,20 +30,34 @@ class Publication:
         self.url = url
 
     @staticmethod
+    def _normalize_title(title):
+        """Normalize a publication title for deduplication."""
+        return title.lower().strip() if title else ''
+
+    @staticmethod
     def save_publications(url, publications):
-        """Save extracted publications to the database."""
+        """Save extracted publications to the database, skipping duplicates."""
         for pub in publications:
             try:
-                # Start a transaction
+                normalized_title = Publication._normalize_title(pub['title'])
+
+                # Check for existing publication with same normalized title + URL
+                existing = Database.fetch_one(
+                    "SELECT id FROM publications WHERE LOWER(TRIM(title)) = %s AND url = %s",
+                    (normalized_title, url)
+                )
+                if existing:
+                    logging.info(f"Duplicate publication skipped: {pub['title']}")
+                    continue
+
                 with Database.get_connection() as conn:
                     cursor = conn.cursor()
 
-                    # Insert publication
                     query = """
                     INSERT INTO publications (url, title, year, venue, timestamp)
                     VALUES (%s, %s, %s, %s, %s)
                     """
-                    params = (url, pub['title'], pub['year'], pub['venue'], datetime.now())
+                    params = (url, pub['title'], pub.get('year'), pub.get('venue'), datetime.now())
                     cursor.execute(query, params)
 
                     # Get the last inserted ID
