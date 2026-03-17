@@ -33,15 +33,15 @@ Implement publication listing and detail endpoints with pagination and filtering
 
 ### Tasks
 
-- [ ] Task 2.1: Define Pydantic response models (`PublicationItem`, `AuthorSummary`, `PaginatedPublications`)
-- [ ] Task 2.2: Write tests for `GET /api/publications` — default pagination, custom `page`/`per_page`, `per_page` max 100 cap, `year` filter, `researcher_id` filter, invalid params return 400
-- [ ] Task 2.3: Write tests for `GET /api/publications/{id}` — found with authors, not found returns 404
-- [ ] Task 2.4: Implement `GET /api/publications` with pagination and filters
-- [ ] Task 2.5: Implement `GET /api/publications/{id}`
+- [x] Task 2.1: Define Pydantic response models (`PublicationItem`, `AuthorSummary`, `PaginatedPublications`)
+- [x] Task 2.2: Write tests for `GET /api/publications` — default pagination, custom `page`/`per_page`, `per_page` max 100 cap, `year` filter, `researcher_id` filter, invalid params return 400
+- [x] Task 2.3: Write tests for `GET /api/publications/{id}` — found with authors, not found returns 404
+- [x] Task 2.4: Implement `GET /api/publications` with pagination and filters
+- [x] Task 2.5: Implement `GET /api/publications/{id}`
 
 ### Verification
 
-- [ ] All Phase 2 tests pass; pagination math and filters verified
+- [x] All Phase 2 tests pass; pagination math and filters verified
 
 ## Phase 3: Researcher Endpoints
 

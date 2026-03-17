@@ -1,8 +1,9 @@
 """FastAPI REST API for econ-newsfeed."""
+import math
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI, Query, Request
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -136,7 +137,39 @@ async def internal_error_handler(request: Request, exc):
 
 
 # ---------------------------------------------------------------------------
-# Placeholder routes (will be implemented in later phases)
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _get_authors_for_publication(publication_id: int) -> list[dict]:
+    """Fetch authors for a publication via the authorship table."""
+    rows = Database.fetch_all(
+        """
+        SELECT r.id, r.first_name, r.last_name
+        FROM authorship a
+        JOIN researchers r ON r.id = a.researcher_id
+        WHERE a.publication_id = %s
+        ORDER BY a.author_order
+        """,
+        (publication_id,),
+    )
+    return [{"id": r[0], "first_name": r[1], "last_name": r[2]} for r in rows]
+
+
+def _format_publication(row, authors: list[dict]) -> dict:
+    """Format a publication DB row + authors into the API response shape."""
+    return {
+        "id": row[0],
+        "title": row[1],
+        "authors": authors,
+        "year": row[2],
+        "venue": row[3],
+        "source_url": row[4],
+        "discovered_at": row[5].isoformat() + "Z" if row[5] else None,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Publication endpoints
 # ---------------------------------------------------------------------------
 
 @app.get("/api/publications")
@@ -146,14 +179,68 @@ async def list_publications(
     year: str | None = Query(None),
     researcher_id: int | None = Query(None),
 ):
-    return {"items": [], "total": 0, "page": page, "per_page": per_page, "pages": 0}
+    # Build WHERE clause
+    conditions = []
+    params: list = []
+    if year:
+        conditions.append("p.year = %s")
+        params.append(year)
+    if researcher_id:
+        conditions.append("p.id IN (SELECT publication_id FROM authorship WHERE researcher_id = %s)")
+        params.append(researcher_id)
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    # Total count
+    count_row = Database.fetch_one(
+        f"SELECT COUNT(*) FROM publications p {where}", params or None
+    )
+    total = count_row[0] if count_row else 0
+    pages = math.ceil(total / per_page) if total else 0
+
+    # Paginated results
+    offset = (page - 1) * per_page
+    rows = Database.fetch_all(
+        f"""
+        SELECT p.id, p.title, p.year, p.venue, p.url, p.timestamp
+        FROM publications p
+        {where}
+        ORDER BY p.timestamp DESC
+        LIMIT %s OFFSET %s
+        """,
+        (*params, per_page, offset),
+    )
+
+    items = []
+    for row in rows:
+        authors = _get_authors_for_publication(row[0])
+        items.append(_format_publication(row, authors))
+
+    return {
+        "items": items,
+        "total": total,
+        "page": page,
+        "per_page": per_page,
+        "pages": pages,
+    }
 
 
 @app.get("/api/publications/{publication_id}")
 async def get_publication(publication_id: int):
-    from fastapi import HTTPException
-    raise HTTPException(status_code=404, detail="Publication not found")
+    row = Database.fetch_one(
+        "SELECT id, title, year, venue, url, timestamp FROM publications WHERE id = %s",
+        (publication_id,),
+    )
+    if not row:
+        raise HTTPException(status_code=404, detail="Publication not found")
 
+    authors = _get_authors_for_publication(publication_id)
+    return _format_publication(row, authors)
+
+
+# ---------------------------------------------------------------------------
+# Researcher endpoints (placeholder — Phase 3)
+# ---------------------------------------------------------------------------
 
 @app.get("/api/researchers")
 async def list_researchers():
@@ -162,13 +249,15 @@ async def list_researchers():
 
 @app.get("/api/researchers/{researcher_id}")
 async def get_researcher(researcher_id: int):
-    from fastapi import HTTPException
     raise HTTPException(status_code=404, detail="Researcher not found")
 
 
+# ---------------------------------------------------------------------------
+# Scrape endpoints (placeholder — Phase 4)
+# ---------------------------------------------------------------------------
+
 @app.post("/api/scrape", status_code=201)
 async def trigger_scrape(request: Request):
-    from fastapi import HTTPException
     api_key = request.headers.get("X-API-Key")
     scrape_api_key = os.environ.get("SCRAPE_API_KEY")
     if not api_key or api_key != scrape_api_key:
