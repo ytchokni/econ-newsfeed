@@ -1,11 +1,12 @@
 import logging
 import os
-import threading
 from datetime import datetime
 
+import mysql.connector
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from database import Database
+from db_config import db_config
 from researcher import Researcher
 from html_fetcher import HTMLFetcher
 from publication import Publication
@@ -13,8 +14,53 @@ from publication import Publication
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-_scrape_lock = threading.Lock()
+_LOCK_NAME = 'econ_newsfeed_scrape'
+_lock_conn = None  # connection holding the advisory lock for the duration of a scrape
 _scheduler = None
+
+
+def _acquire_db_lock():
+    """Try to acquire a MySQL advisory lock. Returns the connection if acquired, None otherwise."""
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+        cursor.execute("SELECT GET_LOCK(%s, 0)", (_LOCK_NAME,))
+        result = cursor.fetchone()
+        cursor.close()
+        if result and result[0] == 1:
+            return conn
+        conn.close()
+        return None
+    except Exception as e:
+        logger.error(f"Failed to acquire DB advisory lock: {e}")
+        return None
+
+
+def _release_db_lock(conn):
+    """Release the MySQL advisory lock and close the connection."""
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT RELEASE_LOCK(%s)", (_LOCK_NAME,))
+        cursor.fetchone()
+        cursor.close()
+        conn.close()
+    except Exception as e:
+        logger.error(f"Failed to release DB advisory lock: {e}")
+
+
+def is_scrape_running():
+    """Return True if another worker currently holds the scrape advisory lock."""
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+        cursor.execute("SELECT IS_USED_LOCK(%s)", (_LOCK_NAME,))
+        result = cursor.fetchone()
+        cursor.close()
+        conn.close()
+        return result is not None and result[0] is not None
+    except Exception as e:
+        logger.error(f"Failed to check DB advisory lock: {e}")
+        return False
 
 SCRAPE_INTERVAL_HOURS = int(os.environ.get('SCRAPE_INTERVAL_HOURS', '24'))
 SCRAPE_ON_STARTUP = os.environ.get('SCRAPE_ON_STARTUP', 'false').lower() == 'true'
@@ -43,17 +89,14 @@ def update_scrape_log(log_id, status, urls_checked=0, urls_changed=0, pubs_extra
     ))
 
 
-def run_scrape_job(_lock_acquired=False):
-    """Orchestrates a full scraping cycle. Skips if another scrape is running.
-
-    Pass ``_lock_acquired=True`` when the caller has already acquired
-    ``_scrape_lock`` and wants to transfer ownership to this function so it
-    can be released in the ``finally`` block (avoids TOCTOU).
-    """
-    if not _lock_acquired:
-        if not _scrape_lock.acquire(blocking=False):
-            logger.warning("Scrape already in progress, skipping")
-            return
+def run_scrape_job():
+    """Orchestrates a full scraping cycle. Skips if another scrape is running."""
+    global _lock_conn
+    lock_conn = _acquire_db_lock()
+    if lock_conn is None:
+        logger.warning("Scrape already in progress, skipping")
+        return
+    _lock_conn = lock_conn
 
     log_id = None
     try:
@@ -92,7 +135,8 @@ def run_scrape_job(_lock_acquired=False):
         if log_id:
             update_scrape_log(log_id, "failed", error_message=str(e))
     finally:
-        _scrape_lock.release()
+        _release_db_lock(lock_conn)
+        _lock_conn = None
 
 
 def start_scheduler():

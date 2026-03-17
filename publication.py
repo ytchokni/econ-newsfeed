@@ -179,16 +179,25 @@ class Publication:
 
     @staticmethod
     def dump_invalid_json(response):
-        """Dump invalid JSON responses to a text file."""
+        """Dump invalid JSON responses to a text file, capping at 50 files."""
         dump_dir = "invalid_json_dumps"
         os.makedirs(dump_dir, exist_ok=True)
+
+        MAX_DUMP_FILES = 50
+        existing = sorted(f for f in os.listdir(dump_dir) if f.endswith(".txt"))
+        while len(existing) >= MAX_DUMP_FILES:
+            try:
+                os.remove(os.path.join(dump_dir, existing.pop(0)))
+            except FileNotFoundError:
+                pass  # Another worker already removed this file
+
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         filename = f"invalid_json_{timestamp}.txt"
         filepath = os.path.join(dump_dir, filename)
-        
+
         with open(filepath, 'w', encoding='utf-8') as f:
             f.write(response)
-        
+
         logging.warning(f"Invalid JSON dumped to {filepath}")
 
     @staticmethod
