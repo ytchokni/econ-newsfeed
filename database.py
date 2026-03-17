@@ -109,6 +109,7 @@ class Database:
                     researcher_id INT NOT NULL,
                     page_type VARCHAR(255) NOT NULL,
                     url VARCHAR(2048) NOT NULL,
+                    UNIQUE KEY uq_researcher_url (researcher_id, url(500)),
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id)
                 )
             """,
@@ -198,7 +199,7 @@ class Database:
         Insert a new URL for a researcher into the researcher_urls table.
         """
         insert_query = """
-            INSERT INTO researcher_urls (researcher_id, page_type, url)
+            INSERT IGNORE INTO researcher_urls (researcher_id, page_type, url)
             VALUES (%s, %s, %s)
         """
         params = (researcher_id, page_type, url)

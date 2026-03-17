@@ -51,15 +51,4 @@ class Researcher:
     @staticmethod
     def add_url_to_researcher(researcher_id, url, page_type="HOME"):
         """Associate a URL with a researcher in the database, preventing duplication."""
-        check_query = "SELECT id FROM researcher_urls WHERE researcher_id = %s AND url = %s"
-        existing_url = Database.fetch_one(check_query, (researcher_id, url))
-
-        if existing_url:
-            logging.info(f"URL {url} already exists for researcher {researcher_id}. Skipping insertion.")
-            return existing_url[0]
-
-        insert_query = """
-            INSERT INTO researcher_urls (researcher_id, page_type, url)
-            VALUES (%s, %s, %s)
-        """
-        return Database.execute_query(insert_query, (researcher_id, page_type, url))
+        Database.add_researcher_url(researcher_id, page_type, url)
