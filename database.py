@@ -149,6 +149,18 @@ class Database:
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id),
                     FOREIGN KEY (publication_id) REFERENCES publications(id)
                 )
+            """,
+            "scrape_log": """
+                CREATE TABLE IF NOT EXISTS scrape_log (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    started_at DATETIME NOT NULL,
+                    finished_at DATETIME,
+                    status ENUM('running', 'completed', 'failed') DEFAULT 'running',
+                    urls_checked INT DEFAULT 0,
+                    urls_changed INT DEFAULT 0,
+                    pubs_extracted INT DEFAULT 0,
+                    error_message TEXT
+                )
             """
         }
 
