@@ -6,6 +6,7 @@ import hashlib
 import logging
 from datetime import datetime
 from urllib.parse import urlparse
+from urllib.robotparser import RobotFileParser
 from database import Database
 from bs4 import BeautifulSoup
 
@@ -25,6 +26,23 @@ class HTMLFetcher:
 
     # Per-domain rate limiting: domain -> last request timestamp
     _domain_last_request = {}
+
+    @staticmethod
+    def is_allowed_by_robots(url):
+        """Check if the URL is allowed by the site's robots.txt."""
+        try:
+            parsed = urlparse(url)
+            robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+            rp = RobotFileParser()
+            rp.set_url(robots_url)
+            rp.read()
+            allowed = rp.can_fetch('HTMLFetcher/1.0', url)
+            if not allowed:
+                logging.info(f"URL disallowed by robots.txt: {url}")
+            return allowed
+        except Exception:
+            # If robots.txt can't be fetched, allow the request
+            return True
 
     @staticmethod
     def validate_url(url):
@@ -170,6 +188,9 @@ class HTMLFetcher:
         """
         if not HTMLFetcher.validate_url(url):
             logging.warning(f"URL failed SSRF validation, skipping: {url}")
+            return False
+
+        if not HTMLFetcher.is_allowed_by_robots(url):
             return False
 
         html_content = HTMLFetcher.fetch_html(url)
