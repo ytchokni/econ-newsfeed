@@ -107,14 +107,14 @@ class Database:
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     researcher_id INT,
                     page_type VARCHAR(255) NOT NULL,
-                    url VARCHAR(255) NOT NULL,
+                    url VARCHAR(2048) NOT NULL,
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id)
                 )
             """,
             "publications": """
                 CREATE TABLE IF NOT EXISTS publications (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    url VARCHAR(255),
+                    url VARCHAR(2048),
                     title TEXT,
                     year VARCHAR(4),
                     venue TEXT,
