@@ -1,7 +1,9 @@
+import ipaddress
 import requests
 import hashlib
 import logging
 from datetime import datetime
+from urllib.parse import urlparse
 from database import Database
 from bs4 import BeautifulSoup
 
@@ -13,6 +15,45 @@ class HTMLFetcher:
     session.headers.update({
         'User-Agent': 'Mozilla/5.0 (compatible; HTMLFetcher/1.0)'
     })
+
+    @staticmethod
+    def validate_url(url):
+        """
+        Validate a URL for SSRF protection.
+        Rejects non-HTTP(S) schemes, private/reserved IPs, and AWS metadata endpoints.
+        Returns True if safe, False otherwise.
+        """
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return False
+
+        if parsed.scheme not in ('http', 'https'):
+            logging.warning(f"Rejected URL with non-HTTP(S) scheme: {url}")
+            return False
+
+        hostname = parsed.hostname
+        if not hostname:
+            return False
+
+        # Reject AWS metadata endpoints
+        if hostname in ('169.254.169.254', 'metadata.google.internal'):
+            logging.warning(f"Rejected metadata endpoint URL: {url}")
+            return False
+
+        # Resolve hostname and check for private/reserved IPs
+        import socket
+        try:
+            resolved_ip = socket.getaddrinfo(hostname, None)[0][4][0]
+            ip = ipaddress.ip_address(resolved_ip)
+            if ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local:
+                logging.warning(f"Rejected URL resolving to private/reserved IP: {url} -> {resolved_ip}")
+                return False
+        except (socket.gaierror, ValueError):
+            logging.warning(f"Could not resolve hostname for URL: {url}")
+            return False
+
+        return True
 
     @staticmethod
     def fetch_html(url, timeout=10, max_retries=3):
@@ -92,6 +133,10 @@ class HTMLFetcher:
         Fetch HTML content from the given URL and save its text content if it has changed.
         Returns True if content changed, False otherwise.
         """
+        if not HTMLFetcher.validate_url(url):
+            logging.warning(f"URL failed SSRF validation, skipping: {url}")
+            return False
+
         html_content = HTMLFetcher.fetch_html(url)
         if not html_content:
             logging.warning(f"Failed to fetch HTML content for URL ID: {url_id}, URL: {url}")
