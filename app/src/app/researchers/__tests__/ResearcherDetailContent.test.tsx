@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import { SWRConfig } from "swr";
 import ResearcherDetailContent from "../../researchers/[id]/ResearcherDetailContent";
 import type { ResearcherDetail } from "@/lib/types";
 
@@ -35,6 +36,14 @@ const researcher: ResearcherDetail = {
   ],
 };
 
+function renderWithSWR(ui: React.ReactElement) {
+  return render(
+    <SWRConfig value={{ provider: () => new Map(), shouldRetryOnError: false }}>
+      {ui}
+    </SWRConfig>
+  );
+}
+
 beforeEach(() => {
   jest.resetAllMocks();
   global.fetch = jest.fn();
@@ -47,7 +56,7 @@ describe("ResearcherDetailContent", () => {
       json: async () => researcher,
     });
 
-    render(<ResearcherDetailContent id={1} />);
+    renderWithSWR(<ResearcherDetailContent id={1} />);
 
     await waitFor(() => {
       expect(
@@ -64,7 +73,7 @@ describe("ResearcherDetailContent", () => {
   it("shows loading state", () => {
     (global.fetch as jest.Mock).mockReturnValueOnce(new Promise(() => {}));
 
-    render(<ResearcherDetailContent id={1} />);
+    renderWithSWR(<ResearcherDetailContent id={1} />);
     expect(screen.getByText(/Loading/i)).toBeInTheDocument();
   });
 
@@ -73,7 +82,7 @@ describe("ResearcherDetailContent", () => {
       new Error("Not found")
     );
 
-    render(<ResearcherDetailContent id={999} />);
+    renderWithSWR(<ResearcherDetailContent id={999} />);
 
     await waitFor(() => {
       expect(screen.getByText(/failed to load/i)).toBeInTheDocument();

@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import { SWRConfig } from "swr";
 import ResearchersContent from "../ResearchersContent";
 import type { Researcher } from "@/lib/types";
 
@@ -23,6 +24,14 @@ const researchers: Researcher[] = [
   },
 ];
 
+function renderWithSWR(ui: React.ReactElement) {
+  return render(
+    <SWRConfig value={{ provider: () => new Map(), shouldRetryOnError: false }}>
+      {ui}
+    </SWRConfig>
+  );
+}
+
 beforeEach(() => {
   jest.resetAllMocks();
   global.fetch = jest.fn();
@@ -35,7 +44,7 @@ describe("ResearchersContent", () => {
       json: async () => ({ items: researchers }),
     });
 
-    render(<ResearchersContent />);
+    renderWithSWR(<ResearchersContent />);
 
     await waitFor(() => {
       expect(
@@ -48,7 +57,7 @@ describe("ResearchersContent", () => {
   it("shows loading state", () => {
     (global.fetch as jest.Mock).mockReturnValueOnce(new Promise(() => {}));
 
-    render(<ResearchersContent />);
+    renderWithSWR(<ResearchersContent />);
     expect(screen.getByText(/Loading/i)).toBeInTheDocument();
   });
 
@@ -57,7 +66,7 @@ describe("ResearchersContent", () => {
       new Error("Network error")
     );
 
-    render(<ResearchersContent />);
+    renderWithSWR(<ResearchersContent />);
 
     await waitFor(() => {
       expect(screen.getByText(/failed to load/i)).toBeInTheDocument();

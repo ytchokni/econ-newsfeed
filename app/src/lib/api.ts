@@ -1,3 +1,4 @@
+import useSWR from "swr";
 import type {
   PaginatedResponse,
   Publication,
@@ -21,17 +22,35 @@ export async function getPublications(
   perPage = 20
 ): Promise<PaginatedResponse<Publication>> {
   return fetchJson(
-    `${API_BASE_URL}/api/publications?page=${page}&per_page=${perPage}`
+    `/api/publications?page=${page}&per_page=${perPage}`
   );
 }
 
 export async function getResearchers(): Promise<Researcher[]> {
   const data = await fetchJson<{ items: Researcher[] }>(
-    `${API_BASE_URL}/api/researchers`
+    `/api/researchers`
   );
   return data.items;
 }
 
 export async function getResearcher(id: number): Promise<ResearcherDetail> {
-  return fetchJson(`${API_BASE_URL}/api/researchers/${id}`);
+  return fetchJson(`/api/researchers/${id}`);
+}
+
+export function usePublications(page = 1, perPage = 20) {
+  return useSWR<PaginatedResponse<Publication>>(
+    `/api/publications?page=${page}&per_page=${perPage}`,
+    fetchJson
+  );
+}
+
+export function useResearchers() {
+  return useSWR<Researcher[]>("/api/researchers", async (url: string) => {
+    const data = await fetchJson<{ items: Researcher[] }>(url);
+    return data.items;
+  });
+}
+
+export function useResearcher(id: number) {
+  return useSWR<ResearcherDetail>(`/api/researchers/${id}`, fetchJson);
 }
