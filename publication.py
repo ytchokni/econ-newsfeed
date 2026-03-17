@@ -99,7 +99,7 @@ class Publication:
                     logging.info(f"Publication saved successfully: {pub['title']}")
 
             except Exception as e:
-                logging.error(f"Error saving publication: {str(e)}")
+                logging.error("Error saving publication: %s", type(e).__name__)
                 # If there's an error, rollback the transaction
                 if 'conn' in locals():
                     conn.rollback()
@@ -156,7 +156,7 @@ class Publication:
                     logging.warning(f"Rejected malformed publication from LLM output: {e}")
             return validated
         except Exception as e:
-            logging.error(f"Error in OpenAI API call: {str(e)}")
+            logging.error("Error in OpenAI API call: %s", type(e).__name__)
             return []
 
     @staticmethod
