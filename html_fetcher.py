@@ -118,6 +118,7 @@ class HTMLFetcher:
                     logging.warning(f"Response too large ({len(response.content)} bytes) for {url}, rejecting")
                     return None
                 logging.info(f"Successfully fetched HTML content from {url}")
+                response.encoding = response.apparent_encoding
                 return response.text
             except requests.exceptions.Timeout:
                 backoff = 2 ** attempt
