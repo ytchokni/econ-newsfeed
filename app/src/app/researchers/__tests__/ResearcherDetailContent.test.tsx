@@ -9,7 +9,9 @@ const researcher: ResearcherDetail = {
   position: "Professor",
   affiliation: "Freie Universität Berlin",
   urls: [],
+  website_url: null,
   publication_count: 2,
+  fields: [],
   publications: [
     {
       id: 1,
@@ -19,6 +21,9 @@ const researcher: ResearcherDetail = {
       venue: "JLE",
       source_url: null,
       discovered_at: "2026-03-15T14:30:00Z",
+      status: null,
+      draft_url: null,
+      draft_available: false,
     },
     {
       id: 2,
@@ -31,6 +36,9 @@ const researcher: ResearcherDetail = {
       venue: "WP",
       source_url: null,
       discovered_at: "2026-03-14T10:00:00Z",
+      status: null,
+      draft_url: null,
+      draft_available: false,
     },
   ],
 };

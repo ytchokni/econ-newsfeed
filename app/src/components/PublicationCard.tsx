@@ -38,6 +38,18 @@ export default function PublicationCard({
           {publication.year}
         </p>
       )}
+      {publication.draft_available && publication.draft_url && (
+        <p className="mt-2">
+          <a
+            href={publication.draft_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-block text-xs font-medium text-blue-700 border border-blue-300 rounded px-2 py-0.5 hover:bg-blue-50 transition-colors"
+          >
+            Draft &#8599;
+          </a>
+        </p>
+      )}
     </div>
   );
 }

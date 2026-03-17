@@ -18,12 +18,22 @@ class PublicationExtraction(BaseModel):
     authors: list[list[str]]  # [[first_name, last_name], ...]
     year: Optional[str] = None
     venue: Optional[str] = None
+    status: Optional[str] = None
+    draft_url: Optional[str] = None
 
     @field_validator('year', mode='before')
     @classmethod
     def coerce_year_to_str(cls, v):
         if v is not None:
             return str(v)
+        return v
+
+    @field_validator('status', mode='before')
+    @classmethod
+    def validate_status(cls, v):
+        valid = {'published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit'}
+        if v is not None and v not in valid:
+            return None
         return v
 
 
@@ -50,7 +60,7 @@ class Publication:
 
                 # Check for existing publication with same normalized title + URL
                 existing = Database.fetch_one(
-                    "SELECT id FROM publications WHERE LOWER(TRIM(title)) = %s AND url = %s",
+                    "SELECT id FROM papers WHERE LOWER(TRIM(title)) = %s AND url = %s",
                     (normalized_title, url)
                 )
                 if existing:
@@ -61,10 +71,10 @@ class Publication:
                     cursor = conn.cursor()
 
                     query = """
-                    INSERT INTO publications (url, title, year, venue, timestamp)
-                    VALUES (%s, %s, %s, %s, %s)
+                    INSERT INTO papers (url, title, year, venue, timestamp, status, draft_url)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s)
                     """
-                    params = (url, pub['title'], pub.get('year'), pub.get('venue'), datetime.now())
+                    params = (url, pub['title'], pub.get('year'), pub.get('venue'), datetime.now(), pub.get('status'), pub.get('draft_url'))
                     cursor.execute(query, params)
 
                     # Get the last inserted ID
@@ -114,8 +124,10 @@ class Publication:
         - Authors as a list of lists: [first name, last name]
         - Year
         - Venue (e.g., journal or conference name)
+        - Status: one of "published", "accepted", "revise_and_resubmit", "reject_and_resubmit", or null if unknown
+        - Draft URL: a PDF, SSRN, NBER, or working paper link for the paper, or null if not available
 
-        Provide the output as a JSON array of objects with the keys: "title", "authors", "year", "venue".
+        Provide the output as a JSON array of objects with the keys: "title", "authors", "year", "venue", "status", "draft_url".
         Content:
         {text_content[:4000]}  # Limit content to 4000 characters
         """
@@ -194,7 +206,7 @@ class Publication:
         """Retrieve all publications from the database."""
         query = """
             SELECT id, url, title, year, venue
-            FROM publications
+            FROM papers
         """
         results = Database.fetch_all(query)
         return [Publication(id=row[0], url=row[1], title=row[2], year=row[3], venue=row[4], authors=None) for row in results]

@@ -113,16 +113,19 @@ class Database:
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id)
                 )
             """,
-            "publications": """
-                CREATE TABLE IF NOT EXISTS publications (
+            "papers": """
+                CREATE TABLE IF NOT EXISTS papers (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     url VARCHAR(2048),
                     title TEXT,
                     year VARCHAR(4),
                     venue TEXT,
                     timestamp DATETIME,
+                    status ENUM('published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit') DEFAULT NULL,
+                    draft_url VARCHAR(2048) DEFAULT NULL,
                     UNIQUE KEY uq_title_url (title(200), url(200)),
-                    INDEX idx_timestamp (timestamp)
+                    INDEX idx_timestamp (timestamp),
+                    INDEX idx_status (status)
                 )
             """,
             "html_content": """
@@ -148,7 +151,24 @@ class Database:
                     INDEX idx_researcher (researcher_id),
                     INDEX idx_publication (publication_id),
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id),
-                    FOREIGN KEY (publication_id) REFERENCES publications(id)
+                    FOREIGN KEY (publication_id) REFERENCES papers(id)
+                )
+            """,
+            "research_fields": """
+                CREATE TABLE IF NOT EXISTS research_fields (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    name VARCHAR(255) NOT NULL,
+                    slug VARCHAR(255) NOT NULL,
+                    UNIQUE KEY uq_slug (slug)
+                )
+            """,
+            "researcher_fields": """
+                CREATE TABLE IF NOT EXISTS researcher_fields (
+                    researcher_id INT NOT NULL,
+                    field_id INT NOT NULL,
+                    PRIMARY KEY (researcher_id, field_id),
+                    FOREIGN KEY (researcher_id) REFERENCES researchers(id),
+                    FOREIGN KEY (field_id) REFERENCES research_fields(id)
                 )
             """,
             "scrape_log": """
@@ -168,6 +188,30 @@ class Database:
         for table_name, table_query in table_definitions.items():
             Database.execute_query(table_query)
         logging.info("All tables created successfully")
+        Database.seed_research_fields()
+
+    @staticmethod
+    def seed_research_fields():
+        """Insert the initial research field taxonomy if not already present."""
+        fields = [
+            ("Macroeconomics", "macroeconomics"),
+            ("Labour Economics", "labour-economics"),
+            ("Cultural Economics", "cultural-economics"),
+            ("Migration", "migration"),
+            ("Political Economy", "political-economy"),
+            ("Development Economics", "development-economics"),
+            ("International Trade", "international-trade"),
+            ("Finance", "finance"),
+            ("Health Economics", "health-economics"),
+            ("Public Economics", "public-economics"),
+            ("Industrial Organisation", "industrial-organisation"),
+            ("Econometrics/Methods", "econometrics-methods"),
+        ]
+        for name, slug in fields:
+            Database.execute_query(
+                "INSERT IGNORE INTO research_fields (name, slug) VALUES (%s, %s)",
+                (name, slug),
+            )
 
     @staticmethod
     def get_researcher_id(first_name, last_name, position=None, affiliation=None):
