@@ -355,15 +355,19 @@ async def trigger_scrape(request: Request):
             detail="A scrape is already running. Wait for it to complete.",
         )
 
-    log_id = create_scrape_log()
-    started_at = datetime.now(timezone.utc)
+    try:
+        log_id = create_scrape_log()
+        started_at = datetime.now(timezone.utc)
 
-    # Run scrape in background thread; pass _lock_acquired=True so
-    # run_scrape_job skips re-acquiring and releases in its own finally block.
-    t = threading.Thread(
-        target=run_scrape_job, kwargs={"_lock_acquired": True}, daemon=True
-    )
-    t.start()
+        # Run scrape in background thread; pass _lock_acquired=True so
+        # run_scrape_job skips re-acquiring and releases in its own finally block.
+        t = threading.Thread(
+            target=run_scrape_job, kwargs={"_lock_acquired": True}, daemon=True
+        )
+        t.start()
+    except Exception:
+        scheduler._scrape_lock.release()
+        raise
 
     return {
         "scrape_id": log_id,
