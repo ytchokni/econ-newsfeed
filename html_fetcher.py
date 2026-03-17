@@ -13,6 +13,8 @@ from bs4 import BeautifulSoup
 logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 RATE_LIMIT_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_SECONDS', '2'))
+CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS', '4000'))
+CONTENT_MAX_BYTES = 1_000_000  # 1 MB response size limit
 
 
 class HTMLFetcher:
@@ -93,6 +95,9 @@ class HTMLFetcher:
                     time.sleep(backoff)
                     continue
                 response.raise_for_status()
+                if len(response.content) > CONTENT_MAX_BYTES:
+                    logging.warning(f"Response too large ({len(response.content)} bytes) for {url}, rejecting")
+                    return None
                 logging.info(f"Successfully fetched HTML content from {url}")
                 return response.text
             except requests.exceptions.Timeout:
@@ -174,6 +179,10 @@ class HTMLFetcher:
 
         # Parse HTML once, reuse for both comparison and storage
         text_content = HTMLFetcher.extract_text_content(html_content)
+        if len(text_content) > CONTENT_MAX_CHARS:
+            dropped = len(text_content) - CONTENT_MAX_CHARS
+            logging.info(f"Truncating content for URL ID {url_id}: {len(text_content)} -> {CONTENT_MAX_CHARS} chars ({dropped} dropped)")
+            text_content = text_content[:CONTENT_MAX_CHARS]
         text_hash = HTMLFetcher.hash_text_content(text_content)
 
         if HTMLFetcher.has_text_changed(url_id, text_hash):
