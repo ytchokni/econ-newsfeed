@@ -65,16 +65,16 @@ Implement scrape trigger and status endpoints with API key auth.
 
 ### Tasks
 
-- [ ] Task 4.1: Define Pydantic response models (`ScrapeResponse`, `ScrapeStatusResponse`)
-- [ ] Task 4.2: Write tests for `POST /api/scrape` — missing key returns 401, invalid key returns 401, valid key returns 201, already running returns 409
-- [ ] Task 4.3: Write tests for `GET /api/scrape/status` — returns last scrape info and next scheduled time
-- [ ] Task 4.4: Implement API key dependency (validates `X-API-Key` against `SCRAPE_API_KEY` env var)
-- [ ] Task 4.5: Implement `POST /api/scrape` — triggers `run_scrape_job()` in background thread, returns 409 if lock held
-- [ ] Task 4.6: Implement `GET /api/scrape/status`
+- [x] Task 4.1: Define Pydantic response models (`ScrapeResponse`, `ScrapeStatusResponse`)
+- [x] Task 4.2: Write tests for `POST /api/scrape` — missing key returns 401, invalid key returns 401, valid key returns 201, already running returns 409
+- [x] Task 4.3: Write tests for `GET /api/scrape/status` — returns last scrape info and next scheduled time
+- [x] Task 4.4: Implement API key dependency (validates `X-API-Key` against `SCRAPE_API_KEY` env var)
+- [x] Task 4.5: Implement `POST /api/scrape` — triggers `run_scrape_job()` in background thread, returns 409 if lock held
+- [x] Task 4.6: Implement `GET /api/scrape/status`
 
 ### Verification
 
-- [ ] All Phase 4 tests pass; auth enforced, 409 conflict works, status reflects scrape_log data
+- [x] All Phase 4 tests pass; auth enforced, 409 conflict works, status reflects scrape_log data
 
 ## Phase 5: OpenAPI & Final Integration
 
