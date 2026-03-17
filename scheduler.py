@@ -1,6 +1,6 @@
 import logging
 import os
-from datetime import datetime
+from datetime import datetime, timezone
 
 import mysql.connector
 from apscheduler.schedulers.background import BackgroundScheduler
@@ -72,7 +72,7 @@ def create_scrape_log():
         INSERT INTO scrape_log (started_at, status)
         VALUES (%s, 'running')
     """
-    return Database.execute_query(query, (datetime.utcnow(),))
+    return Database.execute_query(query, (datetime.now(timezone.utc),))
 
 
 def update_scrape_log(log_id, status, urls_checked=0, urls_changed=0, pubs_extracted=0, error_message=None):
@@ -84,7 +84,7 @@ def update_scrape_log(log_id, status, urls_checked=0, urls_changed=0, pubs_extra
         WHERE id = %s
     """
     Database.execute_query(query, (
-        datetime.utcnow(), status, urls_checked,
+        datetime.now(timezone.utc), status, urls_checked,
         urls_changed, pubs_extracted, error_message, log_id
     ))
 
@@ -131,9 +131,9 @@ def run_scrape_job():
         logger.info(f"Scrape completed: {urls_checked} checked, {urls_changed} changed, {pubs_extracted} extracted")
 
     except Exception as e:
-        logger.error(f"Scrape job failed: {e}")
+        logger.error("Scrape job failed: %s", type(e).__name__)
         if log_id:
-            update_scrape_log(log_id, "failed", error_message=str(e))
+            update_scrape_log(log_id, "failed", error_message=type(e).__name__)
     finally:
         _release_db_lock(lock_conn)
         _lock_conn = None

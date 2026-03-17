@@ -11,6 +11,9 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
+from slowapi import Limiter
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
 from database import Database
 import scheduler
@@ -22,6 +25,8 @@ from scheduler import (
 )
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+
+limiter = Limiter(key_func=get_remote_address)
 
 
 # ---------------------------------------------------------------------------
@@ -59,6 +64,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+app.state.limiter = limiter
+async def _rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content={"error": {"code": "rate_limit_exceeded", "message": str(exc.detail)}},
+    )
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_handler)
+
 # CORS — only allow the frontend origin
 app.add_middleware(
     CORSMiddleware,
@@ -90,33 +104,37 @@ async def add_security_headers(request: Request, call_next):
 
 @app.exception_handler(400)
 async def bad_request_handler(request: Request, exc):
+    msg = exc.detail if isinstance(exc, HTTPException) else "Bad request"
     return JSONResponse(
         status_code=400,
-        content={"error": {"code": "bad_request", "message": str(exc.detail) if hasattr(exc, "detail") else str(exc)}},
+        content={"error": {"code": "bad_request", "message": str(msg)}},
     )
 
 
 @app.exception_handler(401)
 async def unauthorized_handler(request: Request, exc):
+    msg = exc.detail if isinstance(exc, HTTPException) else "Unauthorized"
     return JSONResponse(
         status_code=401,
-        content={"error": {"code": "unauthorized", "message": str(exc.detail) if hasattr(exc, "detail") else str(exc)}},
+        content={"error": {"code": "unauthorized", "message": str(msg)}},
     )
 
 
 @app.exception_handler(404)
 async def not_found_handler(request: Request, exc):
+    msg = exc.detail if isinstance(exc, HTTPException) else "Not found"
     return JSONResponse(
         status_code=404,
-        content={"error": {"code": "not_found", "message": str(exc.detail) if hasattr(exc, "detail") else str(exc)}},
+        content={"error": {"code": "not_found", "message": str(msg)}},
     )
 
 
 @app.exception_handler(409)
 async def conflict_handler(request: Request, exc):
+    msg = exc.detail if isinstance(exc, HTTPException) else "Conflict"
     return JSONResponse(
         status_code=409,
-        content={"error": {"code": "scrape_in_progress", "message": str(exc.detail) if hasattr(exc, "detail") else str(exc)}},
+        content={"error": {"code": "scrape_in_progress", "message": str(msg)}},
     )
 
 
@@ -133,14 +151,24 @@ async def validation_error_handler(request: Request, exc: RequestValidationError
 
 @app.exception_handler(422)
 async def unprocessable_handler(request: Request, exc):
+    msg = exc.detail if isinstance(exc, HTTPException) else "Unprocessable entity"
     return JSONResponse(
         status_code=422,
-        content={"error": {"code": "validation_error", "message": str(exc.detail) if hasattr(exc, "detail") else str(exc)}},
+        content={"error": {"code": "validation_error", "message": str(msg)}},
     )
 
 
 @app.exception_handler(500)
 async def internal_error_handler(request: Request, exc):
+    return JSONResponse(
+        status_code=500,
+        content={"error": {"code": "internal_error", "message": "An unexpected error occurred."}},
+    )
+
+
+@app.exception_handler(Exception)
+async def generic_exception_handler(request: Request, exc: Exception):
+    """Catch-all handler to prevent stack traces leaking in API responses."""
     return JSONResponse(
         status_code=500,
         content={"error": {"code": "internal_error", "message": "An unexpected error occurred."}},
@@ -191,7 +219,9 @@ def _format_publication(row, authors: list[dict]) -> dict:
 # ---------------------------------------------------------------------------
 
 @app.get("/api/publications")
+@limiter.limit("60/minute")
 async def list_publications(
+    request: Request,
     response: Response,
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
@@ -254,7 +284,8 @@ async def list_publications(
 
 
 @app.get("/api/publications/{publication_id}")
-async def get_publication(publication_id: int):
+@limiter.limit("60/minute")
+async def get_publication(request: Request, publication_id: int):
     row = Database.fetch_one(
         "SELECT id, title, year, venue, url, timestamp, status, draft_url FROM papers WHERE id = %s",
         (publication_id,),
@@ -319,7 +350,8 @@ async def list_fields():
 
 
 @app.get("/api/researchers")
-async def list_researchers(response: Response):
+@limiter.limit("60/minute")
+async def list_researchers(request: Request, response: Response):
     rows = Database.fetch_all(
         "SELECT id, first_name, last_name, position, affiliation FROM researchers"
     )
@@ -344,7 +376,8 @@ async def list_researchers(response: Response):
 
 
 @app.get("/api/researchers/{researcher_id}")
-async def get_researcher(researcher_id: int):
+@limiter.limit("60/minute")
+async def get_researcher(request: Request, researcher_id: int):
     row = Database.fetch_one(
         "SELECT id, first_name, last_name, position, affiliation FROM researchers WHERE id = %s",
         (researcher_id,),
@@ -422,7 +455,8 @@ async def trigger_scrape(request: Request):
 
 
 @app.get("/api/scrape/status")
-async def scrape_status():
+@limiter.limit("60/minute")
+async def scrape_status(request: Request):
     row = Database.fetch_one(
         """
         SELECT id, status, started_at, finished_at,

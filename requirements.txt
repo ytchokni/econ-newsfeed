@@ -8,3 +8,4 @@ uvicorn[standard]==0.34.*
 gunicorn==22.*
 apscheduler==3.10.*
 pydantic==2.10.*
+slowapi==0.1.*

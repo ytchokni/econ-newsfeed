@@ -24,7 +24,7 @@ class Database:
             cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{db_config['database']}`")
             logging.info(f"Database '{db_config['database']}' created or already exists.")
         except Error as e:
-            logging.error(f"Error creating database: {e}")
+            logging.error("Error creating database: %s", type(e).__name__)
         finally:
             if conn.is_connected():
                 cursor.close()
@@ -39,7 +39,7 @@ class Database:
             conn = mysql.connector.connect(**db_config)
             return conn
         except Error as e:
-            logging.error(f"Error connecting to the database: {e}")
+            logging.error("Error connecting to the database: %s", type(e).__name__)
             return None
 
     @staticmethod
@@ -55,7 +55,7 @@ class Database:
                     conn.commit()
                     return cursor.lastrowid
         except Error as e:
-            logging.error(f"Database error in execute_query: {e}")
+            logging.error("Database error in execute_query: %s", type(e).__name__)
             return None
 
     @staticmethod
@@ -70,7 +70,7 @@ class Database:
                     cursor.execute(query, params)
                     return cursor.fetchall()
         except Error as e:
-            logging.error(f"Database error in fetch_all: {e}")
+            logging.error("Database error in fetch_all: %s", type(e).__name__)
             return []
 
     @staticmethod
@@ -84,7 +84,7 @@ class Database:
                     cursor.execute(query, params)
                     return cursor.fetchone()
         except Error as e:
-            logging.error(f"Database error in fetch_one: {e}")
+            logging.error("Database error in fetch_one: %s", type(e).__name__)
             return None
 
     @staticmethod
@@ -268,7 +268,7 @@ class Database:
                     Database.add_researcher_url(researcher_id, page_type, url)
             logging.info("Data imported successfully from file")
         except Exception as e:
-            logging.error(f"Error importing data from file: {e}")
+            logging.error("Error importing data from file: %s", type(e).__name__)
 
 # Example usage:
 if __name__ == "__main__":
