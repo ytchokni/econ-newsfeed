@@ -148,7 +148,7 @@ def run_scrape_job():
                 fetch_ms = (time.time() - t0) * 1000
                 logger.info(f"[{urls_checked}/{len(urls)}] fetch {url} — {fetch_ms:.0f}ms (changed={changed})")
 
-                if changed and page_type in ("PUB", "WP"):
+                if changed:
                     urls_changed += 1
                     new_text = HTMLFetcher.get_latest_text(url_id)
 

@@ -1,4 +1,4 @@
-.PHONY: setup dev seed reset-db scrape
+.PHONY: setup dev seed reset-db scrape fetch parse
 
 setup:
 	python3 -m venv .venv
@@ -26,3 +26,9 @@ reset-db:
 
 scrape:
 	.venv/bin/python -c "from scheduler import run_scrape_job; run_scrape_job()"
+
+fetch:
+	.venv/bin/python -c "from main import download_htmls; download_htmls()"
+
+parse:
+	.venv/bin/python -c "from main import extract_data_from_htmls; extract_data_from_htmls()"
