@@ -219,11 +219,27 @@ class HTMLFetcher:
         return True  # No previous record — treat as changed
 
     @staticmethod
+    def _was_fetched_recently(url_id, hours=24):
+        """Return True if this URL was successfully fetched within the last N hours."""
+        result = Database.fetch_one(
+            "SELECT timestamp FROM html_content WHERE url_id = %s", (url_id,)
+        )
+        if not result or not result[0]:
+            return False
+        age = datetime.now(timezone.utc) - result[0].replace(tzinfo=timezone.utc)
+        return age.total_seconds() < hours * 3600
+
+    @staticmethod
     def fetch_and_save_if_changed(url_id, url, researcher_id):
         """
         Fetch HTML content from the given URL and save its text content if it has changed.
+        Skips fetching if the URL was successfully fetched within the last 24 hours.
         Returns True if content changed, False otherwise.
         """
+        if HTMLFetcher._was_fetched_recently(url_id):
+            logging.info(f"Skipping URL ID {url_id} (fetched <24h ago): {url}")
+            return False
+
         if not HTMLFetcher.validate_url(url):
             logging.warning(f"URL failed SSRF validation, skipping: {url}")
             return False
