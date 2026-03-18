@@ -37,6 +37,18 @@ export default function ResearcherDetailContent({ id }: { id: number }) {
             {researcher.affiliation}
           </p>
         )}
+        {researcher.website_url && (
+          <p className="mt-2">
+            <a
+              href={researcher.website_url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-sm text-blue-600 hover:underline"
+            >
+              Personal website
+            </a>
+          </p>
+        )}
         {researcher.description && (
           <p className="mt-3 text-sm text-gray-700 leading-relaxed">
             {researcher.description}

@@ -1,7 +1,6 @@
 """Tests for scrape trigger and status endpoints."""
-import threading
 from datetime import datetime
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
@@ -41,11 +40,8 @@ class TestTriggerScrape:
         assert body["error"]["code"] == "unauthorized"
 
     def test_valid_key_returns_201(self, client):
-        mock_lock = MagicMock()
-        mock_lock.acquire.return_value = True
-
         with (
-            patch("scheduler._scrape_lock", mock_lock),
+            patch("api.scheduler.is_scrape_running", return_value=False),
             patch("api.create_scrape_log", return_value=15),
             patch("api.threading.Thread") as mock_thread,
         ):
@@ -61,10 +57,7 @@ class TestTriggerScrape:
         assert "started_at" in body
 
     def test_already_running_returns_409(self, client):
-        mock_lock = MagicMock()
-        mock_lock.acquire.return_value = False
-
-        with patch("scheduler._scrape_lock", mock_lock):
+        with patch("api.scheduler.is_scrape_running", return_value=True):
             response = client.post(
                 "/api/scrape",
                 headers={"X-API-Key": "test-secret-key-for-ci-runs"},

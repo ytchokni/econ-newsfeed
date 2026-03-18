@@ -6,8 +6,8 @@ setup:
 	cd app && npm install
 
 dev:
-	.venv/bin/python -m uvicorn api:app --reload --port 8000 & \
-	cd app && npm run dev & \
+	.venv/bin/python -m uvicorn api:app --reload --port 8001 & \
+	cd app && API_INTERNAL_URL=http://localhost:8001 npm run dev & \
 	wait
 
 seed:

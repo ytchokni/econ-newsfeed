@@ -72,7 +72,7 @@ class Publication:
         for pub in publications:
             conn = None
             try:
-                normalized_title = Publication._normalize_title(pub['title'])
+                title = pub['title'].strip() if pub['title'] else ''
                 title_hash = Database.compute_title_hash(pub['title'])
 
                 with Database.get_connection() as conn:
@@ -84,7 +84,7 @@ class Publication:
                         INSERT IGNORE INTO papers (url, title, title_hash, year, venue, abstract, timestamp, status, draft_url)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
-                        (url, normalized_title, title_hash, pub.get('year'), pub.get('venue'),
+                        (url, title, title_hash, pub.get('year'), pub.get('venue'),
                          pub.get('abstract'), datetime.now(timezone.utc), pub.get('status'), pub.get('draft_url')),
                     )
 
