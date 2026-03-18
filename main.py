@@ -40,7 +40,6 @@ def extract_data_from_htmls():
 
 def main():
     """Main function to handle user input and execute the appropriate actions."""
-    Database.apply_schema_migrations()
 
     actions = {
         '1': ('Import data from a file', import_data),
