@@ -102,19 +102,23 @@ class HTMLFetcher:
 
     @staticmethod
     def is_allowed_by_robots(url):
-        """Check if the URL is allowed by the site's robots.txt."""
+        """Check if the URL is allowed by the site's robots.txt.
+        If robots.txt can't be fetched or returns non-200, allow the request."""
         try:
             parsed = urlparse(url)
             robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+            resp = requests.get(robots_url, timeout=10, headers={
+                'User-Agent': SCRAPER_USER_AGENT,
+            })
+            if resp.status_code != 200:
+                return True
             rp = RobotFileParser()
-            rp.set_url(robots_url)
-            rp.read()
+            rp.parse(resp.text.splitlines())
             allowed = rp.can_fetch('HTMLFetcher/1.0', url)
             if not allowed:
                 logging.info(f"URL disallowed by robots.txt: {url}")
             return allowed
         except Exception:
-            # If robots.txt can't be fetched, allow the request
             return True
 
     @staticmethod
@@ -157,6 +161,11 @@ class HTMLFetcher:
         except (socket.gaierror, ValueError):
             logging.warning(f"Could not resolve hostname for URL: {url}")
             return False, None
+
+        # Skip DNS pinning for CDN domains — pinning to a single IP breaks
+        # virtual-hosted sites that route based on CDN edge selection.
+        if hostname in FAST_DOMAINS:
+            return True, None
 
         return True, resolved_ip
 
@@ -313,36 +322,84 @@ class HTMLFetcher:
 
     @staticmethod
     def extract_bio(text_content: str, url: str) -> str | None:
-        """Extract a ≤2-sentence bio from text content using the LLM.
+        """Legacy: extract a ≤2-sentence bio. Delegates to extract_description."""
+        return HTMLFetcher.extract_description(text_content, url)
 
-        Returns the bio string, or None if no bio could be extracted.
-        Import is deferred to avoid circular dependency with publication.py.
+    @staticmethod
+    def extract_description(text_content: str, url: str) -> str | None:
+        """Extract a researcher description (up to 200 words) from plain text.
+
+        Uses a single LLM call on text content (not HTML) for minimal input tokens.
+        Output is capped with max_tokens and truncated to 200 words application-side.
+        Returns the description string, or None if nothing could be extracted.
         """
         try:
             from publication import _openai_client, OPENAI_MODEL
         except ImportError:
-            logging.error("Could not import OpenAI client for bio extraction")
+            logging.error("Could not import OpenAI client for description extraction")
             return None
 
         prompt = (
             f"From the following text from a researcher's homepage at {url}, "
-            "extract a brief professional bio (at most 2 sentences) describing who this person is, "
+            "extract a professional description (up to 200 words) describing who this person is, "
             "their research interests, and their current position/affiliation. "
-            "If no clear bio can be extracted, reply with exactly: null\n\n"
+            "Return only the description text, nothing else. "
+            "If no clear description can be extracted, reply with exactly: null\n\n"
             f"Content:\n{text_content[:3000]}"
         )
         try:
             response = _openai_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model=OPENAI_MODEL,
+                max_completion_tokens=1024,
             )
-            bio = response.choices[0].message.content.strip()
-            if bio.lower() in ("null", "none", ""):
+            desc = response.choices[0].message.content.strip()
+            if desc.lower() in ("null", "none", ""):
                 return None
-            return bio[:500]
+            words = desc.split()
+            if len(words) > 200:
+                desc = ' '.join(words[:200])
+            return desc
         except Exception as e:
-            logging.error(f"Error extracting bio from {url}: {e}")
+            logging.error(f"Error extracting description from {url}: {e}")
             return None
+
+    @staticmethod
+    def validate_draft_url(url: str) -> str:
+        """Validate a draft URL via HTTP HEAD with SSRF protection.
+
+        Returns 'valid', 'invalid', or 'timeout'.
+        """
+        valid, resolved_ip = HTMLFetcher.validate_url(url)
+        if not valid:
+            return 'invalid'
+
+        try:
+            hostname = urlparse(url).hostname
+            session = requests.Session()
+            session.headers.update(HTMLFetcher.session.headers)
+            if resolved_ip is not None:
+                adapter = _PinnedIPAdapter(hostname=hostname, resolved_ip=resolved_ip)
+                session.mount('https://', adapter)
+                session.mount('http://', adapter)
+
+            # Disable auto-redirects to prevent SSRF via redirect to internal IPs
+            response = session.head(url, timeout=10, allow_redirects=False)
+            if response.status_code < 400:
+                return 'valid'
+            # Follow redirects manually with SSRF validation (up to 5 hops)
+            if response.status_code in (301, 302, 303, 307, 308):
+                redirect_url = response.headers.get('Location')
+                if redirect_url:
+                    redir_valid, _ = HTMLFetcher.validate_url(redirect_url)
+                    if redir_valid:
+                        return HTMLFetcher.validate_draft_url(redirect_url)
+                return 'invalid'
+            return 'invalid'
+        except requests.exceptions.Timeout:
+            return 'timeout'
+        except requests.exceptions.RequestException:
+            return 'invalid'
 
     @staticmethod
     def get_latest_text(url_id):

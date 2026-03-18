@@ -1,5 +1,6 @@
 import logging
 import os
+import time
 from datetime import datetime, timezone
 
 import mysql.connector
@@ -89,6 +90,32 @@ def update_scrape_log(log_id, status, urls_checked=0, urls_changed=0, pubs_extra
     ))
 
 
+_DRAFT_VALIDATION_BUDGET_SECONDS = 300  # 5-minute time budget
+_DRAFT_VALIDATION_DELAY = 0.1  # 100ms between requests
+
+
+def _validate_draft_urls():
+    """Validate papers with unchecked draft URLs (rate-limited, time-budgeted)."""
+    unchecked = Database.get_unchecked_draft_urls()
+    if not unchecked:
+        return
+    logger.info(f"Validating {len(unchecked)} unchecked draft URLs")
+    start = time.time()
+    validated = 0
+    for paper_id, draft_url in unchecked:
+        if time.time() - start > _DRAFT_VALIDATION_BUDGET_SECONDS:
+            logger.info(f"Draft URL validation time budget exceeded after {validated} URLs")
+            break
+        try:
+            status = HTMLFetcher.validate_draft_url(draft_url)
+            Database.update_draft_url_status(paper_id, status)
+            logger.info(f"Draft URL for paper {paper_id}: {status}")
+            validated += 1
+            time.sleep(_DRAFT_VALIDATION_DELAY)
+        except Exception as e:
+            logger.error(f"Error validating draft URL for paper {paper_id}: {e}")
+
+
 def run_scrape_job():
     """Orchestrates a full scraping cycle. Skips if another scrape is running."""
     global _lock_conn
@@ -128,20 +155,45 @@ def run_scrape_job():
                             Publication.save_publications(url, pubs)
                             pubs_extracted += len(pubs)
 
-                # Extract bio from HOME pages only when bio is not yet set
-                if page_type == "HOME":
-                    bio_row = Database.fetch_one(
-                        "SELECT bio FROM researchers WHERE id = %s", (researcher_id,)
-                    )
-                    if bio_row and bio_row[0] is None:
-                        page_text = HTMLFetcher.get_latest_text(url_id)
-                        if page_text:
-                            bio = HTMLFetcher.extract_bio(page_text, url)
-                            if bio:
-                                Database.update_researcher_bio(researcher_id, bio)
+                            # Append paper snapshots for versioning
+                            for pub in pubs:
+                                title_hash = Database.compute_title_hash(pub['title'])
+                                paper_row = Database.fetch_one(
+                                    "SELECT id FROM papers WHERE title_hash = %s", (title_hash,)
+                                )
+                                if paper_row:
+                                    Database.append_paper_snapshot(
+                                        paper_id=paper_row[0],
+                                        status=pub.get('status'),
+                                        venue=pub.get('venue'),
+                                        abstract=pub.get('abstract'),
+                                        draft_url=pub.get('draft_url'),
+                                        year=pub.get('year'),
+                                        source_url=url,
+                                    )
+
+                # Extract description from HOME pages using append-only versioning
+                # Only re-extract when content actually changed to avoid unnecessary LLM calls
+                if page_type == "HOME" and changed:
+                    page_text = HTMLFetcher.get_latest_text(url_id)
+                    if page_text:
+                        description = HTMLFetcher.extract_description(page_text, url)
+                        if description:
+                            r_row = Database.fetch_one(
+                                "SELECT position, affiliation FROM researchers WHERE id = %s",
+                                (researcher_id,),
+                            )
+                            position = r_row[0] if r_row else None
+                            affiliation = r_row[1] if r_row else None
+                            Database.append_researcher_snapshot(
+                                researcher_id, position, affiliation, description, source_url=url
+                            )
             except Exception as e:
                 logger.error("Error processing URL %s (id=%s): %s", url, url_id, e)
                 continue
+
+        # Validate draft URLs after extraction phase
+        _validate_draft_urls()
 
         update_scrape_log(log_id, "completed", urls_checked, urls_changed, pubs_extracted)
         logger.info(f"Scrape completed: {urls_checked} checked, {urls_changed} changed, {pubs_extracted} extracted")

@@ -250,9 +250,11 @@ def _get_authors_for_publications(pub_ids: list[int]) -> dict[int, list[dict]]:
 def _format_publication(row, authors: list[dict]) -> dict:
     """Format a publication DB row + authors into the API response shape.
 
-    Expected row columns: id, title, year, venue, url, timestamp, status, draft_url
+    Expected row columns: id, title, year, venue, url, timestamp, status, draft_url, abstract, draft_url_status
     """
     draft_url = row[7] if len(row) > 7 else None
+    abstract = row[8] if len(row) > 8 else None
+    draft_url_status = row[9] if len(row) > 9 else None
     return {
         "id": row[0],
         "title": row[1],
@@ -263,7 +265,9 @@ def _format_publication(row, authors: list[dict]) -> dict:
         "discovered_at": row[5].isoformat() + "Z" if row[5] else None,
         "status": row[6] if len(row) > 6 else None,
         "draft_url": draft_url,
-        "draft_available": draft_url is not None,
+        "draft_available": draft_url_status == 'valid',
+        "abstract": abstract,
+        "draft_url_status": draft_url_status,
     }
 
 
@@ -282,10 +286,21 @@ def list_publications(
     researcher_id: int | None = Query(None),
     status: str | None = Query(None),
     since: str | None = Query(None),
+    institution: str | None = Query(None),
+    preset: str | None = Query(None),
 ):
-    valid_statuses = {"published", "accepted", "revise_and_resubmit", "reject_and_resubmit"}
-    if status and status not in valid_statuses:
-        raise HTTPException(status_code=400, detail=f"Invalid status value. Must be one of: {', '.join(sorted(valid_statuses))}")
+    valid_statuses = {"published", "accepted", "revise_and_resubmit", "reject_and_resubmit", "working_paper"}
+    valid_presets = {"top20"}
+
+    # Parse comma-separated multi-values
+    status_list = [s.strip() for s in status.split(",") if s.strip()] if status else []
+    institution_list = [i.strip() for i in institution.split(",") if i.strip()] if institution else []
+
+    for s in status_list:
+        if s not in valid_statuses:
+            raise HTTPException(status_code=400, detail=f"Invalid status value '{s}'. Must be one of: {', '.join(sorted(valid_statuses))}")
+    if preset and preset not in valid_presets:
+        raise HTTPException(status_code=400, detail=f"Invalid preset value. Must be one of: {', '.join(sorted(valid_presets))}")
 
     # Build WHERE clause
     conditions = []
@@ -296,9 +311,14 @@ def list_publications(
     if researcher_id:
         conditions.append("p.id IN (SELECT publication_id FROM authorship WHERE researcher_id = %s)")
         params.append(researcher_id)
-    if status:
-        conditions.append("p.status = %s")
-        params.append(status)
+    if status_list:
+        if len(status_list) == 1:
+            conditions.append("p.status = %s")
+            params.append(status_list[0])
+        else:
+            placeholders = ",".join(["%s"] * len(status_list))
+            conditions.append(f"p.status IN ({placeholders})")
+            params.extend(status_list)
     if since:
         try:
             since_dt = datetime.fromisoformat(since.rstrip("Z"))
@@ -306,6 +326,30 @@ def list_publications(
             raise HTTPException(status_code=400, detail="Invalid ?since= value; expected ISO8601 timestamp")
         conditions.append("p.timestamp >= %s")
         params.append(since_dt)
+    if institution_list and not preset:
+        if len(institution_list) == 1:
+            conditions.append(
+                "p.id IN (SELECT a.publication_id FROM authorship a "
+                "JOIN researchers r ON r.id = a.researcher_id "
+                "WHERE r.affiliation LIKE %s)"
+            )
+            params.append(f"%{_escape_like(institution_list[0])}%")
+        else:
+            inst_likes = " OR ".join(["r.affiliation LIKE %s"] * len(institution_list))
+            conditions.append(
+                f"p.id IN (SELECT a.publication_id FROM authorship a "
+                f"JOIN researchers r ON r.id = a.researcher_id "
+                f"WHERE {inst_likes})"
+            )
+            params.extend(f"%{_escape_like(i)}%" for i in institution_list)
+    if preset == "top20":
+        dept_likes = " OR ".join(["r.affiliation LIKE %s"] * len(_TOP20_DEPT_KEYWORDS))
+        conditions.append(
+            f"p.id IN (SELECT a.publication_id FROM authorship a "
+            f"JOIN researchers r ON r.id = a.researcher_id "
+            f"WHERE {dept_likes})"
+        )
+        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP20_DEPT_KEYWORDS)
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -320,7 +364,8 @@ def list_publications(
     offset = (page - 1) * per_page
     rows = Database.fetch_all(
         f"""
-        SELECT p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url
+        SELECT p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url,
+               p.abstract, p.draft_url_status
         FROM papers p
         {where}
         ORDER BY p.timestamp DESC
@@ -345,16 +390,38 @@ def list_publications(
 
 @app.get("/api/publications/{publication_id}")
 @limiter.limit("60/minute")
-def get_publication(request: Request, publication_id: int):
+def get_publication(
+    request: Request,
+    publication_id: int,
+    include_history: bool = Query(False),
+):
     row = Database.fetch_one(
-        "SELECT id, title, year, venue, url, timestamp, status, draft_url FROM papers WHERE id = %s",
+        "SELECT id, title, year, venue, url, timestamp, status, draft_url, abstract, draft_url_status FROM papers WHERE id = %s",
         (publication_id,),
     )
     if not row:
         raise HTTPException(status_code=404, detail="Publication not found")
 
     authors = _get_authors_for_publication(publication_id)
-    return _format_publication(row, authors)
+    result = _format_publication(row, authors)
+
+    if include_history:
+        snapshots = Database.get_paper_snapshots(publication_id)
+        result["history"] = [
+            {
+                "status": s[0],
+                "venue": s[1],
+                "abstract": s[2],
+                "draft_url": s[3],
+                "draft_url_status": s[4],
+                "year": s[5],
+                "scraped_at": s[6].isoformat() + "Z" if s[6] else None,
+                "source_url": s[7],
+            }
+            for s in snapshots
+        ]
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -519,7 +586,7 @@ def list_researchers(
     offset = (page - 1) * per_page
     rows = Database.fetch_all(
         f"""
-        SELECT r.id, r.first_name, r.last_name, r.position, r.affiliation, r.bio
+        SELECT r.id, r.first_name, r.last_name, r.position, r.affiliation, r.description
         FROM researchers r
         {where}
         ORDER BY r.last_name, r.first_name
@@ -539,7 +606,7 @@ def list_researchers(
             "last_name": r[2],
             "position": r[3],
             "affiliation": r[4],
-            "bio": r[5],
+            "description": r[5],
             "urls": urls_by_researcher.get(r[0], []),
             "website_url": _get_website_url(urls_by_researcher.get(r[0], [])),
             "publication_count": pub_counts.get(r[0], 0),
@@ -559,9 +626,13 @@ def list_researchers(
 
 @app.get("/api/researchers/{researcher_id}")
 @limiter.limit("60/minute")
-def get_researcher(request: Request, researcher_id: int):
+def get_researcher(
+    request: Request,
+    researcher_id: int,
+    include_history: bool = Query(False),
+):
     row = Database.fetch_one(
-        "SELECT id, first_name, last_name, position, affiliation, bio FROM researchers WHERE id = %s",
+        "SELECT id, first_name, last_name, position, affiliation, description FROM researchers WHERE id = %s",
         (researcher_id,),
     )
     if not row:
@@ -574,7 +645,8 @@ def get_researcher(request: Request, researcher_id: int):
     # Fetch this researcher's publications
     pub_rows = Database.fetch_all(
         """
-        SELECT p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url
+        SELECT p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url,
+               p.abstract, p.draft_url_status
         FROM papers p
         JOIN authorship a ON a.publication_id = p.id
         WHERE a.researcher_id = %s
@@ -586,19 +658,34 @@ def get_researcher(request: Request, researcher_id: int):
     authors_by_pub = _get_authors_for_publications(pub_ids)
     publications = [_format_publication(pr, authors_by_pub.get(pr[0], [])) for pr in pub_rows]
 
-    return {
+    result = {
         "id": row[0],
         "first_name": row[1],
         "last_name": row[2],
         "position": row[3],
         "affiliation": row[4],
-        "bio": row[5],
+        "description": row[5],
         "urls": urls,
         "website_url": _get_website_url(urls),
         "publication_count": pub_count,
         "fields": fields,
         "publications": publications,
     }
+
+    if include_history:
+        snapshots = Database.get_researcher_snapshots(researcher_id)
+        result["history"] = [
+            {
+                "position": s[0],
+                "affiliation": s[1],
+                "description": s[2],
+                "scraped_at": s[3].isoformat() + "Z" if s[3] else None,
+                "source_url": s[4],
+            }
+            for s in snapshots
+        ]
+
+    return result
 
 
 # ---------------------------------------------------------------------------
