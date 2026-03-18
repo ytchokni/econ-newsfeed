@@ -8,6 +8,7 @@ import json
 import re
 import logging
 import os
+import threading
 from urllib.parse import urlparse
 
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
@@ -155,9 +156,9 @@ class Publication:
         return main_content.get_text(separator='\n', strip=True)
 
     @staticmethod
-    def extract_publications(text_content, url):
-        """Use OpenAI to extract publication details from text content."""
-        prompt = f"""
+    def build_extraction_prompt(text_content, url):
+        """Build the LLM prompt for publication extraction."""
+        return f"""
         Extract all the publications from the following content from {url}. For each publication, provide:
         - Title
         - Authors as a list of lists: [first name, last name]. Always use full first names when available \
@@ -170,8 +171,13 @@ class Publication:
 
         Provide the output as a JSON array of objects with the keys: "title", "authors", "year", "venue", "status", "draft_url", "abstract".
         Content:
-        {text_content[:4000]}  # Limit content to 4000 characters
+        {text_content[:4000]}
         """
+
+    @staticmethod
+    def extract_publications(text_content, url, scrape_log_id=None):
+        """Use OpenAI to extract publication details from text content."""
+        prompt = Publication.build_extraction_prompt(text_content, url)
         logging.info(f"Extracting publications from {url} using OpenAI ({OPENAI_MODEL})")
 
         try:
@@ -179,7 +185,10 @@ class Publication:
                 messages=[{"role": "user", "content": prompt}],
                 model=OPENAI_MODEL,
             )
-            
+            Database.log_llm_usage(
+                "publication_extraction", OPENAI_MODEL, chat_completion.usage,
+                context_url=url, scrape_log_id=scrape_log_id,
+            )
             response = chat_completion.choices[0].message.content
             parsed_response = Publication.parse_openai_response(response)
 
@@ -218,28 +227,16 @@ class Publication:
         logging.error("Failed to extract valid JSON from OpenAI response")
         return None
 
+    _dump_lock = threading.Lock()
+
     @staticmethod
     def dump_invalid_json(response):
-        """Dump invalid JSON responses to a text file, capping at 50 files."""
-        dump_dir = "invalid_json_dumps"
-        os.makedirs(dump_dir, exist_ok=True)
-
-        MAX_DUMP_FILES = 50
-        existing = sorted(f for f in os.listdir(dump_dir) if f.endswith(".txt"))
-        while len(existing) >= MAX_DUMP_FILES:
-            try:
-                os.remove(os.path.join(dump_dir, existing.pop(0)))
-            except FileNotFoundError:
-                pass  # Another worker already removed this file
-
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        filename = f"invalid_json_{timestamp}.txt"
-        filepath = os.path.join(dump_dir, filename)
-
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(response)
-
-        logging.warning(f"Invalid JSON dumped to {filepath}")
+        """Log invalid JSON responses. Uses structured logging instead of filesystem writes
+        to avoid data loss on ephemeral cloud container filesystems."""
+        # Truncate to avoid flooding log aggregators with huge payloads
+        preview = response[:2000] + ("..." if len(response) > 2000 else "")
+        with Publication._dump_lock:
+            logging.warning("Invalid JSON from OpenAI (len=%d): %s", len(response), preview)
 
     @staticmethod
     def is_valid_json(json_string):

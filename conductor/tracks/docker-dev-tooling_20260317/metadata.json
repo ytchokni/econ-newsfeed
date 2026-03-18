@@ -1,0 +1,32 @@
+{
+  "id": "docker-dev-tooling_20260317",
+  "title": "Docker Containerization & Developer Tooling",
+  "type": "chore",
+  "status": "complete",
+  "created": "2026-03-17T00:00:00Z",
+  "updated": "2026-03-17T16:00:00Z",
+  "current_phase": 3,
+  "current_task": "3.4",
+  "phases": {
+    "total": 3,
+    "completed": 3
+  },
+  "tasks": {
+    "total": 12,
+    "completed": 12
+  },
+  "commits": [
+    "6f5af30: chore(docker): add root .dockerignore",
+    "5999b53: chore(docker): add Dockerfile.api for Python API service",
+    "e196d1e: chore(docker): add app/.dockerignore for frontend build context",
+    "55b8223: chore(docker): add app/Dockerfile for Next.js frontend service",
+    "de7603e: chore(docker): add docker-compose.yml with MySQL 8 service",
+    "cf6b0e9: chore(docker): add API service to docker-compose.yml",
+    "4a181f0: chore(docker): add frontend service to docker-compose.yml",
+    "fcb6165: chore(docker): add MYSQL_ROOT_PASSWORD to .env.example",
+    "41d75a5: chore(make): add Makefile with setup target",
+    "1a59ec1: chore(make): add dev target for parallel API and frontend startup",
+    "3d4f4f8: chore(make): add seed target for database seeding",
+    "0d40077: chore(make): add reset-db target to drop and recreate database"
+  ]
+}

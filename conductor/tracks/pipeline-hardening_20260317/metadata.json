@@ -1,0 +1,40 @@
+{
+  "id": "pipeline-hardening_20260317",
+  "title": "Pipeline Hardening & Scraping Infrastructure",
+  "type": "feature",
+  "status": "complete",
+  "created": "2026-03-17T00:00:00Z",
+  "updated": "2026-03-17T00:00:00Z",
+  "current_phase": 4,
+  "current_task": "4.5",
+  "phases": {
+    "total": 4,
+    "completed": 4
+  },
+  "tasks": {
+    "total": 24,
+    "completed": 24
+  },
+  "commits": [
+    "ae3dfab: feat(config): add startup validation for required env vars",
+    "8ef93c8: chore(deps): pin all dependencies and add fastapi/apscheduler/pydantic",
+    "425eaf4: feat(schema): widen url columns to VARCHAR(2048)",
+    "cb76403: feat(schema): remove redundant url column from html_content, add UNIQUE(url_id)",
+    "f250bd7: feat(schema): add UNIQUE(title, url) and INDEX(timestamp) to publications",
+    "51a253f: feat(schema): add secondary indexes to researchers, authorship, html_content",
+    "5f325d7: feat(schema): add scrape_log table",
+    "66658cd: feat(schema): add NOT NULL constraints on foreign keys",
+    "2a79daf: fix(researcher): remove RETURNING clause and add missing page_type param",
+    "634596f: fix(html_fetcher): return bool from fetch_and_save_if_changed, parse HTML once",
+    "b05fb76: feat(security): add SSRF protection with URL validation",
+    "df84dc1: feat(scraping): add per-domain rate limiting and exponential backoff",
+    "67ebb79: feat(scraping): add content size limit (1 MB) and configurable truncation",
+    "e4ff99d: feat(scraping): add robots.txt compliance",
+    "318ad68: fix(publication): instantiate OpenAI client once, use configurable model",
+    "c102423: feat(publication): add Pydantic validation for LLM output",
+    "fcd9399: feat(publication): add deduplication before insert",
+    "c2a72e6: feat(scraping): add diff-based extraction with get_previous_text and compute_diff",
+    "d411953: feat(scheduler): create run_scrape_job with threading lock and scrape_log",
+    "a10afd3: feat(scheduler): add APScheduler BackgroundScheduler with start/shutdown"
+  ]
+}
