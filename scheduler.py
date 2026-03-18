@@ -133,14 +133,20 @@ def run_scrape_job():
         urls_changed = 0
         pubs_extracted = 0
 
+        scrape_start = time.time()
+
         for url_id, researcher_id, url, page_type in urls:
             urls_checked += 1
+            url_start = time.time()
 
             try:
                 # Get old text before fetch overwrites it (upsert)
                 old_text = HTMLFetcher.get_previous_text(url_id)
 
+                t0 = time.time()
                 changed = HTMLFetcher.fetch_and_save_if_changed(url_id, url, researcher_id)
+                fetch_ms = (time.time() - t0) * 1000
+                logger.info(f"[{urls_checked}/{len(urls)}] fetch {url} — {fetch_ms:.0f}ms (changed={changed})")
 
                 if changed and page_type in ("PUB", "WP"):
                     urls_changed += 1
@@ -150,12 +156,20 @@ def run_scrape_job():
                     extraction_text = HTMLFetcher.compute_diff(old_text, new_text) if old_text else new_text
 
                     if extraction_text:
+                        t0 = time.time()
                         pubs = Publication.extract_publications(extraction_text, url)
+                        extract_ms = (time.time() - t0) * 1000
+                        logger.info(f"  LLM extract — {extract_ms:.0f}ms, {len(pubs)} pubs")
+
                         if pubs:
+                            t0 = time.time()
                             Publication.save_publications(url, pubs)
+                            save_ms = (time.time() - t0) * 1000
+                            logger.info(f"  save_publications — {save_ms:.0f}ms")
                             pubs_extracted += len(pubs)
 
                             # Append paper snapshots for versioning
+                            t0 = time.time()
                             for pub in pubs:
                                 title_hash = Database.compute_title_hash(pub['title'])
                                 paper_row = Database.fetch_one(
@@ -171,13 +185,18 @@ def run_scrape_job():
                                         year=pub.get('year'),
                                         source_url=url,
                                     )
+                            snapshot_ms = (time.time() - t0) * 1000
+                            logger.info(f"  paper snapshots — {snapshot_ms:.0f}ms")
 
                 # Extract description from HOME pages using append-only versioning
                 # Only re-extract when content actually changed to avoid unnecessary LLM calls
                 if page_type == "HOME" and changed:
                     page_text = HTMLFetcher.get_latest_text(url_id)
                     if page_text:
+                        t0 = time.time()
                         description = HTMLFetcher.extract_description(page_text, url)
+                        desc_ms = (time.time() - t0) * 1000
+                        logger.info(f"  description extract — {desc_ms:.0f}ms (found={description is not None})")
                         if description:
                             r_row = Database.fetch_one(
                                 "SELECT position, affiliation FROM researchers WHERE id = %s",
@@ -188,15 +207,26 @@ def run_scrape_job():
                             Database.append_researcher_snapshot(
                                 researcher_id, position, affiliation, description, source_url=url
                             )
+
+                url_ms = (time.time() - url_start) * 1000
+                logger.info(f"  total — {url_ms:.0f}ms")
+
             except Exception as e:
                 logger.error("Error processing URL %s (id=%s): %s", url, url_id, e)
                 continue
 
-        # Validate draft URLs after extraction phase
-        _validate_draft_urls()
+        fetch_phase_s = time.time() - scrape_start
+        logger.info(f"Fetch phase done: {fetch_phase_s:.1f}s for {urls_checked} URLs")
 
+        # Validate draft URLs after extraction phase
+        t0 = time.time()
+        _validate_draft_urls()
+        validate_s = time.time() - t0
+        logger.info(f"Draft URL validation: {validate_s:.1f}s")
+
+        total_s = time.time() - scrape_start
         update_scrape_log(log_id, "completed", urls_checked, urls_changed, pubs_extracted)
-        logger.info(f"Scrape completed: {urls_checked} checked, {urls_changed} changed, {pubs_extracted} extracted")
+        logger.info(f"Scrape completed: {urls_checked} checked, {urls_changed} changed, {pubs_extracted} extracted — {total_s:.1f}s total")
 
     except Exception as e:
         logger.error("Scrape job failed: %s", type(e).__name__)
