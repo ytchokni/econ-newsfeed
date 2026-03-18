@@ -1,5 +1,6 @@
 import useSWR from "swr";
 import type {
+  FeedFilters,
   PaginatedResponse,
   Publication,
   ResearchField,
@@ -18,13 +19,28 @@ async function fetchJson<T>(url: string): Promise<T> {
   return res.json();
 }
 
+function buildPublicationsUrl(
+  page: number,
+  perPage: number,
+  filters?: FeedFilters
+): string {
+  const params = new URLSearchParams({
+    page: String(page),
+    per_page: String(perPage),
+  });
+  if (filters?.status) params.set("status", filters.status);
+  if (filters?.institution) params.set("institution", filters.institution);
+  if (filters?.preset) params.set("preset", filters.preset);
+  if (filters?.year) params.set("year", filters.year);
+  return `/api/publications?${params.toString()}`;
+}
+
 export async function getPublications(
   page = 1,
-  perPage = 20
+  perPage = 20,
+  filters?: FeedFilters
 ): Promise<PaginatedResponse<Publication>> {
-  return fetchJson(
-    `/api/publications?page=${page}&per_page=${perPage}`
-  );
+  return fetchJson(buildPublicationsUrl(page, perPage, filters));
 }
 
 export async function getResearchers(): Promise<Researcher[]> {
@@ -38,11 +54,9 @@ export async function getResearcher(id: number): Promise<ResearcherDetail> {
   return fetchJson(`/api/researchers/${id}`);
 }
 
-export function usePublications(page = 1, perPage = 20) {
-  return useSWR<PaginatedResponse<Publication>>(
-    `/api/publications?page=${page}&per_page=${perPage}`,
-    fetchJson
-  );
+export function usePublications(page = 1, perPage = 20, filters?: FeedFilters) {
+  const url = buildPublicationsUrl(page, perPage, filters);
+  return useSWR<PaginatedResponse<Publication>>(url, fetchJson);
 }
 
 export function useResearchers() {

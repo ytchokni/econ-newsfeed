@@ -37,6 +37,11 @@ export default function ResearcherDetailContent({ id }: { id: number }) {
             {researcher.affiliation}
           </p>
         )}
+        {researcher.description && (
+          <p className="mt-3 text-sm text-gray-700 leading-relaxed">
+            {researcher.description}
+          </p>
+        )}
       </div>
 
       <h2 className="text-lg font-medium text-gray-900 mb-4">
