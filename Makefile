@@ -1,4 +1,4 @@
-.PHONY: setup dev seed reset-db
+.PHONY: setup dev seed reset-db scrape fetch parse
 
 setup:
 	python3 -m venv .venv
@@ -6,8 +6,8 @@ setup:
 	cd app && npm install
 
 dev:
-	.venv/bin/python -m uvicorn api:app --reload --port 8000 & \
-	cd app && npm run dev & \
+	.venv/bin/python -m uvicorn api:app --reload --port 8001 & \
+	cd app && API_INTERNAL_URL=http://localhost:8001 npm run dev & \
 	wait
 
 seed:
@@ -23,3 +23,12 @@ reset-db:
 		Database.create_database(); \
 		Database.create_tables(); \
 		print('Database reset complete')"
+
+scrape:
+	.venv/bin/python -c "from scheduler import run_scrape_job; run_scrape_job()"
+
+fetch:
+	.venv/bin/python -c "from main import download_htmls; download_htmls()"
+
+parse:
+	.venv/bin/python -c "from main import extract_data_from_htmls; extract_data_from_htmls()"

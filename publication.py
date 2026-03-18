@@ -1,5 +1,5 @@
 from database import Database
-from datetime import datetime
+from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 from openai import OpenAI
 from pydantic import BaseModel, ValidationError, field_validator
@@ -8,6 +8,7 @@ import json
 import re
 import logging
 import os
+from urllib.parse import urlparse
 
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
 _openai_client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
@@ -20,6 +21,7 @@ class PublicationExtraction(BaseModel):
     venue: Optional[str] = None
     status: Optional[str] = None
     draft_url: Optional[str] = None
+    abstract: Optional[str] = None
 
     @field_validator('year', mode='before')
     @classmethod
@@ -31,8 +33,21 @@ class PublicationExtraction(BaseModel):
     @field_validator('status', mode='before')
     @classmethod
     def validate_status(cls, v):
-        valid = {'published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit'}
+        valid = {'published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper'}
         if v is not None and v not in valid:
+            return None
+        return v
+
+    @field_validator('draft_url', mode='before')
+    @classmethod
+    def validate_draft_url(cls, v):
+        if v is None:
+            return v
+        try:
+            parsed = urlparse(str(v))
+        except Exception:
+            return None
+        if parsed.scheme not in ('http', 'https'):
             return None
         return v
 
@@ -53,32 +68,41 @@ class Publication:
 
     @staticmethod
     def save_publications(url, publications):
-        """Save extracted publications to the database, skipping duplicates."""
+        """Save extracted publications to the database, using title_hash for cross-researcher dedup."""
         for pub in publications:
             conn = None
             try:
-                # Normalize title before insertion so the uq_title_url index is used for dedup
-                normalized_title = Publication._normalize_title(pub['title'])
+                title = pub['title'].strip() if pub['title'] else ''
+                title_hash = Database.compute_title_hash(pub['title'])
 
                 with Database.get_connection() as conn:
                     cursor = conn.cursor()
 
-                    # INSERT IGNORE leverages uq_title_url index — no full-table-scan pre-check needed
+                    # INSERT IGNORE leverages uq_title_hash index for cross-researcher dedup
                     cursor.execute(
                         """
-                        INSERT IGNORE INTO papers (url, title, year, venue, timestamp, status, draft_url)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s)
+                        INSERT IGNORE INTO papers (url, title, title_hash, year, venue, abstract, timestamp, status, draft_url)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
-                        (url, normalized_title, pub.get('year'), pub.get('venue'), datetime.now(), pub.get('status'), pub.get('draft_url')),
+                        (url, title, title_hash, pub.get('year'), pub.get('venue'),
+                         pub.get('abstract'), datetime.now(timezone.utc), pub.get('status'), pub.get('draft_url')),
                     )
 
                     if cursor.lastrowid:
                         publication_id = cursor.lastrowid
-                    else:
-                        # Duplicate ignored — fetch existing id via the indexed columns
+                        # Add source URL to paper_urls
                         cursor.execute(
-                            "SELECT id FROM papers WHERE title = %s AND url = %s",
-                            (normalized_title, url),
+                            """
+                            INSERT IGNORE INTO paper_urls (paper_id, url, discovered_at)
+                            VALUES (%s, %s, %s)
+                            """,
+                            (publication_id, url, datetime.now(timezone.utc)),
+                        )
+                    else:
+                        # Duplicate found via title_hash — fetch existing id
+                        cursor.execute(
+                            "SELECT id FROM papers WHERE title_hash = %s",
+                            (title_hash,),
                         )
                         row = cursor.fetchone()
                         if not row:
@@ -86,7 +110,15 @@ class Publication:
                             cursor.close()
                             continue
                         publication_id = row[0]
-                        logging.info(f"Duplicate publication skipped: {pub['title']}")
+                        # Add the new source URL to paper_urls for cross-researcher tracking
+                        cursor.execute(
+                            """
+                            INSERT IGNORE INTO paper_urls (paper_id, url, discovered_at)
+                            VALUES (%s, %s, %s)
+                            """,
+                            (publication_id, url, datetime.now(timezone.utc)),
+                        )
+                        logging.info(f"Duplicate publication (title_hash match), added source URL: {pub['title']}")
 
                     # Process authors
                     for author_order, author in enumerate(pub['authors'], start=1):
@@ -132,10 +164,11 @@ class Publication:
 (e.g., "John Smith" not "J. Smith"). If only an initial appears in the source, use the initial as given.
         - Year
         - Venue (e.g., journal or conference name)
-        - Status: one of "published", "accepted", "revise_and_resubmit", "reject_and_resubmit", or null if unknown
+        - Status: one of "published", "accepted", "revise_and_resubmit", "reject_and_resubmit", "working_paper", or null if unknown
         - Draft URL: a PDF, SSRN, NBER, or working paper link for the paper, or null if not available
+        - Abstract: the paper abstract if available, or null if not shown on the page
 
-        Provide the output as a JSON array of objects with the keys: "title", "authors", "year", "venue", "status", "draft_url".
+        Provide the output as a JSON array of objects with the keys: "title", "authors", "year", "venue", "status", "draft_url", "abstract".
         Content:
         {text_content[:4000]}  # Limit content to 4000 characters
         """
@@ -199,7 +232,7 @@ class Publication:
             except FileNotFoundError:
                 pass  # Another worker already removed this file
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"invalid_json_{timestamp}.txt"
         filepath = os.path.join(dump_dir, filename)
 

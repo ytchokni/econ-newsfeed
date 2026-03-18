@@ -22,10 +22,10 @@ def client():
 
 # Sample data that mimics Database.fetch_all / fetch_one return shapes
 SAMPLE_PUBLICATIONS = [
-    # (pub.id, pub.title, pub.year, pub.venue, pub.url, pub.timestamp, pub.status, pub.draft_url)
-    (1, "Trade and Wages", "2024", "JLE", "https://example.com/pub", datetime(2026, 3, 15, 14, 30), "published", "https://ssrn.com/abstract=1"),
-    (2, "Immigration Effects", "2023", "QJE", "https://example.com/pub2", datetime(2026, 3, 14, 10, 0), "accepted", None),
-    (3, "Labor Markets", "2024", "AER", "https://example.com/pub3", datetime(2026, 3, 13, 9, 0), None, None),
+    # (pub.id, pub.title, pub.year, pub.venue, pub.url, pub.timestamp, pub.status, pub.draft_url, pub.abstract, pub.draft_url_status)
+    (1, "Trade and Wages", "2024", "JLE", "https://example.com/pub", datetime(2026, 3, 15, 14, 30), "published", "https://ssrn.com/abstract=1", None, "valid"),
+    (2, "Immigration Effects", "2023", "QJE", "https://example.com/pub2", datetime(2026, 3, 14, 10, 0), "accepted", None, None, None),
+    (3, "Labor Markets", "2024", "AER", "https://example.com/pub3", datetime(2026, 3, 13, 9, 0), None, None, None, None),
 ]
 
 SAMPLE_AUTHORS_PUB1 = [
@@ -148,7 +148,7 @@ class TestListPublications:
         ):
             mock_fetch.side_effect = [
                 [SAMPLE_PUBLICATIONS[0]],
-                SAMPLE_AUTHORS_PUB1,
+                BATCH_AUTHORS_PUB1,
             ]
             response = client.get("/api/publications?since=2026-03-15T00:00:00Z")
 

@@ -8,6 +8,7 @@ const researcher: Researcher = {
   last_name: "Steinhardt",
   position: "Professor",
   affiliation: "Freie Universität Berlin",
+  description: null,
   urls: [],
   website_url: null,
   publication_count: 23,

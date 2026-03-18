@@ -14,7 +14,9 @@ const publication: Publication = {
   source_url: "https://example.com/paper",
   discovered_at: "2026-03-15T14:30:00Z",
   status: null,
+  abstract: null,
   draft_url: null,
+  draft_url_status: "unchecked",
   draft_available: false,
 };
 

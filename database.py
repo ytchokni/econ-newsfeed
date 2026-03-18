@@ -1,3 +1,4 @@
+import hashlib
 import mysql.connector
 from mysql.connector import Error
 from mysql.connector.pooling import MySQLConnectionPool
@@ -7,7 +8,7 @@ import json
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(message)s')
@@ -55,46 +56,34 @@ class Database:
     def execute_query(query, params=None):
         """
         Execute a query with optional parameters and commit the changes.
-        Returns the last inserted row ID or None if there's an error.
+        Returns the last inserted row ID.
         """
-        try:
-            with Database.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query, params)
-                    conn.commit()
-                    return cursor.lastrowid
-        except Error as e:
-            logging.error("Database error in execute_query: %s", type(e).__name__)
-            return None
+        with Database.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(query, params)
+                conn.commit()
+                return cursor.lastrowid
 
     @staticmethod
     def fetch_all(query, params=None):
         """
         Execute a query with optional parameters and fetch all results.
-        Returns a list of tuples containing the results or an empty list if there's an error.
+        Returns a list of tuples containing the results.
         """
-        try:
-            with Database.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query, params)
-                    return cursor.fetchall()
-        except Error as e:
-            logging.error("Database error in fetch_all: %s", type(e).__name__)
-            return []
+        with Database.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(query, params)
+                return cursor.fetchall()
 
     @staticmethod
     def fetch_one(query, params=None):
         """
         Execute a SELECT query and fetch one result.
         """
-        try:
-            with Database.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query, params)
-                    return cursor.fetchone()
-        except Error as e:
-            logging.error("Database error in fetch_one: %s", type(e).__name__)
-            return None
+        with Database.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(query, params)
+                return cursor.fetchone()
 
     @staticmethod
     def create_tables():
@@ -109,8 +98,10 @@ class Database:
                     first_name VARCHAR(255) NOT NULL,
                     position VARCHAR(255),
                     affiliation VARCHAR(255),
-                    bio TEXT,
-                    INDEX idx_name (last_name, first_name)
+                    description TEXT,
+                    description_updated_at DATETIME DEFAULT NULL,
+                    INDEX idx_name (last_name, first_name),
+                    INDEX idx_affiliation (affiliation)
                 )
             """,
             "researcher_urls": """
@@ -128,14 +119,19 @@ class Database:
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     url VARCHAR(2048),
                     title TEXT,
+                    title_hash CHAR(64) DEFAULT NULL,
                     year VARCHAR(4),
                     venue TEXT,
+                    abstract TEXT DEFAULT NULL,
                     timestamp DATETIME,
-                    status ENUM('published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit') DEFAULT NULL,
+                    status ENUM('published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper') DEFAULT NULL,
                     draft_url VARCHAR(2048) DEFAULT NULL,
-                    UNIQUE KEY uq_title_url (title(200), url(200)),
+                    draft_url_status ENUM('unchecked', 'valid', 'invalid', 'timeout') DEFAULT 'unchecked',
+                    draft_url_checked_at DATETIME DEFAULT NULL,
+                    UNIQUE KEY uq_title_hash (title_hash),
                     INDEX idx_timestamp (timestamp),
-                    INDEX idx_status (status)
+                    INDEX idx_status (status),
+                    INDEX idx_year (year)
                 )
             """,
             "html_content": """
@@ -195,6 +191,48 @@ class Database:
                     pubs_extracted INT DEFAULT 0,
                     error_message TEXT
                 )
+            """,
+            "researcher_snapshots": """
+                CREATE TABLE IF NOT EXISTS researcher_snapshots (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    researcher_id INT NOT NULL,
+                    position VARCHAR(255),
+                    affiliation VARCHAR(255),
+                    description TEXT,
+                    scraped_at DATETIME NOT NULL,
+                    source_url VARCHAR(2048),
+                    content_hash VARCHAR(64),
+                    INDEX idx_researcher_time (researcher_id, scraped_at),
+                    FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
+                )
+            """,
+            "paper_snapshots": """
+                CREATE TABLE IF NOT EXISTS paper_snapshots (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    paper_id INT NOT NULL,
+                    status ENUM('published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper') DEFAULT NULL,
+                    venue TEXT,
+                    abstract TEXT,
+                    draft_url VARCHAR(2048) DEFAULT NULL,
+                    draft_url_status ENUM('unchecked', 'valid', 'invalid', 'timeout') DEFAULT 'unchecked',
+                    year VARCHAR(4),
+                    scraped_at DATETIME NOT NULL,
+                    source_url VARCHAR(2048),
+                    content_hash VARCHAR(64),
+                    INDEX idx_paper_time (paper_id, scraped_at),
+                    FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+                )
+            """,
+            "paper_urls": """
+                CREATE TABLE IF NOT EXISTS paper_urls (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    paper_id INT NOT NULL,
+                    url VARCHAR(2048) NOT NULL,
+                    discovered_at DATETIME NOT NULL,
+                    UNIQUE KEY uq_paper_url (paper_id, url(500)),
+                    INDEX idx_paper_id (paper_id),
+                    FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+                )
             """
         }
 
@@ -203,10 +241,6 @@ class Database:
                 for table_query in table_definitions.values():
                     cursor.execute(table_query)
 
-        # Migration: add bio column to existing researchers tables
-        Database.execute_query(
-            "ALTER TABLE researchers ADD COLUMN IF NOT EXISTS bio TEXT"
-        )
         logging.info("All tables created successfully")
         Database.seed_research_fields()
 
@@ -232,66 +266,6 @@ class Database:
                 "INSERT IGNORE INTO research_fields (name, slug) VALUES (%s, %s)",
                 (name, slug),
             )
-
-    @staticmethod
-    def apply_schema_migrations():
-        """
-        Apply schema migrations to existing tables.
-        Safe to run on every startup — each step is idempotent.
-        """
-        # 1. Remove duplicate researcher_urls rows, keeping the lowest ID
-        Database.execute_query("""
-            DELETE r1 FROM researcher_urls r1
-            JOIN researcher_urls r2
-              ON r1.researcher_id = r2.researcher_id
-              AND r1.url = r2.url
-              AND r1.id > r2.id
-        """)
-
-        # 2. Add UNIQUE KEY to researcher_urls if not present
-        result = Database.fetch_one("""
-            SELECT COUNT(*)
-            FROM information_schema.TABLE_CONSTRAINTS
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME = 'researcher_urls'
-              AND CONSTRAINT_NAME = 'uq_researcher_url'
-        """)
-        if result and result[0] == 0:
-            Database.execute_query("""
-                ALTER TABLE researcher_urls
-                  ADD UNIQUE KEY uq_researcher_url (researcher_id, url(500))
-            """)
-            logging.info("Migration: added UNIQUE KEY uq_researcher_url to researcher_urls")
-
-        # 3. Add extracted_at column to html_content if not present
-        result = Database.fetch_one("""
-            SELECT COUNT(*)
-            FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME = 'html_content'
-              AND COLUMN_NAME = 'extracted_at'
-        """)
-        if result and result[0] == 0:
-            Database.execute_query("""
-                ALTER TABLE html_content ADD COLUMN extracted_at DATETIME
-            """)
-            logging.info("Migration: added extracted_at column to html_content")
-
-        # 4. Add extracted_hash column to html_content if not present
-        result = Database.fetch_one("""
-            SELECT COUNT(*)
-            FROM information_schema.COLUMNS
-            WHERE TABLE_SCHEMA = DATABASE()
-              AND TABLE_NAME = 'html_content'
-              AND COLUMN_NAME = 'extracted_hash'
-        """)
-        if result and result[0] == 0:
-            Database.execute_query("""
-                ALTER TABLE html_content ADD COLUMN extracted_hash VARCHAR(64)
-            """)
-            logging.info("Migration: added extracted_hash column to html_content")
-
-        logging.info("Schema migrations applied successfully")
 
     @staticmethod
     def _disambiguate_researcher(first_name, last_name, candidates):
@@ -374,10 +348,166 @@ class Database:
 
     @staticmethod
     def update_researcher_bio(researcher_id, bio):
-        """Update researcher bio only if the current bio is NULL."""
+        """Legacy: update researcher bio only if the current bio is NULL."""
         Database.execute_query(
             "UPDATE researchers SET bio = %s WHERE id = %s AND bio IS NULL",
             (bio, researcher_id),
+        )
+
+    # ── Title normalization for cross-researcher dedup ──
+
+    @staticmethod
+    def normalize_title(title):
+        """Normalize a title for dedup: lowercase, strip punctuation, collapse whitespace."""
+        if not title:
+            return ''
+        t = title.lower().strip()
+        t = re.sub(r'[^a-z0-9\s]', '', t)
+        t = re.sub(r'\s+', ' ', t).strip()
+        return t
+
+    @staticmethod
+    def compute_title_hash(title):
+        """SHA-256 hash of normalized title for cross-researcher dedup."""
+        normalized = Database.normalize_title(title)
+        return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
+
+    # ── Researcher snapshot (append-only versioning) ──
+
+    @staticmethod
+    def _compute_researcher_content_hash(position, affiliation, description):
+        """Compute content hash for researcher change detection."""
+        parts = '||'.join(str(v or '') for v in (position, affiliation, description))
+        return hashlib.sha256(parts.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def get_latest_researcher_snapshot_hash(researcher_id):
+        """Return the content_hash of the most recent snapshot, or None."""
+        result = Database.fetch_one(
+            "SELECT content_hash FROM researcher_snapshots "
+            "WHERE researcher_id = %s ORDER BY scraped_at DESC LIMIT 1",
+            (researcher_id,),
+        )
+        return result[0] if result else None
+
+    @staticmethod
+    def append_researcher_snapshot(researcher_id, position, affiliation, description, source_url=None):
+        """Append a snapshot if profile changed. Updates denormalized researchers table.
+        Both operations run in a single transaction for consistency.
+        Returns True if a new snapshot was inserted, False if no change."""
+        content_hash = Database._compute_researcher_content_hash(position, affiliation, description)
+        prev_hash = Database.get_latest_researcher_snapshot_hash(researcher_id)
+
+        if prev_hash == content_hash:
+            return False
+
+        now = datetime.now(timezone.utc)
+        with Database.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO researcher_snapshots
+                       (researcher_id, position, affiliation, description, scraped_at, source_url, content_hash)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (researcher_id, position, affiliation, description, now, source_url, content_hash),
+                )
+                cursor.execute(
+                    """UPDATE researchers
+                       SET position = %s, affiliation = %s, description = %s, description_updated_at = %s
+                       WHERE id = %s""",
+                    (position, affiliation, description, now, researcher_id),
+                )
+                conn.commit()
+        logging.info(f"Researcher snapshot appended for id={researcher_id}")
+        return True
+
+    @staticmethod
+    def get_researcher_snapshots(researcher_id, limit=20):
+        """Return recent snapshots for a researcher, newest first."""
+        return Database.fetch_all(
+            """SELECT position, affiliation, description, scraped_at, source_url
+               FROM researcher_snapshots WHERE researcher_id = %s
+               ORDER BY scraped_at DESC LIMIT %s""",
+            (researcher_id, limit),
+        )
+
+    # ── Paper snapshot (append-only versioning) ──
+
+    @staticmethod
+    def _compute_paper_content_hash(status, venue, abstract, draft_url, year):
+        """Compute content hash for paper change detection."""
+        parts = '||'.join(str(v or '') for v in (status, venue, abstract, draft_url, year))
+        return hashlib.sha256(parts.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def get_latest_paper_snapshot_hash(paper_id):
+        """Return the content_hash of the most recent paper snapshot, or None."""
+        result = Database.fetch_one(
+            "SELECT content_hash FROM paper_snapshots "
+            "WHERE paper_id = %s ORDER BY scraped_at DESC LIMIT 1",
+            (paper_id,),
+        )
+        return result[0] if result else None
+
+    @staticmethod
+    def append_paper_snapshot(paper_id, status, venue, abstract, draft_url, year, source_url=None):
+        """Append a paper snapshot if metadata changed. Updates denormalized papers table.
+        Both operations run in a single transaction for consistency.
+        Returns True if a new snapshot was inserted, False if no change."""
+        content_hash = Database._compute_paper_content_hash(status, venue, abstract, draft_url, year)
+        prev_hash = Database.get_latest_paper_snapshot_hash(paper_id)
+
+        if prev_hash == content_hash:
+            return False
+
+        now = datetime.now(timezone.utc)
+        with Database.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """INSERT INTO paper_snapshots
+                       (paper_id, status, venue, abstract, draft_url, draft_url_status, year,
+                        scraped_at, source_url, content_hash)
+                       VALUES (%s, %s, %s, %s, %s, 'unchecked', %s, %s, %s, %s)""",
+                    (paper_id, status, venue, abstract, draft_url, year, now, source_url, content_hash),
+                )
+                cursor.execute(
+                    """UPDATE papers
+                       SET status = %s, venue = %s, abstract = %s, draft_url = %s,
+                           draft_url_status = 'unchecked', year = %s
+                       WHERE id = %s""",
+                    (status, venue, abstract, draft_url, year, paper_id),
+                )
+                conn.commit()
+        logging.info(f"Paper snapshot appended for id={paper_id}")
+        return True
+
+    @staticmethod
+    def get_paper_snapshots(paper_id, limit=20):
+        """Return recent snapshots for a paper, newest first."""
+        return Database.fetch_all(
+            """SELECT status, venue, abstract, draft_url, draft_url_status, year, scraped_at, source_url
+               FROM paper_snapshots WHERE paper_id = %s
+               ORDER BY scraped_at DESC LIMIT %s""",
+            (paper_id, limit),
+        )
+
+    # ── Draft URL validation ──
+
+    @staticmethod
+    def update_draft_url_status(paper_id, status):
+        """Update draft URL validation status."""
+        Database.execute_query(
+            "UPDATE papers SET draft_url_status = %s, draft_url_checked_at = %s WHERE id = %s",
+            (status, datetime.now(timezone.utc), paper_id),
+        )
+
+    @staticmethod
+    def get_unchecked_draft_urls(limit=100):
+        """Get papers with unchecked draft URLs for validation."""
+        return Database.fetch_all(
+            """SELECT id, draft_url FROM papers
+               WHERE draft_url IS NOT NULL AND draft_url_status = 'unchecked'
+               LIMIT %s""",
+            (limit,),
         )
 
     @staticmethod
@@ -415,7 +545,6 @@ class Database:
 
 # Example usage:
 if __name__ == "__main__":
-    Database.create_database()  # Create the database before creating tables
+    Database.create_database()
     Database.create_tables()
-    Database.apply_schema_migrations()
     Database.import_data_from_file('urls.csv')

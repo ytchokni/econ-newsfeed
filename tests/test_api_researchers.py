@@ -69,8 +69,8 @@ BATCH_FIELDS_R2 = []
 SAMPLE_RESEARCHER_DETAIL = (1, "Max Friedrich", "Steinhardt", "Professor", "Freie Universität Berlin", "A leading researcher in trade economics.")
 
 SAMPLE_PUBLICATIONS_R1 = [
-    # (pub.id, pub.title, pub.year, pub.venue, pub.url, pub.timestamp, pub.status, pub.draft_url)
-    (1, "Trade and Wages", "2024", "JLE", "https://example.com/pub", datetime(2026, 3, 15, 14, 30), "published", None),
+    # (pub.id, pub.title, pub.year, pub.venue, pub.url, pub.timestamp, pub.status, pub.draft_url, pub.abstract, pub.draft_url_status)
+    (1, "Trade and Wages", "2024", "JLE", "https://example.com/pub", datetime(2026, 3, 15, 14, 30), "published", None, None, None),
 ]
 
 SAMPLE_FIELDS_R1 = [
@@ -134,7 +134,7 @@ class TestListResearchers:
         assert item["position"] == "Professor"
         assert item["affiliation"] == "Freie Universität Berlin"
         assert item["publication_count"] == 23
-        assert "bio" in item
+        assert "description" in item
         assert len(item["urls"]) == 3
         assert item["urls"][0]["id"] == 10
         assert item["urls"][0]["page_type"] == "PUB"
@@ -306,7 +306,7 @@ class TestGetResearcher:
         body = response.json()
         assert body["id"] == 1
         assert body["first_name"] == "Max Friedrich"
-        assert "bio" in body
+        assert "description" in body
         assert "publications" in body
         assert len(body["publications"]) == 1
         assert body["website_url"] == "https://steinhardt.example.com"
