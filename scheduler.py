@@ -1,5 +1,6 @@
 import logging
 import os
+import signal
 import time
 from datetime import datetime, timezone
 
@@ -248,12 +249,23 @@ def run_scrape_job():
         _lock_conn = None
 
 
+def _handle_sigterm(signum, frame):
+    """Handle SIGTERM/SIGINT for graceful shutdown in cloud environments.
+    Waits for any running scrape job to complete before exiting."""
+    logger.info("Received signal %s, shutting down scheduler gracefully...", signum)
+    shutdown_scheduler()
+
+
 def start_scheduler():
     """Start the APScheduler BackgroundScheduler with the configured interval."""
     global _scheduler
     if _scheduler is not None:
         logger.warning("Scheduler already running")
         return
+
+    # Register signal handlers so cloud container SIGTERM completes the current job
+    signal.signal(signal.SIGTERM, _handle_sigterm)
+    signal.signal(signal.SIGINT, _handle_sigterm)
 
     _scheduler = BackgroundScheduler()
     _scheduler.add_job(
@@ -271,9 +283,9 @@ def start_scheduler():
 
 
 def shutdown_scheduler():
-    """Shut down the scheduler gracefully."""
+    """Shut down the scheduler gracefully, waiting for any running job to complete."""
     global _scheduler
     if _scheduler is not None:
-        _scheduler.shutdown(wait=False)
+        _scheduler.shutdown(wait=True)
         _scheduler = None
         logger.info("Scheduler shut down")

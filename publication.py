@@ -8,6 +8,7 @@ import json
 import re
 import logging
 import os
+import threading
 from urllib.parse import urlparse
 
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
@@ -170,7 +171,7 @@ class Publication:
 
         Provide the output as a JSON array of objects with the keys: "title", "authors", "year", "venue", "status", "draft_url", "abstract".
         Content:
-        {text_content[:4000]}  # Limit content to 4000 characters
+        {text_content[:4000]}
         """
 
     @staticmethod
@@ -226,28 +227,16 @@ class Publication:
         logging.error("Failed to extract valid JSON from OpenAI response")
         return None
 
+    _dump_lock = threading.Lock()
+
     @staticmethod
     def dump_invalid_json(response):
-        """Dump invalid JSON responses to a text file, capping at 50 files."""
-        dump_dir = "invalid_json_dumps"
-        os.makedirs(dump_dir, exist_ok=True)
-
-        MAX_DUMP_FILES = 50
-        existing = sorted(f for f in os.listdir(dump_dir) if f.endswith(".txt"))
-        while len(existing) >= MAX_DUMP_FILES:
-            try:
-                os.remove(os.path.join(dump_dir, existing.pop(0)))
-            except FileNotFoundError:
-                pass  # Another worker already removed this file
-
-        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        filename = f"invalid_json_{timestamp}.txt"
-        filepath = os.path.join(dump_dir, filename)
-
-        with open(filepath, 'w', encoding='utf-8') as f:
-            f.write(response)
-
-        logging.warning(f"Invalid JSON dumped to {filepath}")
+        """Log invalid JSON responses. Uses structured logging instead of filesystem writes
+        to avoid data loss on ephemeral cloud container filesystems."""
+        # Truncate to avoid flooding log aggregators with huge payloads
+        preview = response[:2000] + ("..." if len(response) > 2000 else "")
+        with Publication._dump_lock:
+            logging.warning("Invalid JSON from OpenAI (len=%d): %s", len(response), preview)
 
     @staticmethod
     def is_valid_json(json_string):

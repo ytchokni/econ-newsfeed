@@ -1,6 +1,7 @@
 import difflib
 import ipaddress
 import os
+import threading
 import time
 import socket
 import requests
@@ -54,6 +55,10 @@ class HTMLFetcher:
 
     # Per-domain rate limiting: domain -> last request timestamp
     _domain_last_request = {}
+    # Protects creation of per-domain locks
+    _domain_locks_global = threading.Lock()
+    # Per-domain locks to make the rate-limit check-and-update atomic
+    _domain_locks: dict = {}
 
     @staticmethod
     def is_allowed_by_robots(url):
@@ -119,16 +124,21 @@ class HTMLFetcher:
 
     @staticmethod
     def _rate_limit(url):
-        """Enforce per-domain rate limiting."""
+        """Enforce per-domain rate limiting (thread-safe)."""
         domain = urlparse(url).hostname
         limit = RATE_LIMIT_FAST_SECONDS if _is_fast_domain(domain) else RATE_LIMIT_SECONDS
-        if domain in HTMLFetcher._domain_last_request:
-            elapsed = time.time() - HTMLFetcher._domain_last_request[domain]
-            if elapsed < limit:
-                wait = limit - elapsed
-                logging.info(f"Rate limiting: waiting {wait:.1f}s for {domain}")
-                time.sleep(wait)
-        HTMLFetcher._domain_last_request[domain] = time.time()
+        with HTMLFetcher._domain_locks_global:
+            if domain not in HTMLFetcher._domain_locks:
+                HTMLFetcher._domain_locks[domain] = threading.Lock()
+            domain_lock = HTMLFetcher._domain_locks[domain]
+        with domain_lock:
+            if domain in HTMLFetcher._domain_last_request:
+                elapsed = time.time() - HTMLFetcher._domain_last_request[domain]
+                if elapsed < limit:
+                    wait = limit - elapsed
+                    logging.info(f"Rate limiting: waiting {wait:.1f}s for {domain}")
+                    time.sleep(wait)
+            HTMLFetcher._domain_last_request[domain] = time.time()
 
     @staticmethod
     def fetch_html(url, timeout=10, max_retries=3):
@@ -318,9 +328,10 @@ class HTMLFetcher:
             return None
 
     @staticmethod
-    def validate_draft_url(url: str) -> str:
+    def validate_draft_url(url: str, max_redirects: int = 5) -> str:
         """Validate a draft URL via HTTP HEAD with SSRF protection.
 
+        Follows up to max_redirects hops manually to prevent SSRF via redirect chains.
         Returns 'valid', 'invalid', or 'timeout'.
         """
         if not HTMLFetcher.validate_url(url):
@@ -331,11 +342,14 @@ class HTMLFetcher:
             response = HTMLFetcher.session.head(url, timeout=10, allow_redirects=False)
             if response.status_code < 400:
                 return 'valid'
-            # Follow redirects manually with SSRF validation (up to 5 hops)
+            # Follow redirects manually with SSRF validation
             if response.status_code in (301, 302, 303, 307, 308):
+                if max_redirects <= 0:
+                    logging.warning(f"Redirect limit reached for URL: {url}")
+                    return 'invalid'
                 redirect_url = response.headers.get('Location')
                 if redirect_url and HTMLFetcher.validate_url(redirect_url):
-                    return HTMLFetcher.validate_draft_url(redirect_url)
+                    return HTMLFetcher.validate_draft_url(redirect_url, max_redirects=max_redirects - 1)
                 return 'invalid'
             return 'invalid'
         except requests.exceptions.Timeout:

@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import os
@@ -12,9 +13,8 @@ from html_fetcher import HTMLFetcher
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def import_data():
+def import_data(file_path):
     """Import data from a file into the database."""
-    file_path = input("Enter the path to the file: ")
     Database.import_data_from_file(file_path)
     logging.info(f"Data imported from {file_path}")
 
@@ -302,30 +302,33 @@ def batch_check():
 
 
 def main():
-    """Main function to handle user input and execute the appropriate actions."""
+    """CLI entrypoint — non-interactive, safe for cloud/container environments."""
+    parser = argparse.ArgumentParser(description='Econ Newsfeed scraper CLI')
+    subparsers = parser.add_subparsers(dest='command', required=True)
 
-    actions = {
-        '1': ('Import data from a file', import_data),
-        '2': ('Download HTML content', download_htmls),
-        '3': ('Extract data from HTML content', extract_data_from_htmls),
-        '4': ('Exit', lambda: "exit")
-    }
+    import_parser = subparsers.add_parser('import', help='Import researcher URLs from a CSV file')
+    import_parser.add_argument('file_path', help='Path to the CSV file to import')
 
-    while True:
-        print("\nChoose an action:")
-        for key, (description, _) in actions.items():
-            print(f"{key}: {description}")
+    subparsers.add_parser('download', help='Download HTML content for all researcher URLs')
+    subparsers.add_parser('extract', help='Extract publication data from downloaded HTML')
+    subparsers.add_parser('extract-concurrent', help='Extract publications concurrently')
+    subparsers.add_parser('batch-submit', help='Submit a batch job to OpenAI Batch API')
+    subparsers.add_parser('batch-check', help='Check and process completed batch jobs')
 
-        choice = input("Enter your choice: ")
-        action = actions.get(choice)
+    args = parser.parse_args()
 
-        if action:
-            result = action[1]()
-            if result == "exit":
-                print("Exiting the program.")
-                break
-        else:
-            print("Invalid choice. Please try again.")
+    if args.command == 'import':
+        import_data(args.file_path)
+    elif args.command == 'download':
+        download_htmls()
+    elif args.command == 'extract':
+        extract_data_from_htmls()
+    elif args.command == 'extract-concurrent':
+        extract_data_from_htmls_concurrent()
+    elif args.command == 'batch-submit':
+        batch_submit()
+    elif args.command == 'batch-check':
+        batch_check()
 
 if __name__ == "__main__":
     main()

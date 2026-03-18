@@ -35,6 +35,7 @@ class Database:
         """
         Create the database if it doesn't exist.
         """
+        conn = None
         try:
             conn = mysql.connector.connect(
                 host=db_config['host'],
@@ -47,7 +48,7 @@ class Database:
         except Error as e:
             logging.error("Error creating database: %s", type(e).__name__)
         finally:
-            if conn.is_connected():
+            if conn is not None and conn.is_connected():
                 cursor.close()
                 conn.close()
 
@@ -442,9 +443,9 @@ class Database:
 
     @staticmethod
     def update_researcher_bio(researcher_id, bio):
-        """Legacy: update researcher bio only if the current bio is NULL."""
+        """Legacy: update researcher description only if the current description is NULL."""
         Database.execute_query(
-            "UPDATE researchers SET bio = %s WHERE id = %s AND bio IS NULL",
+            "UPDATE researchers SET description = %s WHERE id = %s AND description IS NULL",
             (bio, researcher_id),
         )
 
