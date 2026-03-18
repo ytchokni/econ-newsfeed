@@ -1,5 +1,5 @@
 from database import Database
-from datetime import datetime
+from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 from openai import OpenAI
 from pydantic import BaseModel, ValidationError, field_validator
@@ -8,6 +8,7 @@ import json
 import re
 import logging
 import os
+from urllib.parse import urlparse
 
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
 _openai_client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
@@ -33,6 +34,19 @@ class PublicationExtraction(BaseModel):
     def validate_status(cls, v):
         valid = {'published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit'}
         if v is not None and v not in valid:
+            return None
+        return v
+
+    @field_validator('draft_url', mode='before')
+    @classmethod
+    def validate_draft_url(cls, v):
+        if v is None:
+            return v
+        try:
+            parsed = urlparse(str(v))
+        except Exception:
+            return None
+        if parsed.scheme not in ('http', 'https'):
             return None
         return v
 
@@ -69,7 +83,7 @@ class Publication:
                         INSERT IGNORE INTO papers (url, title, year, venue, timestamp, status, draft_url)
                         VALUES (%s, %s, %s, %s, %s, %s, %s)
                         """,
-                        (url, normalized_title, pub.get('year'), pub.get('venue'), datetime.now(), pub.get('status'), pub.get('draft_url')),
+                        (url, normalized_title, pub.get('year'), pub.get('venue'), datetime.now(timezone.utc), pub.get('status'), pub.get('draft_url')),
                     )
 
                     if cursor.lastrowid:
@@ -199,7 +213,7 @@ class Publication:
             except FileNotFoundError:
                 pass  # Another worker already removed this file
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
         filename = f"invalid_json_{timestamp}.txt"
         filepath = os.path.join(dump_dir, filename)
 

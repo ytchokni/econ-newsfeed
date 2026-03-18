@@ -225,10 +225,20 @@ class TestNoStackTraceLeakage:
         assert resp.status_code == 401
         self._assert_no_leak(resp.text)
 
-    def test_500_no_stack_trace(self, client):
+    def test_500_no_stack_trace(self):
         """Simulated internal error must return generic 500 with no details."""
-        with patch("api.Database.fetch_one", side_effect=RuntimeError("DB connection failed: password=s3cr3t")):
-            resp = client.get("/api/publications/1")
+        with (
+            patch("database.Database.create_tables"),
+            patch("database.Database.get_connection", return_value=None),
+            patch("database.Database.fetch_all", return_value=[]),
+            patch("database.Database.fetch_one", side_effect=RuntimeError("DB connection failed: password=s3cr3t")),
+            patch("scheduler.start_scheduler"),
+            patch("scheduler.shutdown_scheduler"),
+        ):
+            from api import app
+
+            with TestClient(app, raise_server_exceptions=False) as c:
+                resp = c.get("/api/publications/1")
         assert resp.status_code == 500
         body = resp.json()
         assert "error" in body
@@ -238,10 +248,20 @@ class TestNoStackTraceLeakage:
         assert "password" not in resp.text
         assert "s3cr3t" not in resp.text
 
-    def test_unhandled_exception_returns_generic_500(self, client):
+    def test_unhandled_exception_returns_generic_500(self):
         """Any unhandled exception must produce a generic 500, not a traceback."""
-        with patch("api.Database.fetch_all", side_effect=Exception("internal detail")):
-            resp = client.get("/api/researchers")
+        with (
+            patch("database.Database.create_tables"),
+            patch("database.Database.get_connection", return_value=None),
+            patch("database.Database.fetch_all", side_effect=Exception("internal detail")),
+            patch("database.Database.fetch_one", return_value=None),
+            patch("scheduler.start_scheduler"),
+            patch("scheduler.shutdown_scheduler"),
+        ):
+            from api import app
+
+            with TestClient(app, raise_server_exceptions=False) as c:
+                resp = c.get("/api/researchers")
         assert resp.status_code == 500
         body = resp.json()
         assert body["error"]["message"] == "An unexpected error occurred."

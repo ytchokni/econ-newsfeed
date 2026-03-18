@@ -109,35 +109,39 @@ def run_scrape_job():
         for url_id, researcher_id, url, page_type in urls:
             urls_checked += 1
 
-            # Get old text before fetch overwrites it (upsert)
-            old_text = HTMLFetcher.get_previous_text(url_id)
+            try:
+                # Get old text before fetch overwrites it (upsert)
+                old_text = HTMLFetcher.get_previous_text(url_id)
 
-            changed = HTMLFetcher.fetch_and_save_if_changed(url_id, url, researcher_id)
+                changed = HTMLFetcher.fetch_and_save_if_changed(url_id, url, researcher_id)
 
-            if changed and page_type in ("PUB", "WP"):
-                urls_changed += 1
-                new_text = HTMLFetcher.get_latest_text(url_id)
+                if changed and page_type in ("PUB", "WP"):
+                    urls_changed += 1
+                    new_text = HTMLFetcher.get_latest_text(url_id)
 
-                # Use diff if old content exists, otherwise full text
-                extraction_text = HTMLFetcher.compute_diff(old_text, new_text) if old_text else new_text
+                    # Use diff if old content exists, otherwise full text
+                    extraction_text = HTMLFetcher.compute_diff(old_text, new_text) if old_text else new_text
 
-                if extraction_text:
-                    pubs = Publication.extract_publications(extraction_text, url)
-                    if pubs:
-                        Publication.save_publications(url, pubs)
-                        pubs_extracted += len(pubs)
+                    if extraction_text:
+                        pubs = Publication.extract_publications(extraction_text, url)
+                        if pubs:
+                            Publication.save_publications(url, pubs)
+                            pubs_extracted += len(pubs)
 
-            # Extract bio from HOME pages only when bio is not yet set
-            if page_type == "HOME":
-                bio_row = Database.fetch_one(
-                    "SELECT bio FROM researchers WHERE id = %s", (researcher_id,)
-                )
-                if bio_row and bio_row[0] is None:
-                    page_text = HTMLFetcher.get_latest_text(url_id)
-                    if page_text:
-                        bio = HTMLFetcher.extract_bio(page_text, url)
-                        if bio:
-                            Database.update_researcher_bio(researcher_id, bio)
+                # Extract bio from HOME pages only when bio is not yet set
+                if page_type == "HOME":
+                    bio_row = Database.fetch_one(
+                        "SELECT bio FROM researchers WHERE id = %s", (researcher_id,)
+                    )
+                    if bio_row and bio_row[0] is None:
+                        page_text = HTMLFetcher.get_latest_text(url_id)
+                        if page_text:
+                            bio = HTMLFetcher.extract_bio(page_text, url)
+                            if bio:
+                                Database.update_researcher_bio(researcher_id, bio)
+            except Exception as e:
+                logger.error("Error processing URL %s (id=%s): %s", url, url_id, e)
+                continue
 
         update_scrape_log(log_id, "completed", urls_checked, urls_changed, pubs_extracted)
         logger.info(f"Scrape completed: {urls_checked} checked, {urls_changed} changed, {pubs_extracted} extracted")

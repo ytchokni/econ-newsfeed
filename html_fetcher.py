@@ -385,7 +385,7 @@ class HTMLFetcher:
             SET extracted_at = %s, extracted_hash = content_hash
             WHERE url_id = %s
         """
-        Database.execute_query(query, (datetime.utcnow(), url_id))
+        Database.execute_query(query, (datetime.now(timezone.utc), url_id))
 
     @staticmethod
     def get_previous_text(url_id):

@@ -55,46 +55,34 @@ class Database:
     def execute_query(query, params=None):
         """
         Execute a query with optional parameters and commit the changes.
-        Returns the last inserted row ID or None if there's an error.
+        Returns the last inserted row ID.
         """
-        try:
-            with Database.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query, params)
-                    conn.commit()
-                    return cursor.lastrowid
-        except Error as e:
-            logging.error("Database error in execute_query: %s", type(e).__name__)
-            return None
+        with Database.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(query, params)
+                conn.commit()
+                return cursor.lastrowid
 
     @staticmethod
     def fetch_all(query, params=None):
         """
         Execute a query with optional parameters and fetch all results.
-        Returns a list of tuples containing the results or an empty list if there's an error.
+        Returns a list of tuples containing the results.
         """
-        try:
-            with Database.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query, params)
-                    return cursor.fetchall()
-        except Error as e:
-            logging.error("Database error in fetch_all: %s", type(e).__name__)
-            return []
+        with Database.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(query, params)
+                return cursor.fetchall()
 
     @staticmethod
     def fetch_one(query, params=None):
         """
         Execute a SELECT query and fetch one result.
         """
-        try:
-            with Database.get_connection() as conn:
-                with conn.cursor() as cursor:
-                    cursor.execute(query, params)
-                    return cursor.fetchone()
-        except Error as e:
-            logging.error("Database error in fetch_one: %s", type(e).__name__)
-            return None
+        with Database.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(query, params)
+                return cursor.fetchone()
 
     @staticmethod
     def create_tables():
@@ -204,9 +192,12 @@ class Database:
                     cursor.execute(table_query)
 
         # Migration: add bio column to existing researchers tables
-        Database.execute_query(
-            "ALTER TABLE researchers ADD COLUMN IF NOT EXISTS bio TEXT"
-        )
+        try:
+            Database.execute_query(
+                "ALTER TABLE researchers ADD COLUMN bio TEXT"
+            )
+        except Exception:
+            pass  # column already exists
         logging.info("All tables created successfully")
         Database.seed_research_fields()
 

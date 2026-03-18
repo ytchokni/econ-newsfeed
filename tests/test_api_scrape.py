@@ -51,7 +51,7 @@ class TestTriggerScrape:
         ):
             response = client.post(
                 "/api/scrape",
-                headers={"X-API-Key": "test-secret-key"},
+                headers={"X-API-Key": "test-secret-key-for-ci-runs"},
             )
 
         assert response.status_code == 201
@@ -67,7 +67,7 @@ class TestTriggerScrape:
         with patch("scheduler._scrape_lock", mock_lock):
             response = client.post(
                 "/api/scrape",
-                headers={"X-API-Key": "test-secret-key"},
+                headers={"X-API-Key": "test-secret-key-for-ci-runs"},
             )
 
         assert response.status_code == 409

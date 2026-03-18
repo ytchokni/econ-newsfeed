@@ -133,7 +133,7 @@ class TestFullCycle:
             patch("api.create_scrape_log", return_value=1),
             patch("api.threading.Thread"),
         ):
-            resp = client.post("/api/scrape", headers={"X-API-Key": "test-secret-key"})
+            resp = client.post("/api/scrape", headers={"X-API-Key": "test-secret-key-for-ci-runs"})
         assert resp.status_code == 201
 
 
