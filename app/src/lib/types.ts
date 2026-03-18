@@ -8,7 +8,10 @@ export type PublicationStatus =
   | "published"
   | "accepted"
   | "revise_and_resubmit"
-  | "reject_and_resubmit";
+  | "reject_and_resubmit"
+  | "working_paper";
+
+export type DraftUrlStatus = "unchecked" | "valid" | "invalid" | "timeout";
 
 export interface Publication {
   id: number;
@@ -19,7 +22,9 @@ export interface Publication {
   source_url: string | null;
   discovered_at: string;
   status: PublicationStatus | null;
+  abstract: string | null;
   draft_url: string | null;
+  draft_url_status: DraftUrlStatus;
   draft_available: boolean;
 }
 
@@ -49,10 +54,18 @@ export interface Researcher {
   last_name: string;
   position: string | null;
   affiliation: string | null;
+  description: string | null;
   urls: ResearcherUrl[];
   website_url: string | null;
   publication_count: number;
   fields: ResearchField[];
+}
+
+export interface FeedFilters {
+  status?: string;
+  institution?: string;
+  preset?: string;
+  year?: string;
 }
 
 export interface ResearcherDetail extends Researcher {

@@ -6,12 +6,9 @@ import socket
 import requests
 import hashlib
 import logging
-import urllib3
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 from urllib.robotparser import RobotFileParser
-from requests.adapters import HTTPAdapter
-from urllib3.poolmanager import PoolManager
 from database import Database
 from bs4 import BeautifulSoup
 
@@ -23,64 +20,14 @@ RATE_LIMIT_FAST_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_FAST_SECONDS',
 CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS', '4000'))
 CONTENT_MAX_BYTES = 1_000_000  # 1 MB response size limit
 SCRAPER_USER_AGENT = os.environ.get(
-    'SCRAPER_USER_AGENT', 'Mozilla/5.0 (compatible; HTMLFetcher/1.0)'
+    'SCRAPER_USER_AGENT',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 )
 
 
-# ---------------------------------------------------------------------------
-# DNS-pinning transport adapter (SSRF DNS rebinding prevention)
-# ---------------------------------------------------------------------------
-
-class _PinnedPoolManager(PoolManager):
-    """Pool manager that connects to a pre-resolved IP, preventing DNS rebinding.
-
-    For HTTPS, the original hostname is preserved for SNI and certificate
-    verification so TLS still works correctly.
-    """
-
-    def __init__(self, hostname: str, resolved_ip: str, **kwargs):
-        super().__init__(**kwargs)
-        self._hostname = hostname
-        self._resolved_ip = resolved_ip
-
-    def connection_from_host(self, host, port=None, scheme='http', pool_kwargs=None):
-        if host == self._hostname:
-            pool_kwargs = (pool_kwargs or {}).copy()
-            if scheme == 'https':
-                # Keep original hostname for SNI handshake and cert verification
-                pool_kwargs.setdefault('assert_hostname', self._hostname)
-                pool_kwargs.setdefault('server_hostname', self._hostname)
-            return super().connection_from_host(
-                self._resolved_ip, port, scheme, pool_kwargs
-            )
-        return super().connection_from_host(host, port, scheme, pool_kwargs)
-
-
-class _PinnedIPAdapter(HTTPAdapter):
-    """Transport adapter that pins TCP connections to a pre-resolved IP.
-
-    Prevents DNS rebinding SSRF attacks: the TCP connection always goes to the
-    IP address validated at request time rather than performing a second DNS
-    lookup that an attacker could control via low-TTL records.
-    """
-
-    def __init__(self, hostname: str, resolved_ip: str, **kwargs):
-        self._hostname = hostname
-        self._resolved_ip = resolved_ip
-        super().__init__(**kwargs)
-
-    def init_poolmanager(self, connections, maxsize, block=False, **connection_pool_kw):
-        self.poolmanager = _PinnedPoolManager(
-            hostname=self._hostname,
-            resolved_ip=self._resolved_ip,
-            num_pools=connections,
-            maxsize=maxsize,
-            block=block,
-            **connection_pool_kw,
-        )
-
-# Large CDN/hosting platforms that can handle higher request rates
-FAST_DOMAINS = {
+# Large CDN/hosting platforms that can handle higher request rates.
+# Matched by suffix so subdomains work (e.g. user.github.io matches github.io).
+FAST_DOMAINS = (
     'sites.google.com',
     'github.io',
     'github.com',
@@ -88,7 +35,15 @@ FAST_DOMAINS = {
     'academia.edu',
     'researchgate.net',
     'ssrn.com',
-}
+)
+
+
+def _is_fast_domain(hostname: str) -> bool:
+    """Check if hostname matches a FAST_DOMAINS entry (exact or subdomain)."""
+    for domain in FAST_DOMAINS:
+        if hostname == domain or hostname.endswith('.' + domain):
+            return True
+    return False
 
 
 class HTMLFetcher:
@@ -102,19 +57,23 @@ class HTMLFetcher:
 
     @staticmethod
     def is_allowed_by_robots(url):
-        """Check if the URL is allowed by the site's robots.txt."""
+        """Check if the URL is allowed by the site's robots.txt.
+        If robots.txt can't be fetched or returns non-200, allow the request."""
         try:
             parsed = urlparse(url)
             robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+            resp = requests.get(robots_url, timeout=10, headers={
+                'User-Agent': SCRAPER_USER_AGENT,
+            })
+            if resp.status_code != 200:
+                return True
             rp = RobotFileParser()
-            rp.set_url(robots_url)
-            rp.read()
+            rp.parse(resp.text.splitlines())
             allowed = rp.can_fetch('HTMLFetcher/1.0', url)
             if not allowed:
                 logging.info(f"URL disallowed by robots.txt: {url}")
             return allowed
         except Exception:
-            # If robots.txt can't be fetched, allow the request
             return True
 
     @staticmethod
@@ -123,27 +82,25 @@ class HTMLFetcher:
         Validate a URL for SSRF protection.
         Rejects non-HTTP(S) schemes, private/reserved IPs, and cloud metadata endpoints.
 
-        Returns (True, resolved_ip) if safe, (False, None) otherwise.
-        The resolved_ip is returned so callers can pin the TCP connection to that
-        exact IP, preventing a second DNS resolution (DNS rebinding attack).
+        Returns True if safe, False otherwise.
         """
         try:
             parsed = urlparse(url)
         except Exception:
-            return False, None
+            return False
 
         if parsed.scheme not in ('http', 'https'):
             logging.warning(f"Rejected URL with non-HTTP(S) scheme: {url}")
-            return False, None
+            return False
 
         hostname = parsed.hostname
         if not hostname:
-            return False, None
+            return False
 
         # Reject cloud metadata endpoints by hostname
         if hostname in ('169.254.169.254', 'metadata.google.internal'):
             logging.warning(f"Rejected metadata endpoint URL: {url}")
-            return False, None
+            return False
 
         # Resolve hostname and check for private/reserved IPs
         try:
@@ -153,18 +110,18 @@ class HTMLFetcher:
                 logging.warning(
                     "Rejected URL resolving to private/reserved IP: %s -> [redacted]", url
                 )
-                return False, None
+                return False
         except (socket.gaierror, ValueError):
             logging.warning(f"Could not resolve hostname for URL: {url}")
-            return False, None
+            return False
 
-        return True, resolved_ip
+        return True
 
     @staticmethod
     def _rate_limit(url):
         """Enforce per-domain rate limiting."""
         domain = urlparse(url).hostname
-        limit = RATE_LIMIT_FAST_SECONDS if domain in FAST_DOMAINS else RATE_LIMIT_SECONDS
+        limit = RATE_LIMIT_FAST_SECONDS if _is_fast_domain(domain) else RATE_LIMIT_SECONDS
         if domain in HTMLFetcher._domain_last_request:
             elapsed = time.time() - HTMLFetcher._domain_last_request[domain]
             if elapsed < limit:
@@ -174,29 +131,15 @@ class HTMLFetcher:
         HTMLFetcher._domain_last_request[domain] = time.time()
 
     @staticmethod
-    def fetch_html(url, timeout=10, max_retries=3, resolved_ip=None):
+    def fetch_html(url, timeout=10, max_retries=3):
         """
         Fetch HTML content from a given URL with exponential backoff.
         Retries on timeouts and 5xx server errors.
 
-        If resolved_ip is provided, the TCP connection is pinned to that IP to
-        prevent DNS rebinding (the IP must already be validated by validate_url).
-
         Returns the HTML content as a string, or None on failure.
         """
         HTMLFetcher._rate_limit(url)
-
-        if resolved_ip is not None:
-            # Use a per-request session with a pinned-IP adapter to prevent
-            # a second DNS resolution from returning a different (private) IP.
-            hostname = urlparse(url).hostname
-            session = requests.Session()
-            session.headers.update(HTMLFetcher.session.headers)
-            adapter = _PinnedIPAdapter(hostname=hostname, resolved_ip=resolved_ip)
-            session.mount('https://', adapter)
-            session.mount('http://', adapter)
-        else:
-            session = HTMLFetcher.session
+        session = HTMLFetcher.session
 
         for attempt in range(max_retries):
             try:
@@ -276,21 +219,35 @@ class HTMLFetcher:
         return True  # No previous record — treat as changed
 
     @staticmethod
+    def _was_fetched_recently(url_id, hours=24):
+        """Return True if this URL was successfully fetched within the last N hours."""
+        result = Database.fetch_one(
+            "SELECT timestamp FROM html_content WHERE url_id = %s", (url_id,)
+        )
+        if not result or not result[0]:
+            return False
+        age = datetime.now(timezone.utc) - result[0].replace(tzinfo=timezone.utc)
+        return age.total_seconds() < hours * 3600
+
+    @staticmethod
     def fetch_and_save_if_changed(url_id, url, researcher_id):
         """
         Fetch HTML content from the given URL and save its text content if it has changed.
+        Skips fetching if the URL was successfully fetched within the last 24 hours.
         Returns True if content changed, False otherwise.
         """
-        valid, resolved_ip = HTMLFetcher.validate_url(url)
-        if not valid:
+        if HTMLFetcher._was_fetched_recently(url_id):
+            logging.info(f"Skipping URL ID {url_id} (fetched <24h ago): {url}")
+            return False
+
+        if not HTMLFetcher.validate_url(url):
             logging.warning(f"URL failed SSRF validation, skipping: {url}")
             return False
 
         if not HTMLFetcher.is_allowed_by_robots(url):
             return False
 
-        # Pass the pre-resolved IP to avoid a second DNS lookup (DNS rebinding prevention)
-        html_content = HTMLFetcher.fetch_html(url, resolved_ip=resolved_ip)
+        html_content = HTMLFetcher.fetch_html(url)
         if not html_content:
             logging.warning(f"Failed to fetch HTML content for URL ID: {url_id}, URL: {url}")
             return False
@@ -313,36 +270,73 @@ class HTMLFetcher:
 
     @staticmethod
     def extract_bio(text_content: str, url: str) -> str | None:
-        """Extract a ≤2-sentence bio from text content using the LLM.
+        """Legacy: extract a ≤2-sentence bio. Delegates to extract_description."""
+        return HTMLFetcher.extract_description(text_content, url)
 
-        Returns the bio string, or None if no bio could be extracted.
-        Import is deferred to avoid circular dependency with publication.py.
+    @staticmethod
+    def extract_description(text_content: str, url: str) -> str | None:
+        """Extract a researcher description (up to 200 words) from plain text.
+
+        Uses a single LLM call on text content (not HTML) for minimal input tokens.
+        Output is capped with max_tokens and truncated to 200 words application-side.
+        Returns the description string, or None if nothing could be extracted.
         """
         try:
             from publication import _openai_client, OPENAI_MODEL
         except ImportError:
-            logging.error("Could not import OpenAI client for bio extraction")
+            logging.error("Could not import OpenAI client for description extraction")
             return None
 
         prompt = (
             f"From the following text from a researcher's homepage at {url}, "
-            "extract a brief professional bio (at most 2 sentences) describing who this person is, "
+            "extract a professional description (up to 200 words) describing who this person is, "
             "their research interests, and their current position/affiliation. "
-            "If no clear bio can be extracted, reply with exactly: null\n\n"
+            "Return only the description text, nothing else. "
+            "If no clear description can be extracted, reply with exactly: null\n\n"
             f"Content:\n{text_content[:3000]}"
         )
         try:
             response = _openai_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model=OPENAI_MODEL,
+                max_completion_tokens=1024,
             )
-            bio = response.choices[0].message.content.strip()
-            if bio.lower() in ("null", "none", ""):
+            desc = response.choices[0].message.content.strip()
+            if desc.lower() in ("null", "none", ""):
                 return None
-            return bio[:500]
+            words = desc.split()
+            if len(words) > 200:
+                desc = ' '.join(words[:200])
+            return desc
         except Exception as e:
-            logging.error(f"Error extracting bio from {url}: {e}")
+            logging.error(f"Error extracting description from {url}: {e}")
             return None
+
+    @staticmethod
+    def validate_draft_url(url: str) -> str:
+        """Validate a draft URL via HTTP HEAD with SSRF protection.
+
+        Returns 'valid', 'invalid', or 'timeout'.
+        """
+        if not HTMLFetcher.validate_url(url):
+            return 'invalid'
+
+        try:
+            # Disable auto-redirects to prevent SSRF via redirect to internal IPs
+            response = HTMLFetcher.session.head(url, timeout=10, allow_redirects=False)
+            if response.status_code < 400:
+                return 'valid'
+            # Follow redirects manually with SSRF validation (up to 5 hops)
+            if response.status_code in (301, 302, 303, 307, 308):
+                redirect_url = response.headers.get('Location')
+                if redirect_url and HTMLFetcher.validate_url(redirect_url):
+                    return HTMLFetcher.validate_draft_url(redirect_url)
+                return 'invalid'
+            return 'invalid'
+        except requests.exceptions.Timeout:
+            return 'timeout'
+        except requests.exceptions.RequestException:
+            return 'invalid'
 
     @staticmethod
     def get_latest_text(url_id):
@@ -385,7 +379,7 @@ class HTMLFetcher:
             SET extracted_at = %s, extracted_hash = content_hash
             WHERE url_id = %s
         """
-        Database.execute_query(query, (datetime.utcnow(), url_id))
+        Database.execute_query(query, (datetime.now(timezone.utc), url_id))
 
     @staticmethod
     def get_previous_text(url_id):

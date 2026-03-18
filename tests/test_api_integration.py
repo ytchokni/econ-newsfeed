@@ -60,10 +60,11 @@ class TestOpenAPI:
 # Task 5.3: Full request cycle integration test
 # ---------------------------------------------------------------------------
 
-SAMPLE_PUB = (1, "Trade and Wages", "2024", "JLE", "https://example.com/p", datetime(2026, 3, 15, 14, 30), "published", None)
-SAMPLE_AUTHORS = [(10, "Max Friedrich", "Steinhardt")]
-SAMPLE_RESEARCHER = (10, "Max Friedrich", "Steinhardt", "Professor", "FU Berlin")
-SAMPLE_URLS = [(1, "PUB", "https://example.com/pubs")]
+SAMPLE_PUB = (1, "Trade and Wages", "2024", "JLE", "https://example.com/p", datetime(2026, 3, 15, 14, 30), "published", None, None, None)
+SAMPLE_AUTHORS = [(1, 10, "Max Friedrich", "Steinhardt")]
+SAMPLE_RESEARCHER = (10, "Max Friedrich", "Steinhardt", "Professor", "FU Berlin", None)
+SAMPLE_URLS_BATCH = [(10, 1, "PUB", "https://example.com/pubs")]
+SAMPLE_URLS_SINGLE = [(1, "PUB", "https://example.com/pubs")]
 SAMPLE_FIELDS: list = []
 SAMPLE_SCRAPE = (1, "completed", datetime(2026, 3, 16, 10, 0), datetime(2026, 3, 16, 10, 5), 10, 2, 3)
 
@@ -96,7 +97,7 @@ class TestFullCycle:
             patch("api.Database.fetch_all") as mock_all,
             patch("api.Database.fetch_one", return_value=(5,)),
         ):
-            mock_all.side_effect = [[SAMPLE_RESEARCHER], SAMPLE_URLS, SAMPLE_FIELDS]
+            mock_all.side_effect = [[SAMPLE_RESEARCHER], SAMPLE_URLS_BATCH, [(10, 5)], SAMPLE_FIELDS]
             resp = client.get("/api/researchers")
         assert resp.status_code == 200
         assert len(resp.json()["items"]) == 1
@@ -107,7 +108,7 @@ class TestFullCycle:
             patch("api.Database.fetch_all") as mock_all,
         ):
             mock_one.side_effect = [SAMPLE_RESEARCHER, (5,)]
-            mock_all.side_effect = [SAMPLE_URLS, SAMPLE_FIELDS, [SAMPLE_PUB], SAMPLE_AUTHORS]
+            mock_all.side_effect = [SAMPLE_URLS_SINGLE, SAMPLE_FIELDS, [SAMPLE_PUB], SAMPLE_AUTHORS]
             resp = client.get("/api/researchers/10")
         assert resp.status_code == 200
         assert resp.json()["first_name"] == "Max Friedrich"
@@ -126,14 +127,12 @@ class TestFullCycle:
         assert resp.status_code == 401
 
         # 7. Trigger scrape (authenticated)
-        mock_lock = MagicMock()
-        mock_lock.acquire.return_value = True
         with (
-            patch("scheduler._scrape_lock", mock_lock),
+            patch("api.scheduler.is_scrape_running", return_value=False),
             patch("api.create_scrape_log", return_value=1),
             patch("api.threading.Thread"),
         ):
-            resp = client.post("/api/scrape", headers={"X-API-Key": "test-secret-key"})
+            resp = client.post("/api/scrape", headers={"X-API-Key": "test-secret-key-for-ci-runs"})
         assert resp.status_code == 201
 
 
@@ -157,3 +156,99 @@ class TestLifespan:
                 mock_start.assert_called_once()
 
             mock_stop.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Smoke tests — would have caught "page stuck on loading"
+# ---------------------------------------------------------------------------
+
+# Sample data for smoke tests (publication batch format)
+_SMOKE_PUB = (1, "Trade and Wages", "2024", "JLE", "https://example.com/p", datetime(2026, 3, 15, 14, 30), "published", None, None, None)
+_SMOKE_BATCH_AUTHORS = [(1, 10, "Max Friedrich", "Steinhardt")]
+
+# Sample data for researchers (batch format)
+_SMOKE_RESEARCHER = (10, "Max Friedrich", "Steinhardt", "Professor", "FU Berlin", "Economist.")
+_SMOKE_BATCH_URLS = [(10, 1, "homepage", "https://example.com")]
+_SMOKE_BATCH_PUB_COUNTS = [(10, 5)]
+_SMOKE_BATCH_FIELDS = [(10, 1, "Labour Economics", "labour-economics")]
+
+
+class TestPublicationsSmoke:
+    """High-level smoke tests that verify endpoints actually return data.
+
+    These catch startup/configuration failures that leave the page stuck
+    on "Loading..." — the full middleware stack runs, only the DB is mocked.
+    """
+
+    @pytest.fixture
+    def client(self):
+        with (
+            patch("database.Database.create_tables"),
+            patch("scheduler.start_scheduler"),
+            patch("scheduler.shutdown_scheduler"),
+        ):
+            from api import app
+
+            with TestClient(app) as c:
+                yield c
+
+    @pytest.mark.timeout(5)
+    def test_publications_endpoint_responds_with_data(self, client):
+        """GET /api/publications must return 200 with the expected shape — not hang."""
+        with (
+            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_all") as mock_all,
+        ):
+            mock_all.side_effect = [[_SMOKE_PUB], _SMOKE_BATCH_AUTHORS]
+            resp = client.get("/api/publications")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body["items"], list)
+        assert len(body["items"]) > 0
+        assert isinstance(body["total"], int)
+        assert isinstance(body["page"], int)
+        assert isinstance(body["pages"], int)
+        # Verify the publication has the expected fields
+        pub = body["items"][0]
+        assert "id" in pub
+        assert "title" in pub
+        assert "authors" in pub
+        assert "discovered_at" in pub
+
+    @pytest.mark.timeout(5)
+    def test_researchers_endpoint_responds_with_data(self, client):
+        """GET /api/researchers must return 200 with the expected shape — not hang."""
+        with (
+            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_all") as mock_all,
+        ):
+            mock_all.side_effect = [
+                [_SMOKE_RESEARCHER],
+                _SMOKE_BATCH_URLS,
+                _SMOKE_BATCH_PUB_COUNTS,
+                _SMOKE_BATCH_FIELDS,
+            ]
+            resp = client.get("/api/researchers")
+
+        assert resp.status_code == 200
+        body = resp.json()
+        assert isinstance(body["items"], list)
+        assert len(body["items"]) > 0
+        assert isinstance(body["total"], int)
+        assert isinstance(body["page"], int)
+        assert isinstance(body["pages"], int)
+        # Verify the researcher has the expected fields
+        researcher = body["items"][0]
+        assert "id" in researcher
+        assert "first_name" in researcher
+        assert "last_name" in researcher
+        assert "publication_count" in researcher
+
+    @pytest.mark.timeout(5)
+    def test_app_starts_without_crashing(self, client):
+        """The app lifespan must complete — catches env var and DB migration failures."""
+        # If we got here, the TestClient started the app successfully.
+        # Verify the healthiest endpoint responds.
+        resp = client.get("/openapi.json")
+        assert resp.status_code == 200
