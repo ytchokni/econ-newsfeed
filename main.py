@@ -109,7 +109,7 @@ def batch_submit():
     ]
 
     if not urls_to_process:
-        print("Nothing to extract")
+        logging.info("Nothing to extract")
         return
 
     # Warn if pending batches exist
@@ -119,7 +119,7 @@ def batch_submit():
     )
     if pending:
         ids = ", ".join(r[0] for r in pending)
-        print(f"Warning: {len(pending)} pending batch(es) already exist: {ids}")
+        logging.warning("Warning: %d pending batch(es) already exist: %s", len(pending), ids)
 
     # Build JSONL
     lines = []
@@ -140,7 +140,7 @@ def batch_submit():
         lines.append(json.dumps(request))
 
     if not lines:
-        print("No URLs with downloadable content to batch")
+        logging.info("No URLs with downloadable content to batch")
         return
 
     jsonl_content = "\n".join(lines).encode("utf-8")
@@ -166,9 +166,17 @@ def batch_submit():
             (batch.id, uploaded.id, len(lines), datetime.now(timezone.utc)),
         )
 
-        print(f"Batch submitted: {batch.id} ({len(lines)} URLs)")
+        logging.info("Batch submitted: %s (%d URLs)", batch.id, len(lines))
     finally:
         os.unlink(tmp_path)
+
+
+class _UsageDict:
+    """Thin wrapper so a dict from the Batch API response can be passed to log_llm_usage()."""
+    def __init__(self, d):
+        self.prompt_tokens = d.get("prompt_tokens", 0)
+        self.completion_tokens = d.get("completion_tokens", 0)
+        self.total_tokens = d.get("total_tokens", self.prompt_tokens + self.completion_tokens)
 
 
 def batch_check():
@@ -185,7 +193,7 @@ def batch_check():
     )
 
     if not pending:
-        print("No pending batches")
+        logging.info("No pending batches")
         return
 
     for db_id, openai_batch_id in pending:
@@ -216,30 +224,14 @@ def batch_check():
                 url = url_row[0]
 
                 response_body = result.get("response", {}).get("body", {})
-                usage = response_body.get("usage", {})
-                prompt_tokens = usage.get("prompt_tokens", 0)
-                completion_tokens = usage.get("completion_tokens", 0)
-                total_tokens = usage.get("total_tokens", prompt_tokens + completion_tokens)
-                total_prompt_tokens += prompt_tokens
-                total_completion_tokens += completion_tokens
+                usage_dict = response_body.get("usage", {})
+                usage = _UsageDict(usage_dict)
+                total_prompt_tokens += usage.prompt_tokens
+                total_completion_tokens += usage.completion_tokens
 
-                # Log per-request usage
-                from database import _LLM_PRICING
-                pricing = _LLM_PRICING.get(OPENAI_MODEL)
-                estimated_cost = None
-                if pricing:
-                    p_rate, c_rate = pricing
-                    estimated_cost = 0.5 * (
-                        prompt_tokens * p_rate / 1_000_000
-                        + completion_tokens * c_rate / 1_000_000
-                    )
-                Database.execute_query(
-                    """INSERT INTO llm_usage
-                       (called_at, call_type, model, prompt_tokens, completion_tokens,
-                        total_tokens, estimated_cost_usd, is_batch, context_url, batch_job_id)
-                       VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE, %s, %s)""",
-                    (datetime.now(timezone.utc), "publication_extraction", OPENAI_MODEL,
-                     prompt_tokens, completion_tokens, total_tokens, estimated_cost, url, db_id),
+                Database.log_llm_usage(
+                    "publication_extraction", OPENAI_MODEL, usage,
+                    context_url=url, is_batch=True, batch_job_id=db_id,
                 )
 
                 choices = response_body.get("choices", [])
@@ -264,15 +256,13 @@ def batch_check():
                 HTMLFetcher.mark_extracted(url_id)
                 processed_urls += 1
 
-            # Compute aggregate cost for batch_jobs
-            pricing = _LLM_PRICING.get(OPENAI_MODEL)
-            batch_cost = None
-            if pricing:
-                p_rate, c_rate = pricing
-                batch_cost = 0.5 * (
-                    total_prompt_tokens * p_rate / 1_000_000
-                    + total_completion_tokens * c_rate / 1_000_000
-                )
+            # Aggregate cost from llm_usage rows logged above
+            cost_row = Database.fetch_one(
+                """SELECT SUM(estimated_cost_usd) FROM llm_usage
+                   WHERE batch_job_id = %s""",
+                (db_id,),
+            )
+            batch_cost = cost_row[0] if cost_row else None
 
             Database.execute_query(
                 """UPDATE batch_jobs
@@ -283,9 +273,9 @@ def batch_check():
                 (output_file_id, datetime.now(timezone.utc),
                  total_prompt_tokens, total_completion_tokens, batch_cost, db_id),
             )
-            print(
-                f"Batch {openai_batch_id} completed: {processed_urls} URLs processed, "
-                f"{saved_pubs} publications saved"
+            logging.info(
+                "Batch %s completed: %d URLs processed, %d publications saved",
+                openai_batch_id, processed_urls, saved_pubs,
             )
 
         elif status in ("failed", "expired", "cancelled"):
@@ -294,11 +284,11 @@ def batch_check():
                 "UPDATE batch_jobs SET status = %s, error_message = %s WHERE id = %s",
                 (status, str(error_msg), db_id),
             )
-            print(f"Batch {openai_batch_id} {status}: {error_msg}")
+            logging.warning("Batch %s %s: %s", openai_batch_id, status, error_msg)
 
         else:
             req_counts = getattr(batch, 'request_counts', None)
-            print(f"Batch {openai_batch_id} status: {status} — {req_counts}")
+            logging.info("Batch %s status: %s — %s", openai_batch_id, status, req_counts)
 
 
 def main():

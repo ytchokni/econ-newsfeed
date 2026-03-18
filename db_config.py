@@ -24,7 +24,14 @@ if not _DB_NAME_RE.match(_DB_NAME):
 # MySQL configuration
 db_config = {
     'host': os.environ['DB_HOST'],
+    'port': int(os.environ.get('DB_PORT', '3306')),
     'user': os.environ['DB_USER'],
     'password': os.environ['DB_PASSWORD'],
     'database': _DB_NAME,
 }
+
+# Optional SSL for managed cloud databases (Cloud SQL, RDS, PlanetScale)
+_ssl_ca = os.environ.get('DB_SSL_CA')
+if _ssl_ca:
+    db_config['ssl_ca'] = _ssl_ca
+    db_config['ssl_verify_cert'] = True

@@ -22,10 +22,13 @@ _LLM_PRICING = {  # (prompt, completion) cost per 1M tokens
 _pool: "MySQLConnectionPool | None" = None
 
 
+_DB_POOL_SIZE = int(os.environ.get('DB_POOL_SIZE', '5'))
+
+
 def _get_pool() -> "MySQLConnectionPool":
     global _pool
     if _pool is None:
-        _pool = MySQLConnectionPool(pool_size=10, pool_name="econ_pool", **db_config)
+        _pool = MySQLConnectionPool(pool_size=_DB_POOL_SIZE, pool_name="econ_pool", **db_config)
     return _pool
 
 
@@ -288,18 +291,30 @@ class Database:
                 for table_query in table_definitions.values():
                     cursor.execute(table_query)
 
-        # Add token columns to scrape_log if they don't exist (migration for existing DBs)
-        for col, definition in [
-            ("prompt_tokens_total", "INT DEFAULT 0"),
-            ("completion_tokens_total", "INT DEFAULT 0"),
-        ]:
-            try:
-                Database.execute_query(
-                    f"ALTER TABLE scrape_log ADD COLUMN {col} {definition}"
-                )
-            except Exception as e:
-                if getattr(e, 'errno', None) != 1060:  # 1060 = Duplicate column name
-                    logging.warning(f"Migration warning for scrape_log.{col}: {e}")
+        # Add token columns to scrape_log if they don't exist (migration for existing DBs).
+        # Use a MySQL advisory lock so only one pod runs migrations on multi-pod startup.
+        with Database.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("SELECT GET_LOCK('econ_migrations', 10)")
+                got_lock = cursor.fetchone()[0]
+                if got_lock == 1:
+                    try:
+                        for col, definition in [
+                            ("prompt_tokens_total", "INT DEFAULT 0"),
+                            ("completion_tokens_total", "INT DEFAULT 0"),
+                        ]:
+                            try:
+                                cursor.execute(
+                                    f"ALTER TABLE scrape_log ADD COLUMN {col} {definition}"
+                                )
+                                conn.commit()
+                            except Exception as e:
+                                if getattr(e, 'errno', None) != 1060:  # 1060 = Duplicate column name
+                                    logging.warning("Migration warning for scrape_log.%s: %s", col, e)
+                    finally:
+                        cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
+                else:
+                    logging.info("Skipping migrations — another pod holds the lock")
 
         logging.info("All tables created successfully")
         Database.seed_research_fields()
@@ -345,6 +360,7 @@ class Database:
                 )
             else:
                 estimated_cost = None
+                logging.warning("No pricing entry for model '%s' — cost will be NULL", model)
             Database.execute_query(
                 """INSERT INTO llm_usage
                    (called_at, call_type, model, prompt_tokens, completion_tokens,

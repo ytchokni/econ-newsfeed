@@ -236,7 +236,14 @@ class HTMLFetcher:
         )
         if not result or not result[0]:
             return False
-        age = datetime.now(timezone.utc) - result[0].replace(tzinfo=timezone.utc)
+        # MySQL connector returns naive datetimes (no tzinfo) stored as UTC.
+        # Use replace() only when the value is naive; use astimezone() if aware.
+        ts = result[0]
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        else:
+            ts = ts.astimezone(timezone.utc)
+        age = datetime.now(timezone.utc) - ts
         return age.total_seconds() < hours * 3600
 
     @staticmethod
