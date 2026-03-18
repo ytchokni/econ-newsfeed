@@ -6,6 +6,7 @@ COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
+ENV API_INTERNAL_URL=http://api:8000
 RUN npm run build
 
 FROM node:20-slim

@@ -1,4 +1,4 @@
-.PHONY: setup dev seed reset-db
+.PHONY: setup dev seed reset-db scrape
 
 setup:
 	python3 -m venv .venv
@@ -23,3 +23,6 @@ reset-db:
 		Database.create_database(); \
 		Database.create_tables(); \
 		print('Database reset complete')"
+
+scrape:
+	.venv/bin/python -c "from scheduler import run_scrape_job; run_scrape_job()"
