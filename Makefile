@@ -1,4 +1,4 @@
-.PHONY: setup dev seed reset-db scrape fetch parse
+.PHONY: setup dev seed reset-db scrape fetch parse parse-fast batch-submit batch-check
 
 setup:
 	python3 -m venv .venv
@@ -32,3 +32,12 @@ fetch:
 
 parse:
 	.venv/bin/python -c "from main import extract_data_from_htmls; extract_data_from_htmls()"
+
+parse-fast:
+	.venv/bin/python -c "from main import extract_data_from_htmls_concurrent; extract_data_from_htmls_concurrent()"
+
+batch-submit:
+	.venv/bin/python -c "from main import batch_submit; batch_submit()"
+
+batch-check:
+	.venv/bin/python -c "from main import batch_check; batch_check()"

@@ -13,6 +13,12 @@ from datetime import datetime, timezone
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(levelname)s:%(message)s')
 
+_LLM_PRICING = {  # (prompt, completion) cost per 1M tokens
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-5.4-mini": (0.75, 4.50),
+    "gpt-5.4-nano": (0.20, 1.25),
+}
+
 _pool: "MySQLConnectionPool | None" = None
 
 
@@ -189,6 +195,8 @@ class Database:
                     urls_checked INT DEFAULT 0,
                     urls_changed INT DEFAULT 0,
                     pubs_extracted INT DEFAULT 0,
+                    prompt_tokens_total INT DEFAULT 0,
+                    completion_tokens_total INT DEFAULT 0,
                     error_message TEXT
                 )
             """,
@@ -233,6 +241,44 @@ class Database:
                     INDEX idx_paper_id (paper_id),
                     FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
                 )
+            """,
+            "llm_usage": """
+                CREATE TABLE IF NOT EXISTS llm_usage (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    called_at DATETIME NOT NULL,
+                    call_type ENUM('publication_extraction','description_extraction','researcher_disambiguation') NOT NULL,
+                    model VARCHAR(100) NOT NULL,
+                    prompt_tokens INT NOT NULL DEFAULT 0,
+                    completion_tokens INT NOT NULL DEFAULT 0,
+                    total_tokens INT NOT NULL DEFAULT 0,
+                    estimated_cost_usd DECIMAL(10,6) DEFAULT NULL,
+                    is_batch BOOLEAN NOT NULL DEFAULT FALSE,
+                    context_url VARCHAR(2048) DEFAULT NULL,
+                    researcher_id INT DEFAULT NULL,
+                    scrape_log_id INT DEFAULT NULL,
+                    batch_job_id INT DEFAULT NULL,
+                    INDEX idx_called_at (called_at),
+                    INDEX idx_call_type (call_type),
+                    INDEX idx_scrape_log (scrape_log_id)
+                )
+            """,
+            "batch_jobs": """
+                CREATE TABLE IF NOT EXISTS batch_jobs (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    openai_batch_id VARCHAR(255) NOT NULL,
+                    input_file_id VARCHAR(255) NOT NULL,
+                    output_file_id VARCHAR(255) DEFAULT NULL,
+                    status ENUM('submitted','validating','in_progress','finalizing','completed','failed','expired','cancelled') DEFAULT 'submitted',
+                    url_count INT DEFAULT 0,
+                    created_at DATETIME NOT NULL,
+                    completed_at DATETIME DEFAULT NULL,
+                    prompt_tokens_total INT DEFAULT 0,
+                    completion_tokens_total INT DEFAULT 0,
+                    estimated_cost_usd DECIMAL(10,6) DEFAULT NULL,
+                    error_message TEXT DEFAULT NULL,
+                    UNIQUE KEY uq_batch_id (openai_batch_id),
+                    INDEX idx_status (status)
+                )
             """
         }
 
@@ -240,6 +286,19 @@ class Database:
             with conn.cursor() as cursor:
                 for table_query in table_definitions.values():
                     cursor.execute(table_query)
+
+        # Add token columns to scrape_log if they don't exist (migration for existing DBs)
+        for col, definition in [
+            ("prompt_tokens_total", "INT DEFAULT 0"),
+            ("completion_tokens_total", "INT DEFAULT 0"),
+        ]:
+            try:
+                Database.execute_query(
+                    f"ALTER TABLE scrape_log ADD COLUMN {col} {definition}"
+                )
+            except Exception as e:
+                if getattr(e, 'errno', None) != 1060:  # 1060 = Duplicate column name
+                    logging.warning(f"Migration warning for scrape_log.{col}: {e}")
 
         logging.info("All tables created successfully")
         Database.seed_research_fields()
@@ -268,6 +327,37 @@ class Database:
             )
 
     @staticmethod
+    def log_llm_usage(call_type, model, usage, context_url=None, researcher_id=None,
+                      scrape_log_id=None, is_batch=False, batch_job_id=None):
+        """Log an LLM API call with token counts and estimated cost. Failures are silenced."""
+        try:
+            prompt_tokens = getattr(usage, 'prompt_tokens', 0) or 0
+            completion_tokens = getattr(usage, 'completion_tokens', 0) or 0
+            total_tokens = getattr(usage, 'total_tokens', 0) or (prompt_tokens + completion_tokens)
+            pricing = _LLM_PRICING.get(model)
+            if pricing:
+                prompt_rate, completion_rate = pricing
+                multiplier = 0.5 if is_batch else 1.0
+                estimated_cost = multiplier * (
+                    prompt_tokens * prompt_rate / 1_000_000
+                    + completion_tokens * completion_rate / 1_000_000
+                )
+            else:
+                estimated_cost = None
+            Database.execute_query(
+                """INSERT INTO llm_usage
+                   (called_at, call_type, model, prompt_tokens, completion_tokens,
+                    total_tokens, estimated_cost_usd, is_batch, context_url,
+                    researcher_id, scrape_log_id, batch_job_id)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                (datetime.now(timezone.utc), call_type, model, prompt_tokens,
+                 completion_tokens, total_tokens, estimated_cost, is_batch,
+                 context_url, researcher_id, scrape_log_id, batch_job_id),
+            )
+        except Exception as e:
+            logging.warning(f"log_llm_usage failed (non-fatal): {e}")
+
+    @staticmethod
     def _disambiguate_researcher(first_name, last_name, candidates):
         """
         Use LLM to check if any same-last-name candidate is the same person as first_name last_name.
@@ -289,9 +379,13 @@ class Database:
         try:
             from openai import OpenAI
             client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
+            model = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
             response = client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
-                model=os.environ.get('OPENAI_MODEL', 'gpt-4o-mini'),
+                model=model,
+            )
+            Database.log_llm_usage(
+                "researcher_disambiguation", model, response.usage,
             )
             content = response.choices[0].message.content
             match = re.search(r'\{.*?\}', content, re.DOTALL)

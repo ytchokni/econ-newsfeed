@@ -78,15 +78,26 @@ def create_scrape_log():
 
 def update_scrape_log(log_id, status, urls_checked=0, urls_changed=0, pubs_extracted=0, error_message=None):
     """Update an existing scrape_log entry with results."""
+    # Aggregate token totals from llm_usage for this scrape run
+    token_row = Database.fetch_one(
+        """SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0)
+           FROM llm_usage WHERE scrape_log_id = %s""",
+        (log_id,),
+    )
+    prompt_tokens_total = token_row[0] if token_row else 0
+    completion_tokens_total = token_row[1] if token_row else 0
+
     query = """
         UPDATE scrape_log
         SET finished_at = %s, status = %s, urls_checked = %s,
-            urls_changed = %s, pubs_extracted = %s, error_message = %s
+            urls_changed = %s, pubs_extracted = %s, error_message = %s,
+            prompt_tokens_total = %s, completion_tokens_total = %s
         WHERE id = %s
     """
     Database.execute_query(query, (
         datetime.now(timezone.utc), status, urls_checked,
-        urls_changed, pubs_extracted, error_message, log_id
+        urls_changed, pubs_extracted, error_message,
+        prompt_tokens_total, completion_tokens_total, log_id
     ))
 
 
@@ -157,7 +168,7 @@ def run_scrape_job():
 
                     if extraction_text:
                         t0 = time.time()
-                        pubs = Publication.extract_publications(extraction_text, url)
+                        pubs = Publication.extract_publications(extraction_text, url, scrape_log_id=log_id)
                         extract_ms = (time.time() - t0) * 1000
                         logger.info(f"  LLM extract — {extract_ms:.0f}ms, {len(pubs)} pubs")
 
@@ -194,7 +205,7 @@ def run_scrape_job():
                     page_text = HTMLFetcher.get_latest_text(url_id)
                     if page_text:
                         t0 = time.time()
-                        description = HTMLFetcher.extract_description(page_text, url)
+                        description = HTMLFetcher.extract_description(page_text, url, scrape_log_id=log_id)
                         desc_ms = (time.time() - t0) * 1000
                         logger.info(f"  description extract — {desc_ms:.0f}ms (found={description is not None})")
                         if description:

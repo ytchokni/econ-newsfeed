@@ -269,12 +269,12 @@ class HTMLFetcher:
         return False
 
     @staticmethod
-    def extract_bio(text_content: str, url: str) -> str | None:
+    def extract_bio(text_content: str, url: str, scrape_log_id=None) -> str | None:
         """Legacy: extract a ≤2-sentence bio. Delegates to extract_description."""
-        return HTMLFetcher.extract_description(text_content, url)
+        return HTMLFetcher.extract_description(text_content, url, scrape_log_id=scrape_log_id)
 
     @staticmethod
-    def extract_description(text_content: str, url: str) -> str | None:
+    def extract_description(text_content: str, url: str, scrape_log_id=None) -> str | None:
         """Extract a researcher description (up to 200 words) from plain text.
 
         Uses a single LLM call on text content (not HTML) for minimal input tokens.
@@ -296,10 +296,15 @@ class HTMLFetcher:
             f"Content:\n{text_content[:3000]}"
         )
         try:
+            from database import Database
             response = _openai_client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model=OPENAI_MODEL,
                 max_completion_tokens=1024,
+            )
+            Database.log_llm_usage(
+                "description_extraction", OPENAI_MODEL, response.usage,
+                context_url=url, scrape_log_id=scrape_log_id,
             )
             desc = response.choices[0].message.content.strip()
             if desc.lower() in ("null", "none", ""):

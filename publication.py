@@ -155,9 +155,9 @@ class Publication:
         return main_content.get_text(separator='\n', strip=True)
 
     @staticmethod
-    def extract_publications(text_content, url):
-        """Use OpenAI to extract publication details from text content."""
-        prompt = f"""
+    def build_extraction_prompt(text_content, url):
+        """Build the LLM prompt for publication extraction."""
+        return f"""
         Extract all the publications from the following content from {url}. For each publication, provide:
         - Title
         - Authors as a list of lists: [first name, last name]. Always use full first names when available \
@@ -172,6 +172,11 @@ class Publication:
         Content:
         {text_content[:4000]}  # Limit content to 4000 characters
         """
+
+    @staticmethod
+    def extract_publications(text_content, url, scrape_log_id=None):
+        """Use OpenAI to extract publication details from text content."""
+        prompt = Publication.build_extraction_prompt(text_content, url)
         logging.info(f"Extracting publications from {url} using OpenAI ({OPENAI_MODEL})")
 
         try:
@@ -179,7 +184,10 @@ class Publication:
                 messages=[{"role": "user", "content": prompt}],
                 model=OPENAI_MODEL,
             )
-            
+            Database.log_llm_usage(
+                "publication_extraction", OPENAI_MODEL, chat_completion.usage,
+                context_url=url, scrape_log_id=scrape_log_id,
+            )
             response = chat_completion.choices[0].message.content
             parsed_response = Publication.parse_openai_response(response)
 
