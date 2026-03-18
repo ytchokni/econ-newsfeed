@@ -18,3 +18,8 @@ invalid_json_dumps/
 
 # Logs and databases
 *.log
+
+urls.csv
+conductor/
+
+backups/
