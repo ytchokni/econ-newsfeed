@@ -1,12 +1,4 @@
 """Tests for HTMLFetcher: robots.txt caching."""
-import os
-
-os.environ.setdefault("CONTENT_MAX_CHARS", "4000")
-os.environ.setdefault("DB_HOST", "localhost")
-os.environ.setdefault("DB_USER", "test")
-os.environ.setdefault("DB_PASSWORD", "test")
-os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
-
 from unittest.mock import patch, MagicMock
 
 from html_fetcher import HTMLFetcher
