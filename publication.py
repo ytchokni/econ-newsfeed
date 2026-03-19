@@ -106,6 +106,16 @@ class Publication:
                             """,
                             (publication_id, url, datetime.now(timezone.utc)),
                         )
+                        # Create new_paper feed event for non-seed papers with known, non-published status
+                        pub_status = pub.get('status')
+                        if not is_seed and pub_status and pub_status != 'published':
+                            cursor.execute(
+                                """
+                                INSERT INTO feed_events (paper_id, event_type, new_status, created_at)
+                                VALUES (%s, 'new_paper', %s, %s)
+                                """,
+                                (publication_id, pub_status, datetime.now(timezone.utc)),
+                            )
                     else:
                         # Duplicate found via title_hash — fetch existing id
                         cursor.execute(

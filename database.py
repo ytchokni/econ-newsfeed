@@ -268,6 +268,20 @@ class Database:
                     INDEX idx_scrape_log (scrape_log_id)
                 )
             """,
+            "feed_events": """
+                CREATE TABLE IF NOT EXISTS feed_events (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    paper_id INT NOT NULL,
+                    event_type ENUM('new_paper', 'status_change') NOT NULL,
+                    old_status ENUM('published','accepted','revise_and_resubmit','reject_and_resubmit','working_paper') DEFAULT NULL,
+                    new_status ENUM('published','accepted','revise_and_resubmit','reject_and_resubmit','working_paper') DEFAULT NULL,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+                    INDEX idx_paper_id (paper_id),
+                    INDEX idx_created_at (created_at),
+                    INDEX idx_event_type (event_type)
+                )
+            """,
             "batch_jobs": """
                 CREATE TABLE IF NOT EXISTS batch_jobs (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -613,7 +627,8 @@ class Database:
     @staticmethod
     def append_paper_snapshot(paper_id, status, venue, abstract, draft_url, year, source_url=None):
         """Append a paper snapshot if metadata changed. Updates denormalized papers table.
-        Both operations run in a single transaction for consistency.
+        Creates a feed_event if status changed.
+        All operations run in a single transaction for consistency.
         Returns True if a new snapshot was inserted, False if no change."""
         content_hash = Database._compute_paper_content_hash(status, venue, abstract, draft_url, year)
         prev_hash = Database.get_latest_paper_snapshot_hash(paper_id)
@@ -624,6 +639,15 @@ class Database:
         now = datetime.now(timezone.utc)
         with Database.get_connection() as conn:
             with conn.cursor() as cursor:
+                # Fetch previous status before inserting new snapshot
+                cursor.execute(
+                    "SELECT status FROM paper_snapshots WHERE paper_id = %s "
+                    "ORDER BY scraped_at DESC LIMIT 1",
+                    (paper_id,),
+                )
+                prev_row = cursor.fetchone()
+                old_status = prev_row[0] if prev_row else None
+
                 cursor.execute(
                     """INSERT INTO paper_snapshots
                        (paper_id, status, venue, abstract, draft_url, draft_url_status, year,
@@ -638,6 +662,18 @@ class Database:
                        WHERE id = %s""",
                     (status, venue, abstract, draft_url, year, paper_id),
                 )
+
+                # Create status_change feed event if status actually changed
+                if (old_status != status
+                        and old_status is not None
+                        and status is not None):
+                    cursor.execute(
+                        """INSERT INTO feed_events
+                           (paper_id, event_type, old_status, new_status, created_at)
+                           VALUES (%s, 'status_change', %s, %s, %s)""",
+                        (paper_id, old_status, status, now),
+                    )
+
                 conn.commit()
         logging.info(f"Paper snapshot appended for id={paper_id}")
         return True

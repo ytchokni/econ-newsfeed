@@ -271,6 +271,35 @@ def _format_publication(row, authors: list[dict]) -> dict:
     }
 
 
+def _format_feed_event(row, authors: list[dict]) -> dict:
+    """Format a feed_events + papers joined row into the API response shape.
+
+    Expected row columns (positional):
+        0: event_id, 1: event_type, 2: event_old_status, 3: event_new_status, 4: event_date,
+        5: paper_id, 6: title, 7: year, 8: venue, 9: url, 10: timestamp,
+        11: status, 12: draft_url, 13: abstract, 14: draft_url_status
+    """
+    return {
+        "id": row[5],           # paper_id (used by frontend for detail links / React keys)
+        "event_id": row[0],
+        "event_type": row[1],
+        "old_status": row[2],
+        "new_status": row[3],
+        "event_date": row[4].isoformat() + "Z" if row[4] else None,
+        "title": row[6],
+        "authors": authors,
+        "year": row[7],
+        "venue": row[8],
+        "source_url": row[9],
+        "discovered_at": row[10].isoformat() + "Z" if row[10] else None,
+        "status": row[11],
+        "draft_url": row[12],
+        "draft_available": row[14] == 'valid' if row[14] else False,
+        "abstract": row[13],
+        "draft_url_status": row[14],
+    }
+
+
 # ---------------------------------------------------------------------------
 # Publication endpoints
 # ---------------------------------------------------------------------------
@@ -288,8 +317,13 @@ def list_publications(
     since: str | None = Query(None),
     institution: str | None = Query(None),
     preset: str | None = Query(None),
-    include_seed: bool = Query(False),
 ):
+    """List feed events (new papers and status changes).
+
+    Queries the feed_events table joined to papers. Only non-seed,
+    non-published papers with known status generate events, so no
+    include_seed parameter is needed.
+    """
     valid_statuses = {"published", "accepted", "revise_and_resubmit", "reject_and_resubmit", "working_paper"}
     valid_presets = {"top20"}
 
@@ -306,8 +340,6 @@ def list_publications(
     # Build WHERE clause
     conditions = []
     params: list = []
-    if not include_seed:
-        conditions.append("p.is_seed = FALSE")
     if year:
         conditions.append("p.year = %s")
         params.append(year)
@@ -327,7 +359,8 @@ def list_publications(
             since_dt = datetime.fromisoformat(since.rstrip("Z"))
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid ?since= value; expected ISO8601 timestamp")
-        conditions.append("p.timestamp >= %s")
+        # Filter on event time, not paper discovery time
+        conditions.append("fe.created_at >= %s")
         params.append(since_dt)
     if institution_list and not preset:
         if len(institution_list) == 1:
@@ -358,7 +391,11 @@ def list_publications(
 
     # Total count
     count_row = Database.fetch_one(
-        f"SELECT COUNT(*) FROM papers p {where}", params or None
+        f"""SELECT COUNT(*)
+            FROM feed_events fe
+            JOIN papers p ON p.id = fe.paper_id
+            {where}""",
+        params or None,
     )
     total = count_row[0] if count_row else 0
     pages = math.ceil(total / per_page) if total else 0
@@ -367,19 +404,22 @@ def list_publications(
     offset = (page - 1) * per_page
     rows = Database.fetch_all(
         f"""
-        SELECT p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url,
-               p.abstract, p.draft_url_status
-        FROM papers p
+        SELECT fe.id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
+               p.id, p.title, p.year, p.venue, p.url, p.timestamp,
+               p.status, p.draft_url, p.abstract, p.draft_url_status
+        FROM feed_events fe
+        JOIN papers p ON p.id = fe.paper_id
         {where}
-        ORDER BY p.timestamp DESC
+        ORDER BY fe.created_at DESC
         LIMIT %s OFFSET %s
         """,
         (*params, per_page, offset),
     )
 
-    pub_ids = [row[0] for row in rows]
+    # row[5] is paper_id
+    pub_ids = [row[5] for row in rows]
     authors_by_pub = _get_authors_for_publications(pub_ids)
-    items = [_format_publication(row, authors_by_pub.get(row[0], [])) for row in rows]
+    items = [_format_feed_event(row, authors_by_pub.get(row[5], [])) for row in rows]
 
     response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=600"
     return {

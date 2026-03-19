@@ -22,7 +22,8 @@ function formatDateHeader(iso: string): string {
 function groupByDate(publications: Publication[]) {
   const groups: Map<string, Publication[]> = new Map();
   for (const pub of publications) {
-    const key = formatDateHeader(pub.discovered_at);
+    const dateStr = pub.event_date ?? pub.discovered_at;
+    const key = formatDateHeader(dateStr);
     const group = groups.get(key);
     if (group) {
       group.push(pub);
@@ -285,7 +286,7 @@ export default function NewsfeedContent() {
       )}
 
       {!isLoading && data && data.items.length === 0 && (
-        <EmptyState message="No publications match the current filters." />
+        <EmptyState message="No new publications yet. Papers will appear here as researchers update their pages." />
       )}
 
       {data && data.items.length > 0 && (
@@ -298,7 +299,7 @@ export default function NewsfeedContent() {
               </h2>
               <div className="space-y-3 animate-stagger">
                 {pubs.map((pub) => (
-                  <PublicationCard key={pub.id} publication={pub} />
+                  <PublicationCard key={pub.event_id ?? pub.id} publication={pub} />
                 ))}
               </div>
             </section>

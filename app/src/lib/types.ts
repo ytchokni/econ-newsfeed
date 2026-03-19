@@ -13,6 +13,8 @@ export type PublicationStatus =
 
 export type DraftUrlStatus = "unchecked" | "valid" | "invalid" | "timeout";
 
+export type EventType = 'new_paper' | 'status_change';
+
 export interface Publication {
   id: number;
   title: string;
@@ -26,6 +28,11 @@ export interface Publication {
   draft_url: string | null;
   draft_url_status: DraftUrlStatus;
   draft_available: boolean;
+  event_id?: number;
+  event_type?: EventType;
+  old_status?: PublicationStatus | null;
+  new_status?: PublicationStatus | null;
+  event_date?: string;
 }
 
 export interface PaginatedResponse<T> {

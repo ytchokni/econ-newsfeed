@@ -41,7 +41,22 @@ export default function PublicationCard({
 
   return (
     <div className="rounded-lg bg-[var(--bg-card)] shadow-card hover:shadow-card-hover hover:-translate-y-px transition-all duration-200 p-5">
-      {publication.status && (
+      {publication.event_type === "status_change" && publication.old_status && publication.new_status && (
+        <div className="flex items-center gap-2 text-xs font-medium mb-3 px-3 py-2 rounded-md bg-[#f0f4ff] border border-[#d0daf0]">
+          <span className="text-[var(--text-secondary)]">Status update:</span>
+          <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${statusPillConfig[publication.old_status].className}`}>
+            {statusPillConfig[publication.old_status].label}
+          </span>
+          <span className="text-[var(--text-muted)]">&rarr;</span>
+          <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${statusPillConfig[publication.new_status].className}`}>
+            {statusPillConfig[publication.new_status].label}
+          </span>
+          {publication.venue && (
+            <span className="text-[var(--text-secondary)] ml-1">at {publication.venue}</span>
+          )}
+        </div>
+      )}
+      {publication.event_type !== "status_change" && publication.status && (
         <span
           className={`inline-block text-[10px] font-semibold uppercase tracking-wider rounded-full px-2.5 py-0.5 mb-2.5 ${statusPillConfig[publication.status].className}`}
         >
