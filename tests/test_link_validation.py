@@ -7,6 +7,7 @@ PublicationExtraction is also tested here for the new 'working_paper' status and
 the 'abstract' field added in v2.
 """
 from unittest.mock import MagicMock, patch
+from pydantic import ValidationError
 
 import pytest
 import requests
@@ -61,10 +62,10 @@ class TestPublicationExtractionModel:
             pub = PublicationExtraction(**self._valid_base(status=s))
             assert pub.status == s, f"Status {s!r} was rejected"
 
-    def test_invalid_status_is_coerced_to_none(self):
-        """Unknown status values are silently coerced to None by the validator."""
-        pub = PublicationExtraction(**self._valid_base(status="under_review"))
-        assert pub.status is None
+    def test_invalid_status_is_rejected(self):
+        """Unknown status values are rejected by the Literal type constraint."""
+        with pytest.raises(ValidationError):
+            PublicationExtraction(**self._valid_base(status="under_review"))
 
     def test_status_none_is_valid(self):
         pub = PublicationExtraction(**self._valid_base(status=None))
