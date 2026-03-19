@@ -32,6 +32,10 @@ jobs:
       - name: Install dependencies
         run: poetry install --no-interaction
 
+      - name: Security audit (pip)
+        run: pip install pip-audit && pip-audit 2>&1 || true
+        continue-on-error: true
+
       - name: Run pytest
         run: poetry run pytest -q --tb=short --ignore=tests/test_imports.py -k "not test_private_ip_url_returns_invalid"
 
@@ -52,6 +56,10 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+
+      - name: Security audit (npm)
+        run: npm audit --audit-level=high || true
+        continue-on-error: true
 
       - name: TypeScript check
         run: npx tsc --noEmit
