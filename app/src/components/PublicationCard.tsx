@@ -33,8 +33,10 @@ const statusPillConfig: Record<PublicationStatus, { label: string; className: st
 
 export default function PublicationCard({
   publication,
+  primaryAuthorId,
 }: {
   publication: Publication;
+  primaryAuthorId?: number;
 }) {
   const [abstractOpen, setAbstractOpen] = useState(false);
   const authors = publication.authors.map(formatAuthor);
@@ -45,7 +47,7 @@ export default function PublicationCard({
     <div className="rounded-md bg-[var(--bg-card)] border border-[var(--border-light)] hover:border-[var(--border)] transition-colors duration-150 px-5 py-4">
       {/* Status change banner (feed only) */}
       {publication.event_type === "status_change" && publication.old_status && publication.new_status && (
-        <div className="flex items-center gap-2 text-xs font-medium mb-2.5 px-3 py-1.5 rounded bg-[#f0f4ff] border border-[#d0daf0]">
+        <div className="font-sans flex items-center gap-2 text-xs font-medium mb-2.5 px-3 py-1.5 rounded bg-[#f0f4ff] border border-[#d0daf0]">
           <span className="text-[var(--text-secondary)]">Status update:</span>
           <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${statusPillConfig[publication.old_status].className}`}>
             {statusPillConfig[publication.old_status].label}
@@ -65,22 +67,25 @@ export default function PublicationCard({
         {publication.title}
       </h3>
 
-      {/* Authors · Venue — first author is bold/dark, co-authors are link-colored */}
-      <p className="mt-1 text-sm font-medium">
-        {authors.map((a, i) => (
-          <span key={a.id}>
-            {i > 0 && ", "}
-            <Link
-              href={`/researchers/${a.id}`}
-              className={i === 0
-                ? "text-[var(--text-primary)] font-semibold hover:underline"
-                : "text-[var(--link)] hover:underline"
-              }
-            >
-              {a.display}
-            </Link>
-          </span>
-        ))}
+      {/* Authors · Venue — primary author is bold/dark, others are link-colored */}
+      <p className="mt-1 font-sans text-sm font-medium">
+        {authors.map((a, i) => {
+          const isPrimary = primaryAuthorId != null && a.id === primaryAuthorId;
+          return (
+            <span key={a.id}>
+              {i > 0 && ", "}
+              <Link
+                href={`/researchers/${a.id}`}
+                className={isPrimary
+                  ? "text-[var(--text-primary)] font-semibold hover:underline"
+                  : "text-[var(--link)] hover:underline"
+                }
+              >
+                {a.display}
+              </Link>
+            </span>
+          );
+        })}
         {venueYear && (
           <>
             <span className="mx-1.5 text-[var(--text-muted)] font-normal">&middot;</span>
@@ -90,7 +95,7 @@ export default function PublicationCard({
       </p>
 
       {/* Bottom row: status pill, draft link, abstract toggle */}
-      <div className="mt-2.5 flex items-center gap-2.5 flex-wrap">
+      <div className="mt-2.5 font-sans flex items-center gap-2.5 flex-wrap">
         {publication.event_type !== "status_change" && publication.status && (
           <span
             className={`inline-block text-[10px] font-bold uppercase tracking-wider rounded px-2.5 py-0.5 ${statusPillConfig[publication.status].className}`}

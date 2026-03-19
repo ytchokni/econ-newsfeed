@@ -99,7 +99,7 @@ export default function ResearcherDetailContent({ id }: { id: number }) {
           </div>
           <div className="space-y-3 animate-stagger">
             {publications.map((pub) => (
-              <PublicationCard key={pub.id} publication={pub} />
+              <PublicationCard key={pub.id} publication={pub} primaryAuthorId={id} />
             ))}
           </div>
         </section>
@@ -118,7 +118,7 @@ export default function ResearcherDetailContent({ id }: { id: number }) {
           </div>
           <div className="space-y-3 animate-stagger">
             {workingPapers.map((pub) => (
-              <PublicationCard key={pub.id} publication={pub} />
+              <PublicationCard key={pub.id} publication={pub} primaryAuthorId={id} />
             ))}
           </div>
         </section>
