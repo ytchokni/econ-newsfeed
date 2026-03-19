@@ -184,7 +184,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS html_content (
                     id INT AUTO_INCREMENT PRIMARY KEY,
                     url_id INT NOT NULL,
-                    content LONGTEXT,
+                    content MEDIUMTEXT,
                     content_hash VARCHAR(64),
                     timestamp DATETIME,
                     researcher_id INT,
@@ -237,7 +237,8 @@ class Database:
                     pubs_extracted INT DEFAULT 0,
                     prompt_tokens_total INT DEFAULT 0,
                     completion_tokens_total INT DEFAULT 0,
-                    error_message TEXT
+                    error_message TEXT,
+                    INDEX idx_scrape_status (status)
                 )
             """,
             "researcher_snapshots": """
@@ -389,6 +390,21 @@ class Database:
                                 conn.commit()
                             except Exception as e:
                                 logging.warning("Migration: CASCADE for %s.%s: %s", table, col, e)
+
+                        # Add index on scrape_log.status
+                        try:
+                            cursor.execute("ALTER TABLE scrape_log ADD INDEX idx_scrape_status (status)")
+                            conn.commit()
+                        except Exception as e:
+                            if getattr(e, 'errno', None) != 1061:  # Duplicate key name
+                                logging.warning("Migration: scrape_log.idx_scrape_status: %s", e)
+
+                        # Downgrade html_content.content from LONGTEXT to MEDIUMTEXT
+                        try:
+                            cursor.execute("ALTER TABLE html_content MODIFY content MEDIUMTEXT")
+                            conn.commit()
+                        except Exception as e:
+                            logging.warning("Migration: html_content.content type: %s", e)
 
                         # Backfill seed publications if any unseeded papers exist
                         cursor.execute(
