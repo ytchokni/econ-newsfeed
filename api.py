@@ -288,6 +288,7 @@ def list_publications(
     since: str | None = Query(None),
     institution: str | None = Query(None),
     preset: str | None = Query(None),
+    include_seed: bool = Query(False),
 ):
     valid_statuses = {"published", "accepted", "revise_and_resubmit", "reject_and_resubmit", "working_paper"}
     valid_presets = {"top20"}
@@ -305,6 +306,8 @@ def list_publications(
     # Build WHERE clause
     conditions = []
     params: list = []
+    if not include_seed:
+        conditions.append("p.is_seed = FALSE")
     if year:
         conditions.append("p.year = %s")
         params.append(year)

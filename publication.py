@@ -69,7 +69,11 @@ class Publication:
         return title.lower().strip() if title else ''
 
     @staticmethod
-    def save_publications(url, publications):
+    def save_publications(
+        url: str,
+        publications: list[dict],
+        is_seed: bool = False,
+    ) -> None:
         """Save extracted publications to the database, using title_hash for cross-researcher dedup."""
         for pub in publications:
             conn = None
@@ -80,14 +84,16 @@ class Publication:
                 with Database.get_connection() as conn:
                     cursor = conn.cursor()
 
-                    # INSERT IGNORE leverages uq_title_hash index for cross-researcher dedup
+                    # INSERT IGNORE leverages uq_title_hash index for cross-researcher dedup.
+                    # is_seed is set on INSERT but NOT updated on duplicate (preserves original).
                     cursor.execute(
                         """
-                        INSERT IGNORE INTO papers (url, title, title_hash, year, venue, abstract, timestamp, status, draft_url)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        INSERT IGNORE INTO papers (url, title, title_hash, year, venue, abstract, timestamp, status, draft_url, is_seed)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (url, title, title_hash, pub.get('year'), pub.get('venue'),
-                         pub.get('abstract'), datetime.now(timezone.utc), pub.get('status'), pub.get('draft_url')),
+                         pub.get('abstract'), datetime.now(timezone.utc), pub.get('status'),
+                         pub.get('draft_url'), is_seed),
                     )
 
                     if cursor.lastrowid:

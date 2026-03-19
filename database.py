@@ -138,10 +138,12 @@ class Database:
                     draft_url VARCHAR(2048) DEFAULT NULL,
                     draft_url_status ENUM('unchecked', 'valid', 'invalid', 'timeout') DEFAULT 'unchecked',
                     draft_url_checked_at DATETIME DEFAULT NULL,
+                    is_seed BOOLEAN NOT NULL DEFAULT FALSE,
                     UNIQUE KEY uq_title_hash (title_hash),
                     INDEX idx_timestamp (timestamp),
                     INDEX idx_status (status),
-                    INDEX idx_year (year)
+                    INDEX idx_year (year),
+                    INDEX idx_is_seed (is_seed)
                 )
             """,
             "html_content": """
@@ -291,7 +293,7 @@ class Database:
                 for table_query in table_definitions.values():
                     cursor.execute(table_query)
 
-        # Add token columns to scrape_log if they don't exist (migration for existing DBs).
+        # Add columns to existing tables if they don't exist (migration for existing DBs).
         # Use a MySQL advisory lock so only one pod runs migrations on multi-pod startup.
         with Database.get_connection() as conn:
             with conn.cursor(buffered=True) as cursor:
@@ -299,18 +301,29 @@ class Database:
                 got_lock = cursor.fetchone()[0]
                 if got_lock == 1:
                     try:
-                        for col, definition in [
-                            ("prompt_tokens_total", "INT DEFAULT 0"),
-                            ("completion_tokens_total", "INT DEFAULT 0"),
-                        ]:
+                        _migrations: list[tuple[str, str, str]] = [
+                            ("scrape_log", "prompt_tokens_total", "INT DEFAULT 0"),
+                            ("scrape_log", "completion_tokens_total", "INT DEFAULT 0"),
+                            ("papers", "is_seed", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                        ]
+                        for table, col, definition in _migrations:
                             try:
                                 cursor.execute(
-                                    f"ALTER TABLE scrape_log ADD COLUMN {col} {definition}"
+                                    f"ALTER TABLE {table} ADD COLUMN {col} {definition}"
                                 )
                                 conn.commit()
                             except Exception as e:
-                                if getattr(e, 'errno', None) != 1060:  # 1060 = Duplicate column name
-                                    logging.warning("Migration warning for scrape_log.%s: %s", col, e)
+                                if getattr(e, 'errno', None) != 1060:
+                                    logging.warning("Migration warning for %s.%s: %s", table, col, e)
+                        # Add index on is_seed if it doesn't exist
+                        try:
+                            cursor.execute(
+                                "ALTER TABLE papers ADD INDEX idx_is_seed (is_seed)"
+                            )
+                            conn.commit()
+                        except Exception as e:
+                            if getattr(e, 'errno', None) != 1061:  # 1061 = Duplicate key name
+                                logging.warning("Migration warning for papers.idx_is_seed: %s", e)
                     finally:
                         cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                         cursor.fetchone()
@@ -342,6 +355,30 @@ class Database:
                 "INSERT IGNORE INTO research_fields (name, slug) VALUES (%s, %s)",
                 (name, slug),
             )
+
+    @staticmethod
+    def backfill_seed_publications() -> int:
+        """Mark initial-batch publications as seeds.
+
+        For each researcher, publications discovered at the earliest
+        timestamp are considered seed data (from the first-ever scrape).
+        Returns the number of rows updated.
+        """
+        with Database.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    """UPDATE papers p
+                       JOIN authorship a ON a.publication_id = p.id
+                       SET p.is_seed = TRUE
+                       WHERE p.timestamp = (
+                           SELECT MIN(p2.timestamp)
+                           FROM papers p2
+                           JOIN authorship a2 ON a2.publication_id = p2.id
+                           WHERE a2.researcher_id = a.researcher_id
+                       )"""
+                )
+                conn.commit()
+                return cursor.rowcount
 
     @staticmethod
     def log_llm_usage(call_type, model, usage, context_url=None, researcher_id=None,

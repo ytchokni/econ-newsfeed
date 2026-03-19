@@ -154,6 +154,7 @@ def run_scrape_job():
             try:
                 # Get old text before fetch overwrites it (upsert)
                 old_text = HTMLFetcher.get_previous_text(url_id)
+                is_first_scrape = old_text is None
 
                 t0 = time.time()
                 changed = HTMLFetcher.fetch_and_save_if_changed(url_id, url, researcher_id)
@@ -175,7 +176,7 @@ def run_scrape_job():
 
                         if pubs:
                             t0 = time.time()
-                            Publication.save_publications(url, pubs)
+                            Publication.save_publications(url, pubs, is_seed=is_first_scrape)
                             save_ms = (time.time() - t0) * 1000
                             logger.info(f"  save_publications — {save_ms:.0f}ms")
                             pubs_extracted += len(pubs)
