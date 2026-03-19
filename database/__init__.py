@@ -35,11 +35,9 @@ from database.papers import (
 )
 from database.snapshots import (
     _compute_researcher_content_hash,
-    get_latest_researcher_snapshot_hash as _get_latest_researcher_snapshot_hash,
     append_researcher_snapshot as _append_researcher_snapshot,
     get_researcher_snapshots as _get_researcher_snapshots,
     _compute_paper_content_hash,
-    get_latest_paper_snapshot_hash as _get_latest_paper_snapshot_hash,
     append_paper_snapshot as _append_paper_snapshot,
     get_paper_snapshots as _get_paper_snapshots,
 )
@@ -75,11 +73,9 @@ class Database:
 
     # Snapshots
     _compute_researcher_content_hash = staticmethod(_compute_researcher_content_hash)
-    get_latest_researcher_snapshot_hash = staticmethod(_get_latest_researcher_snapshot_hash)
     append_researcher_snapshot = staticmethod(_append_researcher_snapshot)
     get_researcher_snapshots = staticmethod(_get_researcher_snapshots)
     _compute_paper_content_hash = staticmethod(_compute_paper_content_hash)
-    get_latest_paper_snapshot_hash = staticmethod(_get_latest_paper_snapshot_hash)
     append_paper_snapshot = staticmethod(_append_paper_snapshot)
     get_paper_snapshots = staticmethod(_get_paper_snapshots)
 
