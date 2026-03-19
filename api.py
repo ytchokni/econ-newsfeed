@@ -294,6 +294,16 @@ def _format_feed_event(row, authors: list[dict]) -> dict:
 
 
 # ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
+
+@app.get("/api/health")
+def health_check():
+    """Health check endpoint for load balancers and monitoring."""
+    return {"status": "ok"}
+
+
+# ---------------------------------------------------------------------------
 # Publication endpoints
 # ---------------------------------------------------------------------------
 
@@ -786,7 +796,7 @@ async def trigger_scrape(request: Request):
     started_at = datetime.now(timezone.utc)
 
     t = threading.Thread(
-        target=run_scrape_job, daemon=True
+        target=run_scrape_job, daemon=False, name="manual-scrape"
     )
     t.start()
 
