@@ -442,9 +442,10 @@ def _get_urls_for_researcher(researcher_id: int) -> list[dict]:
 def _get_website_url(urls: list[dict]) -> str | None:
     """Return the homepage URL from a researcher's URL list, or None."""
     for u in urls:
-        if u["page_type"].lower() == "homepage":
+        if u["page_type"].upper() in ("HOME", "HOMEPAGE"):
             return u["url"]
-    return None
+    # Fallback: return first URL if no homepage found
+    return urls[0]["url"] if urls else None
 
 
 def _get_pub_count_for_researcher(researcher_id: int) -> int:
