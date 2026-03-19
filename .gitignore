@@ -23,3 +23,7 @@ urls.csv
 conductor/
 
 backups/
+
+CLAUDE.md
+
+.claude/
