@@ -2,26 +2,12 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import type { DraftUrlStatus, Publication, PublicationStatus } from "@/lib/types";
+import type { Publication, PublicationStatus } from "@/lib/types";
 
 function formatAuthor(author: { id: number; first_name: string; last_name: string }) {
   const initial = author.first_name.charAt(0);
   return { display: `${initial}. ${author.last_name}`, id: author.id };
 }
-
-const draftStatusStyles: Record<DraftUrlStatus, string> = {
-  unchecked: "bg-gray-100 text-gray-500",
-  valid: "bg-green-100 text-green-700",
-  invalid: "bg-red-100 text-red-700",
-  timeout: "bg-yellow-100 text-yellow-700",
-};
-
-const draftStatusLabels: Record<DraftUrlStatus, string> = {
-  unchecked: "unchecked",
-  valid: "link ok",
-  invalid: "broken link",
-  timeout: "timeout",
-};
 
 const statusPillConfig: Record<PublicationStatus, { label: string; className: string }> = {
   published: { label: "Published", className: "bg-teal-100 text-teal-700" },
