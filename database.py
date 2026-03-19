@@ -324,6 +324,21 @@ class Database:
                         except Exception as e:
                             if getattr(e, 'errno', None) != 1061:  # 1061 = Duplicate key name
                                 logging.warning("Migration warning for papers.idx_is_seed: %s", e)
+
+                        # Backfill seed publications if any unseeded papers exist
+                        cursor.execute(
+                            "SELECT COUNT(*) FROM papers WHERE is_seed = FALSE"
+                        )
+                        total_unseeded = cursor.fetchone()[0]
+                        if total_unseeded > 0:
+                            cursor.execute(
+                                "SELECT COUNT(*) FROM papers WHERE is_seed = TRUE"
+                            )
+                            already_seeded = cursor.fetchone()[0]
+                            if already_seeded == 0:
+                                logging.info("Backfilling seed publications...")
+                                Database.backfill_seed_publications()
+                                logging.info("Seed backfill complete")
                     finally:
                         cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                         cursor.fetchone()
