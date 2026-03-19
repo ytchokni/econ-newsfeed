@@ -375,25 +375,28 @@ class Database:
     def backfill_seed_publications() -> int:
         """Mark initial-batch publications as seeds.
 
-        For each researcher, publications discovered at the earliest
-        timestamp are considered seed data (from the first-ever scrape).
+        A researcher with multiple URLs gets papers extracted at slightly
+        different timestamps within the same scrape session.  To handle
+        this, we mark ALL papers from the first scrape session as seed.
+        The first session is identified as: all papers whose timestamp
+        falls within 30 minutes of the researcher's earliest paper.
+        This safely covers multi-URL researchers scraped in one job.
         Returns the number of rows updated.
         """
         with Database.get_connection() as conn:
             with conn.cursor() as cursor:
-                # MySQL can't UPDATE a table referenced in a subquery,
-                # so use a derived table (JOIN with a temp result).
                 cursor.execute(
                     """UPDATE papers p
                        JOIN authorship a ON a.publication_id = p.id
                        JOIN (
-                           SELECT a2.researcher_id, MIN(p2.timestamp) AS min_ts
+                           SELECT a2.researcher_id,
+                                  MIN(p2.timestamp) AS min_ts
                            FROM papers p2
                            JOIN authorship a2 ON a2.publication_id = p2.id
                            GROUP BY a2.researcher_id
                        ) earliest ON earliest.researcher_id = a.researcher_id
-                                 AND p.timestamp = earliest.min_ts
-                       SET p.is_seed = TRUE"""
+                       SET p.is_seed = TRUE
+                       WHERE p.timestamp <= DATE_ADD(earliest.min_ts, INTERVAL 30 MINUTE)"""
                 )
                 conn.commit()
                 return cursor.rowcount
