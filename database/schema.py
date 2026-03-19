@@ -1,0 +1,394 @@
+"""Schema creation, migrations, and seeding."""
+import logging
+
+import mysql.connector
+from mysql.connector import Error
+
+from db_config import db_config
+from database.connection import get_connection, execute_query
+
+
+def create_database():
+    """Create the database if it doesn't exist."""
+    conn = None
+    try:
+        conn = mysql.connector.connect(
+            host=db_config['host'],
+            user=db_config['user'],
+            password=db_config['password']
+        )
+        cursor = conn.cursor()
+        cursor.execute(f"CREATE DATABASE IF NOT EXISTS `{db_config['database']}`")
+        logging.info(f"Database '{db_config['database']}' created or already exists.")
+    except Error as e:
+        logging.error("Error creating database: %s", type(e).__name__)
+    finally:
+        if conn is not None and conn.is_connected():
+            cursor.close()
+            conn.close()
+
+
+def _migrate_fk_cascade(cursor, table, column, ref_table, ref_column):
+    """Ensure FK on (table.column -> ref_table.ref_column) has ON DELETE CASCADE.
+    Idempotent: skips if CASCADE already in place."""
+    cursor.execute(
+        "SELECT rc.CONSTRAINT_NAME, rc.DELETE_RULE "
+        "FROM information_schema.REFERENTIAL_CONSTRAINTS rc "
+        "JOIN information_schema.KEY_COLUMN_USAGE kcu "
+        "  ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME "
+        "  AND rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA "
+        "WHERE kcu.TABLE_SCHEMA = DATABASE() AND kcu.TABLE_NAME = %s "
+        "AND kcu.COLUMN_NAME = %s AND kcu.REFERENCED_TABLE_NAME = %s",
+        (table, column, ref_table),
+    )
+    row = cursor.fetchone()
+    if row and row[1] == 'CASCADE':
+        return
+
+    cursor.execute(
+        "SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s "
+        "AND COLUMN_NAME = %s AND REFERENCED_TABLE_NAME IS NOT NULL",
+        (table, column),
+    )
+    for (name,) in cursor.fetchall():
+        cursor.execute(f"ALTER TABLE `{table}` DROP FOREIGN KEY `{name}`")
+
+    cursor.execute(
+        f"ALTER TABLE `{table}` ADD FOREIGN KEY (`{column}`) "
+        f"REFERENCES `{ref_table}`(`{ref_column}`) ON DELETE CASCADE"
+    )
+
+
+_TABLE_DEFINITIONS = {
+    "researchers": """
+        CREATE TABLE IF NOT EXISTS researchers (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            last_name VARCHAR(255) NOT NULL,
+            first_name VARCHAR(255) NOT NULL,
+            position VARCHAR(255),
+            affiliation VARCHAR(255),
+            description TEXT,
+            description_updated_at DATETIME DEFAULT NULL,
+            INDEX idx_name (last_name, first_name),
+            INDEX idx_affiliation (affiliation)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "researcher_urls": """
+        CREATE TABLE IF NOT EXISTS researcher_urls (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            researcher_id INT NOT NULL,
+            page_type VARCHAR(255) NOT NULL,
+            url VARCHAR(2048) NOT NULL,
+            UNIQUE KEY uq_researcher_url (researcher_id, url(500)),
+            FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "papers": """
+        CREATE TABLE IF NOT EXISTS papers (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            url VARCHAR(2048),
+            title TEXT,
+            title_hash CHAR(64) DEFAULT NULL,
+            year VARCHAR(4),
+            venue TEXT,
+            abstract TEXT DEFAULT NULL,
+            timestamp DATETIME,
+            status ENUM('published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper') DEFAULT NULL,
+            draft_url VARCHAR(2048) DEFAULT NULL,
+            draft_url_status ENUM('unchecked', 'valid', 'invalid', 'timeout') DEFAULT 'unchecked',
+            draft_url_checked_at DATETIME DEFAULT NULL,
+            is_seed BOOLEAN NOT NULL DEFAULT FALSE,
+            UNIQUE KEY uq_title_hash (title_hash),
+            INDEX idx_timestamp (timestamp),
+            INDEX idx_status (status),
+            INDEX idx_year (year),
+            INDEX idx_is_seed (is_seed)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "html_content": """
+        CREATE TABLE IF NOT EXISTS html_content (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            url_id INT NOT NULL,
+            content MEDIUMTEXT,
+            content_hash VARCHAR(64),
+            timestamp DATETIME,
+            researcher_id INT,
+            extracted_at DATETIME,
+            extracted_hash VARCHAR(64),
+            UNIQUE KEY uq_url_id (url_id),
+            INDEX idx_url_id_ts (url_id, timestamp),
+            FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
+            FOREIGN KEY (url_id) REFERENCES researcher_urls(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "authorship": """
+        CREATE TABLE IF NOT EXISTS authorship (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            researcher_id INT NOT NULL,
+            publication_id INT NOT NULL,
+            author_order INT,
+            UNIQUE KEY uq_researcher_pub (researcher_id, publication_id),
+            INDEX idx_researcher (researcher_id),
+            INDEX idx_publication (publication_id),
+            FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
+            FOREIGN KEY (publication_id) REFERENCES papers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "research_fields": """
+        CREATE TABLE IF NOT EXISTS research_fields (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            slug VARCHAR(255) NOT NULL,
+            UNIQUE KEY uq_slug (slug)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "researcher_fields": """
+        CREATE TABLE IF NOT EXISTS researcher_fields (
+            researcher_id INT NOT NULL,
+            field_id INT NOT NULL,
+            PRIMARY KEY (researcher_id, field_id),
+            FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
+            FOREIGN KEY (field_id) REFERENCES research_fields(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "scrape_log": """
+        CREATE TABLE IF NOT EXISTS scrape_log (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            started_at DATETIME NOT NULL,
+            finished_at DATETIME,
+            status ENUM('running', 'completed', 'failed') DEFAULT 'running',
+            urls_checked INT DEFAULT 0,
+            urls_changed INT DEFAULT 0,
+            pubs_extracted INT DEFAULT 0,
+            prompt_tokens_total INT DEFAULT 0,
+            completion_tokens_total INT DEFAULT 0,
+            error_message TEXT,
+            INDEX idx_scrape_status (status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "researcher_snapshots": """
+        CREATE TABLE IF NOT EXISTS researcher_snapshots (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            researcher_id INT NOT NULL,
+            position VARCHAR(255),
+            affiliation VARCHAR(255),
+            description TEXT,
+            scraped_at DATETIME NOT NULL,
+            source_url VARCHAR(2048),
+            content_hash VARCHAR(64),
+            INDEX idx_researcher_time (researcher_id, scraped_at),
+            FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "paper_snapshots": """
+        CREATE TABLE IF NOT EXISTS paper_snapshots (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            paper_id INT NOT NULL,
+            status ENUM('published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper') DEFAULT NULL,
+            venue TEXT,
+            abstract TEXT,
+            draft_url VARCHAR(2048) DEFAULT NULL,
+            draft_url_status ENUM('unchecked', 'valid', 'invalid', 'timeout') DEFAULT 'unchecked',
+            year VARCHAR(4),
+            scraped_at DATETIME NOT NULL,
+            source_url VARCHAR(2048),
+            content_hash VARCHAR(64),
+            INDEX idx_paper_time (paper_id, scraped_at),
+            FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "paper_urls": """
+        CREATE TABLE IF NOT EXISTS paper_urls (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            paper_id INT NOT NULL,
+            url VARCHAR(2048) NOT NULL,
+            discovered_at DATETIME NOT NULL,
+            UNIQUE KEY uq_paper_url (paper_id, url(500)),
+            INDEX idx_paper_id (paper_id),
+            FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "llm_usage": """
+        CREATE TABLE IF NOT EXISTS llm_usage (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            called_at DATETIME NOT NULL,
+            call_type ENUM('publication_extraction','description_extraction','researcher_disambiguation') NOT NULL,
+            model VARCHAR(100) NOT NULL,
+            prompt_tokens INT NOT NULL DEFAULT 0,
+            completion_tokens INT NOT NULL DEFAULT 0,
+            total_tokens INT NOT NULL DEFAULT 0,
+            estimated_cost_usd DECIMAL(10,6) DEFAULT NULL,
+            is_batch BOOLEAN NOT NULL DEFAULT FALSE,
+            context_url VARCHAR(2048) DEFAULT NULL,
+            researcher_id INT DEFAULT NULL,
+            scrape_log_id INT DEFAULT NULL,
+            batch_job_id INT DEFAULT NULL,
+            INDEX idx_called_at (called_at),
+            INDEX idx_call_type (call_type),
+            INDEX idx_scrape_log (scrape_log_id)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "feed_events": """
+        CREATE TABLE IF NOT EXISTS feed_events (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            paper_id INT NOT NULL,
+            event_type ENUM('new_paper', 'status_change') NOT NULL,
+            old_status ENUM('published','accepted','revise_and_resubmit','reject_and_resubmit','working_paper') DEFAULT NULL,
+            new_status ENUM('published','accepted','revise_and_resubmit','reject_and_resubmit','working_paper') DEFAULT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+            INDEX idx_paper_id (paper_id),
+            INDEX idx_created_at (created_at),
+            INDEX idx_event_type (event_type)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "batch_jobs": """
+        CREATE TABLE IF NOT EXISTS batch_jobs (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            openai_batch_id VARCHAR(255) NOT NULL,
+            input_file_id VARCHAR(255) NOT NULL,
+            output_file_id VARCHAR(255) DEFAULT NULL,
+            status ENUM('submitted','validating','in_progress','finalizing','completed','failed','expired','cancelled') DEFAULT 'submitted',
+            url_count INT DEFAULT 0,
+            created_at DATETIME NOT NULL,
+            completed_at DATETIME DEFAULT NULL,
+            prompt_tokens_total INT DEFAULT 0,
+            completion_tokens_total INT DEFAULT 0,
+            estimated_cost_usd DECIMAL(10,6) DEFAULT NULL,
+            error_message TEXT DEFAULT NULL,
+            UNIQUE KEY uq_batch_id (openai_batch_id),
+            INDEX idx_status (status)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+}
+
+
+def create_tables():
+    """Create all tables and run migrations."""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            for table_query in _TABLE_DEFINITIONS.values():
+                cursor.execute(table_query)
+
+    # Migrations under advisory lock
+    with get_connection() as conn:
+        with conn.cursor(buffered=True) as cursor:
+            cursor.execute("SELECT GET_LOCK('econ_migrations', 10)")
+            got_lock = cursor.fetchone()[0]
+            if got_lock == 1:
+                try:
+                    _migrations = [
+                        ("scrape_log", "prompt_tokens_total", "INT DEFAULT 0"),
+                        ("scrape_log", "completion_tokens_total", "INT DEFAULT 0"),
+                        ("papers", "is_seed", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                    ]
+                    for table, col, definition in _migrations:
+                        try:
+                            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {definition}")
+                            conn.commit()
+                        except Exception as e:
+                            if getattr(e, 'errno', None) != 1060:
+                                logging.warning("Migration warning for %s.%s: %s", table, col, e)
+
+                    try:
+                        cursor.execute("ALTER TABLE papers ADD INDEX idx_is_seed (is_seed)")
+                        conn.commit()
+                    except Exception as e:
+                        if getattr(e, 'errno', None) != 1061:
+                            logging.warning("Migration warning for papers.idx_is_seed: %s", e)
+
+                    _cascade_fks = [
+                        ("researcher_urls", "researcher_id", "researchers", "id"),
+                        ("html_content", "researcher_id", "researchers", "id"),
+                        ("html_content", "url_id", "researcher_urls", "id"),
+                        ("authorship", "researcher_id", "researchers", "id"),
+                        ("authorship", "publication_id", "papers", "id"),
+                        ("researcher_fields", "researcher_id", "researchers", "id"),
+                        ("researcher_fields", "field_id", "research_fields", "id"),
+                    ]
+                    for table, col, ref_table, ref_col in _cascade_fks:
+                        try:
+                            _migrate_fk_cascade(cursor, table, col, ref_table, ref_col)
+                            conn.commit()
+                        except Exception as e:
+                            logging.warning("Migration: CASCADE for %s.%s: %s", table, col, e)
+
+                    try:
+                        cursor.execute("ALTER TABLE scrape_log ADD INDEX idx_scrape_status (status)")
+                        conn.commit()
+                    except Exception as e:
+                        if getattr(e, 'errno', None) != 1061:
+                            logging.warning("Migration: scrape_log.idx_scrape_status: %s", e)
+
+                    try:
+                        cursor.execute("ALTER TABLE html_content MODIFY content MEDIUMTEXT")
+                        conn.commit()
+                    except Exception as e:
+                        logging.warning("Migration: html_content.content type: %s", e)
+
+                    cursor.execute("SELECT COUNT(*) FROM papers WHERE is_seed = FALSE")
+                    total_unseeded = cursor.fetchone()[0]
+                    if total_unseeded > 0:
+                        cursor.execute("SELECT COUNT(*) FROM papers WHERE is_seed = TRUE")
+                        already_seeded = cursor.fetchone()[0]
+                        if already_seeded == 0:
+                            logging.info("Backfilling seed publications...")
+                            backfill_seed_publications()
+                            logging.info("Seed backfill complete")
+
+                    _ALL_TABLES = [
+                        "researchers", "researcher_urls", "papers", "html_content",
+                        "authorship", "research_fields", "researcher_fields",
+                        "scrape_log", "researcher_snapshots", "paper_snapshots",
+                        "paper_urls", "llm_usage", "feed_events", "batch_jobs",
+                    ]
+                    for tbl in _ALL_TABLES:
+                        try:
+                            cursor.execute(
+                                f"ALTER TABLE `{tbl}` CONVERT TO CHARACTER SET utf8mb4 "
+                                f"COLLATE utf8mb4_unicode_ci"
+                            )
+                            conn.commit()
+                        except Exception as e:
+                            logging.warning("Migration: utf8mb4 for %s: %s", tbl, e)
+                finally:
+                    cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
+                    cursor.fetchone()
+            else:
+                logging.info("Skipping migrations — another pod holds the lock")
+
+    logging.info("All tables created successfully")
+    seed_research_fields()
+
+
+def seed_research_fields():
+    """Insert the initial research field taxonomy if not already present."""
+    fields = [
+        ("Macroeconomics", "macroeconomics"),
+        ("Labour Economics", "labour-economics"),
+        ("Cultural Economics", "cultural-economics"),
+        ("Migration", "migration"),
+        ("Political Economy", "political-economy"),
+        ("Development Economics", "development-economics"),
+        ("International Trade", "international-trade"),
+        ("Finance", "finance"),
+        ("Health Economics", "health-economics"),
+        ("Public Economics", "public-economics"),
+        ("Industrial Organisation", "industrial-organisation"),
+        ("Econometrics/Methods", "econometrics-methods"),
+    ]
+    for name, slug in fields:
+        execute_query(
+            "INSERT IGNORE INTO research_fields (name, slug) VALUES (%s, %s)",
+            (name, slug),
+        )
+
+
+def backfill_seed_publications() -> int:
+    """Mark all existing publications as seed."""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("UPDATE papers SET is_seed = TRUE WHERE is_seed = FALSE")
+            conn.commit()
+            return cursor.rowcount

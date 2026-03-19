@@ -97,13 +97,10 @@ class TestBioColumnMigration:
         mock_conn, _ = _make_mock_conn()
         from database import Database
 
-        with patch.object(Database, "get_connection", return_value=mock_conn):
-            with patch.object(
-                Database,
-                "execute_query",
-                side_effect=Exception("Duplicate column name 'bio'"),
-            ):
-                with patch.object(Database, "seed_research_fields"):
+        with patch("database.schema.get_connection", return_value=mock_conn):
+            with patch("database.schema.execute_query",
+                       side_effect=Exception("Duplicate column name 'bio'")):
+                with patch("database.schema.seed_research_fields"):
                     # Must not raise
                     Database.create_tables()
 
@@ -112,9 +109,9 @@ class TestBioColumnMigration:
         mock_conn, _ = _make_mock_conn()
         from database import Database
 
-        with patch.object(Database, "get_connection", return_value=mock_conn):
-            with patch.object(Database, "execute_query", return_value=None):
-                with patch.object(Database, "seed_research_fields"):
+        with patch("database.schema.get_connection", return_value=mock_conn):
+            with patch("database.schema.execute_query", return_value=None):
+                with patch("database.schema.seed_research_fields"):
                     # Must not raise
                     Database.create_tables()
 
@@ -136,8 +133,8 @@ class TestMigrationAdvisoryLock:
         mock_conn, mock_cursor = _make_mock_conn()
         from database import Database
 
-        with patch.object(Database, "get_connection", return_value=mock_conn):
-            with patch.object(Database, "seed_research_fields"):
+        with patch("database.schema.get_connection", return_value=mock_conn):
+            with patch("database.schema.seed_research_fields"):
                 Database.create_tables()
 
         # The cursor must have called fetchone() at least twice:
@@ -152,8 +149,8 @@ class TestMigrationAdvisoryLock:
         mock_conn, mock_cursor = _make_mock_conn()
         from database import Database
 
-        with patch.object(Database, "get_connection", return_value=mock_conn):
-            with patch.object(Database, "seed_research_fields"):
+        with patch("database.schema.get_connection", return_value=mock_conn):
+            with patch("database.schema.seed_research_fields"):
                 Database.create_tables()
 
         executed_sql = [
@@ -183,8 +180,8 @@ class TestMigrationAdvisoryLock:
 
         mock_cursor.execute = MagicMock(side_effect=execute_side_effect)
 
-        with patch.object(Database, "get_connection", return_value=mock_conn):
-            with patch.object(Database, "seed_research_fields"):
+        with patch("database.schema.get_connection", return_value=mock_conn):
+            with patch("database.schema.seed_research_fields"):
                 Database.create_tables()  # Must not raise
 
         executed_sql = [
