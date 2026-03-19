@@ -39,8 +39,11 @@ export default function PublicationCard({
   const [abstractOpen, setAbstractOpen] = useState(false);
   const authors = publication.authors.map(formatAuthor);
 
+  const venueYear = [publication.venue, publication.year].filter(Boolean).join(", ");
+
   return (
     <div className="rounded-lg bg-[var(--bg-card)] shadow-card hover:shadow-card-hover hover:-translate-y-px transition-all duration-200 p-5">
+      {/* Status change banner (feed only) */}
       {publication.event_type === "status_change" && publication.old_status && publication.new_status && (
         <div className="flex items-center gap-2 text-xs font-medium mb-3 px-3 py-2 rounded-md bg-[#f0f4ff] border border-[#d0daf0]">
           <span className="text-[var(--text-secondary)]">Status update:</span>
@@ -56,16 +59,13 @@ export default function PublicationCard({
           )}
         </div>
       )}
-      {publication.event_type !== "status_change" && publication.status && (
-        <span
-          className={`inline-block text-[10px] font-semibold uppercase tracking-wider rounded-full px-2.5 py-0.5 mb-2.5 ${statusPillConfig[publication.status].className}`}
-        >
-          {statusPillConfig[publication.status].label}
-        </span>
-      )}
+
+      {/* Title */}
       <h3 className="font-serif font-semibold text-[var(--text-primary)] leading-snug">
         {publication.title}
       </h3>
+
+      {/* Authors · Venue */}
       <p className="mt-1.5 text-sm">
         {authors.map((a, i) => (
           <span key={a.id}>
@@ -78,52 +78,57 @@ export default function PublicationCard({
             </Link>
           </span>
         ))}
+        {venueYear && (
+          <>
+            <span className="mx-1.5 text-[var(--text-muted)]">&middot;</span>
+            <span className="italic text-[var(--text-muted)]">{venueYear}</span>
+          </>
+        )}
       </p>
-      {(publication.venue || publication.year) && (
-        <p className="mt-1 text-sm italic text-[var(--text-muted)]">
-          {publication.venue}
-          {publication.venue && publication.year && ", "}
-          {publication.year}
-        </p>
-      )}
-      {publication.draft_available && publication.draft_url && (
-        <p className="mt-3 flex items-center gap-2">
+
+      {/* Bottom row: status pill, draft link, abstract toggle */}
+      <div className="mt-3 flex items-center gap-2 flex-wrap">
+        {publication.event_type !== "status_change" && publication.status && (
+          <span
+            className={`inline-block text-[10px] font-semibold uppercase tracking-wider rounded-full px-2.5 py-0.5 ${statusPillConfig[publication.status].className}`}
+          >
+            {statusPillConfig[publication.status].label}
+          </span>
+        )}
+        {publication.draft_available && publication.draft_url && (
           <a
             href={publication.draft_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-block text-xs font-medium text-[var(--accent)] border border-[var(--accent)]/30 rounded-full px-3 py-0.5 hover:bg-[var(--accent)] hover:text-white transition-colors"
+            className="inline-flex items-center gap-1 text-xs font-medium text-[var(--accent)] border border-[var(--accent)]/30 rounded-full px-3 py-0.5 hover:bg-[var(--accent)] hover:text-white transition-colors"
           >
-            Draft &#8599;
+            Draft
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" />
+            </svg>
           </a>
-          {publication.draft_url_status && (
-            <span
-              className={`inline-block text-xs rounded px-1.5 py-0.5 font-medium ${draftStatusStyles[publication.draft_url_status]}`}
-            >
-              {draftStatusLabels[publication.draft_url_status]}
-            </span>
-          )}
-        </p>
-      )}
-      {publication.abstract && (
-        <div className="mt-3">
+        )}
+        {publication.abstract && (
           <button
             onClick={() => setAbstractOpen((prev) => !prev)}
-            className="flex items-center gap-1.5 text-xs font-medium text-[var(--text-secondary)] hover:text-[var(--text-primary)] transition-colors"
+            className="flex items-center gap-1 text-xs font-medium text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
           >
-            <span
-              className={`inline-block text-[9px] transition-transform duration-200 ${abstractOpen ? "rotate-90" : ""}`}
-            >
-              &#9658;
-            </span>
             Abstract
+            <svg
+              className={`w-3 h-3 transition-transform duration-200 ${abstractOpen ? "rotate-180" : ""}`}
+              fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
+            </svg>
           </button>
-          {abstractOpen && (
-            <p className="mt-2 text-sm text-[var(--text-secondary)] leading-relaxed bg-[#faf8f4] border-l-2 border-[var(--border-light)] rounded-r-md p-3">
-              {publication.abstract}
-            </p>
-          )}
-        </div>
+        )}
+      </div>
+
+      {/* Abstract expanded */}
+      {abstractOpen && publication.abstract && (
+        <p className="mt-3 text-sm text-[var(--text-secondary)] leading-relaxed bg-[#faf8f4] border-l-2 border-[var(--border-light)] rounded-r-md p-3">
+          {publication.abstract}
+        </p>
       )}
     </div>
   );

@@ -49,9 +49,20 @@ export default function ResearcherDetailContent({ id }: { id: number }) {
 
       {/* Hero card */}
       <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-6 mb-8">
-        <h1 className="font-serif text-2xl font-bold text-[var(--text-primary)]">
-          {researcher.first_name} {researcher.last_name}
-        </h1>
+        <div className="flex items-start justify-between gap-4">
+          <h1 className="font-serif text-2xl font-bold text-[var(--text-primary)]">
+            {researcher.first_name} {researcher.last_name}
+          </h1>
+          {researcher.website_url && (
+            <a href={researcher.website_url} target="_blank" rel="noopener noreferrer"
+              className="shrink-0 inline-flex items-center gap-1.5 font-sans text-sm text-[var(--link)] hover:text-[var(--accent)] transition-colors">
+              Personal website
+              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" />
+              </svg>
+            </a>
+          )}
+        </div>
         {(researcher.position || researcher.affiliation) && (
           <p className="mt-1.5 font-sans text-[var(--text-secondary)]">
             {researcher.position}
@@ -72,14 +83,6 @@ export default function ResearcherDetailContent({ id }: { id: number }) {
               </span>
             ))}
           </div>
-        )}
-        {researcher.website_url && (
-          <p className="mt-4">
-            <a href={researcher.website_url} target="_blank" rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 font-sans text-sm text-[var(--link)] hover:underline">
-              Personal website &rarr;
-            </a>
-          </p>
         )}
       </div>
 
