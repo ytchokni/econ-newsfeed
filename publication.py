@@ -77,13 +77,12 @@ class Publication:
         is_seed: bool = False,
     ) -> None:
         """Save extracted publications to the database, using title_hash for cross-researcher dedup."""
-        for pub in publications:
-            conn = None
-            try:
-                title = pub['title'].strip() if pub['title'] else ''
-                title_hash = Database.compute_title_hash(pub['title'])
+        with Database.get_connection() as conn:
+            for pub in publications:
+                try:
+                    title = pub['title'].strip() if pub['title'] else ''
+                    title_hash = Database.compute_title_hash(pub['title'])
 
-                with Database.get_connection() as conn:
                     cursor = conn.cursor()
 
                     # INSERT IGNORE leverages uq_title_hash index for cross-researcher dedup.
@@ -143,7 +142,7 @@ class Publication:
                     # Process authors
                     for author_order, author in enumerate(pub['authors'], start=1):
                         first_name, last_name = author
-                        author_id = Database.get_researcher_id(first_name, last_name)
+                        author_id = Database.get_researcher_id(first_name, last_name, conn=conn)
 
                         # INSERT IGNORE prevents duplicate authorship entries (uq_researcher_pub)
                         cursor.execute(
@@ -158,12 +157,11 @@ class Publication:
                     cursor.close()
                     logging.info(f"Publication saved successfully: {pub['title']}")
 
-            except Exception as e:
-                logging.error(
-                    "Error saving publication '%s': %s: %s",
-                    pub.get('title', '<unknown>'), type(e).__name__, e,
-                )
-                if conn is not None:
+                except Exception as e:
+                    logging.error(
+                        "Error saving publication '%s': %s: %s",
+                        pub.get('title', '<unknown>'), type(e).__name__, e,
+                    )
                     conn.rollback()
 
         logging.info(f"{len(publications)} publications processed for {url}")
