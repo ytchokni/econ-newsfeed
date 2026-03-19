@@ -60,26 +60,43 @@ class HTMLFetcher:
     # Per-domain locks to make the rate-limit check-and-update atomic
     _domain_locks: dict = {}
 
+    # Cache parsed robots.txt per origin (scheme://netloc).
+    # Value is a RobotFileParser or None (fetch failed / non-200).
+    _robots_cache: dict = {}
+
     @staticmethod
-    def is_allowed_by_robots(url):
-        """Check if the URL is allowed by the site's robots.txt.
-        If robots.txt can't be fetched or returns non-200, allow the request."""
+    def _get_robots_parser(url):
+        """Get or fetch the RobotFileParser for a URL's domain. Cached per origin."""
+        parsed = urlparse(url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        if origin in HTMLFetcher._robots_cache:
+            return HTMLFetcher._robots_cache[origin]
         try:
-            parsed = urlparse(url)
-            robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+            robots_url = f"{origin}/robots.txt"
             resp = requests.get(robots_url, timeout=10, headers={
                 'User-Agent': SCRAPER_USER_AGENT,
             })
             if resp.status_code != 200:
-                return True
+                HTMLFetcher._robots_cache[origin] = None
+                return None
             rp = RobotFileParser()
             rp.parse(resp.text.splitlines())
-            allowed = rp.can_fetch('HTMLFetcher/1.0', url)
-            if not allowed:
-                logging.info(f"URL disallowed by robots.txt: {url}")
-            return allowed
+            HTMLFetcher._robots_cache[origin] = rp
+            return rp
         except Exception:
+            HTMLFetcher._robots_cache[origin] = None
+            return None
+
+    @staticmethod
+    def is_allowed_by_robots(url):
+        """Check if the URL is allowed by the site's robots.txt. Cached per domain."""
+        rp = HTMLFetcher._get_robots_parser(url)
+        if rp is None:
             return True
+        allowed = rp.can_fetch('HTMLFetcher/1.0', url)
+        if not allowed:
+            logging.info(f"URL disallowed by robots.txt: {url}")
+        return allowed
 
     @staticmethod
     def validate_url(url):
