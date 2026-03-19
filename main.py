@@ -6,7 +6,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-from database import Database
+from database import Database, _DB_POOL_SIZE
 from researcher import Researcher
 from publication import Publication
 from html_fetcher import HTMLFetcher
@@ -80,7 +80,7 @@ def _process_one_url(url_id, researcher_id, url, page_type):
 def extract_data_from_htmls_concurrent():
     """Extract publication data concurrently using ThreadPoolExecutor."""
     researcher_urls = Researcher.get_all_researcher_urls()
-    workers = int(os.environ.get('PARSE_WORKERS', '8'))
+    workers = min(int(os.environ.get('PARSE_WORKERS', '8')), _DB_POOL_SIZE)
     total = len(researcher_urls)
     logging.info(f"Starting concurrent extraction: {total} URLs, {workers} workers")
 
