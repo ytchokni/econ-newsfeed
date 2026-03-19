@@ -146,7 +146,7 @@ class Database:
                     description_updated_at DATETIME DEFAULT NULL,
                     INDEX idx_name (last_name, first_name),
                     INDEX idx_affiliation (affiliation)
-                )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             "researcher_urls": """
                 CREATE TABLE IF NOT EXISTS researcher_urls (
@@ -156,7 +156,7 @@ class Database:
                     url VARCHAR(2048) NOT NULL,
                     UNIQUE KEY uq_researcher_url (researcher_id, url(500)),
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
-                )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             "papers": """
                 CREATE TABLE IF NOT EXISTS papers (
@@ -178,7 +178,7 @@ class Database:
                     INDEX idx_status (status),
                     INDEX idx_year (year),
                     INDEX idx_is_seed (is_seed)
-                )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             "html_content": """
                 CREATE TABLE IF NOT EXISTS html_content (
@@ -194,7 +194,7 @@ class Database:
                     INDEX idx_url_id_ts (url_id, timestamp),
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
                     FOREIGN KEY (url_id) REFERENCES researcher_urls(id) ON DELETE CASCADE
-                )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             "authorship": """
                 CREATE TABLE IF NOT EXISTS authorship (
@@ -207,7 +207,7 @@ class Database:
                     INDEX idx_publication (publication_id),
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
                     FOREIGN KEY (publication_id) REFERENCES papers(id) ON DELETE CASCADE
-                )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             "research_fields": """
                 CREATE TABLE IF NOT EXISTS research_fields (
@@ -215,7 +215,7 @@ class Database:
                     name VARCHAR(255) NOT NULL,
                     slug VARCHAR(255) NOT NULL,
                     UNIQUE KEY uq_slug (slug)
-                )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             "researcher_fields": """
                 CREATE TABLE IF NOT EXISTS researcher_fields (
@@ -224,7 +224,7 @@ class Database:
                     PRIMARY KEY (researcher_id, field_id),
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
                     FOREIGN KEY (field_id) REFERENCES research_fields(id) ON DELETE CASCADE
-                )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             "scrape_log": """
                 CREATE TABLE IF NOT EXISTS scrape_log (
@@ -239,7 +239,7 @@ class Database:
                     completion_tokens_total INT DEFAULT 0,
                     error_message TEXT,
                     INDEX idx_scrape_status (status)
-                )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             "researcher_snapshots": """
                 CREATE TABLE IF NOT EXISTS researcher_snapshots (
@@ -253,7 +253,7 @@ class Database:
                     content_hash VARCHAR(64),
                     INDEX idx_researcher_time (researcher_id, scraped_at),
                     FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
-                )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             "paper_snapshots": """
                 CREATE TABLE IF NOT EXISTS paper_snapshots (
@@ -270,7 +270,7 @@ class Database:
                     content_hash VARCHAR(64),
                     INDEX idx_paper_time (paper_id, scraped_at),
                     FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
-                )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             "paper_urls": """
                 CREATE TABLE IF NOT EXISTS paper_urls (
@@ -281,7 +281,7 @@ class Database:
                     UNIQUE KEY uq_paper_url (paper_id, url(500)),
                     INDEX idx_paper_id (paper_id),
                     FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
-                )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             "llm_usage": """
                 CREATE TABLE IF NOT EXISTS llm_usage (
@@ -301,7 +301,7 @@ class Database:
                     INDEX idx_called_at (called_at),
                     INDEX idx_call_type (call_type),
                     INDEX idx_scrape_log (scrape_log_id)
-                )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             "feed_events": """
                 CREATE TABLE IF NOT EXISTS feed_events (
@@ -315,7 +315,7 @@ class Database:
                     INDEX idx_paper_id (paper_id),
                     INDEX idx_created_at (created_at),
                     INDEX idx_event_type (event_type)
-                )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """,
             "batch_jobs": """
                 CREATE TABLE IF NOT EXISTS batch_jobs (
@@ -333,7 +333,7 @@ class Database:
                     error_message TEXT DEFAULT NULL,
                     UNIQUE KEY uq_batch_id (openai_batch_id),
                     INDEX idx_status (status)
-                )
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
             """
         }
 
@@ -420,6 +420,23 @@ class Database:
                                 logging.info("Backfilling seed publications...")
                                 Database.backfill_seed_publications()
                                 logging.info("Seed backfill complete")
+
+                        # Convert all tables to utf8mb4
+                        _ALL_TABLES = [
+                            "researchers", "researcher_urls", "papers", "html_content",
+                            "authorship", "research_fields", "researcher_fields",
+                            "scrape_log", "researcher_snapshots", "paper_snapshots",
+                            "paper_urls", "llm_usage", "feed_events", "batch_jobs",
+                        ]
+                        for tbl in _ALL_TABLES:
+                            try:
+                                cursor.execute(
+                                    f"ALTER TABLE `{tbl}` CONVERT TO CHARACTER SET utf8mb4 "
+                                    f"COLLATE utf8mb4_unicode_ci"
+                                )
+                                conn.commit()
+                            except Exception as e:
+                                logging.warning("Migration: utf8mb4 for %s: %s", tbl, e)
                     finally:
                         cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                         cursor.fetchone()
@@ -554,14 +571,43 @@ class Database:
         return None
 
     @staticmethod
-    def get_researcher_id(first_name, last_name, position=None, affiliation=None):
+    def get_researcher_id(first_name, last_name, position=None, affiliation=None, conn=None):
         """
         Get the researcher ID based on the first name and last name.
         If the researcher does not exist, query same-last-name candidates and use LLM
         to disambiguate abbreviated vs full names before inserting a new row.
+        Accepts optional conn to reuse an existing DB connection (avoids pool exhaustion).
         """
+        def _fetch_one(query, params):
+            if conn is not None:
+                c = conn.cursor()
+                c.execute(query, params)
+                row = c.fetchone()
+                c.close()
+                return row
+            return Database.fetch_one(query, params)
+
+        def _fetch_all(query, params):
+            if conn is not None:
+                c = conn.cursor()
+                c.execute(query, params)
+                rows = c.fetchall()
+                c.close()
+                return rows
+            return Database.fetch_all(query, params)
+
+        def _execute(query, params):
+            if conn is not None:
+                c = conn.cursor()
+                c.execute(query, params)
+                conn.commit()
+                lid = c.lastrowid
+                c.close()
+                return lid
+            return Database.execute_query(query, params)
+
         # 1. Exact match
-        result = Database.fetch_one(
+        result = _fetch_one(
             "SELECT id FROM researchers WHERE first_name = %s AND last_name = %s",
             (first_name, last_name),
         )
@@ -569,7 +615,7 @@ class Database:
             return result[0]
 
         # 2. Same-last-name candidates — let LLM decide if any is the same person
-        candidates = Database.fetch_all(
+        candidates = _fetch_all(
             "SELECT id, first_name, last_name FROM researchers WHERE last_name = %s",
             (last_name,),
         )
@@ -586,7 +632,7 @@ class Database:
             INSERT INTO researchers (first_name, last_name, position, affiliation)
             VALUES (%s, %s, %s, %s)
         """
-        new_id = Database.execute_query(insert_query, (first_name, last_name, position, affiliation))
+        new_id = _execute(insert_query, (first_name, last_name, position, affiliation))
         return new_id
 
     @staticmethod
