@@ -63,7 +63,7 @@ export default function ResearchersContent() {
   return (
     <div className="space-y-6">
       {/* Filter bar */}
-      <div className="rounded-lg bg-[var(--bg-card)] shadow-[var(--shadow-sm)] p-4 flex items-center gap-3 flex-wrap">
+      <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-4 flex items-center gap-3 flex-wrap">
         <span className="font-sans text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mr-1">
           Filter
         </span>

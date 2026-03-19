@@ -9,7 +9,7 @@ export default function ResearcherCard({
   return (
     <Link
       href={`/researchers/${researcher.id}`}
-      className="block rounded-lg bg-[var(--bg-card)] shadow-[var(--shadow-sm)] p-5 hover:shadow-[var(--shadow-md)] hover:-translate-y-px transition-all duration-200"
+      className="block rounded-lg bg-[var(--bg-card)] shadow-card p-5 hover:shadow-card-hover hover:-translate-y-px transition-all duration-200"
     >
       <h3 className="font-serif font-semibold text-[var(--text-primary)] text-lg">
         {researcher.first_name} {researcher.last_name}

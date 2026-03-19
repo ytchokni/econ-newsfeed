@@ -115,7 +115,7 @@ function CheckboxDropdown({
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className={`flex items-center gap-1.5 px-3 py-1.5 font-sans text-sm border rounded-lg shadow-[var(--shadow-sm)] transition-all min-w-[120px] ${
+        className={`flex items-center gap-1.5 px-3 py-1.5 font-sans text-sm border rounded-lg shadow-card transition-all min-w-[120px] ${
           hasSelection
             ? "bg-[var(--bg-header)] text-white border-[var(--bg-header)]"
             : "border-[var(--border)] bg-[var(--bg-card)] hover:border-[var(--text-muted)]"
@@ -132,7 +132,7 @@ function CheckboxDropdown({
         </svg>
       </button>
       {open && (
-        <div className="absolute z-10 mt-1 w-56 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg shadow-[var(--shadow-md)] py-1 max-h-60 overflow-y-auto animate-dropdown-in">
+        <div className="absolute z-10 mt-1 w-56 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg shadow-card-hover py-1 max-h-60 overflow-y-auto animate-dropdown-in">
           {options.map((opt) => (
             <label
               key={opt.value}
@@ -207,7 +207,7 @@ function FilterBar({
   );
 
   return (
-    <div className="rounded-lg bg-[var(--bg-card)] shadow-[var(--shadow-sm)] p-4 mb-8 flex items-center gap-3 flex-wrap">
+    <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-4 mb-8 flex items-center gap-3 flex-wrap">
       <span className="font-sans text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mr-1">
         Filter
       </span>
@@ -222,7 +222,7 @@ function FilterBar({
       <select
         value={filters.year ?? ""}
         onChange={(e) => handleYearChange(e.target.value)}
-        className="px-3 py-1.5 font-sans text-sm border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-[var(--shadow-sm)] focus:outline-none focus:ring-1 focus:ring-[var(--link)]"
+        className="px-3 py-1.5 font-sans text-sm border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card focus:outline-none focus:ring-1 focus:ring-[var(--link)]"
       >
         <option value="">All years</option>
         {YEAR_OPTIONS.map((y) => (
@@ -307,7 +307,7 @@ export default function NewsfeedContent() {
             {page > 1 ? (
               <button
                 onClick={() => setPage((p) => p - 1)}
-                className="font-sans px-5 py-2 text-sm font-medium border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-[var(--shadow-sm)] hover:shadow-[var(--shadow-md)] hover:-translate-y-px transition-all duration-200 text-[var(--text-primary)]"
+                className="font-sans px-5 py-2 text-sm font-medium border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card hover:shadow-card-hover hover:-translate-y-px transition-all duration-200 text-[var(--text-primary)]"
               >
                 &larr; Previous
               </button>
@@ -322,7 +322,7 @@ export default function NewsfeedContent() {
             {data && data.page < data.pages && (
               <button
                 onClick={() => setPage((p) => p + 1)}
-                className="font-sans px-5 py-2 text-sm font-medium border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-[var(--shadow-sm)] hover:shadow-[var(--shadow-md)] hover:-translate-y-px transition-all duration-200 text-[var(--text-primary)]"
+                className="font-sans px-5 py-2 text-sm font-medium border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card hover:shadow-card-hover hover:-translate-y-px transition-all duration-200 text-[var(--text-primary)]"
               >
                 Next &rarr;
               </button>

@@ -84,7 +84,7 @@ export function useFilterOptions() {
 }
 
 export function useResearchersFiltered(filters?: ResearcherFilters) {
-  const params = new URLSearchParams({ per_page: "200" });
+  const params = new URLSearchParams({ per_page: "100" });
   if (filters?.institution) params.set("institution", filters.institution);
   if (filters?.field) params.set("field", filters.field);
   if (filters?.position) params.set("position", filters.position);

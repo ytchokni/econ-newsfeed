@@ -66,7 +66,7 @@ export default function SearchableCheckboxDropdown({
         className={`flex items-center gap-1.5 px-3 py-1.5 font-sans text-sm border rounded-lg transition-all min-w-[120px] ${
           selected.length > 0
             ? "bg-[var(--bg-header)] text-white border-[var(--bg-header)]"
-            : "border-[var(--border)] bg-[var(--bg-card)] shadow-[var(--shadow-sm)] hover:border-[var(--text-muted)]"
+            : "border-[var(--border)] bg-[var(--bg-card)] shadow-card hover:border-[var(--text-muted)]"
         }`}
       >
         <span className={selected.length === 0 ? "text-[var(--text-muted)]" : ""}>
@@ -82,7 +82,7 @@ export default function SearchableCheckboxDropdown({
         </svg>
       </button>
       {open && (
-        <div className="absolute z-10 mt-1 w-64 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg shadow-[var(--shadow-md)] py-1 animate-dropdown-in">
+        <div className="absolute z-10 mt-1 w-64 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg shadow-card-hover py-1 animate-dropdown-in">
           <div className="px-2 py-1.5">
             <input
               ref={inputRef}

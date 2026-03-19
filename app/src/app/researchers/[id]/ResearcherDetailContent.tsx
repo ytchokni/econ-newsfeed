@@ -48,7 +48,7 @@ export default function ResearcherDetailContent({ id }: { id: number }) {
       </nav>
 
       {/* Hero card */}
-      <div className="rounded-lg bg-[var(--bg-card)] shadow-[var(--shadow-sm)] p-6 mb-8">
+      <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-6 mb-8">
         <h1 className="font-serif text-2xl font-bold text-[var(--text-primary)]">
           {researcher.first_name} {researcher.last_name}
         </h1>

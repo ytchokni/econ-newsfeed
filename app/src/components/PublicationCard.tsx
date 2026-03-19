@@ -40,7 +40,7 @@ export default function PublicationCard({
   const authors = publication.authors.map(formatAuthor);
 
   return (
-    <div className="rounded-lg bg-[var(--bg-card)] shadow-[var(--shadow-sm)] hover:shadow-[var(--shadow-md)] hover:-translate-y-px transition-all duration-200 p-5">
+    <div className="rounded-lg bg-[var(--bg-card)] shadow-card hover:shadow-card-hover hover:-translate-y-px transition-all duration-200 p-5">
       {publication.status && (
         <span
           className={`inline-block text-[10px] font-semibold uppercase tracking-wider rounded-full px-2.5 py-0.5 mb-2.5 ${statusPillConfig[publication.status].className}`}
