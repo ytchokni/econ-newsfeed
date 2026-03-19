@@ -138,10 +138,12 @@ class Database:
                     draft_url VARCHAR(2048) DEFAULT NULL,
                     draft_url_status ENUM('unchecked', 'valid', 'invalid', 'timeout') DEFAULT 'unchecked',
                     draft_url_checked_at DATETIME DEFAULT NULL,
+                    is_seed BOOLEAN NOT NULL DEFAULT FALSE,
                     UNIQUE KEY uq_title_hash (title_hash),
                     INDEX idx_timestamp (timestamp),
                     INDEX idx_status (status),
-                    INDEX idx_year (year)
+                    INDEX idx_year (year),
+                    INDEX idx_is_seed (is_seed)
                 )
             """,
             "html_content": """
@@ -266,6 +268,20 @@ class Database:
                     INDEX idx_scrape_log (scrape_log_id)
                 )
             """,
+            "feed_events": """
+                CREATE TABLE IF NOT EXISTS feed_events (
+                    id INT AUTO_INCREMENT PRIMARY KEY,
+                    paper_id INT NOT NULL,
+                    event_type ENUM('new_paper', 'status_change') NOT NULL,
+                    old_status ENUM('published','accepted','revise_and_resubmit','reject_and_resubmit','working_paper') DEFAULT NULL,
+                    new_status ENUM('published','accepted','revise_and_resubmit','reject_and_resubmit','working_paper') DEFAULT NULL,
+                    created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+                    INDEX idx_paper_id (paper_id),
+                    INDEX idx_created_at (created_at),
+                    INDEX idx_event_type (event_type)
+                )
+            """,
             "batch_jobs": """
                 CREATE TABLE IF NOT EXISTS batch_jobs (
                     id INT AUTO_INCREMENT PRIMARY KEY,
@@ -291,7 +307,7 @@ class Database:
                 for table_query in table_definitions.values():
                     cursor.execute(table_query)
 
-        # Add token columns to scrape_log if they don't exist (migration for existing DBs).
+        # Add columns to existing tables if they don't exist (migration for existing DBs).
         # Use a MySQL advisory lock so only one pod runs migrations on multi-pod startup.
         with Database.get_connection() as conn:
             with conn.cursor(buffered=True) as cursor:
@@ -299,18 +315,44 @@ class Database:
                 got_lock = cursor.fetchone()[0]
                 if got_lock == 1:
                     try:
-                        for col, definition in [
-                            ("prompt_tokens_total", "INT DEFAULT 0"),
-                            ("completion_tokens_total", "INT DEFAULT 0"),
-                        ]:
+                        _migrations: list[tuple[str, str, str]] = [
+                            ("scrape_log", "prompt_tokens_total", "INT DEFAULT 0"),
+                            ("scrape_log", "completion_tokens_total", "INT DEFAULT 0"),
+                            ("papers", "is_seed", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                        ]
+                        for table, col, definition in _migrations:
                             try:
                                 cursor.execute(
-                                    f"ALTER TABLE scrape_log ADD COLUMN {col} {definition}"
+                                    f"ALTER TABLE {table} ADD COLUMN {col} {definition}"
                                 )
                                 conn.commit()
                             except Exception as e:
-                                if getattr(e, 'errno', None) != 1060:  # 1060 = Duplicate column name
-                                    logging.warning("Migration warning for scrape_log.%s: %s", col, e)
+                                if getattr(e, 'errno', None) != 1060:
+                                    logging.warning("Migration warning for %s.%s: %s", table, col, e)
+                        # Add index on is_seed if it doesn't exist
+                        try:
+                            cursor.execute(
+                                "ALTER TABLE papers ADD INDEX idx_is_seed (is_seed)"
+                            )
+                            conn.commit()
+                        except Exception as e:
+                            if getattr(e, 'errno', None) != 1061:  # 1061 = Duplicate key name
+                                logging.warning("Migration warning for papers.idx_is_seed: %s", e)
+
+                        # Backfill seed publications if any unseeded papers exist
+                        cursor.execute(
+                            "SELECT COUNT(*) FROM papers WHERE is_seed = FALSE"
+                        )
+                        total_unseeded = cursor.fetchone()[0]
+                        if total_unseeded > 0:
+                            cursor.execute(
+                                "SELECT COUNT(*) FROM papers WHERE is_seed = TRUE"
+                            )
+                            already_seeded = cursor.fetchone()[0]
+                            if already_seeded == 0:
+                                logging.info("Backfilling seed publications...")
+                                Database.backfill_seed_publications()
+                                logging.info("Seed backfill complete")
                     finally:
                         cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                         cursor.fetchone()
@@ -342,6 +384,28 @@ class Database:
                 "INSERT IGNORE INTO research_fields (name, slug) VALUES (%s, %s)",
                 (name, slug),
             )
+
+    @staticmethod
+    def backfill_seed_publications() -> int:
+        """Mark all existing publications as seed.
+
+        Since html_content stores only one row per URL (upsert), we
+        cannot reliably distinguish first-scrape from re-scrape papers
+        using timestamps alone (researchers with multiple URLs get
+        papers at different times within the same session).
+
+        The safe approach: mark ALL existing papers as seed on first
+        run.  Going forward, the scheduler sets is_seed=True only
+        when old_text is None (first-ever scrape of a URL), so new
+        papers found on re-scrapes will correctly be is_seed=False.
+        """
+        with Database.get_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "UPDATE papers SET is_seed = TRUE WHERE is_seed = FALSE"
+                )
+                conn.commit()
+                return cursor.rowcount
 
     @staticmethod
     def log_llm_usage(call_type, model, usage, context_url=None, researcher_id=None,
@@ -563,7 +627,8 @@ class Database:
     @staticmethod
     def append_paper_snapshot(paper_id, status, venue, abstract, draft_url, year, source_url=None):
         """Append a paper snapshot if metadata changed. Updates denormalized papers table.
-        Both operations run in a single transaction for consistency.
+        Creates a feed_event if status changed.
+        All operations run in a single transaction for consistency.
         Returns True if a new snapshot was inserted, False if no change."""
         content_hash = Database._compute_paper_content_hash(status, venue, abstract, draft_url, year)
         prev_hash = Database.get_latest_paper_snapshot_hash(paper_id)
@@ -574,6 +639,15 @@ class Database:
         now = datetime.now(timezone.utc)
         with Database.get_connection() as conn:
             with conn.cursor() as cursor:
+                # Fetch previous status before inserting new snapshot
+                cursor.execute(
+                    "SELECT status FROM paper_snapshots WHERE paper_id = %s "
+                    "ORDER BY scraped_at DESC LIMIT 1",
+                    (paper_id,),
+                )
+                prev_row = cursor.fetchone()
+                old_status = prev_row[0] if prev_row else None
+
                 cursor.execute(
                     """INSERT INTO paper_snapshots
                        (paper_id, status, venue, abstract, draft_url, draft_url_status, year,
@@ -588,6 +662,18 @@ class Database:
                        WHERE id = %s""",
                     (status, venue, abstract, draft_url, year, paper_id),
                 )
+
+                # Create status_change feed event if status actually changed
+                if (old_status != status
+                        and old_status is not None
+                        and status is not None):
+                    cursor.execute(
+                        """INSERT INTO feed_events
+                           (paper_id, event_type, old_status, new_status, created_at)
+                           VALUES (%s, 'status_change', %s, %s, %s)""",
+                        (paper_id, old_status, status, now),
+                    )
+
                 conn.commit()
         logging.info(f"Paper snapshot appended for id={paper_id}")
         return True

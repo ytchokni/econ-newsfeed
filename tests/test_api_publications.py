@@ -21,12 +21,25 @@ def client():
 
 
 # Sample data that mimics Database.fetch_all / fetch_one return shapes
+# Feed events row shape (15 columns): fe.id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
+#   p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url, p.abstract, p.draft_url_status
 SAMPLE_PUBLICATIONS = [
-    # (pub.id, pub.title, pub.year, pub.venue, pub.url, pub.timestamp, pub.status, pub.draft_url, pub.abstract, pub.draft_url_status)
-    (1, "Trade and Wages", "2024", "JLE", "https://example.com/pub", datetime(2026, 3, 15, 14, 30), "published", "https://ssrn.com/abstract=1", None, "valid"),
-    (2, "Immigration Effects", "2023", "QJE", "https://example.com/pub2", datetime(2026, 3, 14, 10, 0), "accepted", None, None, None),
-    (3, "Labor Markets", "2024", "AER", "https://example.com/pub3", datetime(2026, 3, 13, 9, 0), None, None, None, None),
+    (100, "new_paper", None, "working_paper", datetime(2026, 3, 15, 14, 30),
+     1, "Trade and Wages", "2024", "JLE", "https://example.com/pub",
+     datetime(2026, 3, 15, 14, 30), "working_paper", "https://ssrn.com/abstract=1", None, "valid"),
+    (101, "new_paper", None, "accepted", datetime(2026, 3, 14, 10, 0),
+     2, "Immigration Effects", "2023", "QJE", "https://example.com/pub2",
+     datetime(2026, 3, 14, 10, 0), "accepted", None, None, None),
+    (102, "new_paper", None, "working_paper", datetime(2026, 3, 13, 9, 0),
+     3, "Labor Markets", "2024", "AER", "https://example.com/pub3",
+     datetime(2026, 3, 13, 9, 0), "working_paper", None, None, None),
 ]
+
+# 10-column papers row for single publication detail endpoint
+SAMPLE_PUB_DETAIL = (
+    1, "Trade and Wages", "2024", "JLE", "https://example.com/pub",
+    datetime(2026, 3, 15, 14, 30), "working_paper", "https://ssrn.com/abstract=1", None, "valid",
+)
 
 SAMPLE_AUTHORS_PUB1 = [
     # (researcher_id, first_name, last_name) — used for single-pub endpoint
@@ -180,7 +193,7 @@ class TestListPublications:
         assert item["venue"] == "JLE"
         assert item["source_url"] == "https://example.com/pub"
         assert "discovered_at" in item
-        assert item["status"] == "published"
+        assert item["status"] == "working_paper"
         assert item["draft_url"] == "https://ssrn.com/abstract=1"
         assert item["draft_available"] is True
         assert len(item["authors"]) == 2
@@ -199,7 +212,7 @@ class TestGetPublication:
     def test_found_with_authors(self, client):
         """Returns publication with nested authors."""
         with (
-            patch("api.Database.fetch_one", return_value=SAMPLE_PUBLICATIONS[0]),
+            patch("api.Database.fetch_one", return_value=SAMPLE_PUB_DETAIL),
             patch("api.Database.fetch_all", return_value=SAMPLE_AUTHORS_PUB1),
         ):
             response = client.get("/api/publications/1")

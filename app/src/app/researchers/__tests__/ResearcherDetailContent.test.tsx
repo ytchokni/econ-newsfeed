@@ -73,7 +73,7 @@ describe("ResearcherDetailContent", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText("Max Friedrich Steinhardt")
+        screen.getByRole("heading", { level: 1, name: "Max Friedrich Steinhardt" })
       ).toBeInTheDocument();
     });
 
@@ -98,7 +98,7 @@ describe("ResearcherDetailContent", () => {
     renderWithSWR(<ResearcherDetailContent id={999} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/failed to load/i)).toBeInTheDocument();
+      expect(screen.getByText(/not found/i)).toBeInTheDocument();
     });
   });
 });

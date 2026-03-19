@@ -39,6 +39,7 @@ PUBLICATION_KEYS = {
     "id", "title", "authors", "year", "venue", "source_url",
     "discovered_at", "status", "abstract", "draft_url",
     "draft_url_status", "draft_available",
+    "event_id", "event_type", "old_status", "new_status", "event_date",
 }
 
 AUTHOR_KEYS = {"id", "first_name", "last_name"}
@@ -66,12 +67,21 @@ SCRAPE_LAST_KEYS = {
 # Sample data (minimal, just enough to produce responses)
 # ---------------------------------------------------------------------------
 
+# Feed events row shape: fe.id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
+#   p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url, p.abstract, p.draft_url_status
 SAMPLE_PUB = (
+    100, "new_paper", None, "working_paper", datetime(2026, 3, 15, 14, 30),
     1, "Trade and Wages", "2024", "JLE", "https://example.com/p",
-    datetime(2026, 3, 15, 14, 30), "published", "https://ssrn.com/1",
+    datetime(2026, 3, 15, 14, 30), "working_paper", "https://ssrn.com/1",
     "An abstract.", "valid",
 )
 SAMPLE_AUTHORS = [(1, 10, "Max", "Steinhardt")]
+# Single publication detail (10-column papers row, used by GET /api/publications/{id} and researcher detail)
+SAMPLE_PUB_DETAIL = (
+    1, "Trade and Wages", "2024", "JLE", "https://example.com/p",
+    datetime(2026, 3, 15, 14, 30), "working_paper", "https://ssrn.com/1",
+    "An abstract.", "valid",
+)
 SAMPLE_RESEARCHER = (
     10, "Max", "Steinhardt", "Professor", "FU Berlin", "Economist."
 )
@@ -202,7 +212,7 @@ class TestResearcherDetailShape:
             single_fields = [(1, "Labour Economics", "labour-economics")]
             mock_all.side_effect = [
                 single_urls, single_fields,
-                [SAMPLE_PUB], SAMPLE_AUTHORS,
+                [SAMPLE_PUB_DETAIL], SAMPLE_AUTHORS,
             ]
             body = client.get("/api/researchers/10").json()
 

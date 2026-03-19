@@ -60,8 +60,19 @@ class TestOpenAPI:
 # Task 5.3: Full request cycle integration test
 # ---------------------------------------------------------------------------
 
-SAMPLE_PUB = (1, "Trade and Wages", "2024", "JLE", "https://example.com/p", datetime(2026, 3, 15, 14, 30), "published", None, None, None)
+# Feed events row shape: fe.id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
+#   p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url, p.abstract, p.draft_url_status
+SAMPLE_PUB = (
+    100, "new_paper", None, "working_paper", datetime(2026, 3, 15, 14, 30),
+    1, "Trade and Wages", "2024", "JLE", "https://example.com/p",
+    datetime(2026, 3, 15, 14, 30), "working_paper", None, None, None,
+)
 SAMPLE_AUTHORS = [(1, 10, "Max Friedrich", "Steinhardt")]
+# Single publication detail (10-column papers row, used by GET /api/publications/{id})
+SAMPLE_PUB_DETAIL = (
+    1, "Trade and Wages", "2024", "JLE", "https://example.com/p",
+    datetime(2026, 3, 15, 14, 30), "working_paper", None, None, None,
+)
 SAMPLE_RESEARCHER = (10, "Max Friedrich", "Steinhardt", "Professor", "FU Berlin", None)
 SAMPLE_URLS_BATCH = [(10, 1, "PUB", "https://example.com/pubs")]
 SAMPLE_URLS_SINGLE = [(1, "PUB", "https://example.com/pubs")]
@@ -83,9 +94,9 @@ class TestFullCycle:
         assert resp.status_code == 200
         assert len(resp.json()["items"]) == 1
 
-        # 2. Get single publication
+        # 2. Get single publication (uses old 10-column papers row shape)
         with (
-            patch("api.Database.fetch_one", return_value=SAMPLE_PUB),
+            patch("api.Database.fetch_one", return_value=SAMPLE_PUB_DETAIL),
             patch("api.Database.fetch_all", return_value=SAMPLE_AUTHORS),
         ):
             resp = client.get("/api/publications/1")
@@ -108,7 +119,7 @@ class TestFullCycle:
             patch("api.Database.fetch_all") as mock_all,
         ):
             mock_one.side_effect = [SAMPLE_RESEARCHER, (5,)]
-            mock_all.side_effect = [SAMPLE_URLS_SINGLE, SAMPLE_FIELDS, [SAMPLE_PUB], SAMPLE_AUTHORS]
+            mock_all.side_effect = [SAMPLE_URLS_SINGLE, SAMPLE_FIELDS, [SAMPLE_PUB_DETAIL], SAMPLE_AUTHORS]
             resp = client.get("/api/researchers/10")
         assert resp.status_code == 200
         assert resp.json()["first_name"] == "Max Friedrich"
@@ -163,7 +174,11 @@ class TestLifespan:
 # ---------------------------------------------------------------------------
 
 # Sample data for smoke tests (publication batch format)
-_SMOKE_PUB = (1, "Trade and Wages", "2024", "JLE", "https://example.com/p", datetime(2026, 3, 15, 14, 30), "published", None, None, None)
+_SMOKE_PUB = (
+    100, "new_paper", None, "working_paper", datetime(2026, 3, 15, 14, 30),
+    1, "Trade and Wages", "2024", "JLE", "https://example.com/p",
+    datetime(2026, 3, 15, 14, 30), "working_paper", None, None, None,
+)
 _SMOKE_BATCH_AUTHORS = [(1, 10, "Max Friedrich", "Steinhardt")]
 
 # Sample data for researchers (batch format)

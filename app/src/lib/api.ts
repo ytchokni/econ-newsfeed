@@ -1,11 +1,13 @@
 import useSWR from "swr";
 import type {
   FeedFilters,
+  FilterOptions,
   PaginatedResponse,
   Publication,
   ResearchField,
   Researcher,
   ResearcherDetail,
+  ResearcherFilters,
 } from "./types";
 
 export const API_BASE_URL =
@@ -75,4 +77,20 @@ export async function getFields(): Promise<ResearchField[]> {
     `${API_BASE_URL}/api/fields`
   );
   return data.items;
+}
+
+export function useFilterOptions() {
+  return useSWR<FilterOptions>("/api/filter-options", fetchJson);
+}
+
+export function useResearchersFiltered(filters?: ResearcherFilters) {
+  const params = new URLSearchParams({ per_page: "100" });
+  if (filters?.institution) params.set("institution", filters.institution);
+  if (filters?.field) params.set("field", filters.field);
+  if (filters?.position) params.set("position", filters.position);
+  const url = `/api/researchers?${params.toString()}`;
+  return useSWR<Researcher[]>(url, async (u: string) => {
+    const data = await fetchJson<{ items: Researcher[] }>(u);
+    return data.items;
+  });
 }

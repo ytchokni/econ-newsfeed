@@ -22,7 +22,8 @@ function formatDateHeader(iso: string): string {
 function groupByDate(publications: Publication[]) {
   const groups: Map<string, Publication[]> = new Map();
   for (const pub of publications) {
-    const key = formatDateHeader(pub.discovered_at);
+    const dateStr = pub.event_date ?? pub.discovered_at;
+    const key = formatDateHeader(dateStr);
     const group = groups.get(key);
     if (group) {
       group.push(pub);
@@ -109,25 +110,34 @@ function CheckboxDropdown({
             .join(", ")
         : `${selected.length} selected`;
 
+  const hasSelection = selected.length > 0;
+
   return (
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className="flex items-center gap-1.5 px-3 py-1.5 text-sm border border-gray-300 rounded-md bg-white hover:bg-gray-50 transition-colors min-w-[120px]"
+        className={`flex items-center gap-1.5 px-3 py-1.5 font-sans text-sm border rounded-lg shadow-card transition-all min-w-[120px] ${
+          hasSelection
+            ? "bg-[var(--bg-header)] text-white border-[var(--bg-header)]"
+            : "border-[var(--border)] bg-[var(--bg-card)] hover:border-[var(--text-muted)]"
+        }`}
       >
-        <span className={selected.length === 0 ? "text-gray-500" : "text-gray-900"}>
-          {display}
-        </span>
-        <svg className="w-3.5 h-3.5 text-gray-400 ml-auto" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <span>{display}</span>
+        <svg
+          className={`w-3.5 h-3.5 ml-auto ${hasSelection ? "text-white/70" : "text-[var(--text-muted)]"}`}
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
         </svg>
       </button>
       {open && (
-        <div className="absolute z-10 mt-1 w-52 bg-white border border-gray-200 rounded-md shadow-lg py-1 max-h-60 overflow-y-auto">
+        <div className="absolute z-10 mt-1 w-56 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg shadow-card-hover py-1 max-h-60 overflow-y-auto animate-dropdown-in">
           {options.map((opt) => (
             <label
               key={opt.value}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-gray-50 cursor-pointer"
+              className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-[var(--bg)] cursor-pointer font-sans"
             >
               <input
                 type="checkbox"
@@ -141,7 +151,7 @@ function CheckboxDropdown({
           {selected.length > 0 && (
             <button
               onClick={() => { onChange([]); setOpen(false); }}
-              className="w-full text-left px-3 py-1.5 text-xs text-gray-500 hover:bg-gray-50 border-t border-gray-100"
+              className="w-full text-left px-3 py-1.5 text-xs text-[var(--text-muted)] hover:bg-[var(--bg)] border-t border-[var(--border-light)] font-sans"
             >
               Clear all
             </button>
@@ -167,6 +177,8 @@ function FilterBar({
     if (filters.institution) return filters.institution.split(",");
     return [];
   })();
+
+  const hasActiveFilters = !!(filters.status || filters.institution || filters.preset || filters.year);
 
   const handleStatusChange = useCallback(
     (selected: string[]) => {
@@ -196,7 +208,11 @@ function FilterBar({
   );
 
   return (
-    <div className="flex items-center gap-3 mb-6">
+    <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-4 mb-8 flex items-center gap-3 flex-wrap">
+      <span className="font-sans text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mr-1">
+        Filter
+      </span>
+
       <CheckboxDropdown
         label="Status"
         options={STATUS_OPTIONS}
@@ -207,7 +223,7 @@ function FilterBar({
       <select
         value={filters.year ?? ""}
         onChange={(e) => handleYearChange(e.target.value)}
-        className="px-3 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-1 focus:ring-gray-400 bg-white"
+        className="px-3 py-1.5 font-sans text-sm border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card focus:outline-none focus:ring-1 focus:ring-[var(--link)]"
       >
         <option value="">All years</option>
         {YEAR_OPTIONS.map((y) => (
@@ -223,6 +239,18 @@ function FilterBar({
         selected={selectedInstitutions}
         onChange={handleInstitutionChange}
       />
+
+      {hasActiveFilters && (
+        <>
+          <span className="w-px h-5 bg-[var(--border)]" />
+          <button
+            onClick={() => onChange({})}
+            className="font-sans text-xs text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+          >
+            Clear all
+          </button>
+        </>
+      )}
     </div>
   );
 }
@@ -241,12 +269,12 @@ export default function NewsfeedContent() {
   }, []);
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       <FilterBar filters={filters} onChange={handleFilterChange} />
 
       {isLoading && (
         <div className="space-y-4">
-          <p className="text-sm text-gray-500">Loading publications...</p>
+          <p className="font-sans text-sm text-[var(--text-muted)]">Loading publications...</p>
           {Array.from({ length: 3 }).map((_, i) => (
             <PublicationCardSkeleton key={i} />
           ))}
@@ -258,40 +286,46 @@ export default function NewsfeedContent() {
       )}
 
       {!isLoading && data && data.items.length === 0 && (
-        <EmptyState message="No publications match the current filters." />
+        <EmptyState message="No new publications yet. Papers will appear here as researchers update their pages." />
       )}
 
       {data && data.items.length > 0 && (
         <>
           {Array.from(groupByDate(data.items).entries()).map(([date, pubs]) => (
             <section key={date}>
-              <h2 className="text-sm font-medium text-gray-500 mb-3">
+              <h2 className="font-sans text-xs font-semibold uppercase tracking-widest text-[var(--text-muted)] mb-4 pb-2 border-b border-[var(--border-light)] flex items-center gap-2">
+                <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
                 {date}
               </h2>
-              <div className="space-y-3">
+              <div className="space-y-3 animate-stagger">
                 {pubs.map((pub) => (
-                  <PublicationCard key={pub.id} publication={pub} />
+                  <PublicationCard key={pub.event_id ?? pub.id} publication={pub} />
                 ))}
               </div>
             </section>
           ))}
-          <div className="flex justify-between pt-2">
+          <div className="flex items-center justify-center gap-3 pt-4">
             {page > 1 ? (
               <button
                 onClick={() => setPage((p) => p - 1)}
-                className="px-4 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+                className="font-sans px-5 py-2 text-sm font-medium border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card hover:shadow-card-hover hover:-translate-y-px transition-all duration-200 text-[var(--text-primary)]"
               >
-                Previous
+                &larr; Previous
               </button>
             ) : (
               <span />
             )}
-            {data.page < data.pages && (
+            {data && data.pages > 0 && (
+              <span className="font-sans text-sm text-[var(--text-muted)]">
+                Page {data.page} of {data.pages}
+              </span>
+            )}
+            {data && data.page < data.pages && (
               <button
                 onClick={() => setPage((p) => p + 1)}
-                className="px-4 py-2 text-sm border border-gray-300 rounded-md hover:bg-gray-50 transition-colors"
+                className="font-sans px-5 py-2 text-sm font-medium border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card hover:shadow-card-hover hover:-translate-y-px transition-all duration-200 text-[var(--text-primary)]"
               >
-                Next
+                Next &rarr;
               </button>
             )}
           </div>

@@ -35,30 +35,42 @@ def client():
 # ---------------------------------------------------------------------------
 # Sample data
 #
-# Row shape (10 columns) matches the v2 SELECT in list_publications:
-#   id, title, year, venue, url, timestamp, status, draft_url, abstract, draft_url_status
+# Row shape (15 columns) matches the feed_events JOIN in list_publications:
+#   fe.id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
+#   p.id, p.title, p.year, p.venue, p.url, p.timestamp,
+#   p.status, p.draft_url, p.abstract, p.draft_url_status
 # ---------------------------------------------------------------------------
 
 _PUB_WITH_ABSTRACT = (
-    1,
-    "Trade and Wages",
-    "2024",
-    "JLE",
-    "https://example.com/pub1",
-    datetime(2026, 3, 15, 14, 30),
-    "working_paper",
-    "https://ssrn.com/abstract=1",
-    "This paper examines trade and wages.",
-    "valid",
+    100,                              # fe.id (event_id)
+    "new_paper",                      # fe.event_type
+    None,                             # fe.old_status
+    "working_paper",                  # fe.new_status
+    datetime(2026, 3, 15, 14, 30),    # fe.created_at
+    1,                                # p.id
+    "Trade and Wages",                # p.title
+    "2024",                           # p.year
+    "JLE",                            # p.venue
+    "https://example.com/pub1",       # p.url
+    datetime(2026, 3, 15, 14, 30),    # p.timestamp
+    "working_paper",                  # p.status
+    "https://ssrn.com/abstract=1",    # p.draft_url
+    "This paper examines trade and wages.",  # p.abstract
+    "valid",                          # p.draft_url_status
 )
 
 _PUB_NO_ABSTRACT = (
+    101,
+    "status_change",
+    "working_paper",
+    "published",
+    datetime(2026, 3, 14, 10, 0),
     2,
     "Immigration Effects",
     "2023",
     "QJE",
     "https://example.com/pub2",
-    datetime(2026, 3, 14, 10, 0),
+    datetime(2026, 3, 10, 10, 0),
     "published",
     None,
     None,
@@ -66,6 +78,11 @@ _PUB_NO_ABSTRACT = (
 )
 
 _PUB_MIT = (
+    102,
+    "new_paper",
+    None,
+    "accepted",
+    datetime(2026, 3, 13, 9, 0),
     3,
     "Labor Markets and MIT",
     "2024",
