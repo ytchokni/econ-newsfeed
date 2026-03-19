@@ -294,7 +294,7 @@ class Database:
         # Add token columns to scrape_log if they don't exist (migration for existing DBs).
         # Use a MySQL advisory lock so only one pod runs migrations on multi-pod startup.
         with Database.get_connection() as conn:
-            with conn.cursor() as cursor:
+            with conn.cursor(buffered=True) as cursor:
                 cursor.execute("SELECT GET_LOCK('econ_migrations', 10)")
                 got_lock = cursor.fetchone()[0]
                 if got_lock == 1:
@@ -313,6 +313,7 @@ class Database:
                                     logging.warning("Migration warning for scrape_log.%s: %s", col, e)
                     finally:
                         cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
+                        cursor.fetchone()
                 else:
                     logging.info("Skipping migrations — another pod holds the lock")
 
