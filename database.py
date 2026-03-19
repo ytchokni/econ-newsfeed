@@ -34,6 +34,11 @@ def _get_pool() -> "MySQLConnectionPool":
 
 class Database:
     @staticmethod
+    def pool_size() -> int:
+        """Return the connection pool size (useful for capping concurrent workers)."""
+        return _DB_POOL_SIZE
+
+    @staticmethod
     def create_database():
         """
         Create the database if it doesn't exist.
@@ -63,11 +68,16 @@ class Database:
         return _get_pool().get_connection()
 
     @staticmethod
-    def execute_query(query, params=None):
+    def execute_query(query, params=None, conn=None):
         """
         Execute a query with optional parameters and commit the changes.
-        Returns the last inserted row ID.
+        Returns the last inserted row ID. Pass conn to reuse an existing connection.
         """
+        if conn is not None:
+            with conn.cursor() as cursor:
+                cursor.execute(query, params)
+                conn.commit()
+                return cursor.lastrowid
         with Database.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(query, params)
@@ -75,42 +85,50 @@ class Database:
                 return cursor.lastrowid
 
     @staticmethod
-    def fetch_all(query, params=None):
+    def fetch_all(query, params=None, conn=None):
         """
         Execute a query with optional parameters and fetch all results.
         Returns a list of tuples containing the results.
         """
+        if conn is not None:
+            with conn.cursor() as cursor:
+                cursor.execute(query, params)
+                return cursor.fetchall()
         with Database.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(query, params)
                 return cursor.fetchall()
 
     @staticmethod
-    def fetch_one(query, params=None):
+    def fetch_one(query, params=None, conn=None):
         """
         Execute a SELECT query and fetch one result.
         """
+        if conn is not None:
+            with conn.cursor() as cursor:
+                cursor.execute(query, params)
+                return cursor.fetchone()
         with Database.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(query, params)
                 return cursor.fetchone()
 
     @staticmethod
-    def _migrate_fk_cascade(cursor, table, column, ref_table, ref_column):
-        """Ensure FK on (table.column → ref_table.ref_column) has ON DELETE CASCADE.
-        Idempotent: skips if CASCADE already in place."""
+    def _column_exists(cursor, table, column):
+        """Check if a column exists in the given table."""
         cursor.execute(
-            "SELECT rc.CONSTRAINT_NAME, rc.DELETE_RULE "
-            "FROM information_schema.REFERENTIAL_CONSTRAINTS rc "
-            "JOIN information_schema.KEY_COLUMN_USAGE kcu "
-            "  ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME "
-            "  AND rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA "
-            "WHERE kcu.TABLE_SCHEMA = DATABASE() AND kcu.TABLE_NAME = %s "
-            "AND kcu.COLUMN_NAME = %s AND kcu.REFERENCED_TABLE_NAME = %s",
-            (table, column, ref_table),
+            "SELECT COUNT(*) FROM information_schema.COLUMNS "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s "
+            "AND COLUMN_NAME = %s",
+            (table, column),
         )
-        row = cursor.fetchone()
-        if row and row[1] == 'CASCADE':
+        return cursor.fetchone()[0] > 0
+
+    @staticmethod
+    def _migrate_fk_cascade(cursor, table, column, ref_table, ref_column, fk_status):
+        """Ensure FK on (table.column → ref_table.ref_column) has ON DELETE CASCADE.
+        fk_status is a pre-fetched dict of (table, column) → delete_rule from information_schema."""
+        if fk_status.get((table, column)) == 'CASCADE':
             return  # Already correct
 
         # Drop existing FK(s) for this column
@@ -375,6 +393,16 @@ class Database:
                                 logging.warning("Migration warning for papers.idx_is_seed: %s", e)
 
                         # Migrate FKs to ON DELETE CASCADE
+                        # Batch-fetch current FK delete rules in one query
+                        cursor.execute(
+                            "SELECT kcu.TABLE_NAME, kcu.COLUMN_NAME, rc.DELETE_RULE "
+                            "FROM information_schema.REFERENTIAL_CONSTRAINTS rc "
+                            "JOIN information_schema.KEY_COLUMN_USAGE kcu "
+                            "  ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME "
+                            "  AND rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA "
+                            "WHERE kcu.TABLE_SCHEMA = DATABASE()"
+                        )
+                        _fk_status = {(r[0], r[1]): r[2] for r in cursor.fetchall()}
                         _cascade_fks = [
                             ("researcher_urls", "researcher_id", "researchers", "id"),
                             ("html_content", "researcher_id", "researchers", "id"),
@@ -386,7 +414,7 @@ class Database:
                         ]
                         for table, col, ref_table, ref_col in _cascade_fks:
                             try:
-                                Database._migrate_fk_cascade(cursor, table, col, ref_table, ref_col)
+                                Database._migrate_fk_cascade(cursor, table, col, ref_table, ref_col, _fk_status)
                                 conn.commit()
                             except Exception as e:
                                 logging.warning("Migration: CASCADE for %s.%s: %s", table, col, e)
@@ -449,12 +477,7 @@ class Database:
 
                         # Rename papers.url → papers.source_url
                         try:
-                            cursor.execute(
-                                "SELECT COUNT(*) FROM information_schema.COLUMNS "
-                                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'papers' "
-                                "AND COLUMN_NAME = 'url'"
-                            )
-                            if cursor.fetchone()[0] > 0:
+                            if Database._column_exists(cursor, 'papers', 'url'):
                                 cursor.execute("ALTER TABLE papers RENAME COLUMN url TO source_url")
                                 conn.commit()
                         except Exception as e:
@@ -462,14 +485,8 @@ class Database:
 
                         # Rename papers.timestamp → papers.discovered_at
                         try:
-                            cursor.execute(
-                                "SELECT COUNT(*) FROM information_schema.COLUMNS "
-                                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'papers' "
-                                "AND COLUMN_NAME = 'timestamp'"
-                            )
-                            if cursor.fetchone()[0] > 0:
+                            if Database._column_exists(cursor, 'papers', 'timestamp'):
                                 cursor.execute("ALTER TABLE papers RENAME COLUMN `timestamp` TO discovered_at")
-                                # Rename the index too
                                 try:
                                     cursor.execute("ALTER TABLE papers DROP INDEX idx_timestamp")
                                 except Exception:
@@ -504,11 +521,14 @@ class Database:
             ("Industrial Organisation", "industrial-organisation"),
             ("Econometrics/Methods", "econometrics-methods"),
         ]
-        for name, slug in fields:
-            Database.execute_query(
-                "INSERT IGNORE INTO research_fields (name, slug) VALUES (%s, %s)",
-                (name, slug),
-            )
+        if not fields:
+            return
+        placeholders = ", ".join(["(%s, %s)"] * len(fields))
+        params = [v for pair in fields for v in pair]
+        Database.execute_query(
+            f"INSERT IGNORE INTO research_fields (name, slug) VALUES {placeholders}",
+            params,
+        )
 
     @staticmethod
     def backfill_seed_publications() -> int:
@@ -619,46 +639,20 @@ class Database:
         to disambiguate abbreviated vs full names before inserting a new row.
         Accepts optional conn to reuse an existing DB connection (avoids pool exhaustion).
         """
-        def _fetch_one(query, params):
-            if conn is not None:
-                c = conn.cursor()
-                c.execute(query, params)
-                row = c.fetchone()
-                c.close()
-                return row
-            return Database.fetch_one(query, params)
-
-        def _fetch_all(query, params):
-            if conn is not None:
-                c = conn.cursor()
-                c.execute(query, params)
-                rows = c.fetchall()
-                c.close()
-                return rows
-            return Database.fetch_all(query, params)
-
-        def _execute(query, params):
-            if conn is not None:
-                c = conn.cursor()
-                c.execute(query, params)
-                conn.commit()
-                lid = c.lastrowid
-                c.close()
-                return lid
-            return Database.execute_query(query, params)
-
         # 1. Exact match
-        result = _fetch_one(
+        result = Database.fetch_one(
             "SELECT id FROM researchers WHERE first_name = %s AND last_name = %s",
             (first_name, last_name),
+            conn=conn,
         )
         if result:
             return result[0]
 
         # 2. Same-last-name candidates — let LLM decide if any is the same person
-        candidates = _fetch_all(
+        candidates = Database.fetch_all(
             "SELECT id, first_name, last_name FROM researchers WHERE last_name = %s",
             (last_name,),
+            conn=conn,
         )
         if candidates:
             match_id = Database._disambiguate_researcher(first_name, last_name, candidates)
@@ -673,7 +667,7 @@ class Database:
             INSERT INTO researchers (first_name, last_name, position, affiliation)
             VALUES (%s, %s, %s, %s)
         """
-        new_id = _execute(insert_query, (first_name, last_name, position, affiliation))
+        new_id = Database.execute_query(insert_query, (first_name, last_name, position, affiliation), conn=conn)
         return new_id
 
     @staticmethod

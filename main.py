@@ -6,7 +6,7 @@ import tempfile
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
-from database import Database, _DB_POOL_SIZE
+from database import Database
 from researcher import Researcher
 from publication import Publication
 from html_fetcher import HTMLFetcher
@@ -80,7 +80,7 @@ def _process_one_url(url_id, researcher_id, url, page_type):
 def extract_data_from_htmls_concurrent():
     """Extract publication data concurrently using ThreadPoolExecutor."""
     researcher_urls = Researcher.get_all_researcher_urls()
-    workers = min(int(os.environ.get('PARSE_WORKERS', '8')), _DB_POOL_SIZE)
+    workers = min(int(os.environ.get('PARSE_WORKERS', '8')), Database.pool_size())
     total = len(researcher_urls)
     logging.info(f"Starting concurrent extraction: {total} URLs, {workers} workers")
 
@@ -223,19 +223,32 @@ def batch_check():
             saved_pubs = 0
             processed_urls = 0
 
-            for line in content.strip().splitlines():
+            # Pre-fetch all URL mappings in one query to avoid N+1
+            lines = content.strip().splitlines()
+            url_ids = []
+            for line in lines:
+                cid = json.loads(line).get("custom_id", "")
+                if cid.startswith("url_"):
+                    url_ids.append(int(cid.replace("url_", "")))
+            url_map = {}
+            if url_ids:
+                ph = ",".join(["%s"] * len(url_ids))
+                rows = Database.fetch_all(
+                    f"SELECT id, url FROM researcher_urls WHERE id IN ({ph})",
+                    tuple(url_ids),
+                )
+                url_map = {r[0]: r[1] for r in rows}
+
+            for line in lines:
                 result = json.loads(line)
                 custom_id = result.get("custom_id", "")
                 url_id = int(custom_id.replace("url_", "")) if custom_id.startswith("url_") else None
                 if url_id is None:
                     continue
 
-                url_row = Database.fetch_one(
-                    "SELECT url FROM researcher_urls WHERE id = %s", (url_id,)
-                )
-                if not url_row:
+                url = url_map.get(url_id)
+                if not url:
                     continue
-                url = url_row[0]
 
                 response_body = result.get("response", {}).get("body", {})
                 usage_dict = response_body.get("usage", {})

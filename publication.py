@@ -14,7 +14,8 @@ from urllib.parse import urlparse
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL')
 _openai_client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
 
-CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS', '4000'))
+_DEFAULT_CONTENT_MAX_CHARS = 4000  # chars of page text sent to LLM for extraction
+CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS', str(_DEFAULT_CONTENT_MAX_CHARS)))
 
 _VALID_STATUSES = Literal[
     'published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper'
@@ -64,11 +65,6 @@ class Publication:
         self.year = year
         self.venue = venue
         self.url = url
-
-    @staticmethod
-    def _normalize_title(title):
-        """Normalize a publication title for deduplication."""
-        return title.lower().strip() if title else ''
 
     @staticmethod
     def save_publications(
