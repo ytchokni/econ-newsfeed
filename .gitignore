@@ -27,3 +27,6 @@ backups/
 CLAUDE.md
 
 .claude/
+
+# Worktrees
+.worktrees/
