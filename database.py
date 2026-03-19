@@ -96,6 +96,40 @@ class Database:
                 return cursor.fetchone()
 
     @staticmethod
+    def _migrate_fk_cascade(cursor, table, column, ref_table, ref_column):
+        """Ensure FK on (table.column → ref_table.ref_column) has ON DELETE CASCADE.
+        Idempotent: skips if CASCADE already in place."""
+        cursor.execute(
+            "SELECT rc.CONSTRAINT_NAME, rc.DELETE_RULE "
+            "FROM information_schema.REFERENTIAL_CONSTRAINTS rc "
+            "JOIN information_schema.KEY_COLUMN_USAGE kcu "
+            "  ON rc.CONSTRAINT_NAME = kcu.CONSTRAINT_NAME "
+            "  AND rc.CONSTRAINT_SCHEMA = kcu.CONSTRAINT_SCHEMA "
+            "WHERE kcu.TABLE_SCHEMA = DATABASE() AND kcu.TABLE_NAME = %s "
+            "AND kcu.COLUMN_NAME = %s AND kcu.REFERENCED_TABLE_NAME = %s",
+            (table, column, ref_table),
+        )
+        row = cursor.fetchone()
+        if row and row[1] == 'CASCADE':
+            return  # Already correct
+
+        # Drop existing FK(s) for this column
+        cursor.execute(
+            "SELECT CONSTRAINT_NAME FROM information_schema.KEY_COLUMN_USAGE "
+            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s "
+            "AND COLUMN_NAME = %s AND REFERENCED_TABLE_NAME IS NOT NULL",
+            (table, column),
+        )
+        for (name,) in cursor.fetchall():
+            cursor.execute(f"ALTER TABLE `{table}` DROP FOREIGN KEY `{name}`")
+
+        # Recreate with CASCADE
+        cursor.execute(
+            f"ALTER TABLE `{table}` ADD FOREIGN KEY (`{column}`) "
+            f"REFERENCES `{ref_table}`(`{ref_column}`) ON DELETE CASCADE"
+        )
+
+    @staticmethod
     def create_tables():
         """
         Create the necessary tables if they do not already exist.
@@ -121,7 +155,7 @@ class Database:
                     page_type VARCHAR(255) NOT NULL,
                     url VARCHAR(2048) NOT NULL,
                     UNIQUE KEY uq_researcher_url (researcher_id, url(500)),
-                    FOREIGN KEY (researcher_id) REFERENCES researchers(id)
+                    FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
                 )
             """,
             "papers": """
@@ -158,8 +192,8 @@ class Database:
                     extracted_hash VARCHAR(64),
                     UNIQUE KEY uq_url_id (url_id),
                     INDEX idx_url_id_ts (url_id, timestamp),
-                    FOREIGN KEY (researcher_id) REFERENCES researchers(id),
-                    FOREIGN KEY (url_id) REFERENCES researcher_urls(id)
+                    FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
+                    FOREIGN KEY (url_id) REFERENCES researcher_urls(id) ON DELETE CASCADE
                 )
             """,
             "authorship": """
@@ -171,8 +205,8 @@ class Database:
                     UNIQUE KEY uq_researcher_pub (researcher_id, publication_id),
                     INDEX idx_researcher (researcher_id),
                     INDEX idx_publication (publication_id),
-                    FOREIGN KEY (researcher_id) REFERENCES researchers(id),
-                    FOREIGN KEY (publication_id) REFERENCES papers(id)
+                    FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
+                    FOREIGN KEY (publication_id) REFERENCES papers(id) ON DELETE CASCADE
                 )
             """,
             "research_fields": """
@@ -188,8 +222,8 @@ class Database:
                     researcher_id INT NOT NULL,
                     field_id INT NOT NULL,
                     PRIMARY KEY (researcher_id, field_id),
-                    FOREIGN KEY (researcher_id) REFERENCES researchers(id),
-                    FOREIGN KEY (field_id) REFERENCES research_fields(id)
+                    FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
+                    FOREIGN KEY (field_id) REFERENCES research_fields(id) ON DELETE CASCADE
                 )
             """,
             "scrape_log": """
@@ -338,6 +372,23 @@ class Database:
                         except Exception as e:
                             if getattr(e, 'errno', None) != 1061:  # 1061 = Duplicate key name
                                 logging.warning("Migration warning for papers.idx_is_seed: %s", e)
+
+                        # Migrate FKs to ON DELETE CASCADE
+                        _cascade_fks = [
+                            ("researcher_urls", "researcher_id", "researchers", "id"),
+                            ("html_content", "researcher_id", "researchers", "id"),
+                            ("html_content", "url_id", "researcher_urls", "id"),
+                            ("authorship", "researcher_id", "researchers", "id"),
+                            ("authorship", "publication_id", "papers", "id"),
+                            ("researcher_fields", "researcher_id", "researchers", "id"),
+                            ("researcher_fields", "field_id", "research_fields", "id"),
+                        ]
+                        for table, col, ref_table, ref_col in _cascade_fks:
+                            try:
+                                Database._migrate_fk_cascade(cursor, table, col, ref_table, ref_col)
+                                conn.commit()
+                            except Exception as e:
+                                logging.warning("Migration: CASCADE for %s.%s: %s", table, col, e)
 
                         # Backfill seed publications if any unseeded papers exist
                         cursor.execute(
