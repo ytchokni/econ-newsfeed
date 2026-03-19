@@ -90,7 +90,7 @@ class Publication:
                     # is_seed is set on INSERT but NOT updated on duplicate (preserves original).
                     cursor.execute(
                         """
-                        INSERT IGNORE INTO papers (source_url, title, title_hash, year, venue, abstract, timestamp, status, draft_url, is_seed)
+                        INSERT IGNORE INTO papers (source_url, title, title_hash, year, venue, abstract, discovered_at, status, draft_url, is_seed)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (url, title, title_hash, pub.get('year'), pub.get('venue'),
