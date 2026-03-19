@@ -98,7 +98,7 @@ describe("ResearcherDetailContent", () => {
     renderWithSWR(<ResearcherDetailContent id={999} />);
 
     await waitFor(() => {
-      expect(screen.getByText(/failed to load/i)).toBeInTheDocument();
+      expect(screen.getByText(/not found/i)).toBeInTheDocument();
     });
   });
 });

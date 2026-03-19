@@ -1,6 +1,6 @@
 export default function EmptyState({ message }: { message: string }) {
   return (
-    <div className="rounded-lg border border-gray-200 bg-gray-50 p-8 text-center text-sm text-gray-500">
+    <div className="rounded-lg bg-[var(--bg-card)] shadow-[var(--shadow-sm)] p-10 text-center font-sans text-sm text-[var(--text-muted)]">
       {message}
     </div>
   );
