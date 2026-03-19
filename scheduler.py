@@ -17,8 +17,10 @@ logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(
 logger = logging.getLogger(__name__)
 
 _LOCK_NAME = 'econ_newsfeed_scrape'
+_SCHEDULER_LOCK_NAME = 'econ_newsfeed_scheduler'
 _lock_conn = None  # connection holding the advisory lock for the duration of a scrape
 _scheduler = None
+_scheduler_lock_conn = None  # connection holding the advisory lock for the scheduler singleton
 
 
 def _acquire_db_lock():
@@ -263,10 +265,32 @@ def _handle_sigterm(signum, frame):
 
 
 def start_scheduler():
-    """Start the APScheduler BackgroundScheduler with the configured interval."""
-    global _scheduler
+    """Start the APScheduler BackgroundScheduler with the configured interval.
+
+    Uses a MySQL advisory lock to ensure only one Gunicorn worker runs the
+    scheduler, preventing duplicate scrape triggers from multiple workers.
+    """
+    global _scheduler, _scheduler_lock_conn
     if _scheduler is not None:
         logger.warning("Scheduler already running")
+        return
+
+    # Acquire a non-blocking advisory lock so only one worker runs the scheduler.
+    # The lock is held for the lifetime of the connection; if the worker dies,
+    # the connection drops and another worker can acquire it.
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+        cursor.execute("SELECT GET_LOCK(%s, 0)", (_SCHEDULER_LOCK_NAME,))
+        result = cursor.fetchone()
+        cursor.close()
+        if not (result and result[0] == 1):
+            conn.close()
+            logger.info("Another worker owns the scheduler lock — this worker handles API requests only")
+            return
+        _scheduler_lock_conn = conn  # keep connection alive to hold the lock
+    except Exception as e:
+        logger.warning("Could not acquire scheduler lock: %s — skipping scheduler", e)
         return
 
     # Register signal handlers so cloud container SIGTERM completes the current job
@@ -290,8 +314,18 @@ def start_scheduler():
 
 def shutdown_scheduler():
     """Shut down the scheduler gracefully, waiting for any running job to complete."""
-    global _scheduler
+    global _scheduler, _scheduler_lock_conn
     if _scheduler is not None:
         _scheduler.shutdown(wait=True)
         _scheduler = None
         logger.info("Scheduler shut down")
+    if _scheduler_lock_conn is not None:
+        try:
+            cursor = _scheduler_lock_conn.cursor()
+            cursor.execute("SELECT RELEASE_LOCK(%s)", (_SCHEDULER_LOCK_NAME,))
+            cursor.fetchone()
+            cursor.close()
+            _scheduler_lock_conn.close()
+        except Exception:
+            pass
+        _scheduler_lock_conn = None
