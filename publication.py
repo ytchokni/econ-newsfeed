@@ -14,6 +14,8 @@ from urllib.parse import urlparse
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL')
 _openai_client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
 
+CONTENT_MAX_CHARS = os.environ.get('CONTENT_MAX_CHARS')
+
 _VALID_STATUSES = Literal[
     'published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper'
 ]
@@ -199,7 +201,7 @@ For each publication, extract:
 If no publications are found in the content, return an empty list. Do not fabricate publications.
 
 Content:
-{text_content[:4000]}"""
+{text_content[:CONTENT_MAX_CHARS]}"""
 
     @staticmethod
     def extract_publications(text_content, url, scrape_log_id=None):

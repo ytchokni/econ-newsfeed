@@ -20,10 +20,24 @@ def import_data(file_path):
 
 def download_htmls():
     """Download HTML content for all URLs in the researcher_urls table."""
+    from scheduler import create_scrape_log, update_scrape_log
+
+    log_id = create_scrape_log()
     researcher_urls = Researcher.get_all_researcher_urls()
-    for id, researcher_id, url, page_type in researcher_urls:
-        logging.info(f"Downloading HTML for URL ID: {id}, URL: {url}, Page Type: {page_type}")
-        HTMLFetcher.fetch_and_save_if_changed(id, url, researcher_id)
+    urls_checked = 0
+    urls_changed = 0
+
+    try:
+        for id, researcher_id, url, page_type in researcher_urls:
+            urls_checked += 1
+            logging.info(f"Downloading HTML for URL ID: {id}, URL: {url}, Page Type: {page_type}")
+            changed = HTMLFetcher.fetch_and_save_if_changed(id, url, researcher_id)
+            if changed:
+                urls_changed += 1
+        update_scrape_log(log_id, "completed", urls_checked, urls_changed)
+    except Exception as e:
+        logging.error(f"Download failed: {e}")
+        update_scrape_log(log_id, "failed", urls_checked, urls_changed, error_message=str(e))
 
 def extract_data_from_htmls():
     """Extract publication data from downloaded HTML content."""

@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 RATE_LIMIT_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_SECONDS', '2'))
 RATE_LIMIT_FAST_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_FAST_SECONDS', '0.5'))
-CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS', '4000'))
+CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS'))
 CONTENT_MAX_BYTES = 1_000_000  # 1 MB response size limit
 SCRAPER_USER_AGENT = os.environ.get(
     'SCRAPER_USER_AGENT',
@@ -310,7 +310,7 @@ class HTMLFetcher:
             "their research interests, and their current position/affiliation. "
             "Return only the description text, nothing else. "
             "If no clear description can be extracted, reply with exactly: null\n\n"
-            f"Content:\n{text_content[:3000]}"
+            f"Content:\n{text_content[:CONTENT_MAX_CHARS]}"
         )
         try:
             from database import Database
