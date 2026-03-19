@@ -37,7 +37,7 @@ def client():
 #
 # Row shape (15 columns) matches the feed_events JOIN in list_publications:
 #   fe.id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
-#   p.id, p.title, p.year, p.venue, p.url, p.timestamp,
+#   p.id, p.title, p.year, p.venue, p.source_url, p.discovered_at,
 #   p.status, p.draft_url, p.abstract, p.draft_url_status
 # ---------------------------------------------------------------------------
 
@@ -51,8 +51,8 @@ _PUB_WITH_ABSTRACT = (
     "Trade and Wages",                # p.title
     "2024",                           # p.year
     "JLE",                            # p.venue
-    "https://example.com/pub1",       # p.url
-    datetime(2026, 3, 15, 14, 30),    # p.timestamp
+    "https://example.com/pub1",       # p.source_url
+    datetime(2026, 3, 15, 14, 30),    # p.discovered_at
     "working_paper",                  # p.status
     "https://ssrn.com/abstract=1",    # p.draft_url
     "This paper examines trade and wages.",  # p.abstract

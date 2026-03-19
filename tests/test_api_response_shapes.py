@@ -68,7 +68,7 @@ SCRAPE_LAST_KEYS = {
 # ---------------------------------------------------------------------------
 
 # Feed events row shape: fe.id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
-#   p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url, p.abstract, p.draft_url_status
+#   p.id, p.title, p.year, p.venue, p.source_url, p.discovered_at, p.status, p.draft_url, p.abstract, p.draft_url_status
 SAMPLE_PUB = (
     100, "new_paper", None, "working_paper", datetime(2026, 3, 15, 14, 30),
     1, "Trade and Wages", "2024", "JLE", "https://example.com/p",
