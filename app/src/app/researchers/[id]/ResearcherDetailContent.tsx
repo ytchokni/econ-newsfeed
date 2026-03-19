@@ -26,10 +26,10 @@ export default function ResearcherDetailContent({ id }: { id: number }) {
   }
 
   const workingPapers = researcher.publications.filter(
-    (p) => p.status === "working_paper"
+    (p) => p.status !== "published"
   );
   const publications = researcher.publications.filter(
-    (p) => p.status !== "working_paper"
+    (p) => p.status === "published"
   );
 
   return (
@@ -86,26 +86,7 @@ export default function ResearcherDetailContent({ id }: { id: number }) {
         )}
       </div>
 
-      {/* Publications section */}
-      {publications.length > 0 && (
-        <section className="mb-8">
-          <div className="flex items-center gap-3 mb-4">
-            <h2 className="font-serif text-lg font-semibold text-[var(--text-primary)]">
-              Publications
-            </h2>
-            <span className="font-sans text-xs font-bold bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full">
-              {publications.length}
-            </span>
-          </div>
-          <div className="space-y-3 animate-stagger">
-            {publications.map((pub) => (
-              <PublicationCard key={pub.id} publication={pub} primaryAuthorId={id} />
-            ))}
-          </div>
-        </section>
-      )}
-
-      {/* Working Papers section */}
+      {/* Working Papers section (includes R&R, accepted, etc.) */}
       {workingPapers.length > 0 && (
         <section className="mb-8">
           <div className="flex items-center gap-3 mb-4">
@@ -118,6 +99,25 @@ export default function ResearcherDetailContent({ id }: { id: number }) {
           </div>
           <div className="space-y-3 animate-stagger">
             {workingPapers.map((pub) => (
+              <PublicationCard key={pub.id} publication={pub} primaryAuthorId={id} />
+            ))}
+          </div>
+        </section>
+      )}
+
+      {/* Publications section (published only) */}
+      {publications.length > 0 && (
+        <section className="mb-8">
+          <div className="flex items-center gap-3 mb-4">
+            <h2 className="font-serif text-lg font-semibold text-[var(--text-primary)]">
+              Publications
+            </h2>
+            <span className="font-sans text-xs font-bold bg-teal-100 text-teal-700 px-2 py-0.5 rounded-full">
+              {publications.length}
+            </span>
+          </div>
+          <div className="space-y-3 animate-stagger">
+            {publications.map((pub) => (
               <PublicationCard key={pub.id} publication={pub} primaryAuthorId={id} />
             ))}
           </div>
