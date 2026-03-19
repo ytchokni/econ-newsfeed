@@ -33,6 +33,23 @@ class TestHealthEndpoint:
 
 
 # ---------------------------------------------------------------------------
+# Task 4.3: Metrics endpoint
+# ---------------------------------------------------------------------------
+
+class TestMetricsEndpoint:
+    def test_metrics_returns_counts(self, client):
+        with patch("api.Database.fetch_one", side_effect=[
+            {"cnt": 42}, {"cnt": 10}, {"cnt": 5}
+        ]):
+            response = client.get("/api/metrics")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["publications"] == 42
+        assert body["researchers"] == 10
+        assert body["scrapes"] == 5
+
+
+# ---------------------------------------------------------------------------
 # Task 5.1: OpenAPI docs
 # ---------------------------------------------------------------------------
 

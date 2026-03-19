@@ -303,6 +303,19 @@ def health_check():
     return {"status": "ok"}
 
 
+@app.get("/api/metrics")
+def metrics():
+    """Basic application metrics for monitoring."""
+    pub_count = Database.fetch_one("SELECT COUNT(*) AS cnt FROM papers")
+    researcher_count = Database.fetch_one("SELECT COUNT(*) AS cnt FROM researchers")
+    scrape_count = Database.fetch_one("SELECT COUNT(*) AS cnt FROM scrape_log")
+    return {
+        "publications": pub_count['cnt'] if pub_count else 0,
+        "researchers": researcher_count['cnt'] if researcher_count else 0,
+        "scrapes": scrape_count['cnt'] if scrape_count else 0,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Publication endpoints
 # ---------------------------------------------------------------------------
