@@ -1,18 +1,15 @@
 """Tests for HTMLFetcher: robots.txt caching."""
 import os
-import sys
 
 os.environ.setdefault("CONTENT_MAX_CHARS", "4000")
+os.environ.setdefault("DB_HOST", "localhost")
+os.environ.setdefault("DB_USER", "test")
+os.environ.setdefault("DB_PASSWORD", "test")
+os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
 
-# Stub out the database module before importing html_fetcher, since the
-# database package has broken imports in this worktree that are unrelated
-# to HTMLFetcher functionality.
-from unittest.mock import MagicMock
-sys.modules.setdefault("database", MagicMock())
+from unittest.mock import patch, MagicMock
 
-from html_fetcher import HTMLFetcher  # noqa: E402
-
-from unittest.mock import patch
+from html_fetcher import HTMLFetcher
 
 
 class TestRobotsTxtCaching:
