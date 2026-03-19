@@ -73,7 +73,7 @@ describe("ResearcherDetailContent", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText("Max Friedrich Steinhardt")
+        screen.getByRole("heading", { level: 1, name: "Max Friedrich Steinhardt" })
       ).toBeInTheDocument();
     });
 
