@@ -30,12 +30,33 @@ const researchers: Researcher[] = [
   },
 ];
 
+const emptyFilterOptions = {
+  institutions: [],
+  positions: [],
+  fields: [],
+};
+
 function renderWithSWR(ui: React.ReactElement) {
   return render(
     <SWRConfig value={{ provider: () => new Map(), shouldRetryOnError: false }}>
       {ui}
     </SWRConfig>
   );
+}
+
+function mockFetchResponses(
+  researchersResponse: unknown,
+  filterOptionsResponse: unknown = emptyFilterOptions
+) {
+  (global.fetch as jest.Mock).mockImplementation(async (url: string) => {
+    if (url.includes("/api/filter-options")) {
+      return { ok: true, json: async () => filterOptionsResponse };
+    }
+    if (url.includes("/api/researchers")) {
+      return { ok: true, json: async () => researchersResponse };
+    }
+    return { ok: false, status: 404, statusText: "Not Found" };
+  });
 }
 
 beforeEach(() => {
@@ -45,10 +66,7 @@ beforeEach(() => {
 
 describe("ResearchersContent", () => {
   it("renders all researchers", async () => {
-    (global.fetch as jest.Mock).mockResolvedValueOnce({
-      ok: true,
-      json: async () => ({ items: researchers }),
-    });
+    mockFetchResponses({ items: researchers });
 
     renderWithSWR(<ResearchersContent />);
 
@@ -61,16 +79,19 @@ describe("ResearchersContent", () => {
   });
 
   it("shows loading state", () => {
-    (global.fetch as jest.Mock).mockReturnValueOnce(new Promise(() => {}));
+    (global.fetch as jest.Mock).mockReturnValue(new Promise(() => {}));
 
     renderWithSWR(<ResearchersContent />);
     expect(screen.getByText(/Loading/i)).toBeInTheDocument();
   });
 
   it("shows error state", async () => {
-    (global.fetch as jest.Mock).mockRejectedValueOnce(
-      new Error("Network error")
-    );
+    (global.fetch as jest.Mock).mockImplementation(async (url: string) => {
+      if (url.includes("/api/filter-options")) {
+        return { ok: true, json: async () => emptyFilterOptions };
+      }
+      throw new Error("Network error");
+    });
 
     renderWithSWR(<ResearchersContent />);
 
