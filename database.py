@@ -400,11 +400,18 @@ class Database:
                                 logging.warning("Migration: scrape_log.idx_scrape_status: %s", e)
 
                         # Downgrade html_content.content from LONGTEXT to MEDIUMTEXT
-                        try:
-                            cursor.execute("ALTER TABLE html_content MODIFY content MEDIUMTEXT")
-                            conn.commit()
-                        except Exception as e:
-                            logging.warning("Migration: html_content.content type: %s", e)
+                        cursor.execute(
+                            "SELECT DATA_TYPE FROM information_schema.COLUMNS "
+                            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'html_content' "
+                            "AND COLUMN_NAME = 'content'"
+                        )
+                        content_row = cursor.fetchone()
+                        if content_row and content_row[0] != 'mediumtext':
+                            try:
+                                cursor.execute("ALTER TABLE html_content MODIFY content MEDIUMTEXT")
+                                conn.commit()
+                            except Exception as e:
+                                logging.warning("Migration: html_content.content type: %s", e)
 
                         # Backfill seed publications if any unseeded papers exist
                         cursor.execute(
@@ -421,14 +428,16 @@ class Database:
                                 Database.backfill_seed_publications()
                                 logging.info("Seed backfill complete")
 
-                        # Convert all tables to utf8mb4
-                        _ALL_TABLES = [
-                            "researchers", "researcher_urls", "papers", "html_content",
-                            "authorship", "research_fields", "researcher_fields",
-                            "scrape_log", "researcher_snapshots", "paper_snapshots",
-                            "paper_urls", "llm_usage", "feed_events", "batch_jobs",
-                        ]
-                        for tbl in _ALL_TABLES:
+                        # Convert all tables to utf8mb4 (skip if already done)
+                        cursor.execute(
+                            "SELECT TABLE_NAME FROM information_schema.TABLES "
+                            "WHERE TABLE_SCHEMA = DATABASE() "
+                            "AND TABLE_COLLATION != 'utf8mb4_unicode_ci'"
+                        )
+                        tables_needing_charset = {r[0] for r in cursor.fetchall()}
+                        for tbl in table_definitions:
+                            if tbl not in tables_needing_charset:
+                                continue
                             try:
                                 cursor.execute(
                                     f"ALTER TABLE `{tbl}` CONVERT TO CHARACTER SET utf8mb4 "
