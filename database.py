@@ -161,7 +161,7 @@ class Database:
             "papers": """
                 CREATE TABLE IF NOT EXISTS papers (
                     id INT AUTO_INCREMENT PRIMARY KEY,
-                    url VARCHAR(2048),
+                    source_url VARCHAR(2048),
                     title TEXT,
                     title_hash CHAR(64) DEFAULT NULL,
                     year VARCHAR(4),
@@ -437,6 +437,19 @@ class Database:
                                 conn.commit()
                             except Exception as e:
                                 logging.warning("Migration: utf8mb4 for %s: %s", tbl, e)
+
+                        # Rename papers.url → papers.source_url
+                        try:
+                            cursor.execute(
+                                "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'papers' "
+                                "AND COLUMN_NAME = 'url'"
+                            )
+                            if cursor.fetchone()[0] > 0:
+                                cursor.execute("ALTER TABLE papers RENAME COLUMN url TO source_url")
+                                conn.commit()
+                        except Exception as e:
+                            logging.warning("Migration: papers.url rename: %s", e)
                     finally:
                         cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                         cursor.fetchone()

@@ -250,7 +250,7 @@ def _get_authors_for_publications(pub_ids: list[int]) -> dict[int, list[dict]]:
 def _format_publication(row, authors: list[dict]) -> dict:
     """Format a publication DB row + authors into the API response shape.
 
-    Expected row columns: id, title, year, venue, url, timestamp, status, draft_url, abstract, draft_url_status
+    Expected row columns: id, title, year, venue, source_url, timestamp, status, draft_url, abstract, draft_url_status
     """
     draft_url = row[7] if len(row) > 7 else None
     abstract = row[8] if len(row) > 8 else None
@@ -276,7 +276,7 @@ def _format_feed_event(row, authors: list[dict]) -> dict:
 
     Expected row columns (positional):
         0: event_id, 1: event_type, 2: event_old_status, 3: event_new_status, 4: event_date,
-        5: paper_id, 6: title, 7: year, 8: venue, 9: url, 10: timestamp,
+        5: paper_id, 6: title, 7: year, 8: venue, 9: source_url, 10: timestamp,
         11: status, 12: draft_url, 13: abstract, 14: draft_url_status
     """
     return {
@@ -405,7 +405,7 @@ def list_publications(
     rows = Database.fetch_all(
         f"""
         SELECT fe.id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
-               p.id, p.title, p.year, p.venue, p.url, p.timestamp,
+               p.id, p.title, p.year, p.venue, p.source_url, p.timestamp,
                p.status, p.draft_url, p.abstract, p.draft_url_status
         FROM feed_events fe
         JOIN papers p ON p.id = fe.paper_id
@@ -439,7 +439,7 @@ def get_publication(
     include_history: bool = Query(False),
 ):
     row = Database.fetch_one(
-        "SELECT id, title, year, venue, url, timestamp, status, draft_url, abstract, draft_url_status FROM papers WHERE id = %s",
+        "SELECT id, title, year, venue, source_url, timestamp, status, draft_url, abstract, draft_url_status FROM papers WHERE id = %s",
         (publication_id,),
     )
     if not row:
@@ -729,7 +729,7 @@ def get_researcher(
     # Fetch this researcher's publications
     pub_rows = Database.fetch_all(
         """
-        SELECT p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url,
+        SELECT p.id, p.title, p.year, p.venue, p.source_url, p.timestamp, p.status, p.draft_url,
                p.abstract, p.draft_url_status
         FROM papers p
         JOIN authorship a ON a.publication_id = p.id

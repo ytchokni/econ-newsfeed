@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL')
 _openai_client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
 
-CONTENT_MAX_CHARS = os.environ.get('CONTENT_MAX_CHARS')
+CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS', '4000'))
 
 _VALID_STATUSES = Literal[
     'published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper'
@@ -90,7 +90,7 @@ class Publication:
                     # is_seed is set on INSERT but NOT updated on duplicate (preserves original).
                     cursor.execute(
                         """
-                        INSERT IGNORE INTO papers (url, title, title_hash, year, venue, abstract, timestamp, status, draft_url, is_seed)
+                        INSERT IGNORE INTO papers (source_url, title, title_hash, year, venue, abstract, timestamp, status, draft_url, is_seed)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (url, title, title_hash, pub.get('year'), pub.get('venue'),
@@ -143,7 +143,7 @@ class Publication:
                     # Process authors
                     for author_order, author in enumerate(pub['authors'], start=1):
                         first_name, last_name = author
-                        author_id = Database.get_researcher_id(first_name, last_name)
+                        author_id = Database.get_researcher_id(first_name, last_name, conn=conn)
 
                         # INSERT IGNORE prevents duplicate authorship entries (uq_researcher_pub)
                         cursor.execute(
@@ -159,9 +159,12 @@ class Publication:
                     logging.info(f"Publication saved successfully: {pub['title']}")
 
             except Exception as e:
-                logging.error("Error saving publication: %s", type(e).__name__)
-                if conn is not None:
-                    conn.rollback()
+                logging.error("Error saving publication '%s': %s: %s", pub.get('title', '?'), type(e).__name__, e)
+                try:
+                    if conn is not None:
+                        conn.rollback()
+                except Exception:
+                    pass
 
         logging.info(f"{len(publications)} publications processed for {url}")
 
@@ -278,7 +281,7 @@ Content:
     def get_all_publications():
         """Retrieve all publications from the database."""
         query = """
-            SELECT id, url, title, year, venue
+            SELECT id, source_url, title, year, venue
             FROM papers
         """
         results = Database.fetch_all(query)
