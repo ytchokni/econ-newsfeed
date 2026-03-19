@@ -114,7 +114,7 @@ class Database:
                 return cursor.fetchone()
 
     @staticmethod
-    def _column_exists(cursor, table, column):
+    def _column_exists(cursor, table: str, column: str) -> bool:
         """Check if a column exists in the given table."""
         cursor.execute(
             "SELECT COUNT(*) FROM information_schema.COLUMNS "
@@ -125,7 +125,7 @@ class Database:
         return cursor.fetchone()[0] > 0
 
     @staticmethod
-    def _migrate_fk_cascade(cursor, table, column, ref_table, ref_column, fk_status):
+    def _migrate_fk_cascade(cursor, table: str, column: str, ref_table: str, ref_column: str, fk_status: dict[tuple[str, str], str]) -> None:
         """Ensure FK on (table.column → ref_table.ref_column) has ON DELETE CASCADE.
         fk_status is a pre-fetched dict of (table, column) → delete_rule from information_schema."""
         if fk_status.get((table, column)) == 'CASCADE':
