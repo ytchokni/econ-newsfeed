@@ -550,6 +550,30 @@ def list_fields(request: Request):
     return {"items": [{"id": r[0], "name": r[1], "slug": r[2]} for r in rows]}
 
 
+@app.get("/api/filter-options")
+@limiter.limit("30/minute")
+def get_filter_options(request: Request, response: Response):
+    institutions = Database.fetch_all(
+        "SELECT DISTINCT affiliation FROM researchers "
+        "WHERE affiliation IS NOT NULL AND affiliation != '' "
+        "ORDER BY affiliation"
+    )
+    positions = Database.fetch_all(
+        "SELECT DISTINCT position FROM researchers "
+        "WHERE position IS NOT NULL AND position != '' "
+        "ORDER BY position"
+    )
+    fields = Database.fetch_all(
+        "SELECT id, name, slug FROM research_fields ORDER BY name"
+    )
+    response.headers["Cache-Control"] = "public, max-age=600"
+    return {
+        "institutions": [r[0] for r in institutions],
+        "positions": [r[0] for r in positions],
+        "fields": [{"id": r[0], "name": r[1], "slug": r[2]} for r in fields],
+    }
+
+
 @app.get("/api/researchers")
 @limiter.limit("60/minute")
 def list_researchers(
@@ -575,7 +599,23 @@ def list_researchers(
         dept_conditions = " OR ".join(["r.affiliation LIKE %s"] * len(_TOP20_DEPT_KEYWORDS))
         conditions.append(f"({dept_conditions})")
         params.extend(f"%{kw}%" for kw in _TOP20_DEPT_KEYWORDS)
-    # ?field= filtering depends on the field taxonomy table (Issue #11); stubbed until that schema lands
+    if field:
+        field_slugs = [f.strip() for f in field.split(",") if f.strip()]
+        if len(field_slugs) == 1:
+            conditions.append(
+                "r.id IN (SELECT rf.researcher_id FROM researcher_fields rf "
+                "JOIN research_fields f ON f.id = rf.field_id "
+                "WHERE f.slug = %s)"
+            )
+            params.append(field_slugs[0])
+        else:
+            placeholders = ",".join(["%s"] * len(field_slugs))
+            conditions.append(
+                f"r.id IN (SELECT rf.researcher_id FROM researcher_fields rf "
+                f"JOIN research_fields f ON f.id = rf.field_id "
+                f"WHERE f.slug IN ({placeholders}))"
+            )
+            params.extend(field_slugs)
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
