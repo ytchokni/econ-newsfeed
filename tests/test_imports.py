@@ -54,14 +54,21 @@ def test_module_imports_cleanly(module_name):
         patch("mysql.connector.connect", return_value=MagicMock())
     )
 
+    # Save original module so we can restore it after the test.
+    # Other test files hold references to classes imported during collection;
+    # if we leave a reimported module in sys.modules, those references become
+    # stale and patches in other tests target the wrong class object.
+    original = sys.modules.get(module_name)
+
     for p in patches:
         p.start()
     try:
-        # Remove from cache so importlib re-executes the module code,
-        # catching errors even if a prior parametrized case imported it transitively
         sys.modules.pop(module_name, None)
         mod = importlib.import_module(module_name)
         assert mod is not None
     finally:
         for p in patches:
             p.stop()
+        # Restore original module to avoid breaking other tests
+        if original is not None:
+            sys.modules[module_name] = original

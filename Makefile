@@ -1,4 +1,4 @@
-.PHONY: setup dev seed reset-db scrape fetch parse parse-fast batch-submit batch-check
+.PHONY: setup dev seed reset-db scrape fetch parse parse-fast batch-submit batch-check check
 
 setup:
 	python3 -m venv .venv
@@ -42,3 +42,14 @@ batch-submit:
 
 batch-check:
 	.venv/bin/python -c "from main import batch_check; batch_check()"
+
+check:
+	@echo "=== Step 1: Env validation ==="
+	.venv/bin/python scripts/check_env.py
+	@echo "=== Step 2: Python tests ==="
+	.venv/bin/pytest
+	@echo "=== Step 3: TypeScript check ==="
+	cd app && npx tsc --noEmit
+	@echo "=== Step 4: Frontend tests ==="
+	cd app && npx jest
+	@echo "=== All checks passed ==="

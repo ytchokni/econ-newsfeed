@@ -12,11 +12,17 @@ from fastapi.testclient import TestClient
 
 @pytest.fixture
 def client():
-    """Create a test client with mocked database and scheduler."""
+    """Create a test client with mocked database and scheduler.
+
+    Patches both scheduler.* and api.* because test_imports.py may
+    reimport api outside patch context, binding the real functions.
+    """
     with (
         patch("database.Database.create_tables"),
         patch("scheduler.start_scheduler"),
         patch("scheduler.shutdown_scheduler"),
+        patch("api.start_scheduler"),
+        patch("api.shutdown_scheduler"),
     ):
         from api import app
         with TestClient(app) as c:
