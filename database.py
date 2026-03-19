@@ -381,16 +381,19 @@ class Database:
         """
         with Database.get_connection() as conn:
             with conn.cursor() as cursor:
+                # MySQL can't UPDATE a table referenced in a subquery,
+                # so use a derived table (JOIN with a temp result).
                 cursor.execute(
                     """UPDATE papers p
                        JOIN authorship a ON a.publication_id = p.id
-                       SET p.is_seed = TRUE
-                       WHERE p.timestamp = (
-                           SELECT MIN(p2.timestamp)
+                       JOIN (
+                           SELECT a2.researcher_id, MIN(p2.timestamp) AS min_ts
                            FROM papers p2
                            JOIN authorship a2 ON a2.publication_id = p2.id
-                           WHERE a2.researcher_id = a.researcher_id
-                       )"""
+                           GROUP BY a2.researcher_id
+                       ) earliest ON earliest.researcher_id = a.researcher_id
+                                 AND p.timestamp = earliest.min_ts
+                       SET p.is_seed = TRUE"""
                 )
                 conn.commit()
                 return cursor.rowcount
