@@ -18,13 +18,11 @@ from database.connection import (
 from database.schema import (
     create_database as _create_database,
     create_tables as _create_tables,
-    _migrate_fk_cascade,
     seed_research_fields as _seed_research_fields,
     backfill_seed_publications as _backfill_seed_publications,
 )
 from database.researchers import (
     get_researcher_id as _get_researcher_id,
-    _disambiguate_researcher,
     update_researcher_bio as _update_researcher_bio,
     add_researcher_url as _add_researcher_url,
     import_data_from_file as _import_data_from_file,
@@ -60,13 +58,11 @@ class Database:
     # Schema
     create_database = staticmethod(_create_database)
     create_tables = staticmethod(_create_tables)
-    _migrate_fk_cascade = staticmethod(_migrate_fk_cascade)
     seed_research_fields = staticmethod(_seed_research_fields)
     backfill_seed_publications = staticmethod(_backfill_seed_publications)
 
     # Researchers
     get_researcher_id = staticmethod(_get_researcher_id)
-    _disambiguate_researcher = staticmethod(_disambiguate_researcher)
     update_researcher_bio = staticmethod(_update_researcher_bio)
     add_researcher_url = staticmethod(_add_researcher_url)
     import_data_from_file = staticmethod(_import_data_from_file)

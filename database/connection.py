@@ -1,5 +1,4 @@
 """Connection pool and low-level query execution."""
-import logging
 import os
 
 from mysql.connector.pooling import MySQLConnectionPool

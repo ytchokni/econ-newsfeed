@@ -211,6 +211,11 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _iso_z(dt) -> str | None:
+    """Format a datetime as ISO 8601 with trailing Z, or None."""
+    return dt.isoformat() + "Z" if dt else None
+
+
 def _get_authors_for_publication(publication_id: int) -> list[dict]:
     """Fetch authors for a single publication via the authorship table."""
     rows = Database.fetch_all(
@@ -256,7 +261,7 @@ def _format_publication(row, authors: list[dict]) -> dict:
         "year": row['year'],
         "venue": row['venue'],
         "source_url": row['url'],
-        "discovered_at": row['timestamp'].isoformat() + "Z" if row.get('timestamp') else None,
+        "discovered_at": _iso_z(row.get('timestamp')),
         "status": row.get('status'),
         "draft_url": row.get('draft_url'),
         "draft_available": row.get('draft_url_status') == 'valid',
@@ -271,20 +276,20 @@ def _format_feed_event(row, authors: list[dict]) -> dict:
         "id": row['paper_id'],
         "event_id": row['event_id'],
         "event_type": row['event_type'],
-        "old_status": row['old_status'],
-        "new_status": row['new_status'],
-        "event_date": row['created_at'].isoformat() + "Z" if row.get('created_at') else None,
+        "old_status": row.get('old_status'),
+        "new_status": row.get('new_status'),
+        "event_date": _iso_z(row.get('created_at')),
         "title": row['title'],
         "authors": authors,
         "year": row['year'],
         "venue": row['venue'],
         "source_url": row['url'],
-        "discovered_at": row['discovered_at'].isoformat() + "Z" if row.get('discovered_at') else None,
-        "status": row['status'],
-        "draft_url": row['draft_url'],
-        "draft_available": row.get('draft_url_status') == 'valid' if row.get('draft_url_status') else False,
-        "abstract": row['abstract'],
-        "draft_url_status": row['draft_url_status'],
+        "discovered_at": _iso_z(row.get('discovered_at')),
+        "status": row.get('status'),
+        "draft_url": row.get('draft_url'),
+        "draft_available": row.get('draft_url_status') == 'valid',
+        "abstract": row.get('abstract'),
+        "draft_url_status": row.get('draft_url_status'),
     }
 
 
@@ -445,7 +450,7 @@ def get_publication(
                 "draft_url": s['draft_url'],
                 "draft_url_status": s['draft_url_status'],
                 "year": s['year'],
-                "scraped_at": s['scraped_at'].isoformat() + "Z" if s['scraped_at'] else None,
+                "scraped_at": _iso_z(s['scraped_at']),
                 "source_url": s['source_url'],
             }
             for s in snapshots
@@ -750,7 +755,7 @@ def get_researcher(
                 "position": s['position'],
                 "affiliation": s['affiliation'],
                 "description": s['description'],
-                "scraped_at": s['scraped_at'].isoformat() + "Z" if s['scraped_at'] else None,
+                "scraped_at": _iso_z(s['scraped_at']),
                 "source_url": s['source_url'],
             }
             for s in snapshots
@@ -788,7 +793,7 @@ async def trigger_scrape(request: Request):
     return {
         "scrape_id": log_id,
         "status": "running",
-        "started_at": started_at.isoformat() + "Z",
+        "started_at": _iso_z(started_at),
     }
 
 
@@ -811,14 +816,14 @@ def scrape_status(request: Request):
         return {"last_scrape": None, "next_scrape_at": None, "interval_hours": interval}
 
     started_at = row['started_at']
-    next_scrape = (started_at + timedelta(hours=interval)).isoformat() + "Z" if started_at else None
+    next_scrape = _iso_z(started_at + timedelta(hours=interval)) if started_at else None
 
     return {
         "last_scrape": {
             "id": row['id'],
             "status": row['status'],
-            "started_at": row['started_at'].isoformat() + "Z" if row['started_at'] else None,
-            "finished_at": row['finished_at'].isoformat() + "Z" if row['finished_at'] else None,
+            "started_at": _iso_z(row['started_at']),
+            "finished_at": _iso_z(row['finished_at']),
             "urls_checked": row['urls_checked'],
             "urls_changed": row['urls_changed'],
             "pubs_extracted": row['pubs_extracted'],
