@@ -6,6 +6,7 @@ setup:
 	cd app && npm install
 
 dev:
+	@trap 'kill 0' INT TERM; \
 	.venv/bin/python -m uvicorn api:app --reload --port 8001 & \
 	cd app && API_INTERNAL_URL=http://localhost:8001 npm run dev & \
 	wait
