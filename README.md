@@ -1,59 +1,100 @@
 # Econ Newsfeed
 
-A web scraping system for economics research papers from personal websites. This tool automatically collects, processes, and stores publication information from economists' personal websites.
+Full-stack application that monitors economics researchers' personal websites, detects new publications via LLM-powered extraction, and displays them in a chronological newsfeed.
 
-## Features
+**Stack:** FastAPI backend, Next.js 14 frontend, MySQL 8, OpenAI API.
 
-- **Database Management**: MySQL database for storing researcher information, publications, and HTML content
-- **Web Scraping**: Fetch HTML content from researcher websites and process publication using Open AI API
-- **Change Detection**: Only send content after significant website changes
+## Quick Start (Docker Compose)
 
-## Requirements
-
-- Requires API Key for OpenAI
-- MySQL or MariaDB database
-
-## Setup
-
-1. Clone the repository
-2. Install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
-3. Create a `.env` file with your database and OpenAI API credentials
-4. Create the database structure:
-   ```
-   python database.py
-   ```
-
-## Usage
-
-Run the main program:
-```
-python main.py
+```bash
+cp .env.example .env
+# Edit .env — set OPENAI_API_KEY, DB_PASSWORD, MYSQL_ROOT_PASSWORD, SCRAPE_API_KEY
+docker compose up
 ```
 
-This will present a menu with options to:
-1. Import researcher data from a file
-2. Download HTML content from researcher websites
-3. Extract publication data from the HTML content
-4. Exit the program
+The frontend is available at `http://localhost:3000` and the API at `http://localhost:8000`.
 
-## Data Import Format
+## Development Setup
 
-Import researcher URLs via CSV file with the following columns:
-- First name
-- Last name
-- Position
-- Affiliation
-- Page type (e.g., "PUB" for publications, "WP" for working papers)
-- URL
+### Backend
 
-## Database Structure
+```bash
+poetry install
+poetry run uvicorn api:app --reload --port 8000
+```
 
-- **researchers**: Basic researcher information
-- **researcher_urls**: URLs associated with researchers
-- **publications**: Publication details (title, year, venue)
-- **html_content**: Stored HTML content with hashing for change detection
-- **authorship**: Links researchers to publications
+### Frontend
 
+```bash
+cd app
+npm install
+npm run dev
+```
+
+### Database
+
+Docker Compose starts MySQL 8 automatically. For local development without Docker, create a MySQL database and configure connection details in `.env`.
+
+## Environment Variables
+
+Copy `.env.example` and fill in the required values. Key variables:
+
+| Variable | Description |
+|---|---|
+| `OPENAI_API_KEY` | OpenAI API key (required) |
+| `DB_PASSWORD` | MySQL application user password (required) |
+| `MYSQL_ROOT_PASSWORD` | MySQL root password (Docker Compose only) |
+| `SCRAPE_API_KEY` | API key for the POST /api/scrape endpoint (must be 16+ characters) |
+| `SCRAPE_INTERVAL_HOURS` | Hours between automatic scrape runs (default: 24) |
+| `CONTENT_MAX_CHARS` | Max characters to send to the LLM (default: 4000) |
+
+See `.env.example` for the full list.
+
+## Architecture Overview
+
+### Backend
+
+| Module | Purpose |
+|---|---|
+| `api.py` | FastAPI application with REST endpoints and rate limiting |
+| `scheduler.py` | APScheduler-based periodic scraping |
+| `database/` | Database package (schema, queries, connection pooling) |
+| `html_fetcher.py` | Fetches and hashes HTML content from researcher URLs |
+| `publication.py` | LLM-powered publication extraction from HTML |
+| `researcher.py` | Researcher CSV import |
+
+### Frontend
+
+Next.js 14 application in `app/` with server-side rendering and API route proxying.
+
+## API Endpoints
+
+| Method | Path | Auth | Description |
+|---|---|---|---|
+| GET | `/api/health` | No | Health check |
+| GET | `/api/metrics` | No | Scraping metrics and statistics |
+| GET | `/api/publications` | No | Paginated publication feed |
+| GET | `/api/publications/{id}` | No | Single publication details |
+| GET | `/api/researchers` | No | Paginated researcher list |
+| GET | `/api/researchers/{id}` | No | Single researcher with publications |
+| GET | `/api/fields` | No | List of research fields |
+| GET | `/api/filter-options` | No | Available filter values |
+| POST | `/api/scrape` | X-API-Key | Trigger a scrape run |
+| GET | `/api/scrape/status` | No | Current scrape job status |
+
+## Running Tests
+
+```bash
+# Backend
+poetry run pytest
+
+# Frontend
+cd app && npm test
+```
+
+## Security Notes
+
+- Never commit `.env` to version control (it is in `.gitignore`).
+- `SCRAPE_API_KEY` protects the scrape endpoint; use 16+ characters and rotate periodically.
+- In production, use Docker secrets or a cloud secret manager instead of environment variables.
+- The API binds to `127.0.0.1` by default in Docker Compose to avoid exposing services to the network.
