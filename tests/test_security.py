@@ -294,3 +294,35 @@ class TestRateLimitErrorEnvelope:
         assert "code" in body["error"]
         assert "message" in body["error"]
         assert body["error"]["code"] == "rate_limit_exceeded"
+
+
+# ---------------------------------------------------------------------------
+# DNS Pinning — validate_url_with_pin
+# ---------------------------------------------------------------------------
+
+class TestDNSPinning:
+    """validate_url_with_pin must return resolved IP for SSRF prevention."""
+
+    def test_returns_resolved_ip_for_public_address(self):
+        from html_fetcher import HTMLFetcher
+        with patch("socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 0))]):
+            safe, resolved_ip = HTMLFetcher.validate_url_with_pin("https://example.com/page")
+            assert safe is True
+            assert resolved_ip == "93.184.216.34"
+
+    def test_rejects_private_ip(self):
+        from html_fetcher import HTMLFetcher
+        with patch("socket.getaddrinfo", return_value=[(None, None, None, None, ("192.168.1.1", 0))]):
+            safe, resolved_ip = HTMLFetcher.validate_url_with_pin("https://evil.com/page")
+            assert safe is False
+            assert resolved_ip is None
+
+    def test_rejects_metadata_endpoint(self):
+        from html_fetcher import HTMLFetcher
+        safe, resolved_ip = HTMLFetcher.validate_url_with_pin("http://169.254.169.254/latest/meta-data/")
+        assert safe is False
+
+    def test_rejects_non_http_scheme(self):
+        from html_fetcher import HTMLFetcher
+        safe, _ = HTMLFetcher.validate_url_with_pin("file:///etc/passwd")
+        assert safe is False

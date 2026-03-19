@@ -140,6 +140,37 @@ class HTMLFetcher:
         return True
 
     @staticmethod
+    def validate_url_with_pin(url):
+        """Validate URL for SSRF and return (is_safe, resolved_ip).
+        The resolved IP should be used for the actual HTTP request to prevent DNS rebinding."""
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return False, None
+
+        if parsed.scheme not in ('http', 'https'):
+            return False, None
+
+        hostname = parsed.hostname
+        if not hostname:
+            return False, None
+
+        if hostname in ('169.254.169.254', 'metadata.google.internal'):
+            return False, None
+
+        try:
+            resolved_ip = socket.getaddrinfo(hostname, None)[0][4][0]
+            ip = ipaddress.ip_address(resolved_ip)
+            if ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local:
+                logging.warning("Rejected URL resolving to private/reserved IP: %s -> [redacted]", url)
+                return False, None
+        except (socket.gaierror, ValueError):
+            logging.warning(f"Could not resolve hostname for URL: {url}")
+            return False, None
+
+        return True, resolved_ip
+
+    @staticmethod
     def _rate_limit(url):
         """Enforce per-domain rate limiting (thread-safe)."""
         domain = urlparse(url).hostname
@@ -274,7 +305,8 @@ class HTMLFetcher:
             logging.info(f"Skipping URL ID {url_id} (fetched <24h ago): {url}")
             return False
 
-        if not HTMLFetcher.validate_url(url):
+        is_safe, _resolved_ip = HTMLFetcher.validate_url_with_pin(url)
+        if not is_safe:
             logging.warning(f"URL failed SSRF validation, skipping: {url}")
             return False
 
