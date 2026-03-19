@@ -90,7 +90,7 @@ class Publication:
                     # is_seed is set on INSERT but NOT updated on duplicate (preserves original).
                     cursor.execute(
                         """
-                        INSERT IGNORE INTO papers (url, title, title_hash, year, venue, abstract, timestamp, status, draft_url, is_seed)
+                        INSERT IGNORE INTO papers (source_url, title, title_hash, year, venue, abstract, discovered_at, status, draft_url, is_seed)
                         VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         """,
                         (url, title, title_hash, pub.get('year'), pub.get('venue'),
@@ -281,8 +281,8 @@ Content:
     def get_all_publications():
         """Retrieve all publications from the database."""
         query = """
-            SELECT id, url, title, year, venue
+            SELECT id, source_url, title, year, venue
             FROM papers
         """
         results = Database.fetch_all(query)
-        return [Publication(id=row['id'], url=row['url'], title=row['title'], year=row['year'], venue=row['venue'], authors=None) for row in results]
+        return [Publication(id=row['id'], url=row['source_url'], title=row['title'], year=row['year'], venue=row['venue'], authors=None) for row in results]

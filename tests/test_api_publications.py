@@ -26,17 +26,17 @@ def client():
 SAMPLE_PUBLICATIONS = [
     {"event_id": 100, "event_type": "new_paper", "old_status": None, "new_status": "working_paper",
      "created_at": datetime(2026, 3, 15, 14, 30), "paper_id": 1, "title": "Trade and Wages",
-     "year": "2024", "venue": "JLE", "url": "https://example.com/pub",
+     "year": "2024", "venue": "JLE", "source_url": "https://example.com/pub",
      "discovered_at": datetime(2026, 3, 15, 14, 30), "status": "working_paper",
      "draft_url": "https://ssrn.com/abstract=1", "abstract": None, "draft_url_status": "valid"},
     {"event_id": 101, "event_type": "new_paper", "old_status": None, "new_status": "accepted",
      "created_at": datetime(2026, 3, 14, 10, 0), "paper_id": 2, "title": "Immigration Effects",
-     "year": "2023", "venue": "QJE", "url": "https://example.com/pub2",
+     "year": "2023", "venue": "QJE", "source_url": "https://example.com/pub2",
      "discovered_at": datetime(2026, 3, 14, 10, 0), "status": "accepted",
      "draft_url": None, "abstract": None, "draft_url_status": None},
     {"event_id": 102, "event_type": "new_paper", "old_status": None, "new_status": "working_paper",
      "created_at": datetime(2026, 3, 13, 9, 0), "paper_id": 3, "title": "Labor Markets",
-     "year": "2024", "venue": "AER", "url": "https://example.com/pub3",
+     "year": "2024", "venue": "AER", "source_url": "https://example.com/pub3",
      "discovered_at": datetime(2026, 3, 13, 9, 0), "status": "working_paper",
      "draft_url": None, "abstract": None, "draft_url_status": None},
 ]
@@ -44,7 +44,7 @@ SAMPLE_PUBLICATIONS = [
 # 10-key papers dict for single publication detail endpoint
 SAMPLE_PUB_DETAIL = {
     "id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
-    "url": "https://example.com/pub", "timestamp": datetime(2026, 3, 15, 14, 30),
+    "source_url": "https://example.com/pub", "discovered_at": datetime(2026, 3, 15, 14, 30),
     "status": "working_paper", "draft_url": "https://ssrn.com/abstract=1",
     "abstract": None, "draft_url_status": "valid",
 }

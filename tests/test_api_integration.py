@@ -66,7 +66,7 @@ SAMPLE_PUB = {
     "event_id": 100, "event_type": "new_paper", "old_status": None, "new_status": "working_paper",
     "created_at": datetime(2026, 3, 15, 14, 30),
     "paper_id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
-    "url": "https://example.com/p", "discovered_at": datetime(2026, 3, 15, 14, 30),
+    "source_url": "https://example.com/p", "discovered_at": datetime(2026, 3, 15, 14, 30),
     "status": "working_paper", "draft_url": None, "abstract": None, "draft_url_status": None,
 }
 SAMPLE_AUTHORS = [{"publication_id": 1, "researcher_id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]
@@ -74,7 +74,7 @@ SAMPLE_AUTHORS_SINGLE = [{"id": 10, "first_name": "Max Friedrich", "last_name": 
 # Single publication detail (10-column papers row, used by GET /api/publications/{id})
 SAMPLE_PUB_DETAIL = {
     "id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
-    "url": "https://example.com/p", "timestamp": datetime(2026, 3, 15, 14, 30),
+    "source_url": "https://example.com/p", "discovered_at": datetime(2026, 3, 15, 14, 30),
     "status": "working_paper", "draft_url": None, "abstract": None, "draft_url_status": None,
 }
 SAMPLE_RESEARCHER = {"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "FU Berlin", "description": None}
@@ -182,7 +182,7 @@ _SMOKE_PUB = {
     "event_id": 100, "event_type": "new_paper", "old_status": None, "new_status": "working_paper",
     "created_at": datetime(2026, 3, 15, 14, 30),
     "paper_id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
-    "url": "https://example.com/p", "discovered_at": datetime(2026, 3, 15, 14, 30),
+    "source_url": "https://example.com/p", "discovered_at": datetime(2026, 3, 15, 14, 30),
     "status": "working_paper", "draft_url": None, "abstract": None, "draft_url_status": None,
 }
 _SMOKE_BATCH_AUTHORS = [{"publication_id": 1, "researcher_id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]

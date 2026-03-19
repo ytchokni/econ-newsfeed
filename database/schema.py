@@ -87,20 +87,20 @@ _TABLE_DEFINITIONS = {
     "papers": """
         CREATE TABLE IF NOT EXISTS papers (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            url VARCHAR(2048),
+            source_url VARCHAR(2048),
             title TEXT,
             title_hash CHAR(64) DEFAULT NULL,
             year VARCHAR(4),
             venue TEXT,
             abstract TEXT DEFAULT NULL,
-            timestamp DATETIME,
+            discovered_at DATETIME,
             status ENUM('published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper') DEFAULT NULL,
             draft_url VARCHAR(2048) DEFAULT NULL,
             draft_url_status ENUM('unchecked', 'valid', 'invalid', 'timeout') DEFAULT 'unchecked',
             draft_url_checked_at DATETIME DEFAULT NULL,
             is_seed BOOLEAN NOT NULL DEFAULT FALSE,
             UNIQUE KEY uq_title_hash (title_hash),
-            INDEX idx_timestamp (timestamp),
+            INDEX idx_discovered_at (discovered_at),
             INDEX idx_status (status),
             INDEX idx_year (year),
             INDEX idx_is_seed (is_seed)
@@ -352,6 +352,37 @@ def create_tables():
                             conn.commit()
                         except Exception as e:
                             logging.warning("Migration: utf8mb4 for %s: %s", tbl, e)
+
+                    # Rename papers.url → papers.source_url
+                    try:
+                        cursor.execute(
+                            "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'papers' "
+                            "AND COLUMN_NAME = 'url'"
+                        )
+                        if cursor.fetchone()[0] > 0:
+                            cursor.execute("ALTER TABLE papers RENAME COLUMN url TO source_url")
+                            conn.commit()
+                    except Exception as e:
+                        logging.warning("Migration: papers.url rename: %s", e)
+
+                    # Rename papers.timestamp → papers.discovered_at
+                    try:
+                        cursor.execute(
+                            "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'papers' "
+                            "AND COLUMN_NAME = 'timestamp'"
+                        )
+                        if cursor.fetchone()[0] > 0:
+                            cursor.execute("ALTER TABLE papers RENAME COLUMN `timestamp` TO discovered_at")
+                            try:
+                                cursor.execute("ALTER TABLE papers DROP INDEX idx_timestamp")
+                            except Exception:
+                                pass
+                            cursor.execute("ALTER TABLE papers ADD INDEX idx_discovered_at (discovered_at)")
+                            conn.commit()
+                    except Exception as e:
+                        logging.warning("Migration: papers.timestamp rename: %s", e)
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                     cursor.fetchone()
