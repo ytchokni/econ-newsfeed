@@ -373,30 +373,22 @@ class Database:
 
     @staticmethod
     def backfill_seed_publications() -> int:
-        """Mark initial-batch publications as seeds.
+        """Mark all existing publications as seed.
 
-        A researcher with multiple URLs gets papers extracted at slightly
-        different timestamps within the same scrape session.  To handle
-        this, we mark ALL papers from the first scrape session as seed.
-        The first session is identified as: all papers whose timestamp
-        falls within 30 minutes of the researcher's earliest paper.
-        This safely covers multi-URL researchers scraped in one job.
-        Returns the number of rows updated.
+        Since html_content stores only one row per URL (upsert), we
+        cannot reliably distinguish first-scrape from re-scrape papers
+        using timestamps alone (researchers with multiple URLs get
+        papers at different times within the same session).
+
+        The safe approach: mark ALL existing papers as seed on first
+        run.  Going forward, the scheduler sets is_seed=True only
+        when old_text is None (first-ever scrape of a URL), so new
+        papers found on re-scrapes will correctly be is_seed=False.
         """
         with Database.get_connection() as conn:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    """UPDATE papers p
-                       JOIN authorship a ON a.publication_id = p.id
-                       JOIN (
-                           SELECT a2.researcher_id,
-                                  MIN(p2.timestamp) AS min_ts
-                           FROM papers p2
-                           JOIN authorship a2 ON a2.publication_id = p2.id
-                           GROUP BY a2.researcher_id
-                       ) earliest ON earliest.researcher_id = a.researcher_id
-                       SET p.is_seed = TRUE
-                       WHERE p.timestamp <= DATE_ADD(earliest.min_ts, INTERVAL 30 MINUTE)"""
+                    "UPDATE papers SET is_seed = TRUE WHERE is_seed = FALSE"
                 )
                 conn.commit()
                 return cursor.rowcount
