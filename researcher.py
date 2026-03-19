@@ -13,14 +13,20 @@ class Researcher:
     def get_all_researchers():
         """Retrieve all researchers from the database."""
         query = """
-            SELECT r.id, r.last_name, r.first_name, r.position, r.affiliation, ru.id, ru.url
+            SELECT r.id AS researcher_id, r.last_name, r.first_name, r.position, r.affiliation, ru.id AS url_id, ru.url
             FROM researchers r
             LEFT JOIN researcher_urls ru ON r.id = ru.researcher_id
         """
         results = Database.fetch_all(query)
         researchers = {}
         for row in results:
-            researcher_id, last_name, first_name, position, affiliation, url_id, url = row
+            researcher_id = row['researcher_id']
+            last_name = row['last_name']
+            first_name = row['first_name']
+            position = row['position']
+            affiliation = row['affiliation']
+            url_id = row['url_id']
+            url = row['url']
             if researcher_id not in researchers:
                 researchers[researcher_id] = Researcher(
                     researcher_id,

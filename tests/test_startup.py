@@ -66,7 +66,7 @@ class TestScrapeApiKeyValidation:
                 with TestClient(api_mod.app) as c:
                     # App started successfully — verify it responds
                     with (
-                        patch("api.Database.fetch_one", return_value=(0,)),
+                        patch("api.Database.fetch_one", return_value={"total": 0}),
                         patch("api.Database.fetch_all", return_value=[]),
                     ):
                         resp = c.get("/api/publications")

@@ -78,10 +78,10 @@ class Database:
     def fetch_all(query, params=None):
         """
         Execute a query with optional parameters and fetch all results.
-        Returns a list of tuples containing the results.
+        Returns a list of dicts keyed by column name.
         """
         with Database.get_connection() as conn:
-            with conn.cursor() as cursor:
+            with conn.cursor(dictionary=True) as cursor:
                 cursor.execute(query, params)
                 return cursor.fetchall()
 
@@ -89,9 +89,10 @@ class Database:
     def fetch_one(query, params=None):
         """
         Execute a SELECT query and fetch one result.
+        Returns a dict keyed by column name, or None.
         """
         with Database.get_connection() as conn:
-            with conn.cursor() as cursor:
+            with conn.cursor(dictionary=True) as cursor:
                 cursor.execute(query, params)
                 return cursor.fetchone()
 
@@ -530,7 +531,7 @@ class Database:
         Returns the matching researcher id (int) or None if no match.
         candidates: list of (id, first_name, last_name)
         """
-        candidates_text = "\n".join(f"- ID {c[0]}: {c[1]} {c[2]}" for c in candidates)
+        candidates_text = "\n".join(f"- ID {c['id']}: {c['first_name']} {c['last_name']}" for c in candidates)
         prompt = (
             f'You are disambiguating researcher names. A publication lists the author as: '
             f'"{first_name} {last_name}"\n\n'
@@ -559,7 +560,7 @@ class Database:
                 data = json.loads(match.group(0))
                 match_id = data.get('match_id')
                 if match_id is not None:
-                    candidate_ids = {c[0] for c in candidates}
+                    candidate_ids = {c['id'] for c in candidates}
                     match_id_int = int(match_id)
                     if match_id_int in candidate_ids:
                         return match_id_int
@@ -580,7 +581,7 @@ class Database:
         """
         def _fetch_one(query, params):
             if conn is not None:
-                c = conn.cursor()
+                c = conn.cursor(dictionary=True)
                 c.execute(query, params)
                 row = c.fetchone()
                 c.close()
@@ -589,7 +590,7 @@ class Database:
 
         def _fetch_all(query, params):
             if conn is not None:
-                c = conn.cursor()
+                c = conn.cursor(dictionary=True)
                 c.execute(query, params)
                 rows = c.fetchall()
                 c.close()
@@ -612,7 +613,7 @@ class Database:
             (first_name, last_name),
         )
         if result:
-            return result[0]
+            return result['id']
 
         # 2. Same-last-name candidates — let LLM decide if any is the same person
         candidates = _fetch_all(
@@ -677,7 +678,7 @@ class Database:
             "WHERE researcher_id = %s ORDER BY scraped_at DESC LIMIT 1",
             (researcher_id,),
         )
-        return result[0] if result else None
+        return result['content_hash'] if result else None
 
     @staticmethod
     def append_researcher_snapshot(researcher_id, position, affiliation, description, source_url=None):
@@ -735,7 +736,7 @@ class Database:
             "WHERE paper_id = %s ORDER BY scraped_at DESC LIMIT 1",
             (paper_id,),
         )
-        return result[0] if result else None
+        return result['content_hash'] if result else None
 
     @staticmethod
     def append_paper_snapshot(paper_id, status, venue, abstract, draft_url, year, source_url=None):

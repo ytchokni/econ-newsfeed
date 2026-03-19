@@ -62,22 +62,26 @@ class TestOpenAPI:
 
 # Feed events row shape: fe.id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
 #   p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url, p.abstract, p.draft_url_status
-SAMPLE_PUB = (
-    100, "new_paper", None, "working_paper", datetime(2026, 3, 15, 14, 30),
-    1, "Trade and Wages", "2024", "JLE", "https://example.com/p",
-    datetime(2026, 3, 15, 14, 30), "working_paper", None, None, None,
-)
-SAMPLE_AUTHORS = [(1, 10, "Max Friedrich", "Steinhardt")]
+SAMPLE_PUB = {
+    "event_id": 100, "event_type": "new_paper", "old_status": None, "new_status": "working_paper",
+    "created_at": datetime(2026, 3, 15, 14, 30),
+    "paper_id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
+    "url": "https://example.com/p", "discovered_at": datetime(2026, 3, 15, 14, 30),
+    "status": "working_paper", "draft_url": None, "abstract": None, "draft_url_status": None,
+}
+SAMPLE_AUTHORS = [{"publication_id": 1, "researcher_id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]
+SAMPLE_AUTHORS_SINGLE = [{"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]
 # Single publication detail (10-column papers row, used by GET /api/publications/{id})
-SAMPLE_PUB_DETAIL = (
-    1, "Trade and Wages", "2024", "JLE", "https://example.com/p",
-    datetime(2026, 3, 15, 14, 30), "working_paper", None, None, None,
-)
-SAMPLE_RESEARCHER = (10, "Max Friedrich", "Steinhardt", "Professor", "FU Berlin", None)
-SAMPLE_URLS_BATCH = [(10, 1, "PUB", "https://example.com/pubs")]
-SAMPLE_URLS_SINGLE = [(1, "PUB", "https://example.com/pubs")]
+SAMPLE_PUB_DETAIL = {
+    "id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
+    "url": "https://example.com/p", "timestamp": datetime(2026, 3, 15, 14, 30),
+    "status": "working_paper", "draft_url": None, "abstract": None, "draft_url_status": None,
+}
+SAMPLE_RESEARCHER = {"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "FU Berlin", "description": None}
+SAMPLE_URLS_BATCH = [{"researcher_id": 10, "id": 1, "page_type": "PUB", "url": "https://example.com/pubs"}]
+SAMPLE_URLS_SINGLE = [{"id": 1, "page_type": "PUB", "url": "https://example.com/pubs"}]
 SAMPLE_FIELDS: list = []
-SAMPLE_SCRAPE = (1, "completed", datetime(2026, 3, 16, 10, 0), datetime(2026, 3, 16, 10, 5), 10, 2, 3)
+SAMPLE_SCRAPE = {"id": 1, "status": "completed", "started_at": datetime(2026, 3, 16, 10, 0), "finished_at": datetime(2026, 3, 16, 10, 5), "urls_checked": 10, "urls_changed": 2, "pubs_extracted": 3}
 
 
 class TestFullCycle:
@@ -86,7 +90,7 @@ class TestFullCycle:
     def test_full_api_cycle(self, client):
         # 1. List publications
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
         ):
             mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS]
@@ -97,7 +101,7 @@ class TestFullCycle:
         # 2. Get single publication (uses old 10-column papers row shape)
         with (
             patch("api.Database.fetch_one", return_value=SAMPLE_PUB_DETAIL),
-            patch("api.Database.fetch_all", return_value=SAMPLE_AUTHORS),
+            patch("api.Database.fetch_all", return_value=SAMPLE_AUTHORS_SINGLE),
         ):
             resp = client.get("/api/publications/1")
         assert resp.status_code == 200
@@ -106,9 +110,9 @@ class TestFullCycle:
         # 3. List researchers
         with (
             patch("api.Database.fetch_all") as mock_all,
-            patch("api.Database.fetch_one", return_value=(5,)),
+            patch("api.Database.fetch_one", return_value={"total": 5}),
         ):
-            mock_all.side_effect = [[SAMPLE_RESEARCHER], SAMPLE_URLS_BATCH, [(10, 5)], SAMPLE_FIELDS]
+            mock_all.side_effect = [[SAMPLE_RESEARCHER], SAMPLE_URLS_BATCH, [{"researcher_id": 10, "cnt": 5}], SAMPLE_FIELDS]
             resp = client.get("/api/researchers")
         assert resp.status_code == 200
         assert len(resp.json()["items"]) == 1
@@ -118,7 +122,7 @@ class TestFullCycle:
             patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_all,
         ):
-            mock_one.side_effect = [SAMPLE_RESEARCHER, (5,)]
+            mock_one.side_effect = [SAMPLE_RESEARCHER, {"cnt": 5}]
             mock_all.side_effect = [SAMPLE_URLS_SINGLE, SAMPLE_FIELDS, [SAMPLE_PUB_DETAIL], SAMPLE_AUTHORS]
             resp = client.get("/api/researchers/10")
         assert resp.status_code == 200
@@ -174,18 +178,20 @@ class TestLifespan:
 # ---------------------------------------------------------------------------
 
 # Sample data for smoke tests (publication batch format)
-_SMOKE_PUB = (
-    100, "new_paper", None, "working_paper", datetime(2026, 3, 15, 14, 30),
-    1, "Trade and Wages", "2024", "JLE", "https://example.com/p",
-    datetime(2026, 3, 15, 14, 30), "working_paper", None, None, None,
-)
-_SMOKE_BATCH_AUTHORS = [(1, 10, "Max Friedrich", "Steinhardt")]
+_SMOKE_PUB = {
+    "event_id": 100, "event_type": "new_paper", "old_status": None, "new_status": "working_paper",
+    "created_at": datetime(2026, 3, 15, 14, 30),
+    "paper_id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
+    "url": "https://example.com/p", "discovered_at": datetime(2026, 3, 15, 14, 30),
+    "status": "working_paper", "draft_url": None, "abstract": None, "draft_url_status": None,
+}
+_SMOKE_BATCH_AUTHORS = [{"publication_id": 1, "researcher_id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]
 
 # Sample data for researchers (batch format)
-_SMOKE_RESEARCHER = (10, "Max Friedrich", "Steinhardt", "Professor", "FU Berlin", "Economist.")
-_SMOKE_BATCH_URLS = [(10, 1, "homepage", "https://example.com")]
-_SMOKE_BATCH_PUB_COUNTS = [(10, 5)]
-_SMOKE_BATCH_FIELDS = [(10, 1, "Labour Economics", "labour-economics")]
+_SMOKE_RESEARCHER = {"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "FU Berlin", "description": "Economist."}
+_SMOKE_BATCH_URLS = [{"researcher_id": 10, "id": 1, "page_type": "homepage", "url": "https://example.com"}]
+_SMOKE_BATCH_PUB_COUNTS = [{"researcher_id": 10, "cnt": 5}]
+_SMOKE_BATCH_FIELDS = [{"researcher_id": 10, "id": 1, "name": "Labour Economics", "slug": "labour-economics"}]
 
 
 class TestPublicationsSmoke:
@@ -211,7 +217,7 @@ class TestPublicationsSmoke:
     def test_publications_endpoint_responds_with_data(self, client):
         """GET /api/publications must return 200 with the expected shape — not hang."""
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
         ):
             mock_all.side_effect = [[_SMOKE_PUB], _SMOKE_BATCH_AUTHORS]
@@ -235,7 +241,7 @@ class TestPublicationsSmoke:
     def test_researchers_endpoint_responds_with_data(self, client):
         """GET /api/researchers must return 200 with the expected shape — not hang."""
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
         ):
             mock_all.side_effect = [

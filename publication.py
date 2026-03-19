@@ -159,7 +159,10 @@ class Publication:
                     logging.info(f"Publication saved successfully: {pub['title']}")
 
             except Exception as e:
-                logging.error("Error saving publication: %s", type(e).__name__)
+                logging.error(
+                    "Error saving publication '%s': %s: %s",
+                    pub.get('title', '<unknown>'), type(e).__name__, e,
+                )
                 if conn is not None:
                     conn.rollback()
 
@@ -232,7 +235,7 @@ Content:
 
             return [pub.model_dump() for pub in result.publications]
         except Exception as e:
-            logging.error("Error in OpenAI API call: %s", type(e).__name__)
+            logging.error("Error in OpenAI API call for %s: %s: %s", url, type(e).__name__, e)
             return []
 
     @staticmethod
@@ -282,4 +285,4 @@ Content:
             FROM papers
         """
         results = Database.fetch_all(query)
-        return [Publication(id=row[0], url=row[1], title=row[2], year=row[3], venue=row[4], authors=None) for row in results]
+        return [Publication(id=row['id'], url=row['url'], title=row['title'], year=row['year'], venue=row['venue'], authors=None) for row in results]

@@ -81,12 +81,13 @@ def update_scrape_log(log_id, status, urls_checked=0, urls_changed=0, pubs_extra
     """Update an existing scrape_log entry with results."""
     # Aggregate token totals from llm_usage for this scrape run
     token_row = Database.fetch_one(
-        """SELECT COALESCE(SUM(prompt_tokens), 0), COALESCE(SUM(completion_tokens), 0)
+        """SELECT COALESCE(SUM(prompt_tokens), 0) AS prompt_total,
+                  COALESCE(SUM(completion_tokens), 0) AS completion_total
            FROM llm_usage WHERE scrape_log_id = %s""",
         (log_id,),
     )
-    prompt_tokens_total = token_row[0] if token_row else 0
-    completion_tokens_total = token_row[1] if token_row else 0
+    prompt_tokens_total = token_row['prompt_total'] if token_row else 0
+    completion_tokens_total = token_row['completion_total'] if token_row else 0
 
     query = """
         UPDATE scrape_log
@@ -147,7 +148,11 @@ def run_scrape_job():
 
         scrape_start = time.time()
 
-        for url_id, researcher_id, url, page_type in urls:
+        for url_row in urls:
+            url_id = url_row['id']
+            researcher_id = url_row['researcher_id']
+            url = url_row['url']
+            page_type = url_row['page_type']
             urls_checked += 1
             url_start = time.time()
 
@@ -190,7 +195,7 @@ def run_scrape_job():
                                 )
                                 if paper_row:
                                     Database.append_paper_snapshot(
-                                        paper_id=paper_row[0],
+                                        paper_id=paper_row['id'],
                                         status=pub.get('status'),
                                         venue=pub.get('venue'),
                                         abstract=pub.get('abstract'),
@@ -215,8 +220,8 @@ def run_scrape_job():
                                 "SELECT position, affiliation FROM researchers WHERE id = %s",
                                 (researcher_id,),
                             )
-                            position = r_row[0] if r_row else None
-                            affiliation = r_row[1] if r_row else None
+                            position = r_row['position'] if r_row else None
+                            affiliation = r_row['affiliation'] if r_row else None
                             Database.append_researcher_snapshot(
                                 researcher_id, position, affiliation, description, source_url=url
                             )
@@ -242,9 +247,9 @@ def run_scrape_job():
         logger.info(f"Scrape completed: {urls_checked} checked, {urls_changed} changed, {pubs_extracted} extracted — {total_s:.1f}s total")
 
     except Exception as e:
-        logger.error("Scrape job failed: %s", type(e).__name__)
+        logger.error("Scrape job failed: %s: %s", type(e).__name__, e)
         if log_id:
-            update_scrape_log(log_id, "failed", error_message=type(e).__name__)
+            update_scrape_log(log_id, "failed", error_message=f"{type(e).__name__}: {e}")
     finally:
         _release_db_lock(lock_conn)
         _lock_conn = None

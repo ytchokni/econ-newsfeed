@@ -22,60 +22,60 @@ def client():
 
 # Sample DB return shapes
 SAMPLE_RESEARCHERS = [
-    # (id, first_name, last_name, position, affiliation, bio)
-    (1, "Max Friedrich", "Steinhardt", "Professor", "Freie Universität Berlin", "A leading researcher in trade economics."),
-    (2, "Jane", "Doe", "Assistant Professor", "MIT", None),
+    # {id, first_name, last_name, position, affiliation, description}
+    {"id": 1, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "Freie Universität Berlin", "description": "A leading researcher in trade economics."},
+    {"id": 2, "first_name": "Jane", "last_name": "Doe", "position": "Assistant Professor", "affiliation": "MIT", "description": None},
 ]
 
 SAMPLE_URLS_R1 = [
-    # (url_id, page_type, url) — used for single-researcher endpoint
-    (10, "PUB", "https://example.com/steinhardt/pubs"),
-    (11, "WP", "https://example.com/steinhardt/wp"),
-    (12, "homepage", "https://steinhardt.example.com"),
+    # {id, page_type, url} — used for single-researcher endpoint
+    {"id": 10, "page_type": "PUB", "url": "https://example.com/steinhardt/pubs"},
+    {"id": 11, "page_type": "WP", "url": "https://example.com/steinhardt/wp"},
+    {"id": 12, "page_type": "homepage", "url": "https://steinhardt.example.com"},
 ]
 
 SAMPLE_URLS_R2 = [
-    (20, "PUB", "https://example.com/doe/pubs"),
+    {"id": 20, "page_type": "PUB", "url": "https://example.com/doe/pubs"},
 ]
 
-SAMPLE_PUB_COUNT_R1 = (23,)
-SAMPLE_PUB_COUNT_R2 = (5,)
+SAMPLE_PUB_COUNT_R1 = {"cnt": 23}
+SAMPLE_PUB_COUNT_R2 = {"cnt": 5}
 
 # Batch formats for list endpoint
-# (researcher_id, url_id, page_type, url)
+# {researcher_id, id, page_type, url}
 BATCH_URLS_ALL = [
-    (1, 10, "PUB", "https://example.com/steinhardt/pubs"),
-    (1, 11, "WP", "https://example.com/steinhardt/wp"),
-    (1, 12, "homepage", "https://steinhardt.example.com"),
-    (2, 20, "PUB", "https://example.com/doe/pubs"),
+    {"researcher_id": 1, "id": 10, "page_type": "PUB", "url": "https://example.com/steinhardt/pubs"},
+    {"researcher_id": 1, "id": 11, "page_type": "WP", "url": "https://example.com/steinhardt/wp"},
+    {"researcher_id": 1, "id": 12, "page_type": "homepage", "url": "https://steinhardt.example.com"},
+    {"researcher_id": 2, "id": 20, "page_type": "PUB", "url": "https://example.com/doe/pubs"},
 ]
 BATCH_URLS_R1 = [
-    (1, 10, "PUB", "https://example.com/steinhardt/pubs"),
-    (1, 11, "WP", "https://example.com/steinhardt/wp"),
-    (1, 12, "homepage", "https://steinhardt.example.com"),
+    {"researcher_id": 1, "id": 10, "page_type": "PUB", "url": "https://example.com/steinhardt/pubs"},
+    {"researcher_id": 1, "id": 11, "page_type": "WP", "url": "https://example.com/steinhardt/wp"},
+    {"researcher_id": 1, "id": 12, "page_type": "homepage", "url": "https://steinhardt.example.com"},
 ]
 BATCH_URLS_R2 = [
-    (2, 20, "PUB", "https://example.com/doe/pubs"),
+    {"researcher_id": 2, "id": 20, "page_type": "PUB", "url": "https://example.com/doe/pubs"},
 ]
-# (researcher_id, count)
-BATCH_PUB_COUNTS_ALL = [(1, 23), (2, 5)]
-BATCH_PUB_COUNTS_R1 = [(1, 23)]
-BATCH_PUB_COUNTS_R2 = [(2, 5)]
-# (researcher_id, field.id, field.name, field.slug)
-BATCH_FIELDS_ALL = [(1, 1, "Labour Economics", "labour-economics")]
-BATCH_FIELDS_R1 = [(1, 1, "Labour Economics", "labour-economics")]
+# {researcher_id, cnt}
+BATCH_PUB_COUNTS_ALL = [{"researcher_id": 1, "cnt": 23}, {"researcher_id": 2, "cnt": 5}]
+BATCH_PUB_COUNTS_R1 = [{"researcher_id": 1, "cnt": 23}]
+BATCH_PUB_COUNTS_R2 = [{"researcher_id": 2, "cnt": 5}]
+# {researcher_id, id, name, slug}
+BATCH_FIELDS_ALL = [{"researcher_id": 1, "id": 1, "name": "Labour Economics", "slug": "labour-economics"}]
+BATCH_FIELDS_R1 = [{"researcher_id": 1, "id": 1, "name": "Labour Economics", "slug": "labour-economics"}]
 BATCH_FIELDS_R2 = []
 
-SAMPLE_RESEARCHER_DETAIL = (1, "Max Friedrich", "Steinhardt", "Professor", "Freie Universität Berlin", "A leading researcher in trade economics.")
+SAMPLE_RESEARCHER_DETAIL = {"id": 1, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "Freie Universität Berlin", "description": "A leading researcher in trade economics."}
 
 SAMPLE_PUBLICATIONS_R1 = [
-    # (pub.id, pub.title, pub.year, pub.venue, pub.url, pub.timestamp, pub.status, pub.draft_url, pub.abstract, pub.draft_url_status)
-    (1, "Trade and Wages", "2024", "JLE", "https://example.com/pub", datetime(2026, 3, 15, 14, 30), "published", None, None, None),
+    # {id, title, year, venue, url, timestamp, status, draft_url, abstract, draft_url_status}
+    {"id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE", "url": "https://example.com/pub", "timestamp": datetime(2026, 3, 15, 14, 30), "status": "published", "draft_url": None, "abstract": None, "draft_url_status": None},
 ]
 
 SAMPLE_FIELDS_R1 = [
-    # (field.id, field.name, field.slug)
-    (1, "Labour Economics", "labour-economics"),
+    # {id, name, slug}
+    {"id": 1, "name": "Labour Economics", "slug": "labour-economics"},
 ]
 
 
@@ -92,7 +92,7 @@ class TestListResearchers:
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_one.side_effect = [
-                (2,),                    # total count
+                {"total": 2},            # total count
             ]
             mock_fetch.side_effect = [
                 SAMPLE_RESEARCHERS,      # paginated researchers
@@ -117,7 +117,7 @@ class TestListResearchers:
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_one.side_effect = [
-                (1,),                # total count
+                {"total": 1},        # total count
             ]
             mock_fetch.side_effect = [
                 [SAMPLE_RESEARCHERS[0]],
@@ -150,7 +150,7 @@ class TestListResearchers:
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_one.side_effect = [
-                (2,),                    # total count
+                {"total": 2},            # total count
             ]
             mock_fetch.side_effect = [
                 SAMPLE_RESEARCHERS,      # paginated researchers
@@ -174,7 +174,7 @@ class TestListResearchers:
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_one.side_effect = [
-                (2,),                    # total count
+                {"total": 2},            # total count
             ]
             mock_fetch.side_effect = [
                 [SAMPLE_RESEARCHERS[1]], # paginated researchers (page 2)
@@ -206,7 +206,7 @@ class TestListResearchers:
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_one.side_effect = [
-                (1,),                    # total count
+                {"total": 1},            # total count
             ]
             mock_fetch.side_effect = [
                 [SAMPLE_RESEARCHERS[1]], # paginated researchers
@@ -226,7 +226,7 @@ class TestListResearchers:
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_one.side_effect = [
-                (1,),                        # total count
+                {"total": 1},                # total count
             ]
             mock_fetch.side_effect = [
                 [SAMPLE_RESEARCHERS[0]],     # paginated researchers
@@ -246,7 +246,7 @@ class TestListResearchers:
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_one.side_effect = [
-                (1,),                        # total count
+                {"total": 1},                # total count
             ]
             mock_fetch.side_effect = [
                 [SAMPLE_RESEARCHERS[1]],     # paginated researchers
@@ -265,7 +265,7 @@ class TestListResearchers:
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_one.side_effect = [
-                (2,),                    # total count
+                {"total": 2},            # total count
             ]
             mock_fetch.side_effect = [
                 SAMPLE_RESEARCHERS,      # paginated researchers
@@ -298,7 +298,7 @@ class TestGetResearcher:
                 SAMPLE_URLS_R1,              # urls
                 SAMPLE_FIELDS_R1,            # fields
                 SAMPLE_PUBLICATIONS_R1,      # publications
-                [(1, 1, "Max Friedrich", "Steinhardt")],  # batch authors: (pub_id, r_id, first, last)
+                [{"publication_id": 1, "researcher_id": 1, "first_name": "Max Friedrich", "last_name": "Steinhardt"}],  # batch authors
             ]
             response = client.get("/api/researchers/1")
 

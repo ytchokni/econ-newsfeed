@@ -11,3 +11,5 @@
 !publication.py
 !researcher.py
 !scheduler.py
+!pyproject.toml
+!poetry.lock
