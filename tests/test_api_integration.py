@@ -86,6 +86,18 @@ class TestOpenAPI:
 
 
 # ---------------------------------------------------------------------------
+# Task 4.2: OpenAPI response models
+# ---------------------------------------------------------------------------
+
+class TestOpenAPIResponseModels:
+    def test_openapi_schema_has_response_models(self, client):
+        schema = client.get("/openapi.json").json()
+        schema_str = str(schema.get("components", {}).get("schemas", {}))
+        assert "PublicationResponse" in schema_str
+        assert "ResearcherResponse" in schema_str
+
+
+# ---------------------------------------------------------------------------
 # Task 5.3: Full request cycle integration test
 # ---------------------------------------------------------------------------
 

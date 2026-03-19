@@ -46,6 +46,74 @@ class ErrorResponse(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Pydantic response models — OpenAPI docs
+# ---------------------------------------------------------------------------
+
+class AuthorResponse(BaseModel):
+    id: int
+    first_name: str
+    last_name: str
+
+class PublicationResponse(BaseModel):
+    id: int
+    title: str
+    authors: list[AuthorResponse]
+    year: str | None
+    venue: str | None
+    source_url: str | None
+    discovered_at: str | None
+    status: str | None
+    draft_url: str | None
+    draft_available: bool
+    abstract: str | None
+    draft_url_status: str | None
+    event_id: int | None = None
+    event_type: str | None = None
+    old_status: str | None = None
+    new_status: str | None = None
+    event_date: str | None = None
+
+class PaginatedPublications(BaseModel):
+    items: list[PublicationResponse]
+    total: int
+    page: int
+    per_page: int
+    pages: int
+
+class ResearcherUrlResponse(BaseModel):
+    id: int
+    page_type: str
+    url: str
+
+class ResearchFieldResponse(BaseModel):
+    id: int
+    name: str
+    slug: str
+
+class ResearcherResponse(BaseModel):
+    id: int
+    first_name: str
+    last_name: str
+    position: str | None
+    affiliation: str | None
+    description: str | None
+    urls: list[ResearcherUrlResponse]
+    website_url: str | None
+    publication_count: int
+    fields: list[ResearchFieldResponse]
+
+class PaginatedResearchers(BaseModel):
+    items: list[ResearcherResponse]
+    total: int
+    page: int
+    per_page: int
+    pages: int
+
+class HealthResponse(BaseModel):
+    status: str
+
+
+# ---------------------------------------------------------------------------
 # Lifespan
 # ---------------------------------------------------------------------------
 
@@ -297,7 +365,7 @@ def _format_feed_event(row, authors: list[dict]) -> dict:
 # Health check
 # ---------------------------------------------------------------------------
 
-@app.get("/api/health")
+@app.get("/api/health", response_model=HealthResponse)
 def health_check():
     """Health check endpoint for load balancers and monitoring."""
     return {"status": "ok"}
@@ -320,7 +388,7 @@ def metrics():
 # Publication endpoints
 # ---------------------------------------------------------------------------
 
-@app.get("/api/publications")
+@app.get("/api/publications", response_model=PaginatedPublications)
 @limiter.limit("60/minute")
 def list_publications(
     request: Request,
@@ -630,7 +698,7 @@ def get_filter_options(request: Request, response: Response):
     }
 
 
-@app.get("/api/researchers")
+@app.get("/api/researchers", response_model=PaginatedResearchers)
 @limiter.limit("60/minute")
 def list_researchers(
     request: Request,
