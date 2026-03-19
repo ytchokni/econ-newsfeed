@@ -71,3 +71,15 @@ export interface FeedFilters {
 export interface ResearcherDetail extends Researcher {
   publications: Publication[];
 }
+
+export interface FilterOptions {
+  institutions: string[];
+  positions: string[];
+  fields: ResearchField[];
+}
+
+export interface ResearcherFilters {
+  institution?: string;
+  field?: string;
+  position?: string;
+}
