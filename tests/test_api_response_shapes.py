@@ -69,29 +69,38 @@ SCRAPE_LAST_KEYS = {
 
 # Feed events row shape: fe.id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
 #   p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url, p.abstract, p.draft_url_status
-SAMPLE_PUB = (
-    100, "new_paper", None, "working_paper", datetime(2026, 3, 15, 14, 30),
-    1, "Trade and Wages", "2024", "JLE", "https://example.com/p",
-    datetime(2026, 3, 15, 14, 30), "working_paper", "https://ssrn.com/1",
-    "An abstract.", "valid",
-)
-SAMPLE_AUTHORS = [(1, 10, "Max", "Steinhardt")]
+SAMPLE_PUB = {
+    "event_id": 100, "event_type": "new_paper", "old_status": None,
+    "new_status": "working_paper", "created_at": datetime(2026, 3, 15, 14, 30),
+    "paper_id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
+    "url": "https://example.com/p",
+    "discovered_at": datetime(2026, 3, 15, 14, 30), "status": "working_paper",
+    "draft_url": "https://ssrn.com/1", "abstract": "An abstract.",
+    "draft_url_status": "valid",
+}
+SAMPLE_AUTHORS = [{"publication_id": 1, "researcher_id": 10, "first_name": "Max", "last_name": "Steinhardt"}]
 # Single publication detail (10-column papers row, used by GET /api/publications/{id} and researcher detail)
-SAMPLE_PUB_DETAIL = (
-    1, "Trade and Wages", "2024", "JLE", "https://example.com/p",
-    datetime(2026, 3, 15, 14, 30), "working_paper", "https://ssrn.com/1",
-    "An abstract.", "valid",
-)
-SAMPLE_RESEARCHER = (
-    10, "Max", "Steinhardt", "Professor", "FU Berlin", "Economist."
-)
-SAMPLE_URLS = [(10, 1, "homepage", "https://example.com")]
-SAMPLE_PUB_COUNTS = [(10, 5)]
-SAMPLE_FIELDS = [(10, 1, "Labour Economics", "labour-economics")]
-SAMPLE_SCRAPE = (
-    1, "completed", datetime(2026, 3, 16, 10, 0),
-    datetime(2026, 3, 16, 10, 5), 10, 2, 3,
-)
+SAMPLE_PUB_DETAIL = {
+    "id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
+    "url": "https://example.com/p",
+    "timestamp": datetime(2026, 3, 15, 14, 30), "status": "working_paper",
+    "draft_url": "https://ssrn.com/1", "abstract": "An abstract.",
+    "draft_url_status": "valid",
+}
+SAMPLE_RESEARCHER = {
+    "id": 10, "first_name": "Max", "last_name": "Steinhardt",
+    "position": "Professor", "affiliation": "FU Berlin",
+    "description": "Economist.",
+}
+SAMPLE_URLS = [{"researcher_id": 10, "id": 1, "page_type": "homepage", "url": "https://example.com"}]
+SAMPLE_PUB_COUNTS = [{"researcher_id": 10, "cnt": 5}]
+SAMPLE_FIELDS = [{"researcher_id": 10, "id": 1, "name": "Labour Economics", "slug": "labour-economics"}]
+SAMPLE_SCRAPE = {
+    "id": 1, "status": "completed",
+    "started_at": datetime(2026, 3, 16, 10, 0),
+    "finished_at": datetime(2026, 3, 16, 10, 5),
+    "urls_checked": 10, "urls_changed": 2, "pubs_extracted": 3,
+}
 
 
 # ---------------------------------------------------------------------------
@@ -103,7 +112,7 @@ class TestPublicationShape:
 
     def test_paginated_envelope_keys(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
         ):
             mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS]
@@ -113,7 +122,7 @@ class TestPublicationShape:
 
     def test_publication_item_keys(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
         ):
             mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS]
@@ -126,7 +135,7 @@ class TestPublicationShape:
 
     def test_author_sub_object_keys(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
         ):
             mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS]
@@ -147,7 +156,7 @@ class TestResearcherShape:
 
     def test_researcher_list_item_keys(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
         ):
             mock_all.side_effect = [
@@ -164,7 +173,7 @@ class TestResearcherShape:
 
     def test_researcher_url_sub_object_keys(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
         ):
             mock_all.side_effect = [
@@ -180,7 +189,7 @@ class TestResearcherShape:
 
     def test_research_field_sub_object_keys(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
         ):
             mock_all.side_effect = [
@@ -207,9 +216,9 @@ class TestResearcherDetailShape:
             patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_all,
         ):
-            mock_one.side_effect = [SAMPLE_RESEARCHER, (5,)]
-            single_urls = [(1, "homepage", "https://example.com")]
-            single_fields = [(1, "Labour Economics", "labour-economics")]
+            mock_one.side_effect = [SAMPLE_RESEARCHER, {"cnt": 5}]
+            single_urls = [{"id": 1, "page_type": "homepage", "url": "https://example.com"}]
+            single_fields = [{"id": 1, "name": "Labour Economics", "slug": "labour-economics"}]
             mock_all.side_effect = [
                 single_urls, single_fields,
                 [SAMPLE_PUB_DETAIL], SAMPLE_AUTHORS,

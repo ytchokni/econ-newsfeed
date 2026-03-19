@@ -76,12 +76,15 @@ class TestScrapeStatus:
     """Tests for GET /api/scrape/status."""
 
     def test_returns_last_scrape_info(self, client):
-        last_scrape_row = (
-            14, "completed",
-            datetime(2026, 3, 16, 10, 0, 0),
-            datetime(2026, 3, 16, 10, 4, 32),
-            45, 3, 7,
-        )
+        last_scrape_row = {
+            "id": 14,
+            "status": "completed",
+            "started_at": datetime(2026, 3, 16, 10, 0, 0),
+            "finished_at": datetime(2026, 3, 16, 10, 4, 32),
+            "urls_checked": 45,
+            "urls_changed": 3,
+            "pubs_extracted": 7,
+        }
         with (
             patch("api.Database.fetch_one", return_value=last_scrape_row),
             patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),

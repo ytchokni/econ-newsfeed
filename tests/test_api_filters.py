@@ -41,64 +41,64 @@ def client():
 #   p.status, p.draft_url, p.abstract, p.draft_url_status
 # ---------------------------------------------------------------------------
 
-_PUB_WITH_ABSTRACT = (
-    100,                              # fe.id (event_id)
-    "new_paper",                      # fe.event_type
-    None,                             # fe.old_status
-    "working_paper",                  # fe.new_status
-    datetime(2026, 3, 15, 14, 30),    # fe.created_at
-    1,                                # p.id
-    "Trade and Wages",                # p.title
-    "2024",                           # p.year
-    "JLE",                            # p.venue
-    "https://example.com/pub1",       # p.url
-    datetime(2026, 3, 15, 14, 30),    # p.timestamp
-    "working_paper",                  # p.status
-    "https://ssrn.com/abstract=1",    # p.draft_url
-    "This paper examines trade and wages.",  # p.abstract
-    "valid",                          # p.draft_url_status
-)
+_PUB_WITH_ABSTRACT = {
+    "event_id": 100,
+    "event_type": "new_paper",
+    "old_status": None,
+    "new_status": "working_paper",
+    "created_at": datetime(2026, 3, 15, 14, 30),
+    "paper_id": 1,
+    "title": "Trade and Wages",
+    "year": "2024",
+    "venue": "JLE",
+    "url": "https://example.com/pub1",
+    "discovered_at": datetime(2026, 3, 15, 14, 30),
+    "status": "working_paper",
+    "draft_url": "https://ssrn.com/abstract=1",
+    "abstract": "This paper examines trade and wages.",
+    "draft_url_status": "valid",
+}
 
-_PUB_NO_ABSTRACT = (
-    101,
-    "status_change",
-    "working_paper",
-    "published",
-    datetime(2026, 3, 14, 10, 0),
-    2,
-    "Immigration Effects",
-    "2023",
-    "QJE",
-    "https://example.com/pub2",
-    datetime(2026, 3, 10, 10, 0),
-    "published",
-    None,
-    None,
-    "unchecked",
-)
+_PUB_NO_ABSTRACT = {
+    "event_id": 101,
+    "event_type": "status_change",
+    "old_status": "working_paper",
+    "new_status": "published",
+    "created_at": datetime(2026, 3, 14, 10, 0),
+    "paper_id": 2,
+    "title": "Immigration Effects",
+    "year": "2023",
+    "venue": "QJE",
+    "url": "https://example.com/pub2",
+    "discovered_at": datetime(2026, 3, 10, 10, 0),
+    "status": "published",
+    "draft_url": None,
+    "abstract": None,
+    "draft_url_status": "unchecked",
+}
 
-_PUB_MIT = (
-    102,
-    "new_paper",
-    None,
-    "accepted",
-    datetime(2026, 3, 13, 9, 0),
-    3,
-    "Labor Markets and MIT",
-    "2024",
-    "AER",
-    "https://example.com/pub3",
-    datetime(2026, 3, 13, 9, 0),
-    "accepted",
-    None,
-    None,
-    None,
-)
+_PUB_MIT = {
+    "event_id": 102,
+    "event_type": "new_paper",
+    "old_status": None,
+    "new_status": "accepted",
+    "created_at": datetime(2026, 3, 13, 9, 0),
+    "paper_id": 3,
+    "title": "Labor Markets and MIT",
+    "year": "2024",
+    "venue": "AER",
+    "url": "https://example.com/pub3",
+    "discovered_at": datetime(2026, 3, 13, 9, 0),
+    "status": "accepted",
+    "draft_url": None,
+    "abstract": None,
+    "draft_url_status": None,
+}
 
-# Batch author rows: (publication_id, researcher_id, first_name, last_name)
-_AUTHORS_PUB1 = [(1, 10, "Jane", "Doe")]
-_AUTHORS_PUB2 = [(2, 11, "John", "Smith")]
-_AUTHORS_PUB3 = [(3, 12, "Alice", "Brown")]
+# Batch author rows: {publication_id, researcher_id, first_name, last_name}
+_AUTHORS_PUB1 = [{"publication_id": 1, "researcher_id": 10, "first_name": "Jane", "last_name": "Doe"}]
+_AUTHORS_PUB2 = [{"publication_id": 2, "researcher_id": 11, "first_name": "John", "last_name": "Smith"}]
+_AUTHORS_PUB3 = [{"publication_id": 3, "researcher_id": 12, "first_name": "Alice", "last_name": "Brown"}]
 _NO_AUTHORS = []
 
 
@@ -124,7 +124,7 @@ class TestStatusFilter:
     def test_working_paper_status_returns_200(self, client):
         """'working_paper' is a valid v2 status; must not return 400."""
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             _mock_single_pub(mock_fetch, _PUB_WITH_ABSTRACT, _AUTHORS_PUB1)
@@ -135,7 +135,7 @@ class TestStatusFilter:
     def test_working_paper_status_included_in_items(self, client):
         """Items filtered by working_paper should carry status='working_paper'."""
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             _mock_single_pub(mock_fetch, _PUB_WITH_ABSTRACT, _AUTHORS_PUB1)
@@ -146,7 +146,7 @@ class TestStatusFilter:
 
     def test_published_status_still_accepted(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             _mock_single_pub(mock_fetch, _PUB_NO_ABSTRACT, _AUTHORS_PUB2)
@@ -156,7 +156,7 @@ class TestStatusFilter:
 
     def test_accepted_status_accepted(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             _mock_single_pub(mock_fetch, _PUB_MIT, _AUTHORS_PUB3)
@@ -166,7 +166,7 @@ class TestStatusFilter:
 
     def test_revise_and_resubmit_status_accepted(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(0,)),
+            patch("api.Database.fetch_one", return_value={"total": 0}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             # Zero results: first call returns empty pub list; second call (batch authors) never reached
@@ -177,7 +177,7 @@ class TestStatusFilter:
 
     def test_reject_and_resubmit_status_accepted(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(0,)),
+            patch("api.Database.fetch_one", return_value={"total": 0}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_fetch.side_effect = [[], []]
@@ -211,7 +211,7 @@ class TestInstitutionFilter:
 
     def test_institution_filter_returns_200(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             _mock_single_pub(mock_fetch, _PUB_MIT, _AUTHORS_PUB3)
@@ -221,7 +221,7 @@ class TestInstitutionFilter:
 
     def test_institution_filter_returns_items(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             _mock_single_pub(mock_fetch, _PUB_MIT, _AUTHORS_PUB3)
@@ -231,7 +231,7 @@ class TestInstitutionFilter:
 
     def test_institution_filter_no_results_returns_empty_list(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(0,)),
+            patch("api.Database.fetch_one", return_value={"total": 0}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_fetch.side_effect = [[], []]
@@ -243,7 +243,7 @@ class TestInstitutionFilter:
     def test_institution_filter_combined_with_year(self, client):
         """institution and year can be combined; must return 200."""
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             _mock_single_pub(mock_fetch, _PUB_MIT, _AUTHORS_PUB3)
@@ -254,7 +254,7 @@ class TestInstitutionFilter:
     def test_institution_filter_escapes_percent(self, client):
         """A literal % in the institution name must not break the LIKE query."""
         with (
-            patch("api.Database.fetch_one", return_value=(0,)),
+            patch("api.Database.fetch_one", return_value={"total": 0}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_fetch.side_effect = [[], []]
@@ -265,7 +265,7 @@ class TestInstitutionFilter:
     def test_institution_filter_combined_with_status(self, client):
         """institution and status can be combined."""
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             _mock_single_pub(mock_fetch, _PUB_MIT, _AUTHORS_PUB3)
@@ -283,7 +283,7 @@ class TestPresetTop20Filter:
 
     def test_preset_top20_returns_200(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             _mock_single_pub(mock_fetch, _PUB_MIT, _AUTHORS_PUB3)
@@ -293,7 +293,7 @@ class TestPresetTop20Filter:
 
     def test_preset_top20_returns_items(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             _mock_single_pub(mock_fetch, _PUB_MIT, _AUTHORS_PUB3)
@@ -305,7 +305,7 @@ class TestPresetTop20Filter:
 
     def test_preset_top20_no_results_returns_empty(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(0,)),
+            patch("api.Database.fetch_one", return_value={"total": 0}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_fetch.side_effect = [[], []]
@@ -317,7 +317,7 @@ class TestPresetTop20Filter:
     def test_preset_top20_combined_with_year(self, client):
         """preset=top20 and year can be used together."""
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             _mock_single_pub(mock_fetch, _PUB_MIT, _AUTHORS_PUB3)
@@ -344,7 +344,7 @@ class TestResponseShape:
 
     def test_item_includes_abstract_field(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             _mock_single_pub(mock_fetch, _PUB_WITH_ABSTRACT, _AUTHORS_PUB1)
@@ -356,7 +356,7 @@ class TestResponseShape:
 
     def test_item_includes_draft_url_status_field(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             _mock_single_pub(mock_fetch, _PUB_WITH_ABSTRACT, _AUTHORS_PUB1)
@@ -369,7 +369,7 @@ class TestResponseShape:
     def test_draft_available_true_when_status_is_valid(self, client):
         """draft_available must be True only when draft_url_status == 'valid'."""
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             _mock_single_pub(mock_fetch, _PUB_WITH_ABSTRACT, _AUTHORS_PUB1)
@@ -381,7 +381,7 @@ class TestResponseShape:
     def test_draft_available_false_when_status_is_unchecked(self, client):
         """draft_available must be False when draft_url_status is not 'valid'."""
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             _mock_single_pub(mock_fetch, _PUB_NO_ABSTRACT, _AUTHORS_PUB2)
@@ -392,7 +392,7 @@ class TestResponseShape:
 
     def test_abstract_is_none_when_not_present(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             _mock_single_pub(mock_fetch, _PUB_NO_ABSTRACT, _AUTHORS_PUB2)

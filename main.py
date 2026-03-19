@@ -20,15 +20,31 @@ def import_data(file_path):
 
 def download_htmls():
     """Download HTML content for all URLs in the researcher_urls table."""
+    from scheduler import create_scrape_log, update_scrape_log
+
+    log_id = create_scrape_log()
     researcher_urls = Researcher.get_all_researcher_urls()
-    for id, researcher_id, url, page_type in researcher_urls:
-        logging.info(f"Downloading HTML for URL ID: {id}, URL: {url}, Page Type: {page_type}")
-        HTMLFetcher.fetch_and_save_if_changed(id, url, researcher_id)
+    urls_checked = 0
+    urls_changed = 0
+
+    try:
+        for row in researcher_urls:
+            id, researcher_id, url, page_type = row['id'], row['researcher_id'], row['url'], row['page_type']
+            urls_checked += 1
+            logging.info(f"Downloading HTML for URL ID: {id}, URL: {url}, Page Type: {page_type}")
+            changed = HTMLFetcher.fetch_and_save_if_changed(id, url, researcher_id)
+            if changed:
+                urls_changed += 1
+        update_scrape_log(log_id, "completed", urls_checked, urls_changed)
+    except Exception as e:
+        logging.error(f"Download failed: {e}")
+        update_scrape_log(log_id, "failed", urls_checked, urls_changed, error_message=str(e))
 
 def extract_data_from_htmls():
     """Extract publication data from downloaded HTML content."""
     researcher_urls = Researcher.get_all_researcher_urls()
-    for id, researcher_id, url, page_type in researcher_urls:
+    for row in researcher_urls:
+        id, researcher_id, url, page_type = row['id'], row['researcher_id'], row['url'], row['page_type']
         if not HTMLFetcher.needs_extraction(id):
             logging.info(f"Skipping extraction for URL ID: {id}, URL: {url} (content unchanged since last extraction)")
             continue
@@ -76,8 +92,8 @@ def extract_data_from_htmls_concurrent():
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         futures = {
-            executor.submit(_process_one_url, url_id, researcher_id, url, page_type): url
-            for url_id, researcher_id, url, page_type in researcher_urls
+            executor.submit(_process_one_url, row['id'], row['researcher_id'], row['url'], row['page_type']): row['url']
+            for row in researcher_urls
         }
         for future in as_completed(futures):
             url, num_pubs, error = future.result()
@@ -103,9 +119,8 @@ def batch_submit():
 
     researcher_urls = Researcher.get_all_researcher_urls()
     urls_to_process = [
-        (url_id, researcher_id, url, page_type)
-        for url_id, researcher_id, url, page_type in researcher_urls
-        if HTMLFetcher.needs_extraction(url_id)
+        row for row in researcher_urls
+        if HTMLFetcher.needs_extraction(row['id'])
     ]
 
     if not urls_to_process:
@@ -118,12 +133,13 @@ def batch_submit():
            WHERE status IN ('submitted','validating','in_progress','finalizing')"""
     )
     if pending:
-        ids = ", ".join(r[0] for r in pending)
+        ids = ", ".join(r['openai_batch_id'] for r in pending)
         logging.warning("Warning: %d pending batch(es) already exist: %s", len(pending), ids)
 
     # Build JSONL
     lines = []
-    for url_id, researcher_id, url, page_type in urls_to_process:
+    for row in urls_to_process:
+        url_id, researcher_id, url, page_type = row['id'], row['researcher_id'], row['url'], row['page_type']
         text = HTMLFetcher.get_latest_text(url_id)
         if not text:
             continue
@@ -196,7 +212,8 @@ def batch_check():
         logging.info("No pending batches")
         return
 
-    for db_id, openai_batch_id in pending:
+    for row in pending:
+        db_id, openai_batch_id = row['id'], row['openai_batch_id']
         batch = client.batches.retrieve(openai_batch_id)
         status = batch.status
 
@@ -221,7 +238,7 @@ def batch_check():
                 )
                 if not url_row:
                     continue
-                url = url_row[0]
+                url = url_row['url']
 
                 response_body = result.get("response", {}).get("body", {})
                 usage_dict = response_body.get("usage", {})
@@ -258,11 +275,11 @@ def batch_check():
 
             # Aggregate cost from llm_usage rows logged above
             cost_row = Database.fetch_one(
-                """SELECT SUM(estimated_cost_usd) FROM llm_usage
+                """SELECT SUM(estimated_cost_usd) AS total_cost FROM llm_usage
                    WHERE batch_job_id = %s""",
                 (db_id,),
             )
-            batch_cost = cost_row[0] if cost_row else None
+            batch_cost = cost_row['total_cost'] if cost_row else None
 
             Database.execute_query(
                 """UPDATE batch_jobs

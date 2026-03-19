@@ -20,51 +20,59 @@ def client():
             yield c
 
 
-# Sample data that mimics Database.fetch_all / fetch_one return shapes
-# Feed events row shape (15 columns): fe.id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
-#   p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url, p.abstract, p.draft_url_status
+# Sample data that mimics Database.fetch_all / fetch_one return shapes (dicts)
+# Feed events row shape (15 keys): event_id, event_type, old_status, new_status, created_at,
+#   paper_id, title, year, venue, url, discovered_at, status, draft_url, abstract, draft_url_status
 SAMPLE_PUBLICATIONS = [
-    (100, "new_paper", None, "working_paper", datetime(2026, 3, 15, 14, 30),
-     1, "Trade and Wages", "2024", "JLE", "https://example.com/pub",
-     datetime(2026, 3, 15, 14, 30), "working_paper", "https://ssrn.com/abstract=1", None, "valid"),
-    (101, "new_paper", None, "accepted", datetime(2026, 3, 14, 10, 0),
-     2, "Immigration Effects", "2023", "QJE", "https://example.com/pub2",
-     datetime(2026, 3, 14, 10, 0), "accepted", None, None, None),
-    (102, "new_paper", None, "working_paper", datetime(2026, 3, 13, 9, 0),
-     3, "Labor Markets", "2024", "AER", "https://example.com/pub3",
-     datetime(2026, 3, 13, 9, 0), "working_paper", None, None, None),
+    {"event_id": 100, "event_type": "new_paper", "old_status": None, "new_status": "working_paper",
+     "created_at": datetime(2026, 3, 15, 14, 30), "paper_id": 1, "title": "Trade and Wages",
+     "year": "2024", "venue": "JLE", "url": "https://example.com/pub",
+     "discovered_at": datetime(2026, 3, 15, 14, 30), "status": "working_paper",
+     "draft_url": "https://ssrn.com/abstract=1", "abstract": None, "draft_url_status": "valid"},
+    {"event_id": 101, "event_type": "new_paper", "old_status": None, "new_status": "accepted",
+     "created_at": datetime(2026, 3, 14, 10, 0), "paper_id": 2, "title": "Immigration Effects",
+     "year": "2023", "venue": "QJE", "url": "https://example.com/pub2",
+     "discovered_at": datetime(2026, 3, 14, 10, 0), "status": "accepted",
+     "draft_url": None, "abstract": None, "draft_url_status": None},
+    {"event_id": 102, "event_type": "new_paper", "old_status": None, "new_status": "working_paper",
+     "created_at": datetime(2026, 3, 13, 9, 0), "paper_id": 3, "title": "Labor Markets",
+     "year": "2024", "venue": "AER", "url": "https://example.com/pub3",
+     "discovered_at": datetime(2026, 3, 13, 9, 0), "status": "working_paper",
+     "draft_url": None, "abstract": None, "draft_url_status": None},
 ]
 
-# 10-column papers row for single publication detail endpoint
-SAMPLE_PUB_DETAIL = (
-    1, "Trade and Wages", "2024", "JLE", "https://example.com/pub",
-    datetime(2026, 3, 15, 14, 30), "working_paper", "https://ssrn.com/abstract=1", None, "valid",
-)
+# 10-key papers dict for single publication detail endpoint
+SAMPLE_PUB_DETAIL = {
+    "id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
+    "url": "https://example.com/pub", "timestamp": datetime(2026, 3, 15, 14, 30),
+    "status": "working_paper", "draft_url": "https://ssrn.com/abstract=1",
+    "abstract": None, "draft_url_status": "valid",
+}
 
 SAMPLE_AUTHORS_PUB1 = [
-    # (researcher_id, first_name, last_name) — used for single-pub endpoint
-    (10, "Max Friedrich", "Steinhardt"),
-    (11, "Jane", "Doe"),
+    # {id, first_name, last_name} — used for single-pub endpoint
+    {"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"},
+    {"id": 11, "first_name": "Jane", "last_name": "Doe"},
 ]
 
 SAMPLE_AUTHORS_PUB2 = [
-    (10, "Max Friedrich", "Steinhardt"),
+    {"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"},
 ]
 
-# Batch author format: (publication_id, researcher_id, first_name, last_name)
+# Batch author format: {publication_id, researcher_id, first_name, last_name}
 BATCH_AUTHORS_PUBS_1_2_3 = [
-    (1, 10, "Max Friedrich", "Steinhardt"),
-    (1, 11, "Jane", "Doe"),
-    (2, 10, "Max Friedrich", "Steinhardt"),
+    {"publication_id": 1, "researcher_id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"},
+    {"publication_id": 1, "researcher_id": 11, "first_name": "Jane", "last_name": "Doe"},
+    {"publication_id": 2, "researcher_id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"},
 ]
 
 BATCH_AUTHORS_PUB1 = [
-    (1, 10, "Max Friedrich", "Steinhardt"),
-    (1, 11, "Jane", "Doe"),
+    {"publication_id": 1, "researcher_id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"},
+    {"publication_id": 1, "researcher_id": 11, "first_name": "Jane", "last_name": "Doe"},
 ]
 
 BATCH_AUTHORS_PUB2 = [
-    (2, 10, "Max Friedrich", "Steinhardt"),
+    {"publication_id": 2, "researcher_id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"},
 ]
 
 
@@ -78,7 +86,7 @@ class TestListPublications:
     def test_default_pagination(self, client):
         """Default page=1, per_page=20."""
         with (
-            patch("api.Database.fetch_one", return_value=(3,)),  # total count
+            patch("api.Database.fetch_one", return_value={"total": 3}),  # total count
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             # First call: publications; second: batch authors for all pubs
@@ -99,7 +107,7 @@ class TestListPublications:
     def test_custom_pagination(self, client):
         """Custom page and per_page values."""
         with (
-            patch("api.Database.fetch_one", return_value=(3,)),
+            patch("api.Database.fetch_one", return_value={"total": 3}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_fetch.side_effect = [
@@ -122,7 +130,7 @@ class TestListPublications:
     def test_year_filter(self, client):
         """Filter publications by year."""
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_fetch.side_effect = [
@@ -138,7 +146,7 @@ class TestListPublications:
     def test_researcher_id_filter(self, client):
         """Filter publications by researcher_id."""
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_fetch.side_effect = [
@@ -156,7 +164,7 @@ class TestListPublications:
     def test_since_filter(self, client):
         """?since= filters publications discovered after the given timestamp."""
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_fetch.side_effect = [
@@ -177,7 +185,7 @@ class TestListPublications:
     def test_publication_item_shape(self, client):
         """Each item must have id, title, authors, year, venue, source_url, discovered_at."""
         with (
-            patch("api.Database.fetch_one", return_value=(1,)),
+            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
             mock_fetch.side_effect = [

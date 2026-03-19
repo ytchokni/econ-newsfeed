@@ -44,7 +44,7 @@ class TestSQLInjectionQueryParams:
     def test_year_sql_injection_returns_safe_response(self, client):
         """year= accepts only a 4-char string; SQL payload should not crash the API."""
         for payload in self.SQL_PAYLOADS:
-            with patch("api.Database.fetch_one", return_value=(0,)), \
+            with patch("api.Database.fetch_one", return_value={"total": 0}), \
                  patch("api.Database.fetch_all", return_value=[]):
                 resp = client.get(f"/api/publications?year={payload}")
             # Must not be a 500 (unhandled exception)
@@ -153,7 +153,7 @@ class TestOversizedInputs:
     def test_oversized_year_param(self, client):
         """A very long year string should not crash the API."""
         payload = "A" * 10_000
-        with patch("api.Database.fetch_one", return_value=(0,)), \
+        with patch("api.Database.fetch_one", return_value={"total": 0}), \
              patch("api.Database.fetch_all", return_value=[]):
             resp = client.get(f"/api/publications?year={payload}")
         assert resp.status_code != 500

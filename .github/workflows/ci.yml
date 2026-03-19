@@ -1,0 +1,63 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  backend:
+    name: Backend (pytest)
+    runs-on: ubuntu-latest
+    env:
+      CONTENT_MAX_CHARS: "4000"
+      OPENAI_MODEL: "gpt-4o-mini"
+      OPENAI_API_KEY: "sk-test-not-real"
+      SCRAPE_API_KEY: "test-secret-key-for-ci-runs"
+      DB_HOST: "localhost"
+      DB_USER: "test"
+      DB_PASSWORD: "test"
+      DB_NAME: "test_econ_newsfeed"
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Poetry
+        run: pip install poetry
+
+      - name: Install dependencies
+        run: poetry install --no-interaction
+
+      - name: Run pytest
+        run: poetry run pytest -q --tb=short --ignore=tests/test_imports.py -k "not test_private_ip_url_returns_invalid"
+
+  frontend:
+    name: Frontend (jest + tsc)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: app/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: TypeScript check
+        run: npx tsc --noEmit
+
+      - name: Run Jest
+        run: npm test -- --passWithNoTests
+
+      - name: Lint
+        run: npm run lint

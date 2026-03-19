@@ -34,7 +34,7 @@ services:
       SCRAPE_RATE_LIMIT_SECONDS: ${SCRAPE_RATE_LIMIT_SECONDS:-2}
       CONTENT_MAX_CHARS: ${CONTENT_MAX_CHARS:-4000}
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     depends_on:
       db:
         condition: service_healthy
@@ -47,7 +47,7 @@ services:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
       API_INTERNAL_URL: http://api:8000
     ports:
-      - "3000:3000"
+      - "127.0.0.1:3000:3000"
     depends_on:
       - api
 

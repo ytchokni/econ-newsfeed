@@ -18,7 +18,7 @@ logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
 
 RATE_LIMIT_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_SECONDS', '2'))
 RATE_LIMIT_FAST_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_FAST_SECONDS', '0.5'))
-CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS', '4000'))
+CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS'))
 CONTENT_MAX_BYTES = 1_000_000  # 1 MB response size limit
 SCRAPER_USER_AGENT = os.environ.get(
     'SCRAPER_USER_AGENT',
@@ -225,7 +225,7 @@ class HTMLFetcher:
         result = Database.fetch_one(query, (url_id,))
 
         if result:
-            return result[0] != new_text_hash
+            return result['content_hash'] != new_text_hash
         return True  # No previous record — treat as changed
 
     @staticmethod
@@ -234,11 +234,11 @@ class HTMLFetcher:
         result = Database.fetch_one(
             "SELECT timestamp FROM html_content WHERE url_id = %s", (url_id,)
         )
-        if not result or not result[0]:
+        if not result or not result['timestamp']:
             return False
         # MySQL connector returns naive datetimes (no tzinfo) stored as UTC.
         # Use replace() only when the value is naive; use astimezone() if aware.
-        ts = result[0]
+        ts = result['timestamp']
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
         else:
@@ -310,7 +310,7 @@ class HTMLFetcher:
             "their research interests, and their current position/affiliation. "
             "Return only the description text, nothing else. "
             "If no clear description can be extracted, reply with exactly: null\n\n"
-            f"Content:\n{text_content[:3000]}"
+            f"Content:\n{text_content[:CONTENT_MAX_CHARS]}"
         )
         try:
             from database import Database
@@ -373,7 +373,7 @@ class HTMLFetcher:
             WHERE url_id = %s
         """
         result = Database.fetch_one(query, (url_id,))
-        return result[0] if result else None
+        return result['content'] if result else None
 
     @staticmethod
     def needs_extraction(url_id):
@@ -391,7 +391,7 @@ class HTMLFetcher:
         result = Database.fetch_one(query, (url_id,))
         if not result:
             return False  # No content downloaded yet — nothing to extract
-        content_hash, extracted_hash = result
+        content_hash, extracted_hash = result['content_hash'], result['extracted_hash']
         return content_hash != extracted_hash
 
     @staticmethod

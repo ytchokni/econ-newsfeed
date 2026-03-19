@@ -4,10 +4,12 @@
 
 !requirements.txt
 !api.py
-!database.py
+!database/
 !db_config.py
 !html_fetcher.py
 !main.py
 !publication.py
 !researcher.py
 !scheduler.py
+!pyproject.toml
+!poetry.lock

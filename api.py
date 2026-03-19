@@ -211,6 +211,11 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+def _iso_z(dt) -> str | None:
+    """Format a datetime as ISO 8601 with trailing Z, or None."""
+    return dt.isoformat() + "Z" if dt else None
+
+
 def _get_authors_for_publication(publication_id: int) -> list[dict]:
     """Fetch authors for a single publication via the authorship table."""
     rows = Database.fetch_all(
@@ -223,7 +228,7 @@ def _get_authors_for_publication(publication_id: int) -> list[dict]:
         """,
         (publication_id,),
     )
-    return [{"id": r[0], "first_name": r[1], "last_name": r[2]} for r in rows]
+    return [{"id": r['id'], "first_name": r['first_name'], "last_name": r['last_name']} for r in rows]
 
 
 def _get_authors_for_publications(pub_ids: list[int]) -> dict[int, list[dict]]:
@@ -233,7 +238,7 @@ def _get_authors_for_publications(pub_ids: list[int]) -> dict[int, list[dict]]:
     placeholders = ",".join(["%s"] * len(pub_ids))
     rows = Database.fetch_all(
         f"""
-        SELECT a.publication_id, r.id, r.first_name, r.last_name
+        SELECT a.publication_id, r.id AS researcher_id, r.first_name, r.last_name
         FROM authorship a
         JOIN researchers r ON r.id = a.researcher_id
         WHERE a.publication_id IN ({placeholders})
@@ -243,60 +248,48 @@ def _get_authors_for_publications(pub_ids: list[int]) -> dict[int, list[dict]]:
     )
     result: dict[int, list[dict]] = {pid: [] for pid in pub_ids}
     for row in rows:
-        result[row[0]].append({"id": row[1], "first_name": row[2], "last_name": row[3]})
+        result[row['publication_id']].append({"id": row['researcher_id'], "first_name": row['first_name'], "last_name": row['last_name']})
     return result
 
 
 def _format_publication(row, authors: list[dict]) -> dict:
-    """Format a publication DB row + authors into the API response shape.
-
-    Expected row columns: id, title, year, venue, url, timestamp, status, draft_url, abstract, draft_url_status
-    """
-    draft_url = row[7] if len(row) > 7 else None
-    abstract = row[8] if len(row) > 8 else None
-    draft_url_status = row[9] if len(row) > 9 else None
+    """Format a publication DB row + authors into the API response shape."""
     return {
-        "id": row[0],
-        "title": row[1],
+        "id": row['id'],
+        "title": row['title'],
         "authors": authors,
-        "year": row[2],
-        "venue": row[3],
-        "source_url": row[4],
-        "discovered_at": row[5].isoformat() + "Z" if row[5] else None,
-        "status": row[6] if len(row) > 6 else None,
-        "draft_url": draft_url,
-        "draft_available": draft_url_status == 'valid',
-        "abstract": abstract,
-        "draft_url_status": draft_url_status,
+        "year": row['year'],
+        "venue": row['venue'],
+        "source_url": row['url'],
+        "discovered_at": _iso_z(row.get('timestamp')),
+        "status": row.get('status'),
+        "draft_url": row.get('draft_url'),
+        "draft_available": row.get('draft_url_status') == 'valid',
+        "abstract": row.get('abstract'),
+        "draft_url_status": row.get('draft_url_status'),
     }
 
 
 def _format_feed_event(row, authors: list[dict]) -> dict:
-    """Format a feed_events + papers joined row into the API response shape.
-
-    Expected row columns (positional):
-        0: event_id, 1: event_type, 2: event_old_status, 3: event_new_status, 4: event_date,
-        5: paper_id, 6: title, 7: year, 8: venue, 9: url, 10: timestamp,
-        11: status, 12: draft_url, 13: abstract, 14: draft_url_status
-    """
+    """Format a feed_events + papers joined row into the API response shape."""
     return {
-        "id": row[5],           # paper_id (used by frontend for detail links / React keys)
-        "event_id": row[0],
-        "event_type": row[1],
-        "old_status": row[2],
-        "new_status": row[3],
-        "event_date": row[4].isoformat() + "Z" if row[4] else None,
-        "title": row[6],
+        "id": row['paper_id'],
+        "event_id": row['event_id'],
+        "event_type": row['event_type'],
+        "old_status": row.get('old_status'),
+        "new_status": row.get('new_status'),
+        "event_date": _iso_z(row.get('created_at')),
+        "title": row['title'],
         "authors": authors,
-        "year": row[7],
-        "venue": row[8],
-        "source_url": row[9],
-        "discovered_at": row[10].isoformat() + "Z" if row[10] else None,
-        "status": row[11],
-        "draft_url": row[12],
-        "draft_available": row[14] == 'valid' if row[14] else False,
-        "abstract": row[13],
-        "draft_url_status": row[14],
+        "year": row['year'],
+        "venue": row['venue'],
+        "source_url": row['url'],
+        "discovered_at": _iso_z(row.get('discovered_at')),
+        "status": row.get('status'),
+        "draft_url": row.get('draft_url'),
+        "draft_available": row.get('draft_url_status') == 'valid',
+        "abstract": row.get('abstract'),
+        "draft_url_status": row.get('draft_url_status'),
     }
 
 
@@ -391,21 +384,21 @@ def list_publications(
 
     # Total count
     count_row = Database.fetch_one(
-        f"""SELECT COUNT(*)
+        f"""SELECT COUNT(*) AS total
             FROM feed_events fe
             JOIN papers p ON p.id = fe.paper_id
             {where}""",
         params or None,
     )
-    total = count_row[0] if count_row else 0
+    total = count_row['total'] if count_row else 0
     pages = math.ceil(total / per_page) if total else 0
 
     # Paginated results
     offset = (page - 1) * per_page
     rows = Database.fetch_all(
         f"""
-        SELECT fe.id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
-               p.id, p.title, p.year, p.venue, p.url, p.timestamp,
+        SELECT fe.id AS event_id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
+               p.id AS paper_id, p.title, p.year, p.venue, p.url, p.timestamp AS discovered_at,
                p.status, p.draft_url, p.abstract, p.draft_url_status
         FROM feed_events fe
         JOIN papers p ON p.id = fe.paper_id
@@ -416,10 +409,9 @@ def list_publications(
         (*params, per_page, offset),
     )
 
-    # row[5] is paper_id
-    pub_ids = [row[5] for row in rows]
+    pub_ids = [row['paper_id'] for row in rows]
     authors_by_pub = _get_authors_for_publications(pub_ids)
-    items = [_format_feed_event(row, authors_by_pub.get(row[5], [])) for row in rows]
+    items = [_format_feed_event(row, authors_by_pub.get(row['paper_id'], [])) for row in rows]
 
     response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=600"
     return {
@@ -452,14 +444,14 @@ def get_publication(
         snapshots = Database.get_paper_snapshots(publication_id)
         result["history"] = [
             {
-                "status": s[0],
-                "venue": s[1],
-                "abstract": s[2],
-                "draft_url": s[3],
-                "draft_url_status": s[4],
-                "year": s[5],
-                "scraped_at": s[6].isoformat() + "Z" if s[6] else None,
-                "source_url": s[7],
+                "status": s['status'],
+                "venue": s['venue'],
+                "abstract": s['abstract'],
+                "draft_url": s['draft_url'],
+                "draft_url_status": s['draft_url_status'],
+                "year": s['year'],
+                "scraped_at": _iso_z(s['scraped_at']),
+                "source_url": s['source_url'],
             }
             for s in snapshots
         ]
@@ -476,7 +468,7 @@ def _get_urls_for_researcher(researcher_id: int) -> list[dict]:
         "SELECT id, page_type, url FROM researcher_urls WHERE researcher_id = %s",
         (researcher_id,),
     )
-    return [{"id": r[0], "page_type": r[1], "url": r[2]} for r in rows]
+    return [{"id": r['id'], "page_type": r['page_type'], "url": r['url']} for r in rows]
 
 
 def _get_website_url(urls: list[dict]) -> str | None:
@@ -490,10 +482,10 @@ def _get_website_url(urls: list[dict]) -> str | None:
 
 def _get_pub_count_for_researcher(researcher_id: int) -> int:
     row = Database.fetch_one(
-        "SELECT COUNT(*) FROM authorship WHERE researcher_id = %s",
+        "SELECT COUNT(*) AS cnt FROM authorship WHERE researcher_id = %s",
         (researcher_id,),
     )
-    return row[0] if row else 0
+    return row['cnt'] if row else 0
 
 
 def _get_fields_for_researcher(researcher_id: int) -> list[dict]:
@@ -507,7 +499,7 @@ def _get_fields_for_researcher(researcher_id: int) -> list[dict]:
         """,
         (researcher_id,),
     )
-    return [{"id": r[0], "name": r[1], "slug": r[2]} for r in rows]
+    return [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in rows]
 
 
 def _get_urls_for_researchers(researcher_ids: list[int]) -> dict[int, list[dict]]:
@@ -521,7 +513,7 @@ def _get_urls_for_researchers(researcher_ids: list[int]) -> dict[int, list[dict]
     )
     result: dict[int, list[dict]] = {rid: [] for rid in researcher_ids}
     for row in rows:
-        result[row[0]].append({"id": row[1], "page_type": row[2], "url": row[3]})
+        result[row['researcher_id']].append({"id": row['id'], "page_type": row['page_type'], "url": row['url']})
     return result
 
 
@@ -531,12 +523,12 @@ def _get_pub_counts_for_researchers(researcher_ids: list[int]) -> dict[int, int]
         return {}
     placeholders = ",".join(["%s"] * len(researcher_ids))
     rows = Database.fetch_all(
-        f"SELECT researcher_id, COUNT(*) FROM authorship WHERE researcher_id IN ({placeholders}) GROUP BY researcher_id",
+        f"SELECT researcher_id, COUNT(*) AS cnt FROM authorship WHERE researcher_id IN ({placeholders}) GROUP BY researcher_id",
         tuple(researcher_ids),
     )
     result: dict[int, int] = {rid: 0 for rid in researcher_ids}
     for row in rows:
-        result[row[0]] = row[1]
+        result[row['researcher_id']] = row['cnt']
     return result
 
 
@@ -555,7 +547,7 @@ def _get_fields_for_researchers(researcher_ids: list[int]) -> dict[int, list[dic
     )
     result: dict[int, list[dict]] = {rid: [] for rid in researcher_ids}
     for row in rows:
-        result[row[0]].append({"id": row[1], "name": row[2], "slug": row[3]})
+        result[row['researcher_id']].append({"id": row['id'], "name": row['name'], "slug": row['slug']})
     return result
 
 
@@ -588,7 +580,7 @@ _TOP20_DEPT_KEYWORDS = [
 @limiter.limit("60/minute")
 def list_fields(request: Request):
     rows = Database.fetch_all("SELECT id, name, slug FROM research_fields ORDER BY name")
-    return {"items": [{"id": r[0], "name": r[1], "slug": r[2]} for r in rows]}
+    return {"items": [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in rows]}
 
 
 @app.get("/api/filter-options")
@@ -609,9 +601,9 @@ def get_filter_options(request: Request, response: Response):
     )
     response.headers["Cache-Control"] = "public, max-age=600"
     return {
-        "institutions": [r[0] for r in institutions],
-        "positions": [r[0] for r in positions],
-        "fields": [{"id": r[0], "name": r[1], "slug": r[2]} for r in fields],
+        "institutions": [r['affiliation'] for r in institutions],
+        "positions": [r['position'] for r in positions],
+        "fields": [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in fields],
     }
 
 
@@ -662,9 +654,9 @@ def list_researchers(
 
     # Total count
     count_row = Database.fetch_one(
-        f"SELECT COUNT(*) FROM researchers r {where}", params or None
+        f"SELECT COUNT(*) AS total FROM researchers r {where}", params or None
     )
-    total = count_row[0] if count_row else 0
+    total = count_row['total'] if count_row else 0
     pages = math.ceil(total / per_page) if total else 0
 
     offset = (page - 1) * per_page
@@ -679,22 +671,22 @@ def list_researchers(
         (*params, per_page, offset),
     )
 
-    researcher_ids = [r[0] for r in rows]
+    researcher_ids = [r['id'] for r in rows]
     urls_by_researcher = _get_urls_for_researchers(researcher_ids)
     pub_counts = _get_pub_counts_for_researchers(researcher_ids)
     fields_by_researcher = _get_fields_for_researchers(researcher_ids)
     items = [
         {
-            "id": r[0],
-            "first_name": r[1],
-            "last_name": r[2],
-            "position": r[3],
-            "affiliation": r[4],
-            "description": r[5],
-            "urls": urls_by_researcher.get(r[0], []),
-            "website_url": _get_website_url(urls_by_researcher.get(r[0], [])),
-            "publication_count": pub_counts.get(r[0], 0),
-            "fields": fields_by_researcher.get(r[0], []),
+            "id": r['id'],
+            "first_name": r['first_name'],
+            "last_name": r['last_name'],
+            "position": r['position'],
+            "affiliation": r['affiliation'],
+            "description": r['description'],
+            "urls": urls_by_researcher.get(r['id'], []),
+            "website_url": _get_website_url(urls_by_researcher.get(r['id'], [])),
+            "publication_count": pub_counts.get(r['id'], 0),
+            "fields": fields_by_researcher.get(r['id'], []),
         }
         for r in rows
     ]
@@ -738,17 +730,17 @@ def get_researcher(
         """,
         (researcher_id,),
     )
-    pub_ids = [pr[0] for pr in pub_rows]
+    pub_ids = [pr['id'] for pr in pub_rows]
     authors_by_pub = _get_authors_for_publications(pub_ids)
-    publications = [_format_publication(pr, authors_by_pub.get(pr[0], [])) for pr in pub_rows]
+    publications = [_format_publication(pr, authors_by_pub.get(pr['id'], [])) for pr in pub_rows]
 
     result = {
-        "id": row[0],
-        "first_name": row[1],
-        "last_name": row[2],
-        "position": row[3],
-        "affiliation": row[4],
-        "description": row[5],
+        "id": row['id'],
+        "first_name": row['first_name'],
+        "last_name": row['last_name'],
+        "position": row['position'],
+        "affiliation": row['affiliation'],
+        "description": row['description'],
         "urls": urls,
         "website_url": _get_website_url(urls),
         "publication_count": pub_count,
@@ -760,11 +752,11 @@ def get_researcher(
         snapshots = Database.get_researcher_snapshots(researcher_id)
         result["history"] = [
             {
-                "position": s[0],
-                "affiliation": s[1],
-                "description": s[2],
-                "scraped_at": s[3].isoformat() + "Z" if s[3] else None,
-                "source_url": s[4],
+                "position": s['position'],
+                "affiliation": s['affiliation'],
+                "description": s['description'],
+                "scraped_at": _iso_z(s['scraped_at']),
+                "source_url": s['source_url'],
             }
             for s in snapshots
         ]
@@ -801,7 +793,7 @@ async def trigger_scrape(request: Request):
     return {
         "scrape_id": log_id,
         "status": "running",
-        "started_at": started_at.isoformat() + "Z",
+        "started_at": _iso_z(started_at),
     }
 
 
@@ -823,18 +815,18 @@ def scrape_status(request: Request):
     if not row:
         return {"last_scrape": None, "next_scrape_at": None, "interval_hours": interval}
 
-    started_at = row[2]
-    next_scrape = (started_at + timedelta(hours=interval)).isoformat() + "Z" if started_at else None
+    started_at = row['started_at']
+    next_scrape = _iso_z(started_at + timedelta(hours=interval)) if started_at else None
 
     return {
         "last_scrape": {
-            "id": row[0],
-            "status": row[1],
-            "started_at": row[2].isoformat() + "Z" if row[2] else None,
-            "finished_at": row[3].isoformat() + "Z" if row[3] else None,
-            "urls_checked": row[4],
-            "urls_changed": row[5],
-            "pubs_extracted": row[6],
+            "id": row['id'],
+            "status": row['status'],
+            "started_at": _iso_z(row['started_at']),
+            "finished_at": _iso_z(row['finished_at']),
+            "urls_checked": row['urls_checked'],
+            "urls_changed": row['urls_changed'],
+            "pubs_extracted": row['pubs_extracted'],
         },
         "next_scrape_at": next_scrape,
         "interval_hours": interval,
