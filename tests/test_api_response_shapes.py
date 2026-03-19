@@ -73,7 +73,7 @@ SAMPLE_PUB = {
     "event_id": 100, "event_type": "new_paper", "old_status": None,
     "new_status": "working_paper", "created_at": datetime(2026, 3, 15, 14, 30),
     "paper_id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
-    "url": "https://example.com/p",
+    "source_url": "https://example.com/p",
     "discovered_at": datetime(2026, 3, 15, 14, 30), "status": "working_paper",
     "draft_url": "https://ssrn.com/1", "abstract": "An abstract.",
     "draft_url_status": "valid",
@@ -82,8 +82,8 @@ SAMPLE_AUTHORS = [{"publication_id": 1, "researcher_id": 10, "first_name": "Max"
 # Single publication detail (10-column papers row, used by GET /api/publications/{id} and researcher detail)
 SAMPLE_PUB_DETAIL = {
     "id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
-    "url": "https://example.com/p",
-    "timestamp": datetime(2026, 3, 15, 14, 30), "status": "working_paper",
+    "source_url": "https://example.com/p",
+    "discovered_at": datetime(2026, 3, 15, 14, 30), "status": "working_paper",
     "draft_url": "https://ssrn.com/1", "abstract": "An abstract.",
     "draft_url_status": "valid",
 }

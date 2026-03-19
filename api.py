@@ -260,8 +260,8 @@ def _format_publication(row, authors: list[dict]) -> dict:
         "authors": authors,
         "year": row['year'],
         "venue": row['venue'],
-        "source_url": row['url'],
-        "discovered_at": _iso_z(row.get('timestamp')),
+        "source_url": row['source_url'],
+        "discovered_at": _iso_z(row.get('discovered_at')),
         "status": row.get('status'),
         "draft_url": row.get('draft_url'),
         "draft_available": row.get('draft_url_status') == 'valid',
@@ -283,7 +283,7 @@ def _format_feed_event(row, authors: list[dict]) -> dict:
         "authors": authors,
         "year": row['year'],
         "venue": row['venue'],
-        "source_url": row['url'],
+        "source_url": row['source_url'],
         "discovered_at": _iso_z(row.get('discovered_at')),
         "status": row.get('status'),
         "draft_url": row.get('draft_url'),
@@ -398,7 +398,7 @@ def list_publications(
     rows = Database.fetch_all(
         f"""
         SELECT fe.id AS event_id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
-               p.id AS paper_id, p.title, p.year, p.venue, p.url, p.timestamp AS discovered_at,
+               p.id AS paper_id, p.title, p.year, p.venue, p.source_url, p.discovered_at,
                p.status, p.draft_url, p.abstract, p.draft_url_status
         FROM feed_events fe
         JOIN papers p ON p.id = fe.paper_id
@@ -431,7 +431,7 @@ def get_publication(
     include_history: bool = Query(False),
 ):
     row = Database.fetch_one(
-        "SELECT id, title, year, venue, url, timestamp, status, draft_url, abstract, draft_url_status FROM papers WHERE id = %s",
+        "SELECT id, title, year, venue, source_url, discovered_at, status, draft_url, abstract, draft_url_status FROM papers WHERE id = %s",
         (publication_id,),
     )
     if not row:
@@ -721,12 +721,12 @@ def get_researcher(
     # Fetch this researcher's publications
     pub_rows = Database.fetch_all(
         """
-        SELECT p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url,
+        SELECT p.id, p.title, p.year, p.venue, p.source_url, p.discovered_at, p.status, p.draft_url,
                p.abstract, p.draft_url_status
         FROM papers p
         JOIN authorship a ON a.publication_id = p.id
         WHERE a.researcher_id = %s
-        ORDER BY p.timestamp DESC
+        ORDER BY p.discovered_at DESC
         """,
         (researcher_id,),
     )

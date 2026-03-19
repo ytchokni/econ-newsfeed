@@ -69,8 +69,8 @@ BATCH_FIELDS_R2 = []
 SAMPLE_RESEARCHER_DETAIL = {"id": 1, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "Freie Universität Berlin", "description": "A leading researcher in trade economics."}
 
 SAMPLE_PUBLICATIONS_R1 = [
-    # {id, title, year, venue, url, timestamp, status, draft_url, abstract, draft_url_status}
-    {"id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE", "url": "https://example.com/pub", "timestamp": datetime(2026, 3, 15, 14, 30), "status": "published", "draft_url": None, "abstract": None, "draft_url_status": None},
+    # {id, title, year, venue, source_url, discovered_at, status, draft_url, abstract, draft_url_status}
+    {"id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE", "source_url": "https://example.com/pub", "discovered_at": datetime(2026, 3, 15, 14, 30), "status": "published", "draft_url": None, "abstract": None, "draft_url_status": None},
 ]
 
 SAMPLE_FIELDS_R1 = [
