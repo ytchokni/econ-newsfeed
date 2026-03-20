@@ -115,7 +115,7 @@ class TestPublicationShape:
             patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
         ):
-            mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS]
+            mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS, []]  # pubs, authors, links
             body = client.get("/api/publications").json()
 
         assert set(body.keys()) >= PAGINATED_KEYS
@@ -125,7 +125,7 @@ class TestPublicationShape:
             patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
         ):
-            mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS]
+            mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS, []]  # pubs, authors, links
             body = client.get("/api/publications").json()
 
         item = body["items"][0]
@@ -138,7 +138,7 @@ class TestPublicationShape:
             patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
         ):
-            mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS]
+            mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS, []]  # pubs, authors, links
             body = client.get("/api/publications").json()
 
         author = body["items"][0]["authors"][0]
@@ -221,7 +221,7 @@ class TestResearcherDetailShape:
             single_fields = [{"id": 1, "name": "Labour Economics", "slug": "labour-economics"}]
             mock_all.side_effect = [
                 single_urls, single_fields,
-                [SAMPLE_PUB_DETAIL], SAMPLE_AUTHORS,
+                [SAMPLE_PUB_DETAIL], SAMPLE_AUTHORS, [],  # urls, fields, pubs, authors, links
             ]
             body = client.get("/api/researchers/10").json()
 

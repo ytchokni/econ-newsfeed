@@ -107,10 +107,11 @@ _NO_AUTHORS = []
 # ---------------------------------------------------------------------------
 
 def _mock_single_pub(mock_fetch, pub_row, author_rows):
-    """Configure mock_fetch for a two-call sequence: pubs + batch-authors."""
+    """Configure mock_fetch for a three-call sequence: pubs + batch-authors + batch-links."""
     mock_fetch.side_effect = [
         [pub_row],
         author_rows,
+        [],  # links
     ]
 
 
