@@ -95,12 +95,15 @@ def search_work(title: str, author_name: str) -> dict | None:
     if not results:
         return None
 
-    # Find a result where the author name appears in authorships
-    author_lower = author_name.lower()
+    # Match on last name — handles "M. Steinhardt" vs "Max Friedrich Steinhardt"
+    last_name = author_name.split()[-1].lower() if author_name.strip() else ""
+    if not last_name:
+        return None
+
     for work in results:
         for authorship in work.get("authorships", []):
             display = (authorship.get("author", {}).get("display_name") or "").lower()
-            if author_lower in display or display in author_lower:
+            if last_name in display.split():
                 return _parse_work(work)
 
     return None
