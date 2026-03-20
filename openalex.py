@@ -10,6 +10,8 @@ from database import Database
 logger = logging.getLogger(__name__)
 
 OPENALEX_BASE_URL = "https://api.openalex.org"
+_OPENALEX_PREFIX = "https://openalex.org/"
+_DOI_PREFIX = "https://doi.org/"
 MAILTO = os.environ.get("OPENALEX_MAILTO", "")
 
 _session = None
@@ -72,21 +74,22 @@ def search_work(title: str, author_name: str) -> dict | None:
     return None
 
 
+def _strip_prefix(url: str | None, prefix: str) -> str | None:
+    """Strip a URL prefix and return the identifier, or None if empty."""
+    return (url or "").replace(prefix, "") or None
+
+
 def _parse_work(work: dict) -> dict:
     """Parse an OpenAlex work object into our enrichment dict."""
-    raw_doi = work.get("doi") or ""
-    doi = raw_doi.replace("https://doi.org/", "") if raw_doi else None
-
-    openalex_id = work.get("id", "").replace("https://openalex.org/", "") or None
+    doi = _strip_prefix(work.get("doi"), _DOI_PREFIX)
+    openalex_id = _strip_prefix(work.get("id"), _OPENALEX_PREFIX)
 
     coauthors = []
     for authorship in work.get("authorships", []):
         author = authorship.get("author", {})
         coauthors.append({
             "display_name": author.get("display_name", ""),
-            "openalex_author_id": (
-                author.get("id", "").replace("https://openalex.org/", "") or None
-            ),
+            "openalex_author_id": _strip_prefix(author.get("id"), _OPENALEX_PREFIX),
         })
 
     abstract = None

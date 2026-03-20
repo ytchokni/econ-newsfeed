@@ -38,8 +38,9 @@ class TestUpdateOpenalexData:
         assert "UPDATE papers SET doi" in update_call[0][0]
         assert update_call[0][1] == ("10.1257/aer.20181234", "W2741809807", 1)
 
-        # DELETE old coauthors + INSERT coauthors (2 calls)
-        assert mock_cursor.execute.call_count == 4  # 1 update + 1 delete + 2 inserts
+        # DELETE old coauthors + executemany for inserts
+        assert mock_cursor.execute.call_count == 2  # 1 update + 1 delete
+        mock_cursor.executemany.assert_called_once()
         mock_conn.commit.assert_called_once()
 
     def test_stores_abstract_when_provided(self):

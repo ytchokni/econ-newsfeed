@@ -50,7 +50,7 @@ def update_openalex_data(paper_id, doi, openalex_id, coauthors, abstract=None):
     """
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            if abstract:
+            if abstract is not None:
                 cursor.execute(
                     "UPDATE papers SET doi = %s, openalex_id = %s, abstract = %s WHERE id = %s",
                     (doi, openalex_id, abstract, paper_id),
@@ -64,11 +64,11 @@ def update_openalex_data(paper_id, doi, openalex_id, coauthors, abstract=None):
             cursor.execute(
                 "DELETE FROM openalex_coauthors WHERE paper_id = %s", (paper_id,)
             )
-            for ca in coauthors:
-                cursor.execute(
+            if coauthors:
+                cursor.executemany(
                     "INSERT INTO openalex_coauthors (paper_id, display_name, openalex_author_id) "
                     "VALUES (%s, %s, %s)",
-                    (paper_id, ca["display_name"], ca.get("openalex_author_id")),
+                    [(paper_id, ca["display_name"], ca.get("openalex_author_id")) for ca in coauthors],
                 )
             conn.commit()
 
@@ -82,7 +82,7 @@ def get_unenriched_papers(limit=50):
     return fetch_all(
         """
         SELECT p.id, p.title, p.abstract,
-               CONCAT(r.first_name, ' ', r.last_name) AS author_name
+               MIN(CONCAT(r.first_name, ' ', r.last_name)) AS author_name
         FROM papers p
         JOIN authorship a ON a.publication_id = p.id
         JOIN researchers r ON r.id = a.researcher_id

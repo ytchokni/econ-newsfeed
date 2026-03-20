@@ -62,6 +62,10 @@ class AuthorResponse(BaseModel):
     first_name: str
     last_name: str
 
+class CoAuthorResponse(BaseModel):
+    display_name: str
+    openalex_author_id: str | None = None
+
 class PublicationResponse(BaseModel):
     id: int
     title: str
@@ -76,7 +80,7 @@ class PublicationResponse(BaseModel):
     abstract: str | None
     draft_url_status: str | None
     doi: str | None = None
-    coauthors: list[dict] | None = None
+    coauthors: list[CoAuthorResponse] = []
     event_id: int | None = None
     event_type: str | None = None
     old_status: str | None = None

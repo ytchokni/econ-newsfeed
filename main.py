@@ -338,7 +338,6 @@ def main() -> None:
     elif args.command == 'batch-check':
         batch_check()
     elif args.command == 'enrich':
-        from database import Database
         Database.create_tables()
         from openalex import enrich_new_publications
         enrich_new_publications()

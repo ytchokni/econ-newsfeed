@@ -256,12 +256,6 @@ def run_scrape_job() -> None:
         validate_s = time.time() - t0
         logger.info(f"Draft URL validation: {validate_s:.1f}s")
 
-        # Enrich new publications with OpenAlex data
-        t0 = time.time()
-        _enrich_with_openalex()
-        enrich_s = time.time() - t0
-        logger.info(f"OpenAlex enrichment: {enrich_s:.1f}s")
-
         total_s = time.time() - scrape_start
         update_scrape_log(log_id, "completed", urls_checked, urls_changed, pubs_extracted)
         logger.info(f"Scrape completed: {urls_checked} checked, {urls_changed} changed, {pubs_extracted} extracted — {total_s:.1f}s total")
@@ -273,6 +267,12 @@ def run_scrape_job() -> None:
     finally:
         _release_db_lock(lock_conn)
         _lock_conn = None
+
+    # Enrich after releasing lock — doesn't need exclusivity and can be slow
+    t0 = time.time()
+    _enrich_with_openalex()
+    enrich_s = time.time() - t0
+    logger.info(f"OpenAlex enrichment: {enrich_s:.1f}s")
 
 
 def _handle_sigterm(signum: int, frame: object) -> None:
