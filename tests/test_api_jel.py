@@ -63,7 +63,7 @@ class TestResearcherDetailIncludesJel:
         with patch("api._get_urls_for_researcher", return_value=[]), \
              patch("api._get_pub_count_for_researcher", return_value=0), \
              patch("api._get_fields_for_researcher", return_value=[]), \
-             patch("api._get_jel_codes_for_researcher", return_value=SAMPLE_JEL_FOR_R1):
+             patch("api.Database.get_jel_codes_for_researcher", return_value=SAMPLE_JEL_FOR_R1):
             resp = client.get("/api/researchers/1")
 
         assert resp.status_code == 200

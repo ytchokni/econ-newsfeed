@@ -90,7 +90,7 @@ class TestListResearchers:
         with (
             patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
-            patch("api._get_jel_codes_for_researchers", return_value={}),
+            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
             mock_one.side_effect = [
                 {"total": 2},            # total count
@@ -116,7 +116,7 @@ class TestListResearchers:
         with (
             patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
-            patch("api._get_jel_codes_for_researchers", return_value={}),
+            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
             mock_one.side_effect = [
                 {"total": 1},        # total count
@@ -150,7 +150,7 @@ class TestListResearchers:
         with (
             patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
-            patch("api._get_jel_codes_for_researchers", return_value={}),
+            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
             mock_one.side_effect = [
                 {"total": 2},            # total count
@@ -175,7 +175,7 @@ class TestListResearchers:
         with (
             patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
-            patch("api._get_jel_codes_for_researchers", return_value={}),
+            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
             mock_one.side_effect = [
                 {"total": 2},            # total count
@@ -208,7 +208,7 @@ class TestListResearchers:
         with (
             patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
-            patch("api._get_jel_codes_for_researchers", return_value={}),
+            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
             mock_one.side_effect = [
                 {"total": 1},            # total count
@@ -229,7 +229,7 @@ class TestListResearchers:
         with (
             patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
-            patch("api._get_jel_codes_for_researchers", return_value={}),
+            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
             mock_one.side_effect = [
                 {"total": 1},                # total count
@@ -250,7 +250,7 @@ class TestListResearchers:
         with (
             patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
-            patch("api._get_jel_codes_for_researchers", return_value={}),
+            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
             mock_one.side_effect = [
                 {"total": 1},                # total count
@@ -270,7 +270,7 @@ class TestListResearchers:
         with (
             patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
-            patch("api._get_jel_codes_for_researchers", return_value={}),
+            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
             mock_one.side_effect = [
                 {"total": 2},            # total count
@@ -297,7 +297,7 @@ class TestGetResearcher:
         with (
             patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
-            patch("api._get_jel_codes_for_researcher", return_value=[]),
+            patch("api.Database.get_jel_codes_for_researcher", return_value=[]),
         ):
             mock_one.side_effect = [
                 SAMPLE_RESEARCHER_DETAIL,    # researcher row

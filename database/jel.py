@@ -1,7 +1,8 @@
 """JEL code database operations."""
+import logging
 from datetime import datetime, timezone
 
-from database.connection import execute_query, fetch_all, fetch_one
+from database.connection import execute_query, fetch_all
 
 
 def get_all_jel_codes() -> list[dict]:
@@ -44,9 +45,10 @@ def save_researcher_jel_codes(researcher_id: int, jel_codes: list[str]) -> None:
     """Replace a researcher's JEL codes with the given list.
 
     Deletes existing codes and inserts the new set in a single transaction.
-    Invalid codes (not in jel_codes table) are silently skipped.
+    Invalid codes (not in jel_codes table) are skipped with a warning.
     """
     from database.connection import get_connection
+    from mysql.connector.errors import IntegrityError
 
     now = datetime.now(timezone.utc)
     with get_connection() as conn:
@@ -63,8 +65,11 @@ def save_researcher_jel_codes(researcher_id: int, jel_codes: list[str]) -> None:
                            VALUES (%s, %s, %s)""",
                         (researcher_id, code.upper().strip(), now),
                     )
-                except Exception:
-                    pass  # Skip invalid codes (FK violation)
+                except IntegrityError:
+                    logging.warning(
+                        "Skipped unknown JEL code '%s' for researcher %d",
+                        code, researcher_id,
+                    )
             conn.commit()
 
 
@@ -73,10 +78,9 @@ def get_researchers_needing_classification() -> list[dict]:
     return fetch_all(
         """SELECT r.id, r.first_name, r.last_name, r.description
            FROM researchers r
+           LEFT JOIN researcher_jel_codes rjc ON rjc.researcher_id = r.id
            WHERE r.description IS NOT NULL
              AND r.description != ''
-             AND r.id NOT IN (
-                 SELECT DISTINCT researcher_id FROM researcher_jel_codes
-             )
+             AND rjc.researcher_id IS NULL
            ORDER BY r.id"""
     )

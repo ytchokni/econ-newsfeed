@@ -652,14 +652,6 @@ def _get_fields_for_researchers(researcher_ids: list[int]) -> dict[int, list[dic
     return result
 
 
-def _get_jel_codes_for_researcher(researcher_id: int) -> list[dict]:
-    return Database.get_jel_codes_for_researcher(researcher_id)
-
-
-def _get_jel_codes_for_researchers(researcher_ids: list[int]) -> dict[int, list[dict]]:
-    return Database.get_jel_codes_for_researchers(researcher_ids)
-
-
 # Top-20 economics department keywords for preset filtering
 _TOP20_DEPT_KEYWORDS = [
     "MIT", "Massachusetts Institute of Technology",
@@ -801,7 +793,7 @@ def list_researchers(
     urls_by_researcher = _get_urls_for_researchers(researcher_ids)
     pub_counts = _get_pub_counts_for_researchers(researcher_ids)
     fields_by_researcher = _get_fields_for_researchers(researcher_ids)
-    jel_map = _get_jel_codes_for_researchers(researcher_ids)
+    jel_map = Database.get_jel_codes_for_researchers(researcher_ids)
     items = [
         {
             "id": r['id'],
@@ -845,7 +837,7 @@ def get_researcher(
     urls = _get_urls_for_researcher(researcher_id)
     pub_count = _get_pub_count_for_researcher(researcher_id)
     fields = _get_fields_for_researcher(researcher_id)
-    jel_codes = _get_jel_codes_for_researcher(researcher_id)
+    jel_codes = Database.get_jel_codes_for_researcher(researcher_id)
 
     # Fetch this researcher's publications
     pub_rows = Database.fetch_all(

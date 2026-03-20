@@ -152,7 +152,7 @@ class TestFullCycle:
         with (
             patch("api.Database.fetch_all") as mock_all,
             patch("api.Database.fetch_one", return_value={"total": 5}),
-            patch("api._get_jel_codes_for_researchers", return_value={}),
+            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
             mock_all.side_effect = [[SAMPLE_RESEARCHER], SAMPLE_URLS_BATCH, [{"researcher_id": 10, "cnt": 5}], SAMPLE_FIELDS]
             resp = client.get("/api/researchers")
@@ -163,7 +163,7 @@ class TestFullCycle:
         with (
             patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_all,
-            patch("api._get_jel_codes_for_researcher", return_value=[]),
+            patch("api.Database.get_jel_codes_for_researcher", return_value=[]),
         ):
             mock_one.side_effect = [SAMPLE_RESEARCHER, {"cnt": 5}]
             mock_all.side_effect = [SAMPLE_URLS_SINGLE, SAMPLE_FIELDS, [SAMPLE_PUB_DETAIL], SAMPLE_AUTHORS]
@@ -286,7 +286,7 @@ class TestPublicationsSmoke:
         with (
             patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
-            patch("api._get_jel_codes_for_researchers", return_value={}),
+            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
             mock_all.side_effect = [
                 [_SMOKE_RESEARCHER],
