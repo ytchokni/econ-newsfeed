@@ -1,27 +1,33 @@
 """Connection pool and low-level query execution."""
+from __future__ import annotations
+
 import os
+from typing import TYPE_CHECKING
 
 from mysql.connector.pooling import MySQLConnectionPool
 
 from db_config import db_config
 
-_pool: "MySQLConnectionPool | None" = None
+if TYPE_CHECKING:
+    from mysql.connector.pooling import PooledMySQLConnection
+
+_pool: MySQLConnectionPool | None = None
 _DB_POOL_SIZE = int(os.environ.get('DB_POOL_SIZE', '10'))
 
 
-def _get_pool() -> "MySQLConnectionPool":
+def _get_pool() -> MySQLConnectionPool:
     global _pool
     if _pool is None:
         _pool = MySQLConnectionPool(pool_size=_DB_POOL_SIZE, pool_name="econ_pool", **db_config)
     return _pool
 
 
-def get_connection():
+def get_connection() -> PooledMySQLConnection:
     """Checkout and return a connection from the connection pool."""
     return _get_pool().get_connection()
 
 
-def execute_query(query, params=None):
+def execute_query(query: str, params: tuple | list | None = None) -> int:
     """Execute a query with optional parameters and commit. Returns lastrowid."""
     with get_connection() as conn:
         with conn.cursor() as cursor:
@@ -30,7 +36,7 @@ def execute_query(query, params=None):
             return cursor.lastrowid
 
 
-def fetch_all(query, params=None):
+def fetch_all(query: str, params: tuple | list | None = None) -> list[dict]:
     """Execute a query and fetch all results as a list of dicts."""
     with get_connection() as conn:
         with conn.cursor(dictionary=True) as cursor:
@@ -38,7 +44,7 @@ def fetch_all(query, params=None):
             return cursor.fetchall()
 
 
-def fetch_one(query, params=None):
+def fetch_one(query: str, params: tuple | list | None = None) -> dict | None:
     """Execute a query and fetch one result as a dict, or None."""
     with get_connection() as conn:
         with conn.cursor(dictionary=True) as cursor:

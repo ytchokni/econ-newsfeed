@@ -1,4 +1,6 @@
 """Schema creation, migrations, and seeding."""
+from __future__ import annotations
+
 import logging
 
 import mysql.connector
@@ -8,7 +10,7 @@ from db_config import db_config
 from database.connection import get_connection, execute_query
 
 
-def create_database():
+def create_database() -> None:
     """Create the database if it doesn't exist."""
     conn = None
     try:
@@ -28,7 +30,8 @@ def create_database():
             conn.close()
 
 
-def _migrate_fk_cascade(cursor, table, column, ref_table, ref_column):
+def _migrate_fk_cascade(cursor: object, table: str, column: str, ref_table: str,
+                        ref_column: str) -> None:
     """Ensure FK on (table.column -> ref_table.ref_column) has ON DELETE CASCADE.
     Idempotent: skips if CASCADE already in place."""
     cursor.execute(
@@ -264,7 +267,7 @@ _TABLE_DEFINITIONS = {
 }
 
 
-def create_tables():
+def create_tables() -> None:
     """Create all tables and run migrations."""
     with get_connection() as conn:
         with conn.cursor() as cursor:
@@ -393,7 +396,7 @@ def create_tables():
     seed_research_fields()
 
 
-def seed_research_fields():
+def seed_research_fields() -> None:
     """Insert the initial research field taxonomy if not already present."""
     fields = [
         ("Macroeconomics", "macroeconomics"),

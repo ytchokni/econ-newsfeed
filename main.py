@@ -13,12 +13,12 @@ from html_fetcher import HTMLFetcher
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
-def import_data(file_path):
+def import_data(file_path: str) -> None:
     """Import data from a file into the database."""
     Database.import_data_from_file(file_path)
     logging.info(f"Data imported from {file_path}")
 
-def download_htmls():
+def download_htmls() -> None:
     """Download HTML content for all URLs in the researcher_urls table."""
     from scheduler import create_scrape_log, update_scrape_log
 
@@ -40,7 +40,7 @@ def download_htmls():
         logging.error(f"Download failed: {e}")
         update_scrape_log(log_id, "failed", urls_checked, urls_changed, error_message=str(e))
 
-def extract_data_from_htmls():
+def extract_data_from_htmls() -> None:
     """Extract publication data from downloaded HTML content."""
     researcher_urls = Researcher.get_all_researcher_urls()
     for row in researcher_urls:
@@ -61,7 +61,7 @@ def extract_data_from_htmls():
             logging.error(f"No HTML content found for URL ID: {id}, URL: {url}")
 
 
-def _process_one_url(url_id, researcher_id, url, page_type):
+def _process_one_url(url_id: int, researcher_id: int, url: str, page_type: str) -> tuple[str, int, str | None]:
     """Process a single URL: check if extraction needed, extract, save, mark."""
     if not HTMLFetcher.needs_extraction(url_id):
         logging.info(f"Skipping URL ID {url_id} (unchanged): {url}")
@@ -79,7 +79,7 @@ def _process_one_url(url_id, researcher_id, url, page_type):
         return url, 0, str(e)
 
 
-def extract_data_from_htmls_concurrent():
+def extract_data_from_htmls_concurrent() -> None:
     """Extract publication data concurrently using ThreadPoolExecutor."""
     researcher_urls = Researcher.get_all_researcher_urls()
     workers = int(os.environ.get('PARSE_WORKERS', '8'))
@@ -110,7 +110,7 @@ def extract_data_from_htmls_concurrent():
     )
 
 
-def batch_submit():
+def batch_submit() -> None:
     """Submit a batch job to the OpenAI Batch API for all URLs needing extraction."""
     from openai import OpenAI
     from publication import OPENAI_MODEL
@@ -189,13 +189,13 @@ def batch_submit():
 
 class _UsageDict:
     """Thin wrapper so a dict from the Batch API response can be passed to log_llm_usage()."""
-    def __init__(self, d):
+    def __init__(self, d: dict) -> None:
         self.prompt_tokens = d.get("prompt_tokens", 0)
         self.completion_tokens = d.get("completion_tokens", 0)
         self.total_tokens = d.get("total_tokens", self.prompt_tokens + self.completion_tokens)
 
 
-def batch_check():
+def batch_check() -> None:
     """Check pending batch jobs and process completed results."""
     from openai import OpenAI
     from publication import PublicationExtraction, OPENAI_MODEL
@@ -308,7 +308,7 @@ def batch_check():
             logging.info("Batch %s status: %s — %s", openai_batch_id, status, req_counts)
 
 
-def main():
+def main() -> None:
     """CLI entrypoint — non-interactive, safe for cloud/container environments."""
     parser = argparse.ArgumentParser(description='Econ Newsfeed scraper CLI')
     subparsers = parser.add_subparsers(dest='command', required=True)

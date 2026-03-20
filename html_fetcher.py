@@ -13,9 +13,6 @@ from urllib.robotparser import RobotFileParser
 from database import Database
 from bs4 import BeautifulSoup
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(levelname)s: %(message)s')
-
 RATE_LIMIT_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_SECONDS', '2'))
 RATE_LIMIT_FAST_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_FAST_SECONDS', '0.5'))
 CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS'))
@@ -48,10 +45,16 @@ def _is_fast_domain(hostname: str) -> bool:
 
 
 class HTMLFetcher:
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': SCRAPER_USER_AGENT
-    })
+    _thread_local = threading.local()
+
+    @staticmethod
+    def _get_session() -> requests.Session:
+        """Get or create a thread-local requests.Session."""
+        if not hasattr(HTMLFetcher._thread_local, 'session'):
+            s = requests.Session()
+            s.headers.update({'User-Agent': SCRAPER_USER_AGENT})
+            HTMLFetcher._thread_local.session = s
+        return HTMLFetcher._thread_local.session
 
     # Per-domain rate limiting: domain -> last request timestamp
     _domain_last_request = {}
@@ -65,7 +68,7 @@ class HTMLFetcher:
     _robots_cache: dict = {}
 
     @staticmethod
-    def _get_robots_parser(url):
+    def _get_robots_parser(url: str) -> "RobotFileParser | None":
         """Get or fetch the RobotFileParser for a URL's domain. Cached per origin."""
         parsed = urlparse(url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
@@ -88,7 +91,7 @@ class HTMLFetcher:
             return None
 
     @staticmethod
-    def is_allowed_by_robots(url):
+    def is_allowed_by_robots(url: str) -> bool:
         """Check if the URL is allowed by the site's robots.txt. Cached per domain."""
         rp = HTMLFetcher._get_robots_parser(url)
         if rp is None:
@@ -99,13 +102,13 @@ class HTMLFetcher:
         return allowed
 
     @staticmethod
-    def validate_url(url):
+    def validate_url(url: str) -> bool:
         """Validate a URL for SSRF protection. Returns True if safe."""
         safe, _ = HTMLFetcher.validate_url_with_pin(url)
         return safe
 
     @staticmethod
-    def validate_url_with_pin(url):
+    def validate_url_with_pin(url: str) -> tuple[bool, str | None]:
         """Validate URL for SSRF and return (is_safe, resolved_ip).
         The resolved IP should be used for the actual HTTP request to prevent DNS rebinding."""
         try:
@@ -136,7 +139,7 @@ class HTMLFetcher:
         return True, resolved_ip
 
     @staticmethod
-    def _rate_limit(url):
+    def _rate_limit(url: str) -> None:
         """Enforce per-domain rate limiting (thread-safe)."""
         domain = urlparse(url).hostname
         limit = RATE_LIMIT_FAST_SECONDS if _is_fast_domain(domain) else RATE_LIMIT_SECONDS
@@ -154,7 +157,7 @@ class HTMLFetcher:
             HTMLFetcher._domain_last_request[domain] = time.time()
 
     @staticmethod
-    def fetch_html(url, timeout=10, max_retries=3):
+    def fetch_html(url: str, timeout: int = 10, max_retries: int = 3) -> str | None:
         """
         Fetch HTML content from a given URL with exponential backoff.
         Retries on timeouts and 5xx server errors.
@@ -162,7 +165,7 @@ class HTMLFetcher:
         Returns the HTML content as a string, or None on failure.
         """
         HTMLFetcher._rate_limit(url)
-        session = HTMLFetcher.session
+        session = HTMLFetcher._get_session()
 
         for attempt in range(max_retries):
             try:
@@ -190,7 +193,7 @@ class HTMLFetcher:
         return None
 
     @staticmethod
-    def extract_text_content(html_content):
+    def extract_text_content(html_content: str) -> str:
         """
         Extract only the text content from HTML, ignoring scripts, styles, and HTML tags.
         """
@@ -200,24 +203,24 @@ class HTMLFetcher:
         return soup.get_text()
 
     @staticmethod
-    def hash_text_content(text_content):
+    def hash_text_content(text_content: str) -> str:
         """
         Hash the text content using SHA-256.
         """
         return hashlib.sha256(text_content.encode('utf-8')).hexdigest()
 
     @staticmethod
-    def save_text(url_id, text_content, text_hash, researcher_id):
+    def save_text(url_id: int, text_content: str, text_hash: str, researcher_id: int) -> None:
         """
         Save pre-extracted text content and hash to the database using upsert.
         """
         query = """
             INSERT INTO html_content (url_id, content, content_hash, timestamp, researcher_id)
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s) AS new_row
             ON DUPLICATE KEY UPDATE
-                content = VALUES(content),
-                content_hash = VALUES(content_hash),
-                timestamp = VALUES(timestamp)
+                content = new_row.content,
+                content_hash = new_row.content_hash,
+                timestamp = new_row.timestamp
         """
         try:
             Database.execute_query(query, (url_id, text_content, text_hash, datetime.now(timezone.utc), researcher_id))
@@ -226,7 +229,7 @@ class HTMLFetcher:
             logging.error("Error saving text content for URL ID %s: %s", url_id, type(e).__name__)
 
     @staticmethod
-    def has_text_changed(url_id, new_text_hash):
+    def has_text_changed(url_id: int, new_text_hash: str) -> bool:
         """
         Compare the hash of the new text content to the stored hash to check for changes.
         """
@@ -242,7 +245,7 @@ class HTMLFetcher:
         return True  # No previous record — treat as changed
 
     @staticmethod
-    def _was_fetched_recently(url_id, hours=24):
+    def _was_fetched_recently(url_id: int, hours: int = 24) -> bool:
         """Return True if this URL was successfully fetched within the last N hours."""
         result = Database.fetch_one(
             "SELECT timestamp FROM html_content WHERE url_id = %s", (url_id,)
@@ -260,7 +263,7 @@ class HTMLFetcher:
         return age.total_seconds() < hours * 3600
 
     @staticmethod
-    def fetch_and_save_if_changed(url_id, url, researcher_id):
+    def fetch_and_save_if_changed(url_id: int, url: str, researcher_id: int) -> bool:
         """
         Fetch HTML content from the given URL and save its text content if it has changed.
         Skips fetching if the URL was successfully fetched within the last 24 hours.
@@ -360,7 +363,7 @@ class HTMLFetcher:
 
         try:
             # Disable auto-redirects to prevent SSRF via redirect to internal IPs
-            response = HTMLFetcher.session.head(url, timeout=10, allow_redirects=False)
+            response = HTMLFetcher._get_session().head(url, timeout=10, allow_redirects=False)
             if response.status_code < 400:
                 return 'valid'
             # Follow redirects manually with SSRF validation
@@ -379,7 +382,7 @@ class HTMLFetcher:
             return 'invalid'
 
     @staticmethod
-    def get_latest_text(url_id):
+    def get_latest_text(url_id: int) -> str | None:
         """Retrieve the latest text content for a given URL ID."""
         query = """
             SELECT content
@@ -390,7 +393,7 @@ class HTMLFetcher:
         return result['content'] if result else None
 
     @staticmethod
-    def needs_extraction(url_id):
+    def needs_extraction(url_id: int) -> bool:
         """
         Return True if LLM extraction is needed for this URL.
         Extraction is needed when content_hash differs from extracted_hash
@@ -409,7 +412,7 @@ class HTMLFetcher:
         return content_hash != extracted_hash
 
     @staticmethod
-    def mark_extracted(url_id):
+    def mark_extracted(url_id: int) -> None:
         """
         Record that extraction has been run on the current content by setting
         extracted_hash = content_hash and extracted_at = now.
@@ -422,7 +425,7 @@ class HTMLFetcher:
         Database.execute_query(query, (datetime.now(timezone.utc), url_id))
 
     @staticmethod
-    def get_previous_text(url_id):
+    def get_previous_text(url_id: int) -> str | None:
         """Retrieve the previous text content for a given URL ID (before current upsert).
         With upsert, there's only one row per url_id, so this returns the current stored
         content (which represents the *previous* version before fetch_and_save_if_changed
@@ -431,7 +434,7 @@ class HTMLFetcher:
         return HTMLFetcher.get_latest_text(url_id)
 
     @staticmethod
-    def compute_diff(old_text, new_text):
+    def compute_diff(old_text: str, new_text: str) -> str:
         """Compute a unified diff between old and new text content.
         Returns only added/changed lines to reduce LLM token usage.
         """

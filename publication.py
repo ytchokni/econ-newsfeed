@@ -36,14 +36,14 @@ class PublicationExtraction(BaseModel):
 
     @field_validator('year', mode='before')
     @classmethod
-    def coerce_year_to_str(cls, v):
+    def coerce_year_to_str(cls, v: object) -> str | None:
         if v is not None:
             return str(v)
         return v
 
     @field_validator('draft_url', mode='before')
     @classmethod
-    def validate_draft_url(cls, v):
+    def validate_draft_url(cls, v: object) -> str | None:
         if v is None:
             return v
         try:
@@ -61,7 +61,7 @@ class PublicationExtractionList(BaseModel):
 
 
 class Publication:
-    def __init__(self, id, title, authors, year, venue, url):
+    def __init__(self, id: int, title: str, authors: list | None, year: str | None, venue: str | None, url: str | None) -> None:
         self.id = id
         self.title = title
         self.authors = authors
@@ -166,7 +166,7 @@ class Publication:
         logging.info(f"{len(publications)} publications processed for {url}")
 
     @staticmethod
-    def extract_relevant_html(html_content):
+    def extract_relevant_html(html_content: str) -> str:
         """Extract the relevant parts of the HTML, preserving hyperlinks as inline text.
 
         Converts <a href="URL">text</a> to 'text (URL)' before stripping HTML,
@@ -185,7 +185,7 @@ class Publication:
         return main_content.get_text(separator='\n', strip=True)
 
     @staticmethod
-    def build_extraction_prompt(text_content, url):
+    def build_extraction_prompt(text_content: str, url: str) -> str:
         """Build the LLM prompt for publication extraction."""
         return f"""Extract all academic publications from the following researcher page content from {url}.
 
@@ -204,7 +204,7 @@ Content:
 {text_content[:CONTENT_MAX_CHARS]}"""
 
     @staticmethod
-    def extract_publications(text_content, url, scrape_log_id=None):
+    def extract_publications(text_content: str, url: str, scrape_log_id: int | None = None) -> list[dict]:
         """Use OpenAI to extract publication details from text content."""
         prompt = Publication.build_extraction_prompt(text_content, url)
         logging.info(f"Extracting publications from {url} using OpenAI ({OPENAI_MODEL})")
@@ -236,7 +236,7 @@ Content:
             return []
 
     @staticmethod
-    def parse_openai_response(response):
+    def parse_openai_response(response: str) -> list | None:
         """Parse the OpenAI response and extract the JSON content."""
         if Publication.is_valid_json(response):
             return json.loads(response)
@@ -256,7 +256,7 @@ Content:
     _dump_lock = threading.Lock()
 
     @staticmethod
-    def dump_invalid_json(response):
+    def dump_invalid_json(response: str) -> None:
         """Log invalid JSON responses. Uses structured logging instead of filesystem writes
         to avoid data loss on ephemeral cloud container filesystems."""
         # Truncate to avoid flooding log aggregators with huge payloads
@@ -265,7 +265,7 @@ Content:
             logging.warning("Invalid JSON from OpenAI (len=%d): %s", len(response), preview)
 
     @staticmethod
-    def is_valid_json(json_string):
+    def is_valid_json(json_string: str) -> bool:
         """Check if the provided string is valid JSON."""
         try:
             json.loads(json_string)
@@ -275,7 +275,7 @@ Content:
             return False
 
     @staticmethod
-    def get_all_publications():
+    def get_all_publications() -> list["Publication"]:
         """Retrieve all publications from the database."""
         query = """
             SELECT id, source_url, title, year, venue

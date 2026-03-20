@@ -1,4 +1,6 @@
 """Researcher data access: find/create, URL management, CSV import."""
+from __future__ import annotations
+
 import csv
 import json
 import logging
@@ -9,7 +11,7 @@ from database.connection import execute_query, fetch_one, fetch_all
 from database.llm import log_llm_usage
 
 
-def _disambiguate_researcher(first_name, last_name, candidates):
+def _disambiguate_researcher(first_name: str, last_name: str, candidates: list[dict]) -> int | None:
     """Use LLM to check if any same-last-name candidate is the same person.
     Returns the matching researcher id (int) or None if no match.
     candidates: list of dicts with keys id, first_name, last_name."""
@@ -52,10 +54,11 @@ def _disambiguate_researcher(first_name, last_name, candidates):
     return None
 
 
-def get_researcher_id(first_name, last_name, position=None, affiliation=None, conn=None):
+def get_researcher_id(first_name: str, last_name: str, position: str | None = None,
+                      affiliation: str | None = None, conn: "mysql.connector.connection.MySQLConnection | None" = None) -> int:
     """Get the researcher ID based on name. Uses LLM disambiguation for ambiguous matches.
     Accepts optional conn to reuse an existing DB connection (avoids pool exhaustion)."""
-    def _fetch_one(query, params):
+    def _fetch_one(query: str, params: tuple) -> dict | None:
         if conn is not None:
             c = conn.cursor(dictionary=True)
             c.execute(query, params)
@@ -64,7 +67,7 @@ def get_researcher_id(first_name, last_name, position=None, affiliation=None, co
             return row
         return fetch_one(query, params)
 
-    def _fetch_all(query, params):
+    def _fetch_all(query: str, params: tuple) -> list[dict]:
         if conn is not None:
             c = conn.cursor(dictionary=True)
             c.execute(query, params)
@@ -73,7 +76,7 @@ def get_researcher_id(first_name, last_name, position=None, affiliation=None, co
             return rows
         return fetch_all(query, params)
 
-    def _execute(query, params):
+    def _execute(query: str, params: tuple) -> int:
         if conn is not None:
             c = conn.cursor()
             c.execute(query, params)
@@ -112,7 +115,7 @@ def get_researcher_id(first_name, last_name, position=None, affiliation=None, co
     return new_id
 
 
-def update_researcher_bio(researcher_id, bio):
+def update_researcher_bio(researcher_id: int, bio: str) -> None:
     """Legacy: update researcher description only if the current description is NULL."""
     execute_query(
         "UPDATE researchers SET description = %s WHERE id = %s AND description IS NULL",
@@ -120,7 +123,7 @@ def update_researcher_bio(researcher_id, bio):
     )
 
 
-def add_researcher_url(researcher_id, page_type, url):
+def add_researcher_url(researcher_id: int, page_type: str, url: str) -> None:
     """Insert a new URL for a researcher into the researcher_urls table."""
     execute_query(
         "INSERT IGNORE INTO researcher_urls (researcher_id, page_type, url) VALUES (%s, %s, %s)",
@@ -128,7 +131,7 @@ def add_researcher_url(researcher_id, page_type, url):
     )
 
 
-def import_data_from_file(file_path):
+def import_data_from_file(file_path: str) -> None:
     """Import data from a CSV or TXT file into the database."""
     try:
         with open(file_path, mode='r', encoding='utf-8-sig') as file:

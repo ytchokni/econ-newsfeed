@@ -14,7 +14,6 @@ from researcher import Researcher
 from html_fetcher import HTMLFetcher
 from publication import Publication
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 _LOCK_NAME = 'econ_newsfeed_scrape'
@@ -24,7 +23,7 @@ _scheduler = None
 _scheduler_lock_conn = None  # connection holding the advisory lock for the scheduler singleton
 
 
-def _acquire_db_lock():
+def _acquire_db_lock() -> "mysql.connector.connection.MySQLConnection | None":
     """Try to acquire a MySQL advisory lock. Returns the connection if acquired, None otherwise."""
     try:
         conn = mysql.connector.connect(**db_config)
@@ -41,7 +40,7 @@ def _acquire_db_lock():
         return None
 
 
-def _release_db_lock(conn):
+def _release_db_lock(conn: "mysql.connector.connection.MySQLConnection") -> None:
     """Release the MySQL advisory lock and close the connection."""
     try:
         cursor = conn.cursor()
@@ -53,7 +52,7 @@ def _release_db_lock(conn):
         logger.error(f"Failed to release DB advisory lock: {e}")
 
 
-def is_scrape_running():
+def is_scrape_running() -> bool:
     """Return True if another worker currently holds the scrape advisory lock."""
     try:
         conn = mysql.connector.connect(**db_config)
@@ -71,7 +70,7 @@ SCRAPE_INTERVAL_HOURS = int(os.environ.get('SCRAPE_INTERVAL_HOURS', '24'))
 SCRAPE_ON_STARTUP = os.environ.get('SCRAPE_ON_STARTUP', 'false').lower() == 'true'
 
 
-def create_scrape_log():
+def create_scrape_log() -> int:
     """Create a new scrape_log entry and return its ID."""
     query = """
         INSERT INTO scrape_log (started_at, status)
@@ -80,7 +79,7 @@ def create_scrape_log():
     return Database.execute_query(query, (datetime.now(timezone.utc),))
 
 
-def update_scrape_log(log_id, status, urls_checked=0, urls_changed=0, pubs_extracted=0, error_message=None):
+def update_scrape_log(log_id: int, status: str, urls_checked: int = 0, urls_changed: int = 0, pubs_extracted: int = 0, error_message: str | None = None) -> None:
     """Update an existing scrape_log entry with results."""
     # Aggregate token totals from llm_usage for this scrape run
     token_row = Database.fetch_one(
@@ -110,7 +109,7 @@ _DRAFT_VALIDATION_BUDGET_SECONDS = 300  # 5-minute time budget
 _DRAFT_VALIDATION_DELAY = 0.1  # 100ms between requests
 
 
-def _validate_draft_urls():
+def _validate_draft_urls() -> None:
     """Validate papers with unchecked draft URLs (rate-limited, time-budgeted)."""
     unchecked = Database.get_unchecked_draft_urls()
     if not unchecked:
@@ -132,7 +131,7 @@ def _validate_draft_urls():
             logger.error(f"Error validating draft URL for paper {paper_id}: {e}")
 
 
-def run_scrape_job():
+def run_scrape_job() -> None:
     """Orchestrates a full scraping cycle. Skips if another scrape is running."""
     global _lock_conn
     lock_conn = _acquire_db_lock()
@@ -261,14 +260,14 @@ def run_scrape_job():
         _lock_conn = None
 
 
-def _handle_sigterm(signum, frame):
+def _handle_sigterm(signum: int, frame: object) -> None:
     """Handle SIGTERM/SIGINT for graceful shutdown in cloud environments.
     Waits for any running scrape job to complete before exiting."""
     logger.info("Received signal %s, shutting down scheduler gracefully...", signum)
     shutdown_scheduler()
 
 
-def start_scheduler():
+def start_scheduler() -> None:
     """Start the APScheduler BackgroundScheduler with the configured interval.
 
     Uses a MySQL advisory lock to ensure only one Gunicorn worker runs the
@@ -316,7 +315,7 @@ def start_scheduler():
         threading.Thread(target=run_scrape_job, name="startup-scrape").start()
 
 
-def shutdown_scheduler():
+def shutdown_scheduler() -> None:
     """Shut down the scheduler gracefully, waiting for any running job to complete."""
     global _scheduler, _scheduler_lock_conn
     if _scheduler is not None:

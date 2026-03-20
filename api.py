@@ -32,6 +32,13 @@ FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
 limiter = Limiter(key_func=get_remote_address)
 
+# ---------------------------------------------------------------------------
+# Server-side TTL cache for /api/filter-options
+# ---------------------------------------------------------------------------
+_filter_options_cache: dict = {"data": None, "expires_at": 0.0}
+_filter_options_lock = threading.Lock()
+_FILTER_OPTIONS_TTL = 600  # 10 minutes
+
 
 # ---------------------------------------------------------------------------
 # Pydantic models — error envelope
@@ -280,7 +287,7 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def _iso_z(dt) -> str | None:
+def _iso_z(dt: datetime | None) -> str | None:
     """Format a datetime as ISO 8601 with trailing Z, or None."""
     return dt.isoformat() + "Z" if dt else None
 
@@ -321,7 +328,7 @@ def _get_authors_for_publications(pub_ids: list[int]) -> dict[int, list[dict]]:
     return result
 
 
-def _format_publication(row, authors: list[dict]) -> dict:
+def _format_publication(row: dict, authors: list[dict]) -> dict:
     """Format a publication DB row + authors into the API response shape."""
     return {
         "id": row['id'],
@@ -339,7 +346,7 @@ def _format_publication(row, authors: list[dict]) -> dict:
     }
 
 
-def _format_feed_event(row, authors: list[dict]) -> dict:
+def _format_feed_event(row: dict, authors: list[dict]) -> dict:
     """Format a feed_events + papers joined row into the API response shape."""
     # Remap column names to match _format_publication expectations
     pub_row = {**row, "id": row["paper_id"]}
@@ -675,25 +682,35 @@ def list_fields(request: Request):
 @app.get("/api/filter-options")
 @limiter.limit("30/minute")
 def get_filter_options(request: Request, response: Response):
-    institutions = Database.fetch_all(
-        "SELECT DISTINCT affiliation FROM researchers "
-        "WHERE affiliation IS NOT NULL AND affiliation != '' "
-        "ORDER BY affiliation"
-    )
-    positions = Database.fetch_all(
-        "SELECT DISTINCT position FROM researchers "
-        "WHERE position IS NOT NULL AND position != '' "
-        "ORDER BY position"
-    )
-    fields = Database.fetch_all(
-        "SELECT id, name, slug FROM research_fields ORDER BY name"
-    )
+    now = time.time()
+    with _filter_options_lock:
+        if _filter_options_cache["data"] is not None and now < _filter_options_cache["expires_at"]:
+            response.headers["Cache-Control"] = "public, max-age=600"
+            return _filter_options_cache["data"]
+
+        institutions = Database.fetch_all(
+            "SELECT DISTINCT affiliation FROM researchers "
+            "WHERE affiliation IS NOT NULL AND affiliation != '' "
+            "ORDER BY affiliation"
+        )
+        positions = Database.fetch_all(
+            "SELECT DISTINCT position FROM researchers "
+            "WHERE position IS NOT NULL AND position != '' "
+            "ORDER BY position"
+        )
+        fields = Database.fetch_all(
+            "SELECT id, name, slug FROM research_fields ORDER BY name"
+        )
+        result = {
+            "institutions": [r['affiliation'] for r in institutions],
+            "positions": [r['position'] for r in positions],
+            "fields": [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in fields],
+        }
+        _filter_options_cache["data"] = result
+        _filter_options_cache["expires_at"] = now + _FILTER_OPTIONS_TTL
+
     response.headers["Cache-Control"] = "public, max-age=600"
-    return {
-        "institutions": [r['affiliation'] for r in institutions],
-        "positions": [r['position'] for r in positions],
-        "fields": [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in fields],
-    }
+    return result
 
 
 @app.get("/api/researchers", response_model=PaginatedResearchers)
