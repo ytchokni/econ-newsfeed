@@ -100,3 +100,53 @@ def _parse_work(work: dict) -> dict:
         "coauthors": coauthors,
         "abstract": abstract,
     }
+
+
+def enrich_publication(paper_id, title, author_name, existing_abstract=None):
+    """Enrich a single publication with OpenAlex data.
+
+    Returns True if enrichment data was found and stored, False otherwise.
+    """
+    result = search_work(title, author_name)
+    if not result:
+        return False
+
+    # Only use OpenAlex abstract as fallback
+    abstract = result["abstract"] if not existing_abstract else None
+
+    Database.update_openalex_data(
+        paper_id=paper_id,
+        doi=result["doi"],
+        openalex_id=result["openalex_id"],
+        coauthors=result["coauthors"],
+        abstract=abstract,
+    )
+    return True
+
+
+def enrich_new_publications(limit=50):
+    """Enrich all unenriched publications with OpenAlex data.
+
+    Returns the number of papers processed (matched or not).
+    """
+    papers = Database.get_unenriched_papers(limit=limit)
+    if not papers:
+        logger.info("No unenriched papers found")
+        return 0
+
+    logger.info("Enriching %d papers via OpenAlex", len(papers))
+    enriched = 0
+    for paper in papers:
+        success = enrich_publication(
+            paper_id=paper["id"],
+            title=paper["title"],
+            author_name=paper["author_name"],
+            existing_abstract=paper.get("abstract"),
+        )
+        if success:
+            enriched += 1
+        # Polite rate limiting: ~10 req/s
+        time.sleep(0.12)
+
+    logger.info("OpenAlex enrichment: %d/%d papers matched", enriched, len(papers))
+    return len(papers)

@@ -208,3 +208,108 @@ class TestReconstructAbstract:
     def test_empty_index_returns_empty_string(self):
         from openalex import reconstruct_abstract
         assert reconstruct_abstract({}) == ""
+
+
+class TestEnrichPublication:
+    """Tests for openalex.enrich_publication."""
+
+    def test_enriches_new_paper(self):
+        """Paper without openalex_id gets enriched with DOI and coauthors."""
+        openalex_result = {
+            "doi": "10.1257/aer.20181234",
+            "openalex_id": "W2741809807",
+            "coauthors": [
+                {"display_name": "Max Steinhardt", "openalex_author_id": "A111"},
+            ],
+            "abstract": "OpenAlex abstract.",
+        }
+        with (
+            patch("openalex.search_work", return_value=openalex_result),
+            patch("openalex.Database.update_openalex_data") as mock_update,
+        ):
+            from openalex import enrich_publication
+            result = enrich_publication(
+                paper_id=1,
+                title="Trade and Wages",
+                author_name="Max Steinhardt",
+                existing_abstract=None,
+            )
+
+        assert result is True
+        mock_update.assert_called_once_with(
+            paper_id=1,
+            doi="10.1257/aer.20181234",
+            openalex_id="W2741809807",
+            coauthors=[{"display_name": "Max Steinhardt", "openalex_author_id": "A111"}],
+            abstract="OpenAlex abstract.",
+        )
+
+    def test_skips_abstract_when_existing(self):
+        """If paper already has an abstract from scraping, don't overwrite."""
+        openalex_result = {
+            "doi": "10.1234/test",
+            "openalex_id": "W999",
+            "coauthors": [],
+            "abstract": "OpenAlex abstract.",
+        }
+        with (
+            patch("openalex.search_work", return_value=openalex_result),
+            patch("openalex.Database.update_openalex_data") as mock_update,
+        ):
+            from openalex import enrich_publication
+            enrich_publication(
+                paper_id=1,
+                title="Test Paper",
+                author_name="Author",
+                existing_abstract="Already have an abstract.",
+            )
+
+        # abstract should NOT be passed when paper already has one
+        call_kwargs = mock_update.call_args[1]
+        assert call_kwargs.get("abstract") is None
+
+    def test_returns_false_on_no_match(self):
+        """Graceful handling when OpenAlex has no match."""
+        with patch("openalex.search_work", return_value=None):
+            from openalex import enrich_publication
+            result = enrich_publication(
+                paper_id=1,
+                title="Obscure Paper",
+                author_name="Unknown",
+                existing_abstract=None,
+            )
+
+        assert result is False
+
+
+class TestEnrichNewPublications:
+    """Tests for openalex.enrich_new_publications."""
+
+    def test_enriches_unenriched_papers(self):
+        unenriched = [
+            {"id": 1, "title": "Paper A", "abstract": None, "author_name": "Author A"},
+            {"id": 2, "title": "Paper B", "abstract": "Existing", "author_name": "Author B"},
+        ]
+        openalex_result = {
+            "doi": "10.1234/test",
+            "openalex_id": "W123",
+            "coauthors": [],
+            "abstract": None,
+        }
+        with (
+            patch("openalex.Database.get_unenriched_papers", return_value=unenriched),
+            patch("openalex.search_work", return_value=openalex_result),
+            patch("openalex.Database.update_openalex_data"),
+            patch("openalex.time.sleep"),  # skip rate-limit delay in tests
+        ):
+            from openalex import enrich_new_publications
+            count = enrich_new_publications()
+
+        assert count == 2
+
+    def test_returns_zero_when_nothing_to_enrich(self):
+        with patch("openalex.Database.get_unenriched_papers", return_value=[]):
+            from openalex import enrich_new_publications
+            count = enrich_new_publications()
+
+        assert count == 0
