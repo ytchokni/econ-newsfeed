@@ -264,6 +264,18 @@ _TABLE_DEFINITIONS = {
             INDEX idx_status (status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "paper_links": """
+        CREATE TABLE IF NOT EXISTS paper_links (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            paper_id INT NOT NULL,
+            url VARCHAR(2048) NOT NULL,
+            link_type ENUM('pdf', 'ssrn', 'nber', 'arxiv', 'doi', 'journal',
+                            'drive', 'dropbox', 'repository', 'other') DEFAULT NULL,
+            discovered_at DATETIME NOT NULL,
+            FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+            UNIQUE KEY uq_paper_link (paper_id, url(500))
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    """,
 }
 
 
@@ -345,6 +357,7 @@ def create_tables() -> None:
                         "authorship", "research_fields", "researcher_fields",
                         "scrape_log", "researcher_snapshots", "paper_snapshots",
                         "paper_urls", "llm_usage", "feed_events", "batch_jobs",
+                        "paper_links",
                     ]
                     for tbl in _ALL_TABLES:
                         try:
@@ -386,6 +399,17 @@ def create_tables() -> None:
                             conn.commit()
                     except Exception as e:
                         logging.warning("Migration: papers.timestamp rename: %s", e)
+
+                    try:
+                        cursor.execute("""
+                            ALTER TABLE html_content
+                            ADD COLUMN raw_html MEDIUMTEXT DEFAULT NULL AFTER content
+                        """)
+                        logging.info("Added raw_html column to html_content")
+                        conn.commit()
+                    except Exception as e:
+                        if "Duplicate column name" not in str(e):
+                            logging.warning("Migration: html_content.raw_html: %s", e)
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                     cursor.fetchone()
