@@ -56,6 +56,19 @@ class TestTriggerScrape:
         assert body["status"] == "running"
         assert "started_at" in body
 
+    def test_scrape_thread_is_not_daemon(self, client):
+        """Scrape thread must be non-daemon so it completes on shutdown."""
+        with (
+            patch("api.scheduler.is_scrape_running", return_value=False),
+            patch("api.create_scrape_log", return_value=1),
+            patch("api.threading.Thread") as mock_thread_cls,
+        ):
+            client.post("/api/scrape", headers={"X-API-Key": "test-secret-key-for-ci-runs"})
+
+        mock_thread_cls.assert_called_once()
+        call_kwargs = mock_thread_cls.call_args
+        assert call_kwargs.kwargs.get("daemon", False) is False
+
     def test_already_running_returns_409(self, client):
         with patch("api.scheduler.is_scrape_running", return_value=True):
             response = client.post(

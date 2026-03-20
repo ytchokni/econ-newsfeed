@@ -60,67 +60,80 @@ class HTMLFetcher:
     # Per-domain locks to make the rate-limit check-and-update atomic
     _domain_locks: dict = {}
 
+    # Cache parsed robots.txt per origin (scheme://netloc).
+    # Value is a RobotFileParser or None (fetch failed / non-200).
+    _robots_cache: dict = {}
+
     @staticmethod
-    def is_allowed_by_robots(url):
-        """Check if the URL is allowed by the site's robots.txt.
-        If robots.txt can't be fetched or returns non-200, allow the request."""
+    def _get_robots_parser(url):
+        """Get or fetch the RobotFileParser for a URL's domain. Cached per origin."""
+        parsed = urlparse(url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        if origin in HTMLFetcher._robots_cache:
+            return HTMLFetcher._robots_cache[origin]
         try:
-            parsed = urlparse(url)
-            robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
+            robots_url = f"{origin}/robots.txt"
             resp = requests.get(robots_url, timeout=10, headers={
                 'User-Agent': SCRAPER_USER_AGENT,
             })
             if resp.status_code != 200:
-                return True
+                HTMLFetcher._robots_cache[origin] = None
+                return None
             rp = RobotFileParser()
             rp.parse(resp.text.splitlines())
-            allowed = rp.can_fetch('HTMLFetcher/1.0', url)
-            if not allowed:
-                logging.info(f"URL disallowed by robots.txt: {url}")
-            return allowed
+            HTMLFetcher._robots_cache[origin] = rp
+            return rp
         except Exception:
+            HTMLFetcher._robots_cache[origin] = None
+            return None
+
+    @staticmethod
+    def is_allowed_by_robots(url):
+        """Check if the URL is allowed by the site's robots.txt. Cached per domain."""
+        rp = HTMLFetcher._get_robots_parser(url)
+        if rp is None:
             return True
+        allowed = rp.can_fetch('HTMLFetcher/1.0', url)
+        if not allowed:
+            logging.info(f"URL disallowed by robots.txt: {url}")
+        return allowed
 
     @staticmethod
     def validate_url(url):
-        """
-        Validate a URL for SSRF protection.
-        Rejects non-HTTP(S) schemes, private/reserved IPs, and cloud metadata endpoints.
+        """Validate a URL for SSRF protection. Returns True if safe."""
+        safe, _ = HTMLFetcher.validate_url_with_pin(url)
+        return safe
 
-        Returns True if safe, False otherwise.
-        """
+    @staticmethod
+    def validate_url_with_pin(url):
+        """Validate URL for SSRF and return (is_safe, resolved_ip).
+        The resolved IP should be used for the actual HTTP request to prevent DNS rebinding."""
         try:
             parsed = urlparse(url)
         except Exception:
-            return False
+            return False, None
 
         if parsed.scheme not in ('http', 'https'):
-            logging.warning(f"Rejected URL with non-HTTP(S) scheme: {url}")
-            return False
+            return False, None
 
         hostname = parsed.hostname
         if not hostname:
-            return False
+            return False, None
 
-        # Reject cloud metadata endpoints by hostname
         if hostname in ('169.254.169.254', 'metadata.google.internal'):
-            logging.warning(f"Rejected metadata endpoint URL: {url}")
-            return False
+            return False, None
 
-        # Resolve hostname and check for private/reserved IPs
         try:
             resolved_ip = socket.getaddrinfo(hostname, None)[0][4][0]
             ip = ipaddress.ip_address(resolved_ip)
             if ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local:
-                logging.warning(
-                    "Rejected URL resolving to private/reserved IP: %s -> [redacted]", url
-                )
-                return False
+                logging.warning("Rejected URL resolving to private/reserved IP: %s -> [redacted]", url)
+                return False, None
         except (socket.gaierror, ValueError):
             logging.warning(f"Could not resolve hostname for URL: {url}")
-            return False
+            return False, None
 
-        return True
+        return True, resolved_ip
 
     @staticmethod
     def _rate_limit(url):
@@ -257,7 +270,8 @@ class HTMLFetcher:
             logging.info(f"Skipping URL ID {url_id} (fetched <24h ago): {url}")
             return False
 
-        if not HTMLFetcher.validate_url(url):
+        is_safe, _resolved_ip = HTMLFetcher.validate_url_with_pin(url)
+        if not is_safe:
             logging.warning(f"URL failed SSRF validation, skipping: {url}")
             return False
 

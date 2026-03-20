@@ -3,7 +3,7 @@ import hashlib
 import logging
 from datetime import datetime, timezone
 
-from database.connection import get_connection, fetch_one, fetch_all
+from database.connection import get_connection, fetch_all
 
 
 # ── Researcher snapshots ──
@@ -14,29 +14,24 @@ def _compute_researcher_content_hash(position, affiliation, description):
     return hashlib.sha256(parts.encode('utf-8')).hexdigest()
 
 
-def get_latest_researcher_snapshot_hash(researcher_id):
-    """Return the content_hash of the most recent snapshot, or None."""
-    result = fetch_one(
-        "SELECT content_hash FROM researcher_snapshots "
-        "WHERE researcher_id = %s ORDER BY scraped_at DESC LIMIT 1",
-        (researcher_id,),
-    )
-    return result['content_hash'] if result else None
-
-
 def append_researcher_snapshot(researcher_id, position, affiliation, description, source_url=None):
     """Append a snapshot if profile changed. Updates denormalized researchers table.
-    Both operations run in a single transaction for consistency.
+    Hash check and insert run in a single transaction to prevent race conditions.
     Returns True if a new snapshot was inserted, False if no change."""
     content_hash = _compute_researcher_content_hash(position, affiliation, description)
-    prev_hash = get_latest_researcher_snapshot_hash(researcher_id)
-
-    if prev_hash == content_hash:
-        return False
-
     now = datetime.now(timezone.utc)
+
     with get_connection() as conn:
-        with conn.cursor() as cursor:
+        with conn.cursor(dictionary=True) as cursor:
+            cursor.execute(
+                "SELECT content_hash FROM researcher_snapshots "
+                "WHERE researcher_id = %s ORDER BY scraped_at DESC LIMIT 1",
+                (researcher_id,),
+            )
+            prev = cursor.fetchone()
+            if prev and prev['content_hash'] == content_hash:
+                return False
+
             cursor.execute(
                 """INSERT INTO researcher_snapshots
                    (researcher_id, position, affiliation, description, scraped_at, source_url, content_hash)
@@ -72,38 +67,27 @@ def _compute_paper_content_hash(status, venue, abstract, draft_url, year):
     return hashlib.sha256(parts.encode('utf-8')).hexdigest()
 
 
-def get_latest_paper_snapshot_hash(paper_id):
-    """Return the content_hash of the most recent paper snapshot, or None."""
-    result = fetch_one(
-        "SELECT content_hash FROM paper_snapshots "
-        "WHERE paper_id = %s ORDER BY scraped_at DESC LIMIT 1",
-        (paper_id,),
-    )
-    return result['content_hash'] if result else None
-
-
 def append_paper_snapshot(paper_id, status, venue, abstract, draft_url, year, source_url=None):
     """Append a paper snapshot if metadata changed. Updates denormalized papers table.
     Creates a feed_event if status changed.
-    All operations run in a single transaction for consistency.
+    Hash check and insert run in a single transaction to prevent race conditions.
     Returns True if a new snapshot was inserted, False if no change."""
     content_hash = _compute_paper_content_hash(status, venue, abstract, draft_url, year)
-    prev_hash = get_latest_paper_snapshot_hash(paper_id)
-
-    if prev_hash == content_hash:
-        return False
-
     now = datetime.now(timezone.utc)
+
     with get_connection() as conn:
-        with conn.cursor() as cursor:
-            # Fetch previous status before inserting new snapshot
+        with conn.cursor(dictionary=True) as cursor:
+            # Check if content has changed
             cursor.execute(
-                "SELECT status FROM paper_snapshots WHERE paper_id = %s "
-                "ORDER BY scraped_at DESC LIMIT 1",
+                "SELECT content_hash, status FROM paper_snapshots "
+                "WHERE paper_id = %s ORDER BY scraped_at DESC LIMIT 1",
                 (paper_id,),
             )
-            prev_row = cursor.fetchone()
-            old_status = prev_row[0] if prev_row else None
+            prev = cursor.fetchone()
+            if prev and prev['content_hash'] == content_hash:
+                return False
+
+            old_status = prev['status'] if prev else None
 
             cursor.execute(
                 """INSERT INTO paper_snapshots

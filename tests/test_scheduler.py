@@ -4,12 +4,6 @@ Covers the scrape orchestration logic: locking, log creation/update,
 URL processing with change detection, error handling, and lock release.
 All external dependencies (DB, network, LLM) are mocked.
 """
-import os
-
-# Env vars required at import time by transitive dependencies
-os.environ.setdefault("CONTENT_MAX_CHARS", "500000")
-os.environ.setdefault("OPENAI_MODEL", "gpt-4o-mini")
-
 from unittest.mock import MagicMock, patch, call
 
 import pytest

@@ -94,84 +94,112 @@ A pipeline that periodically scrapes researcher websites, uses LLM-based extract
 
 ## 3. Database Schema
 
-The existing schema is updated with constraint fixes, indexes, and a new `scrape_log` table.
+All tables use `ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci` for international character support. Schema is defined in `database/schema.py` and applied via `Database.create_tables()` on startup.
 
-### 3.1 Tables
+### 3.1 Publication Status Enum
 
-```sql
-researchers (
-    id              INT AUTO_INCREMENT PRIMARY KEY,
-    last_name       VARCHAR(255) NOT NULL,
-    first_name      VARCHAR(255) NOT NULL,
-    position        VARCHAR(255),
-    affiliation     VARCHAR(255),
-    INDEX idx_name (last_name, first_name)
-)
+The publication status is a controlled vocabulary shared across the database, backend, and frontend:
 
-researcher_urls (
-    id              INT AUTO_INCREMENT PRIMARY KEY,
-    researcher_id   INT NOT NULL REFERENCES researchers(id),
-    page_type       VARCHAR(255) NOT NULL,    -- PUB, WP, HOME
-    url             VARCHAR(2048) NOT NULL
-)
+| Value | Meaning |
+|-------|---------|
+| `published` | Published in a journal or conference proceedings |
+| `accepted` | Accepted for publication but not yet published |
+| `revise_and_resubmit` | Under revision after peer review (R&R) |
+| `reject_and_resubmit` | Rejected with invitation to resubmit |
+| `working_paper` | Working paper, pre-print, or draft |
 
-publications (
-    id              INT AUTO_INCREMENT PRIMARY KEY,
-    url             VARCHAR(2048),            -- source URL
-    title           TEXT,
-    year            VARCHAR(4),
-    venue           TEXT,
-    timestamp       DATETIME,                 -- when discovered
-    UNIQUE KEY uq_title_url (title(200), url(200)),
-    INDEX idx_timestamp (timestamp)
-)
+**Where it is defined:**
 
-html_content (
-    id              INT AUTO_INCREMENT PRIMARY KEY,
-    url_id          INT NOT NULL REFERENCES researcher_urls(id),
-    content         LONGTEXT,                 -- capped at ~1 MB by application layer
-    content_hash    VARCHAR(64),              -- SHA-256
-    timestamp       DATETIME,
-    researcher_id   INT REFERENCES researchers(id),
-    UNIQUE KEY uq_url_id (url_id),
-    INDEX idx_url_id_ts (url_id, timestamp)
-)
+| Location | Form |
+|----------|------|
+| `database/schema.py` — `papers.status` column | `ENUM('published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper')` |
+| `database/schema.py` — `paper_snapshots.status`, `feed_events.old_status`, `feed_events.new_status` | Same ENUM |
+| `publication.py` — `_VALID_STATUSES` | `typing.Literal[...]` used by Pydantic's `PublicationExtraction` model |
+| `api.py` — `valid_statuses` set in `list_publications()` | Python `set` for query parameter validation |
+| `app/src/lib/types.ts` — `PublicationStatus` | TypeScript union type |
 
-authorship (
-    id              INT AUTO_INCREMENT PRIMARY KEY,
-    researcher_id   INT NOT NULL REFERENCES researchers(id),
-    publication_id  INT NOT NULL REFERENCES publications(id),
-    author_order    INT,
-    INDEX idx_researcher (researcher_id),
-    INDEX idx_publication (publication_id)
-)
+Adding a new status value requires updating all five locations and running a schema migration.
 
-scrape_log (
-    id              INT AUTO_INCREMENT PRIMARY KEY,
-    started_at      DATETIME NOT NULL,
-    finished_at     DATETIME,
-    status          ENUM('running', 'completed', 'failed') DEFAULT 'running',
-    urls_checked    INT DEFAULT 0,
-    urls_changed    INT DEFAULT 0,
-    pubs_extracted  INT DEFAULT 0,
-    error_message   TEXT
-)
-```
+### 3.2 Tables
 
-**Changes from original schema:**
-- `url` columns widened from `VARCHAR(255)` to `VARCHAR(2048)` — academic URLs frequently exceed 255 characters.
-- Redundant `url` column removed from `html_content` — derivable via `url_id` foreign key.
-- `UNIQUE(url_id)` on `html_content` — enforces one-row-per-URL; `save_text()` uses `INSERT ... ON DUPLICATE KEY UPDATE` instead of append-only inserts, preventing unbounded storage growth.
-- `UNIQUE(title(200), url(200))` on `publications` — prevents duplicate publications on re-extraction. Titles are normalized (lowercased, stripped) before comparison.
-- Secondary indexes added on columns used for lookups, ordering, and joins.
-- `LONGTEXT` content capped at ~1 MB by the application layer to prevent storage abuse from malicious pages.
+The database has 14 tables. Each is listed below with its purpose and key columns.
 
-### 3.2 Entity Relationship Diagram
+**`researchers`** — Tracked economists.
+- `id`, `first_name`, `last_name`, `position`, `affiliation`, `description`, `description_updated_at`
+- Indexes: `idx_name (last_name, first_name)`, `idx_affiliation (affiliation)`
+
+**`researcher_urls`** — Web pages to scrape for each researcher.
+- `id`, `researcher_id` (FK CASCADE), `page_type` (PUB, WP, HOME), `url`
+- Unique: `uq_researcher_url (researcher_id, url(500))`
+
+**`papers`** — Extracted publications (renamed from `publications` in earlier designs).
+- `id`, `url` (source URL), `title`, `title_hash` (SHA-256 of normalized title), `year`, `venue`, `abstract`, `timestamp` (discovery time), `status` (publication status ENUM), `draft_url`, `draft_url_status` (ENUM: unchecked/valid/invalid/timeout), `draft_url_checked_at`, `is_seed` (boolean, marks pre-existing publications)
+- Unique: `uq_title_hash (title_hash)` for cross-researcher deduplication
+- Indexes: `idx_timestamp`, `idx_status`, `idx_year`, `idx_is_seed`
+
+**`html_content`** — Latest scraped HTML snapshot per URL (upsert model, one row per URL).
+- `id`, `url_id` (FK CASCADE to researcher_urls), `content` (MEDIUMTEXT), `content_hash` (SHA-256), `timestamp`, `researcher_id` (FK CASCADE), `extracted_at`, `extracted_hash`
+- Unique: `uq_url_id (url_id)`
+
+**`authorship`** — Many-to-many between papers and researchers.
+- `id`, `researcher_id` (FK CASCADE), `publication_id` (FK CASCADE to papers), `author_order`
+- Unique: `uq_researcher_pub (researcher_id, publication_id)`
+
+**`research_fields`** — Taxonomy of economics sub-fields.
+- `id`, `name`, `slug`
+- Unique: `uq_slug (slug)`
+- Seeded on startup with 12 fields (Macroeconomics, Labour Economics, etc.)
+
+**`researcher_fields`** — Many-to-many between researchers and research fields.
+- Composite PK `(researcher_id, field_id)`, both FK CASCADE
+
+**`scrape_log`** — Audit trail for scraping runs.
+- `id`, `started_at`, `finished_at`, `status` (ENUM: running/completed/failed), `urls_checked`, `urls_changed`, `pubs_extracted`, `prompt_tokens_total`, `completion_tokens_total`, `error_message`
+- Index: `idx_scrape_status (status)`
+
+**`researcher_snapshots`** — Append-only history of researcher profile changes.
+- `id`, `researcher_id` (FK CASCADE), `position`, `affiliation`, `description`, `scraped_at`, `source_url`, `content_hash`
+- Index: `idx_researcher_time (researcher_id, scraped_at)`
+
+**`paper_snapshots`** — Append-only history of paper metadata changes.
+- `id`, `paper_id` (FK CASCADE), `status` (publication status ENUM), `venue`, `abstract`, `draft_url`, `draft_url_status`, `year`, `scraped_at`, `source_url`, `content_hash`
+- Index: `idx_paper_time (paper_id, scraped_at)`
+
+**`paper_urls`** — Source URLs where a paper was discovered (supports cross-researcher tracking).
+- `id`, `paper_id` (FK CASCADE), `url`, `discovered_at`
+- Unique: `uq_paper_url (paper_id, url(500))`
+
+**`llm_usage`** — Per-call LLM token accounting and cost estimation.
+- `id`, `called_at`, `call_type` (ENUM: publication_extraction/description_extraction/researcher_disambiguation), `model`, `prompt_tokens`, `completion_tokens`, `total_tokens`, `estimated_cost_usd`, `is_batch`, `context_url`, `researcher_id`, `scrape_log_id`, `batch_job_id`
+- Indexes: `idx_called_at`, `idx_call_type`, `idx_scrape_log`
+
+**`feed_events`** — Events that appear in the newsfeed (see Section 6.5).
+- `id`, `paper_id` (FK CASCADE), `event_type` (ENUM: new_paper/status_change), `old_status`, `new_status` (publication status ENUMs), `created_at`
+- Indexes: `idx_paper_id`, `idx_created_at`, `idx_event_type`
+
+**`batch_jobs`** — OpenAI batch API job tracking.
+- `id`, `openai_batch_id`, `input_file_id`, `output_file_id`, `status` (ENUM: submitted/validating/in_progress/finalizing/completed/failed/expired/cancelled), `url_count`, `created_at`, `completed_at`, `prompt_tokens_total`, `completion_tokens_total`, `estimated_cost_usd`, `error_message`
+- Unique: `uq_batch_id (openai_batch_id)`
+
+### 3.3 Key Constraints
+
+- All foreign keys use `ON DELETE CASCADE` to prevent orphaned rows.
+- Cross-researcher publication deduplication uses `uq_title_hash` on `papers` with SHA-256 of the normalized title (lowercased, punctuation stripped, whitespace collapsed).
+- `html_content` stores exactly one row per URL via `UNIQUE(url_id)` and upsert (`INSERT ... ON DUPLICATE KEY UPDATE`).
+- All tables enforce `utf8mb4` charset via a startup migration for international characters.
+
+### 3.4 Entity Relationship Diagram
 
 ```
 researchers 1───* researcher_urls
 researchers 1───* authorship
-publications 1───* authorship
+researchers 1───* researcher_fields
+researchers 1───* researcher_snapshots
+papers 1───* authorship
+papers 1───* paper_snapshots
+papers 1───* paper_urls
+papers 1───* feed_events
+research_fields 1───* researcher_fields
 researcher_urls 1───1 html_content    (upsert: one snapshot per URL)
 researchers 1───* html_content
 ```
@@ -181,6 +209,14 @@ researchers 1───* html_content
 ## 4. API Design
 
 Base URL: `http://localhost:8000`
+
+### 4.0 Response Format
+
+All API endpoints return **dict-based responses** (plain dicts), not Flask-style `(body, status_code)` tuples. FastAPI serializes dicts to JSON automatically. Status codes are controlled via `status_code=` on the decorator or via `HTTPException`.
+
+List endpoints (`GET /api/publications`, `GET /api/researchers`) declare Pydantic **response models** (`PaginatedPublications`, `PaginatedResearchers`) via `response_model=` on the route decorator. This generates accurate OpenAPI/Swagger documentation at `/docs` without requiring the handler to return a Pydantic instance — FastAPI validates and serializes the returned dict against the model.
+
+Error responses use a standard envelope (see Section 4.4). Rate limiting is enforced via `slowapi` at 60 requests/minute on most endpoints.
 
 ### 4.1 Publications
 
@@ -461,48 +497,15 @@ The scraping pipeline in `html_fetcher.py` and `publication.py` is retained with
 
 ### 6.2 Scheduler Integration
 
-```python
-# scheduler.py
+The scheduler in `scheduler.py` uses APScheduler's `BackgroundScheduler` with two layers of concurrency protection:
 
-import threading
-from apscheduler.schedulers.background import BackgroundScheduler
+**Advisory lock for scheduler singleton:** On startup, `start_scheduler()` attempts to acquire the MySQL advisory lock `econ_newsfeed_scheduler` with a non-blocking `GET_LOCK(..., 0)`. Only the worker that acquires this lock starts the APScheduler interval job. Other Gunicorn workers skip scheduler setup and handle API requests only. If the lock-holding worker dies, MySQL releases the lock automatically (it is connection-scoped), allowing another worker to take over on the next restart.
 
-_scrape_lock = threading.Lock()
+**Advisory lock for scrape exclusion:** Each scrape run acquires a separate advisory lock `econ_newsfeed_scrape` before executing. This prevents overlapping manual (`POST /api/scrape`) and scheduled scrapes from running concurrently across any number of workers or pods. The `is_scrape_running()` function checks lock status via `IS_USED_LOCK()` so the API can return `409 Conflict` without attempting to acquire the lock.
 
-def run_scrape_job():
-    """Orchestrates a full scraping cycle. Skips if another scrape is running."""
-    if not _scrape_lock.acquire(blocking=False):
-        logger.warning("Scrape already in progress, skipping")
-        return
+**SCRAPE_ON_STARTUP:** When `SCRAPE_ON_STARTUP=true`, the startup scrape is dispatched in a **background thread** (`threading.Thread(target=run_scrape_job, name="startup-scrape")`). This prevents blocking the FastAPI lifespan startup — the API starts accepting requests immediately while the scrape runs in the background.
 
-    try:
-        log_id = create_scrape_log()
-        urls = Researcher.get_all_researcher_urls()
-        urls_checked = 0
-        urls_changed = 0
-        pubs_extracted = 0
-
-        for url_id, researcher_id, url, page_type in urls:
-            urls_checked += 1
-            changed = HTMLFetcher.fetch_and_save_if_changed(url_id, url, researcher_id)
-            if changed and page_type in ("PUB", "WP"):
-                urls_changed += 1
-                old_text = HTMLFetcher.get_previous_text(url_id)
-                new_text = HTMLFetcher.get_latest_text(url_id)
-                diff_text = compute_diff(old_text, new_text) if old_text else new_text
-                pubs = Publication.extract_publications(diff_text, url)
-                if pubs:
-                    Publication.save_publications(url, pubs)
-                    pubs_extracted += len(pubs)
-
-        update_scrape_log(log_id, "completed", urls_checked, urls_changed, pubs_extracted)
-    except Exception as e:
-        update_scrape_log(log_id, "failed", error_message=str(e))
-    finally:
-        _scrape_lock.release()
-```
-
-The `_scrape_lock` prevents overlapping manual (`POST /api/scrape`) and scheduled scrapes from running concurrently, avoiding duplicate publications and excessive resource usage.
+**Graceful shutdown:** SIGTERM and SIGINT handlers call `shutdown_scheduler()`, which waits for the current scrape job to finish (`_scheduler.shutdown(wait=True)`) and releases the scheduler advisory lock.
 
 ### 6.3 Schedule Configuration
 
@@ -522,6 +525,16 @@ The `_scrape_lock` prevents overlapping manual (`POST /api/scrape`) and schedule
 | **Exponential backoff** | Retry on timeout and 5xx errors with exponential backoff (1s, 2s, 4s). Max 3 retries. |
 | **Content size limit** | Reject HTTP responses larger than 1 MB to prevent storage abuse. |
 
+### 6.5 Feed Events System
+
+The newsfeed is driven by the `feed_events` table rather than raw publication timestamps. Two event types exist:
+
+**`new_paper`** — Created in `Publication.save_publications()` when a genuinely new paper is inserted (not a duplicate via `title_hash`). Only non-seed papers (`is_seed=False`) with a known, non-`published` status generate events. Seed papers (bulk-imported on first scrape) are silently absorbed without flooding the feed.
+
+**`status_change`** — Created in `database/snapshots.py` `append_paper_snapshot()` when a paper's status changes between scrapes (e.g., `working_paper` to `accepted`). The event records both `old_status` and `new_status`. A status change is only recorded when both the old and new status are non-NULL and differ.
+
+The `GET /api/publications` endpoint queries `feed_events JOIN papers` (ordered by `fe.created_at DESC`) rather than querying the `papers` table directly. This means the newsfeed only shows papers that have had a meaningful event, and each event carries its own timestamp and type.
+
 ---
 
 ## 7. Project Structure (Target)
@@ -529,14 +542,21 @@ The `_scrape_lock` prevents overlapping manual (`POST /api/scrape`) and schedule
 ```
 econ-newsfeed/
 ├── api.py                  # FastAPI application and route definitions
-├── scheduler.py            # APScheduler job and integration
-├── database.py             # Database class (existing, extended)
+├── scheduler.py            # APScheduler job, advisory locks, scrape orchestration
+├── database/               # Database package (see Section 7.1)
+│   ├── __init__.py         # Facade — exports Database class with all static methods
+│   ├── connection.py       # MySQLConnectionPool, get_connection, execute/fetch helpers
+│   ├── schema.py           # DDL (CREATE TABLE), migrations, seeding
+│   ├── researchers.py      # Researcher find/create, LLM disambiguation, CSV import
+│   ├── papers.py           # Title normalization, SHA-256 dedup hashing, draft URL ops
+│   ├── snapshots.py        # Append-only versioning for researchers and papers
+│   └── llm.py              # LLM usage logging and cost estimation
 ├── db_config.py            # DB connection config (existing)
 ├── html_fetcher.py         # Web scraping (existing)
-├── publication.py          # OpenAI extraction (existing)
+├── publication.py          # OpenAI extraction, Pydantic validation (existing)
 ├── researcher.py           # Researcher queries (existing)
 ├── main.py                 # CLI interface (existing, retained)
-├── requirements.txt        # Python dependencies (updated)
+├── requirements.txt        # Python dependencies (pinned)
 ├── urls.csv                # Sample data (existing)
 ├── .env                    # Environment variables (not committed)
 ├── .env.example            # Documented env var template
@@ -553,8 +573,10 @@ econ-newsfeed/
 │   │   │       ├── page.tsx        # Researcher directory
 │   │   │       └── [id]/
 │   │   │           └── page.tsx    # Researcher detail
+│   │   ├── components/             # Reusable UI components
 │   │   └── lib/
-│   │       └── api.ts              # API client functions
+│   │       ├── api.ts              # API client functions
+│   │       └── types.ts            # TypeScript types (Publication, Researcher, etc.)
 │   ├── Dockerfile                  # Frontend container
 │   ├── package.json
 │   ├── tailwind.config.ts
@@ -562,6 +584,20 @@ econ-newsfeed/
 ├── DESIGN.md               # This document
 └── README.md
 ```
+
+### 7.1 `database/` Package Structure
+
+The `database/` package splits what was originally a monolithic `database.py` into focused modules. All existing code continues to use `from database import Database` — the `__init__.py` facade re-exports every function as a static method on the `Database` class.
+
+| Module | Responsibility |
+|--------|---------------|
+| `connection.py` | `MySQLConnectionPool` management (configurable via `DB_POOL_SIZE`, default 10), `get_connection()`, `execute_query()`, `fetch_all()`, `fetch_one()` |
+| `schema.py` | `_TABLE_DEFINITIONS` dict with all 14 `CREATE TABLE` statements, `create_tables()` (DDL + migrations under advisory lock `econ_migrations`), `seed_research_fields()`, `backfill_seed_publications()` |
+| `researchers.py` | `get_researcher_id()` with LLM-based name disambiguation, `update_researcher_bio()`, `add_researcher_url()`, `import_data_from_file()` (CSV import) |
+| `papers.py` | `normalize_title()` (lowercase, strip punctuation, collapse whitespace), `compute_title_hash()` (SHA-256), `update_draft_url_status()`, `get_unchecked_draft_urls()` |
+| `snapshots.py` | `append_researcher_snapshot()` and `append_paper_snapshot()` with content-hash change detection; creates `status_change` feed events when paper status changes |
+| `llm.py` | `log_llm_usage()` with per-model cost estimation (pricing table for gpt-4o-mini, gpt-5.4-mini, gpt-5.4-nano) |
+| `__init__.py` | Imports all public functions and re-exports them as `Database` static methods for backward compatibility |
 
 ---
 

@@ -394,9 +394,9 @@ class TestSavePublications:
 
         # get_researcher_id should be called for each author
         assert mock_get_rid.call_count == 3
-        mock_get_rid.assert_any_call("Alice", "Wu")
-        mock_get_rid.assert_any_call("Bob", "Chen")
-        mock_get_rid.assert_any_call("Carol", "Li")
+        mock_get_rid.assert_any_call("Alice", "Wu", conn=conn)
+        mock_get_rid.assert_any_call("Bob", "Chen", conn=conn)
+        mock_get_rid.assert_any_call("Carol", "Li", conn=conn)
 
     @patch("publication.Database.get_researcher_id", return_value=99)
     @patch("publication.Database.compute_title_hash", return_value="abc123")

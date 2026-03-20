@@ -19,6 +19,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from database import Database
+from publication import VALID_STATUSES
 import scheduler
 from scheduler import (
     start_scheduler,
@@ -43,6 +44,74 @@ class ErrorDetail(BaseModel):
 
 class ErrorResponse(BaseModel):
     error: ErrorDetail
+
+
+# ---------------------------------------------------------------------------
+# Pydantic response models — OpenAPI docs
+# ---------------------------------------------------------------------------
+
+class AuthorResponse(BaseModel):
+    id: int
+    first_name: str
+    last_name: str
+
+class PublicationResponse(BaseModel):
+    id: int
+    title: str
+    authors: list[AuthorResponse]
+    year: str | None
+    venue: str | None
+    source_url: str | None
+    discovered_at: str | None
+    status: str | None
+    draft_url: str | None
+    draft_available: bool
+    abstract: str | None
+    draft_url_status: str | None
+    event_id: int | None = None
+    event_type: str | None = None
+    old_status: str | None = None
+    new_status: str | None = None
+    event_date: str | None = None
+
+class PaginatedPublications(BaseModel):
+    items: list[PublicationResponse]
+    total: int
+    page: int
+    per_page: int
+    pages: int
+
+class ResearcherUrlResponse(BaseModel):
+    id: int
+    page_type: str
+    url: str
+
+class ResearchFieldResponse(BaseModel):
+    id: int
+    name: str
+    slug: str
+
+class ResearcherResponse(BaseModel):
+    id: int
+    first_name: str
+    last_name: str
+    position: str | None
+    affiliation: str | None
+    description: str | None
+    urls: list[ResearcherUrlResponse]
+    website_url: str | None
+    publication_count: int
+    fields: list[ResearchFieldResponse]
+
+class PaginatedResearchers(BaseModel):
+    items: list[ResearcherResponse]
+    total: int
+    page: int
+    per_page: int
+    pages: int
+
+class HealthResponse(BaseModel):
+    status: str
 
 
 # ---------------------------------------------------------------------------
@@ -272,24 +341,44 @@ def _format_publication(row, authors: list[dict]) -> dict:
 
 def _format_feed_event(row, authors: list[dict]) -> dict:
     """Format a feed_events + papers joined row into the API response shape."""
-    return {
+    # Remap column names to match _format_publication expectations
+    pub_row = {**row, "id": row["paper_id"]}
+    result = _format_publication(pub_row, authors)
+    result.update({
         "id": row['paper_id'],
         "event_id": row['event_id'],
         "event_type": row['event_type'],
         "old_status": row.get('old_status'),
         "new_status": row.get('new_status'),
         "event_date": _iso_z(row.get('created_at')),
-        "title": row['title'],
-        "authors": authors,
-        "year": row['year'],
-        "venue": row['venue'],
-        "source_url": row['source_url'],
-        "discovered_at": _iso_z(row.get('discovered_at')),
-        "status": row.get('status'),
-        "draft_url": row.get('draft_url'),
-        "draft_available": row.get('draft_url_status') == 'valid',
-        "abstract": row.get('abstract'),
-        "draft_url_status": row.get('draft_url_status'),
+    })
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Health check
+# ---------------------------------------------------------------------------
+
+@app.get("/api/health", response_model=HealthResponse)
+def health_check():
+    """Health check endpoint for load balancers and monitoring."""
+    return {"status": "ok"}
+
+
+@app.get("/api/metrics")
+def metrics(response: Response):
+    """Basic application metrics for monitoring."""
+    row = Database.fetch_one(
+        "SELECT "
+        "(SELECT COUNT(*) FROM papers) AS publications, "
+        "(SELECT COUNT(*) FROM researchers) AS researchers, "
+        "(SELECT COUNT(*) FROM scrape_log) AS scrapes"
+    )
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return {
+        "publications": row['publications'] if row else 0,
+        "researchers": row['researchers'] if row else 0,
+        "scrapes": row['scrapes'] if row else 0,
     }
 
 
@@ -297,7 +386,7 @@ def _format_feed_event(row, authors: list[dict]) -> dict:
 # Publication endpoints
 # ---------------------------------------------------------------------------
 
-@app.get("/api/publications")
+@app.get("/api/publications", response_model=PaginatedPublications)
 @limiter.limit("60/minute")
 def list_publications(
     request: Request,
@@ -317,7 +406,7 @@ def list_publications(
     non-published papers with known status generate events, so no
     include_seed parameter is needed.
     """
-    valid_statuses = {"published", "accepted", "revise_and_resubmit", "reject_and_resubmit", "working_paper"}
+    valid_statuses = VALID_STATUSES
     valid_presets = {"top20"}
 
     # Parse comma-separated multi-values
@@ -607,7 +696,7 @@ def get_filter_options(request: Request, response: Response):
     }
 
 
-@app.get("/api/researchers")
+@app.get("/api/researchers", response_model=PaginatedResearchers)
 @limiter.limit("60/minute")
 def list_researchers(
     request: Request,
@@ -786,7 +875,7 @@ async def trigger_scrape(request: Request):
     started_at = datetime.now(timezone.utc)
 
     t = threading.Thread(
-        target=run_scrape_job, daemon=True
+        target=run_scrape_job, daemon=False, name="manual-scrape"
     )
     t.start()
 

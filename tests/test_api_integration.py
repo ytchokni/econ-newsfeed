@@ -21,6 +21,35 @@ def client():
 
 
 # ---------------------------------------------------------------------------
+# Task 4.1: Health check
+# ---------------------------------------------------------------------------
+
+class TestHealthEndpoint:
+    def test_health_returns_200(self, client):
+        response = client.get("/api/health")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["status"] == "ok"
+
+
+# ---------------------------------------------------------------------------
+# Task 4.3: Metrics endpoint
+# ---------------------------------------------------------------------------
+
+class TestMetricsEndpoint:
+    def test_metrics_returns_counts(self, client):
+        with patch("api.Database.fetch_one", return_value={
+            "publications": 42, "researchers": 10, "scrapes": 5,
+        }):
+            response = client.get("/api/metrics")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["publications"] == 42
+        assert body["researchers"] == 10
+        assert body["scrapes"] == 5
+
+
+# ---------------------------------------------------------------------------
 # Task 5.1: OpenAPI docs
 # ---------------------------------------------------------------------------
 
@@ -54,6 +83,18 @@ class TestOpenAPI:
         assert "get" in paths["/api/fields"]
         assert "post" in paths["/api/scrape"]
         assert "get" in paths["/api/scrape/status"]
+
+
+# ---------------------------------------------------------------------------
+# Task 4.2: OpenAPI response models
+# ---------------------------------------------------------------------------
+
+class TestOpenAPIResponseModels:
+    def test_openapi_schema_has_response_models(self, client):
+        schema = client.get("/openapi.json").json()
+        schema_str = str(schema.get("components", {}).get("schemas", {}))
+        assert "PublicationResponse" in schema_str
+        assert "ResearcherResponse" in schema_str
 
 
 # ---------------------------------------------------------------------------

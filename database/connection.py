@@ -6,7 +6,7 @@ from mysql.connector.pooling import MySQLConnectionPool
 from db_config import db_config
 
 _pool: "MySQLConnectionPool | None" = None
-_DB_POOL_SIZE = int(os.environ.get('DB_POOL_SIZE', '5'))
+_DB_POOL_SIZE = int(os.environ.get('DB_POOL_SIZE', '10'))
 
 
 def _get_pool() -> "MySQLConnectionPool":

@@ -1,6 +1,7 @@
 import logging
 import os
 import signal
+import threading
 import time
 from datetime import datetime, timezone
 
@@ -139,6 +140,9 @@ def run_scrape_job():
         logger.warning("Scrape already in progress, skipping")
         return
     _lock_conn = lock_conn
+
+    # Clear stale robots.txt cache from previous cycle
+    HTMLFetcher._robots_cache.clear()
 
     log_id = None
     try:
@@ -308,8 +312,8 @@ def start_scheduler():
     logger.info(f"Scheduler started: scraping every {SCRAPE_INTERVAL_HOURS} hours")
 
     if SCRAPE_ON_STARTUP:
-        logger.info("SCRAPE_ON_STARTUP is true, triggering immediate scrape")
-        run_scrape_job()
+        logger.info("SCRAPE_ON_STARTUP is true, triggering immediate scrape in background")
+        threading.Thread(target=run_scrape_job, name="startup-scrape").start()
 
 
 def shutdown_scheduler():
