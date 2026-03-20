@@ -1,4 +1,4 @@
-.PHONY: setup dev seed reset-db scrape fetch parse parse-fast batch-submit batch-check check
+.PHONY: setup dev kill seed reset-db scrape fetch parse parse-fast batch-submit batch-check check
 
 setup:
 	poetry install
@@ -9,6 +9,10 @@ dev:
 	poetry run uvicorn api:app --reload --port 8001 & \
 	cd app && API_INTERNAL_URL=http://localhost:8001 npm run dev & \
 	wait
+
+kill:
+	@lsof -ti :8000 -ti :8001 -ti :3000 -ti :3001 2>/dev/null | xargs kill -9 2>/dev/null || true
+	@echo "Killed processes on ports 8000, 8001, 3000, and 3001"
 
 seed:
 	poetry run python database.py
