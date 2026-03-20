@@ -102,6 +102,8 @@ _TABLE_DEFINITIONS = {
             draft_url_status ENUM('unchecked', 'valid', 'invalid', 'timeout') DEFAULT 'unchecked',
             draft_url_checked_at DATETIME DEFAULT NULL,
             is_seed BOOLEAN NOT NULL DEFAULT FALSE,
+            doi VARCHAR(255) DEFAULT NULL,
+            openalex_id VARCHAR(255) DEFAULT NULL,
             UNIQUE KEY uq_title_hash (title_hash),
             INDEX idx_discovered_at (discovered_at),
             INDEX idx_status (status),
@@ -282,6 +284,29 @@ _TABLE_DEFINITIONS = {
             INDEX idx_status (status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "openalex_coauthors": """
+        CREATE TABLE IF NOT EXISTS openalex_coauthors (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            paper_id INT NOT NULL,
+            display_name VARCHAR(500) NOT NULL,
+            openalex_author_id VARCHAR(255) DEFAULT NULL,
+            UNIQUE KEY uq_paper_name (paper_id, display_name(200)),
+            INDEX idx_paper_id (paper_id),
+            FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "paper_links": """
+        CREATE TABLE IF NOT EXISTS paper_links (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            paper_id INT NOT NULL,
+            url VARCHAR(2048) NOT NULL,
+            link_type ENUM('pdf', 'ssrn', 'nber', 'arxiv', 'doi', 'journal',
+                            'drive', 'dropbox', 'repository', 'other') DEFAULT NULL,
+            discovered_at DATETIME NOT NULL,
+            FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
+            UNIQUE KEY uq_paper_link (paper_id, url(500))
+        ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
+    """,
 }
 
 
@@ -303,6 +328,8 @@ def create_tables() -> None:
                         ("scrape_log", "prompt_tokens_total", "INT DEFAULT 0"),
                         ("scrape_log", "completion_tokens_total", "INT DEFAULT 0"),
                         ("papers", "is_seed", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                        ("papers", "doi", "VARCHAR(255) DEFAULT NULL"),
+                        ("papers", "openalex_id", "VARCHAR(255) DEFAULT NULL"),
                     ]
                     for table, col, definition in _migrations:
                         try:
@@ -364,6 +391,8 @@ def create_tables() -> None:
                         "jel_codes", "researcher_jel_codes",
                         "scrape_log", "researcher_snapshots", "paper_snapshots",
                         "paper_urls", "llm_usage", "feed_events", "batch_jobs",
+                        "openalex_coauthors",
+                        "paper_links",
                     ]
                     for tbl in _ALL_TABLES:
                         try:
@@ -416,6 +445,17 @@ def create_tables() -> None:
                             conn.commit()
                     except Exception as e:
                         logging.warning("Migration: papers.timestamp rename: %s", e)
+
+                    try:
+                        cursor.execute("""
+                            ALTER TABLE html_content
+                            ADD COLUMN raw_html MEDIUMTEXT DEFAULT NULL AFTER content
+                        """)
+                        logging.info("Added raw_html column to html_content")
+                        conn.commit()
+                    except Exception as e:
+                        if "Duplicate column name" not in str(e):
+                            logging.warning("Migration: html_content.raw_html: %s", e)
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                     cursor.fetchone()

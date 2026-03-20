@@ -18,6 +18,9 @@ const publication: Publication = {
   draft_url: null,
   draft_url_status: "unchecked",
   draft_available: false,
+  doi: null,
+  coauthors: [],
+  links: [],
 };
 
 describe("PublicationCard", () => {
@@ -49,5 +52,39 @@ describe("PublicationCard", () => {
     expect(authorLinks).toHaveLength(2);
     expect(authorLinks[0]).toHaveAttribute("href", "/researchers/1");
     expect(authorLinks[1]).toHaveAttribute("href", "/researchers/2");
+  });
+});
+
+describe("PublicationCard OpenAlex fields", () => {
+  const pubWithDoi: Publication = {
+    ...publication,
+    doi: "10.1257/aer.20181234",
+    coauthors: [
+      { display_name: "Max Steinhardt", openalex_author_id: "A111" },
+      { display_name: "Jane Doe", openalex_author_id: "A222" },
+    ],
+  };
+
+  it("renders DOI link when doi is present", () => {
+    render(<PublicationCard publication={pubWithDoi} />);
+    const doiLink = screen.getByText("DOI").closest("a");
+    expect(doiLink).toHaveAttribute("href", "https://doi.org/10.1257/aer.20181234");
+    expect(doiLink).toHaveAttribute("target", "_blank");
+  });
+
+  it("does not render DOI link when doi is null", () => {
+    render(<PublicationCard publication={publication} />);
+    expect(screen.queryByText("DOI")).not.toBeInTheDocument();
+  });
+
+  it("renders OpenAlex co-authors", () => {
+    render(<PublicationCard publication={pubWithDoi} />);
+    expect(screen.getByText(/All authors:/)).toBeInTheDocument();
+    expect(screen.getByText(/Max Steinhardt, Jane Doe/)).toBeInTheDocument();
+  });
+
+  it("does not render co-authors section when empty", () => {
+    render(<PublicationCard publication={publication} />);
+    expect(screen.queryByText(/All authors:/)).not.toBeInTheDocument();
   });
 });

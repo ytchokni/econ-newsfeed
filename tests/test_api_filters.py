@@ -107,10 +107,12 @@ _NO_AUTHORS = []
 # ---------------------------------------------------------------------------
 
 def _mock_single_pub(mock_fetch, pub_row, author_rows):
-    """Configure mock_fetch for a two-call sequence: pubs + batch-authors."""
+    """Configure mock_fetch for a four-call sequence: pubs + batch-authors + coauthors + batch-links."""
     mock_fetch.side_effect = [
         [pub_row],
         author_rows,
+        [],  # coauthors
+        [],  # links
     ]
 
 
@@ -169,8 +171,8 @@ class TestStatusFilter:
             patch("api.Database.fetch_one", return_value={"total": 0}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
-            # Zero results: first call returns empty pub list; second call (batch authors) never reached
-            mock_fetch.side_effect = [[], []]
+            # Zero results: first call returns empty pub list; subsequent calls (batch authors, coauthors) never reached
+            mock_fetch.side_effect = [[], [], [], []]
             response = client.get("/api/publications?status=revise_and_resubmit")
 
         assert response.status_code == 200
@@ -180,7 +182,7 @@ class TestStatusFilter:
             patch("api.Database.fetch_one", return_value={"total": 0}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
-            mock_fetch.side_effect = [[], []]
+            mock_fetch.side_effect = [[], [], [], []]
             response = client.get("/api/publications?status=reject_and_resubmit")
 
         assert response.status_code == 200
@@ -234,7 +236,7 @@ class TestInstitutionFilter:
             patch("api.Database.fetch_one", return_value={"total": 0}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
-            mock_fetch.side_effect = [[], []]
+            mock_fetch.side_effect = [[], [], [], []]
             response = client.get("/api/publications?institution=Nonexistent+University")
 
         assert response.status_code == 200
@@ -257,7 +259,7 @@ class TestInstitutionFilter:
             patch("api.Database.fetch_one", return_value={"total": 0}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
-            mock_fetch.side_effect = [[], []]
+            mock_fetch.side_effect = [[], [], [], []]
             response = client.get("/api/publications?institution=100%25MIT")
 
         assert response.status_code == 200
@@ -308,7 +310,7 @@ class TestPresetTop20Filter:
             patch("api.Database.fetch_one", return_value={"total": 0}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
-            mock_fetch.side_effect = [[], []]
+            mock_fetch.side_effect = [[], [], [], []]
             response = client.get("/api/publications?preset=top20")
 
         assert response.status_code == 200

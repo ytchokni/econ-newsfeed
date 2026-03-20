@@ -28,17 +28,20 @@ SAMPLE_PUBLICATIONS = [
      "created_at": datetime(2026, 3, 15, 14, 30), "paper_id": 1, "title": "Trade and Wages",
      "year": "2024", "venue": "JLE", "source_url": "https://example.com/pub",
      "discovered_at": datetime(2026, 3, 15, 14, 30), "status": "working_paper",
-     "draft_url": "https://ssrn.com/abstract=1", "abstract": None, "draft_url_status": "valid"},
+     "draft_url": "https://ssrn.com/abstract=1", "abstract": None, "draft_url_status": "valid",
+     "doi": None},
     {"event_id": 101, "event_type": "new_paper", "old_status": None, "new_status": "accepted",
      "created_at": datetime(2026, 3, 14, 10, 0), "paper_id": 2, "title": "Immigration Effects",
      "year": "2023", "venue": "QJE", "source_url": "https://example.com/pub2",
      "discovered_at": datetime(2026, 3, 14, 10, 0), "status": "accepted",
-     "draft_url": None, "abstract": None, "draft_url_status": None},
+     "draft_url": None, "abstract": None, "draft_url_status": None,
+     "doi": None},
     {"event_id": 102, "event_type": "new_paper", "old_status": None, "new_status": "working_paper",
      "created_at": datetime(2026, 3, 13, 9, 0), "paper_id": 3, "title": "Labor Markets",
      "year": "2024", "venue": "AER", "source_url": "https://example.com/pub3",
      "discovered_at": datetime(2026, 3, 13, 9, 0), "status": "working_paper",
-     "draft_url": None, "abstract": None, "draft_url_status": None},
+     "draft_url": None, "abstract": None, "draft_url_status": None,
+     "doi": None},
 ]
 
 # 10-key papers dict for single publication detail endpoint
@@ -47,6 +50,7 @@ SAMPLE_PUB_DETAIL = {
     "source_url": "https://example.com/pub", "discovered_at": datetime(2026, 3, 15, 14, 30),
     "status": "working_paper", "draft_url": "https://ssrn.com/abstract=1",
     "abstract": None, "draft_url_status": "valid",
+    "doi": "10.1257/aer.20181234",
 }
 
 SAMPLE_AUTHORS_PUB1 = [
@@ -89,10 +93,12 @@ class TestListPublications:
             patch("api.Database.fetch_one", return_value={"total": 3}),  # total count
             patch("api.Database.fetch_all") as mock_fetch,
         ):
-            # First call: publications; second: batch authors for all pubs
+            # First call: publications; second: batch authors; third: coauthors; fourth: links
             mock_fetch.side_effect = [
                 SAMPLE_PUBLICATIONS,
                 BATCH_AUTHORS_PUBS_1_2_3,
+                [],  # coauthors
+                [],  # links
             ]
             response = client.get("/api/publications")
 
@@ -113,6 +119,8 @@ class TestListPublications:
             mock_fetch.side_effect = [
                 [SAMPLE_PUBLICATIONS[1]],
                 BATCH_AUTHORS_PUB2,
+                [],  # coauthors
+                [],  # links
             ]
             response = client.get("/api/publications?page=2&per_page=1")
 
@@ -136,6 +144,8 @@ class TestListPublications:
             mock_fetch.side_effect = [
                 [SAMPLE_PUBLICATIONS[0]],
                 BATCH_AUTHORS_PUB1,
+                [],  # coauthors
+                [],  # links
             ]
             response = client.get("/api/publications?year=2024")
 
@@ -152,6 +162,8 @@ class TestListPublications:
             mock_fetch.side_effect = [
                 [SAMPLE_PUBLICATIONS[0]],
                 BATCH_AUTHORS_PUB1,
+                [],  # coauthors
+                [],  # links
             ]
             response = client.get("/api/publications?researcher_id=10")
 
@@ -170,6 +182,8 @@ class TestListPublications:
             mock_fetch.side_effect = [
                 [SAMPLE_PUBLICATIONS[0]],
                 BATCH_AUTHORS_PUB1,
+                [],  # coauthors
+                [],  # links
             ]
             response = client.get("/api/publications?since=2026-03-15T00:00:00Z")
 
@@ -191,6 +205,8 @@ class TestListPublications:
             mock_fetch.side_effect = [
                 [SAMPLE_PUBLICATIONS[0]],
                 BATCH_AUTHORS_PUB1,
+                [],  # coauthors
+                [],  # links
             ]
             response = client.get("/api/publications")
 
@@ -221,8 +237,9 @@ class TestGetPublication:
         """Returns publication with nested authors."""
         with (
             patch("api.Database.fetch_one", return_value=SAMPLE_PUB_DETAIL),
-            patch("api.Database.fetch_all", return_value=SAMPLE_AUTHORS_PUB1),
+            patch("api.Database.fetch_all") as mock_fetch,
         ):
+            mock_fetch.side_effect = [SAMPLE_AUTHORS_PUB1, [], []]  # authors, coauthors, links
             response = client.get("/api/publications/1")
 
         assert response.status_code == 200
@@ -239,3 +256,60 @@ class TestGetPublication:
         assert response.status_code == 404
         body = response.json()
         assert body["error"]["code"] == "not_found"
+
+
+# ---------------------------------------------------------------------------
+# OpenAlex enrichment fields
+# ---------------------------------------------------------------------------
+
+class TestPublicationOpenAlexFields:
+    """Tests for OpenAlex enrichment fields in publication responses."""
+
+    def test_feed_includes_doi_and_coauthors(self, client):
+        """GET /api/publications returns doi and coauthors."""
+        sample_pubs = [
+            {**SAMPLE_PUBLICATIONS[0], "doi": "10.1257/aer.20181234"},
+        ]
+        coauthors_data = [
+            {"paper_id": 1, "display_name": "Max Steinhardt", "openalex_author_id": "A111"},
+            {"paper_id": 1, "display_name": "Jane Doe", "openalex_author_id": "A222"},
+        ]
+        with (
+            patch("api.Database.fetch_one", return_value={"total": 1}),
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_fetch.side_effect = [
+                sample_pubs,
+                BATCH_AUTHORS_PUB1,
+                coauthors_data,
+                [],  # links
+            ]
+            response = client.get("/api/publications")
+
+        assert response.status_code == 200
+        item = response.json()["items"][0]
+        assert item["doi"] == "10.1257/aer.20181234"
+        assert len(item["coauthors"]) == 2
+        assert item["coauthors"][0]["display_name"] == "Max Steinhardt"
+
+    def test_single_publication_includes_doi(self, client):
+        """GET /api/publications/{id} returns doi and coauthors."""
+        pub_with_doi = {**SAMPLE_PUB_DETAIL, "doi": "10.1257/aer.20181234"}
+        coauthors_data = [
+            {"paper_id": 1, "display_name": "Max Steinhardt", "openalex_author_id": "A111"},
+        ]
+        with (
+            patch("api.Database.fetch_one", return_value=pub_with_doi),
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_fetch.side_effect = [
+                SAMPLE_AUTHORS_PUB1,
+                coauthors_data,
+                [],  # links
+            ]
+            response = client.get("/api/publications/1")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["doi"] == "10.1257/aer.20181234"
+        assert body["coauthors"][0]["display_name"] == "Max Steinhardt"

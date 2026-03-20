@@ -62,6 +62,14 @@ class AuthorResponse(BaseModel):
     first_name: str
     last_name: str
 
+class CoAuthorResponse(BaseModel):
+    display_name: str
+    openalex_author_id: str | None = None
+
+class PaperLinkResponse(BaseModel):
+    url: str
+    link_type: str | None
+
 class PublicationResponse(BaseModel):
     id: int
     title: str
@@ -75,11 +83,14 @@ class PublicationResponse(BaseModel):
     draft_available: bool
     abstract: str | None
     draft_url_status: str | None
+    doi: str | None = None
+    coauthors: list[CoAuthorResponse] = []
     event_id: int | None = None
     event_type: str | None = None
     old_status: str | None = None
     new_status: str | None = None
     event_date: str | None = None
+    links: list[PaperLinkResponse] = []
 
 class PaginatedPublications(BaseModel):
     items: list[PublicationResponse]
@@ -292,9 +303,13 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def _iso_z(dt: datetime | None) -> str | None:
+def _iso_z(dt: datetime | str | None) -> str | None:
     """Format a datetime as ISO 8601 with trailing Z, or None."""
-    return dt.isoformat() + "Z" if dt else None
+    if not dt:
+        return None
+    if isinstance(dt, str):
+        return dt if dt.endswith("Z") else dt + "Z"
+    return dt.isoformat() + "Z"
 
 
 def _get_authors_for_publication(publication_id: int) -> list[dict]:
@@ -333,7 +348,52 @@ def _get_authors_for_publications(pub_ids: list[int]) -> dict[int, list[dict]]:
     return result
 
 
-def _format_publication(row: dict, authors: list[dict]) -> dict:
+def _get_coauthors_for_publications(pub_ids: list[int]) -> dict[int, list[dict]]:
+    """Batch-fetch OpenAlex co-authors for multiple publications."""
+    if not pub_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(pub_ids))
+    rows = Database.fetch_all(
+        f"""
+        SELECT paper_id, display_name, openalex_author_id
+        FROM openalex_coauthors
+        WHERE paper_id IN ({placeholders})
+        ORDER BY paper_id, id
+        """,
+        tuple(pub_ids),
+    )
+    result: dict[int, list[dict]] = {pid: [] for pid in pub_ids}
+    for row in rows:
+        result[row['paper_id']].append({
+            "display_name": row['display_name'],
+            "openalex_author_id": row['openalex_author_id'],
+        })
+    return result
+
+
+def _get_links_for_publication(paper_id: int) -> list[dict]:
+    rows = Database.fetch_all(
+        "SELECT url, link_type FROM paper_links WHERE paper_id = %s", (paper_id,),
+    )
+    return [{"url": r['url'], "link_type": r['link_type']} for r in rows]
+
+
+def _get_links_for_publications(pub_ids: list[int]) -> dict[int, list[dict]]:
+    """Batch-fetch links for multiple publications."""
+    if not pub_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(pub_ids))
+    rows = Database.fetch_all(
+        f"SELECT paper_id, url, link_type FROM paper_links WHERE paper_id IN ({placeholders})",
+        tuple(pub_ids),
+    )
+    result: dict[int, list[dict]] = {pid: [] for pid in pub_ids}
+    for row in rows:
+        result[row['paper_id']].append({"url": row['url'], "link_type": row['link_type']})
+    return result
+
+
+def _format_publication(row: dict, authors: list[dict], coauthors: list[dict] | None = None, links: list[dict] | None = None) -> dict:
     """Format a publication DB row + authors into the API response shape."""
     return {
         "id": row['id'],
@@ -348,14 +408,17 @@ def _format_publication(row: dict, authors: list[dict]) -> dict:
         "draft_available": row.get('draft_url_status') == 'valid',
         "abstract": row.get('abstract'),
         "draft_url_status": row.get('draft_url_status'),
+        "doi": row.get('doi'),
+        "coauthors": coauthors or [],
+        "links": links or [],
     }
 
 
-def _format_feed_event(row: dict, authors: list[dict]) -> dict:
+def _format_feed_event(row: dict, authors: list[dict], coauthors: list[dict] | None = None, links: list[dict] | None = None) -> dict:
     """Format a feed_events + papers joined row into the API response shape."""
     # Remap column names to match _format_publication expectations
     pub_row = {**row, "id": row["paper_id"]}
-    result = _format_publication(pub_row, authors)
+    result = _format_publication(pub_row, authors, coauthors, links)
     result.update({
         "id": row['paper_id'],
         "event_id": row['event_id'],
@@ -411,6 +474,7 @@ def list_publications(
     since: str | None = Query(None),
     institution: str | None = Query(None),
     preset: str | None = Query(None),
+    search: str | None = Query(None, max_length=200),
 ):
     """List feed events (new papers and status changes).
 
@@ -480,6 +544,11 @@ def list_publications(
             f"WHERE {dept_likes})"
         )
         params.extend(f"%{_escape_like(kw)}%" for kw in _TOP20_DEPT_KEYWORDS)
+    search_term = search.strip() if search else ""
+    if search_term:
+        conditions.append("(p.title LIKE %s ESCAPE '\\\\' OR p.abstract LIKE %s ESCAPE '\\\\')")
+        escaped = f"%{_escape_like(search_term)}%"
+        params.extend([escaped, escaped])
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -500,7 +569,7 @@ def list_publications(
         f"""
         SELECT fe.id AS event_id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
                p.id AS paper_id, p.title, p.year, p.venue, p.source_url, p.discovered_at,
-               p.status, p.draft_url, p.abstract, p.draft_url_status
+               p.status, p.draft_url, p.abstract, p.draft_url_status, p.doi
         FROM feed_events fe
         JOIN papers p ON p.id = fe.paper_id
         {where}
@@ -512,7 +581,14 @@ def list_publications(
 
     pub_ids = [row['paper_id'] for row in rows]
     authors_by_pub = _get_authors_for_publications(pub_ids)
-    items = [_format_feed_event(row, authors_by_pub.get(row['paper_id'], [])) for row in rows]
+    coauthors_by_pub = _get_coauthors_for_publications(pub_ids)
+    links_by_pub = _get_links_for_publications(pub_ids)
+    items = [
+        _format_feed_event(row, authors_by_pub.get(row['paper_id'], []),
+                           coauthors_by_pub.get(row['paper_id'], []),
+                           links_by_pub.get(row['paper_id'], []))
+        for row in rows
+    ]
 
     response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=600"
     return {
@@ -532,14 +608,16 @@ def get_publication(
     include_history: bool = Query(False),
 ):
     row = Database.fetch_one(
-        "SELECT id, title, year, venue, source_url, discovered_at, status, draft_url, abstract, draft_url_status FROM papers WHERE id = %s",
+        "SELECT id, title, year, venue, source_url, discovered_at, status, draft_url, abstract, draft_url_status, doi FROM papers WHERE id = %s",
         (publication_id,),
     )
     if not row:
         raise HTTPException(status_code=404, detail="Publication not found")
 
     authors = _get_authors_for_publication(publication_id)
-    result = _format_publication(row, authors)
+    coauthors_map = _get_coauthors_for_publications([publication_id])
+    links = _get_links_for_publication(publication_id)
+    result = _format_publication(row, authors, coauthors_map.get(publication_id, []), links)
 
     if include_history:
         snapshots = Database.get_paper_snapshots(publication_id)
@@ -736,6 +814,7 @@ def list_researchers(
     field: str | None = Query(None),
     position: str | None = Query(None),
     preset: str | None = Query(None),
+    search: str | None = Query(None, max_length=200),
 ):
     conditions = []
     params: list = []
@@ -767,6 +846,14 @@ def list_researchers(
                 f"WHERE f.slug IN ({placeholders}))"
             )
             params.extend(field_slugs)
+
+    search_term = search.strip() if search else ""
+    if search_term:
+        conditions.append(
+            "(r.first_name LIKE %s ESCAPE '\\\\' OR r.last_name LIKE %s ESCAPE '\\\\')"
+        )
+        escaped = f"%{_escape_like(search_term)}%"
+        params.extend([escaped, escaped])
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -843,7 +930,7 @@ def get_researcher(
     pub_rows = Database.fetch_all(
         """
         SELECT p.id, p.title, p.year, p.venue, p.source_url, p.discovered_at, p.status, p.draft_url,
-               p.abstract, p.draft_url_status
+               p.abstract, p.draft_url_status, p.doi
         FROM papers p
         JOIN authorship a ON a.publication_id = p.id
         WHERE a.researcher_id = %s
@@ -853,7 +940,14 @@ def get_researcher(
     )
     pub_ids = [pr['id'] for pr in pub_rows]
     authors_by_pub = _get_authors_for_publications(pub_ids)
-    publications = [_format_publication(pr, authors_by_pub.get(pr['id'], [])) for pr in pub_rows]
+    coauthors_by_pub = _get_coauthors_for_publications(pub_ids)
+    links_by_pub = _get_links_for_publications(pub_ids)
+    publications = [
+        _format_publication(pr, authors_by_pub.get(pr['id'], []),
+                           coauthors_by_pub.get(pr['id'], []),
+                           links_by_pub.get(pr['id'], []))
+        for pr in pub_rows
+    ]
 
     result = {
         "id": row['id'],

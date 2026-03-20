@@ -19,6 +19,9 @@ const page1: PaginatedResponse<Publication> = {
       draft_url: null,
       draft_url_status: "unchecked" as const,
       draft_available: false,
+      doi: null,
+      coauthors: [],
+      links: [],
     },
     {
       id: 2,
@@ -33,6 +36,9 @@ const page1: PaginatedResponse<Publication> = {
       draft_url: null,
       draft_url_status: "unchecked" as const,
       draft_available: false,
+      doi: null,
+      coauthors: [],
+      links: [],
     },
   ],
   total: 3,
@@ -56,6 +62,9 @@ const page2: PaginatedResponse<Publication> = {
       draft_url: null,
       draft_url_status: "unchecked" as const,
       draft_available: false,
+      doi: null,
+      coauthors: [],
+      links: [],
     },
   ],
   total: 3,
@@ -128,6 +137,19 @@ describe("NewsfeedContent", () => {
     });
 
     expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument();
+  });
+
+  it("renders search input on newsfeed page", async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => page1,
+    });
+
+    renderWithSWR(<NewsfeedContent />);
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/search/i)).toBeInTheDocument();
+    });
   });
 
   it("navigates to next page when Next button is clicked", async () => {

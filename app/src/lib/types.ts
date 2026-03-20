@@ -13,7 +13,21 @@ export type PublicationStatus =
 
 export type DraftUrlStatus = "unchecked" | "valid" | "invalid" | "timeout";
 
+export type LinkType =
+  | "pdf" | "ssrn" | "nber" | "arxiv" | "doi"
+  | "journal" | "drive" | "dropbox" | "repository" | "other";
+
+export interface PaperLink {
+  url: string;
+  link_type: LinkType | null;
+}
+
 export type EventType = 'new_paper' | 'status_change';
+
+export interface OpenAlexCoAuthor {
+  display_name: string;
+  openalex_author_id: string | null;
+}
 
 export interface Publication {
   id: number;
@@ -28,6 +42,9 @@ export interface Publication {
   draft_url: string | null;
   draft_url_status: DraftUrlStatus;
   draft_available: boolean;
+  doi: string | null;
+  coauthors: OpenAlexCoAuthor[];
+  links: PaperLink[];
   event_id?: number;
   event_type?: EventType;
   old_status?: PublicationStatus | null;
@@ -79,6 +96,7 @@ export interface FeedFilters {
   institution?: string;
   preset?: string;
   year?: string;
+  search?: string;
 }
 
 export interface ResearcherDetail extends Researcher {
@@ -95,4 +113,5 @@ export interface ResearcherFilters {
   institution?: string;
   field?: string;
   position?: string;
+  search?: string;
 }

@@ -35,6 +35,7 @@ function buildPublicationsUrl(
   if (filters?.institution) params.set("institution", filters.institution);
   if (filters?.preset) params.set("preset", filters.preset);
   if (filters?.year) params.set("year", filters.year);
+  if (filters?.search) params.set("search", filters.search);
   return `/api/publications?${params.toString()}`;
 }
 
@@ -96,6 +97,7 @@ export function useResearchersFiltered(filters?: ResearcherFilters) {
   if (filters?.institution) params.set("institution", filters.institution);
   if (filters?.field) params.set("field", filters.field);
   if (filters?.position) params.set("position", filters.position);
+  if (filters?.search) params.set("search", filters.search);
   const url = `/api/researchers?${params.toString()}`;
   return useSWR<Researcher[]>(url, async (u: string) => {
     const data = await fetchJson<{ items: Researcher[] }>(u);

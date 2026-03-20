@@ -101,4 +101,14 @@ describe("ResearchersContent", () => {
       expect(screen.getByText(/failed to load/i)).toBeInTheDocument();
     });
   });
+
+  it("renders search input on researchers page", async () => {
+    mockFetchResponses({ items: researchers });
+
+    renderWithSWR(<ResearchersContent />);
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/search/i)).toBeInTheDocument();
+    });
+  });
 });

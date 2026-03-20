@@ -16,6 +16,9 @@ const mockPublicationsResponse: PaginatedResponse<Publication> = {
       draft_url: null,
       draft_url_status: "unchecked",
       draft_available: false,
+      doi: null,
+      coauthors: [],
+      links: [],
     },
   ],
   total: 1,
@@ -68,6 +71,9 @@ const mockResearcherDetail: ResearcherDetail = {
       draft_url: null,
       draft_url_status: "unchecked",
       draft_available: false,
+      doi: null,
+      coauthors: [],
+      links: [],
     },
   ],
 };
@@ -168,5 +174,31 @@ describe("getResearcher", () => {
     });
 
     await expect(getResearcher(999)).rejects.toThrow();
+  });
+});
+
+describe("buildPublicationsUrl with search", () => {
+  it("includes search param in URL", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockPublicationsResponse),
+    });
+
+    await getPublications(1, 20, { search: "monetary policy" });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("search=monetary+policy")
+    );
+  });
+
+  it("omits search param when empty", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockPublicationsResponse),
+    });
+
+    await getPublications(1, 20, { search: "" });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.not.stringContaining("search")
+    );
   });
 });

@@ -1,4 +1,4 @@
-.PHONY: setup dev kill seed reset-db scrape fetch parse parse-fast batch-submit batch-check classify-jel check
+.PHONY: setup dev kill seed reset-db scrape fetch parse parse-fast batch-submit batch-check classify-jel enrich discover-domains check
 
 setup:
 	poetry install
@@ -48,6 +48,12 @@ batch-check:
 
 classify-jel:
 	poetry run python -c "from main import classify_jel; classify_jel()"
+
+enrich:
+	poetry run python main.py enrich
+
+discover-domains:  ## Scan for untrusted domains that may host paper links
+	poetry run python main.py discover-domains
 
 check:
 	@echo "=== Step 1: Env validation ==="

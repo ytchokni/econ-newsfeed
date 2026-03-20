@@ -24,16 +24,15 @@ ROOT_MODULES = [
     "publication",
     "researcher",
     "scheduler",
-    "compare_models",
 ]
 
 # Modules that create or transitively trigger OpenAI() at import time
 # (publication.py and compare_models.py create clients at module scope;
 #  main.py imports publication at module scope, triggering it transitively)
-_OPENAI_CLIENT_MODULES = {"publication", "compare_models", "main"}
+_OPENAI_CLIENT_MODULES = {"publication", "main"}
 
 # Modules that create MySQL connection pools at module scope
-_DB_POOL_MODULES = {"database", "html_fetcher", "researcher", "scheduler", "api", "main", "publication", "compare_models"}
+_DB_POOL_MODULES = {"database", "html_fetcher", "researcher", "scheduler", "api", "main", "publication"}
 
 
 @pytest.mark.parametrize("module_name", ROOT_MODULES)
