@@ -159,6 +159,7 @@ class TestResearcherShape:
         with (
             patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
+            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
             mock_all.side_effect = [
                 [SAMPLE_RESEARCHER], SAMPLE_URLS,
@@ -176,6 +177,7 @@ class TestResearcherShape:
         with (
             patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
+            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
             mock_all.side_effect = [
                 [SAMPLE_RESEARCHER], SAMPLE_URLS,
@@ -192,6 +194,7 @@ class TestResearcherShape:
         with (
             patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
+            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
             mock_all.side_effect = [
                 [SAMPLE_RESEARCHER], SAMPLE_URLS,
@@ -216,6 +219,7 @@ class TestResearcherDetailShape:
         with (
             patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_all,
+            patch("api.Database.get_jel_codes_for_researcher", return_value=[]),
         ):
             mock_one.side_effect = [SAMPLE_RESEARCHER, {"cnt": 5}]
             single_urls = [{"id": 1, "page_type": "homepage", "url": "https://example.com"}]

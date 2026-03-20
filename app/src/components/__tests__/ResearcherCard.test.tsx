@@ -13,6 +13,7 @@ const researcher: Researcher = {
   website_url: null,
   publication_count: 23,
   fields: [],
+  jel_codes: [],
 };
 
 describe("ResearcherCard", () => {

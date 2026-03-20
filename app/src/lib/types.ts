@@ -72,6 +72,11 @@ export interface ResearchField {
   slug: string;
 }
 
+export interface JelCode {
+  code: string;
+  name: string;
+}
+
 export interface Researcher {
   id: number;
   first_name: string;
@@ -83,6 +88,7 @@ export interface Researcher {
   website_url: string | null;
   publication_count: number;
   fields: ResearchField[];
+  jel_codes: JelCode[];
 }
 
 export interface FeedFilters {

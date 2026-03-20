@@ -2,6 +2,7 @@ import useSWR from "swr";
 import type {
   FeedFilters,
   FilterOptions,
+  JelCode,
   PaginatedResponse,
   Publication,
   ResearchField,
@@ -82,6 +83,13 @@ export async function getFields(): Promise<ResearchField[]> {
 
 export function useFilterOptions() {
   return useSWR<FilterOptions>("/api/filter-options", fetchJson);
+}
+
+export function useJelCodes() {
+  return useSWR<JelCode[]>("/api/jel-codes", async (url: string) => {
+    const data = await fetchJson<{ items: JelCode[] }>(url);
+    return data.items;
+  });
 }
 
 export function useResearchersFiltered(filters?: ResearcherFilters) {
