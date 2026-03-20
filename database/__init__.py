@@ -32,6 +32,8 @@ from database.papers import (
     compute_title_hash as _compute_title_hash,
     update_draft_url_status as _update_draft_url_status,
     get_unchecked_draft_urls as _get_unchecked_draft_urls,
+    update_openalex_data as _update_openalex_data,
+    get_unenriched_papers as _get_unenriched_papers,
 )
 from database.snapshots import (
     _compute_researcher_content_hash,
@@ -70,6 +72,8 @@ class Database:
     compute_title_hash = staticmethod(_compute_title_hash)
     update_draft_url_status = staticmethod(_update_draft_url_status)
     get_unchecked_draft_urls = staticmethod(_get_unchecked_draft_urls)
+    update_openalex_data = staticmethod(_update_openalex_data)
+    get_unenriched_papers = staticmethod(_get_unenriched_papers)
 
     # Snapshots
     _compute_researcher_content_hash = staticmethod(_compute_researcher_content_hash)
