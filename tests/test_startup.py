@@ -100,7 +100,8 @@ class TestBioColumnMigration:
         with patch("database.schema.get_connection", return_value=mock_conn):
             with patch("database.schema.execute_query",
                        side_effect=Exception("Duplicate column name 'bio'")):
-                with patch("database.schema.seed_research_fields"):
+                with patch("database.schema.seed_research_fields"), \
+                     patch("database.schema.seed_jel_codes"):
                     # Must not raise
                     Database.create_tables()
 
@@ -111,7 +112,8 @@ class TestBioColumnMigration:
 
         with patch("database.schema.get_connection", return_value=mock_conn):
             with patch("database.schema.execute_query", return_value=None):
-                with patch("database.schema.seed_research_fields"):
+                with patch("database.schema.seed_research_fields"), \
+                     patch("database.schema.seed_jel_codes"):
                     # Must not raise
                     Database.create_tables()
 
@@ -134,7 +136,8 @@ class TestMigrationAdvisoryLock:
         from database import Database
 
         with patch("database.schema.get_connection", return_value=mock_conn):
-            with patch("database.schema.seed_research_fields"):
+            with patch("database.schema.seed_research_fields"), \
+                 patch("database.schema.seed_jel_codes"):
                 Database.create_tables()
 
         # The cursor must have called fetchone() at least twice:
@@ -150,7 +153,8 @@ class TestMigrationAdvisoryLock:
         from database import Database
 
         with patch("database.schema.get_connection", return_value=mock_conn):
-            with patch("database.schema.seed_research_fields"):
+            with patch("database.schema.seed_research_fields"), \
+                 patch("database.schema.seed_jel_codes"):
                 Database.create_tables()
 
         executed_sql = [
@@ -181,7 +185,8 @@ class TestMigrationAdvisoryLock:
         mock_cursor.execute = MagicMock(side_effect=execute_side_effect)
 
         with patch("database.schema.get_connection", return_value=mock_conn):
-            with patch("database.schema.seed_research_fields"):
+            with patch("database.schema.seed_research_fields"), \
+                 patch("database.schema.seed_jel_codes"):
                 Database.create_tables()  # Must not raise
 
         executed_sql = [
