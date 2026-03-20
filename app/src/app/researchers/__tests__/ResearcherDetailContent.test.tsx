@@ -28,6 +28,8 @@ const researcher: ResearcherDetail = {
       draft_url: null,
       draft_url_status: "unchecked" as const,
       draft_available: false,
+      doi: null,
+      coauthors: [],
       links: [],
     },
     {
@@ -46,6 +48,8 @@ const researcher: ResearcherDetail = {
       draft_url: null,
       draft_url_status: "unchecked" as const,
       draft_available: false,
+      doi: null,
+      coauthors: [],
       links: [],
     },
   ],

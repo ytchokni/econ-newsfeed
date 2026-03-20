@@ -140,9 +140,11 @@ class TestApiPaperLinks:
             "source_url": "https://x.com", "discovered_at": "2024-01-01T00:00:00",
             "status": "working_paper", "draft_url": None,
             "draft_url_status": "unchecked", "abstract": None,
+            "doi": None,
         }
         mock_fetch_all.side_effect = [
             [{"id": 1, "first_name": "J", "last_name": "S"}],  # authors
+            [],  # coauthors
             [{"url": "https://ssrn.com/1", "link_type": "ssrn"}],  # links
         ]
         resp = client.get("/api/publications/1")

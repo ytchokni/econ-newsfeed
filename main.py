@@ -357,6 +357,7 @@ def main() -> None:
     subparsers.add_parser('extract-concurrent', help='Extract publications concurrently')
     subparsers.add_parser('batch-submit', help='Submit a batch job to OpenAI Batch API')
     subparsers.add_parser('batch-check', help='Check and process completed batch jobs')
+    subparsers.add_parser('enrich', help='Enrich publications with OpenAlex metadata')
     subparsers.add_parser('discover-domains', help='Scan stored HTML for untrusted domains with paper-title links')
 
     args = parser.parse_args()
@@ -373,6 +374,10 @@ def main() -> None:
         batch_submit()
     elif args.command == 'batch-check':
         batch_check()
+    elif args.command == 'enrich':
+        Database.create_tables()
+        from openalex import enrich_new_publications
+        enrich_new_publications()
     elif args.command == 'discover-domains':
         discover_domains()
 

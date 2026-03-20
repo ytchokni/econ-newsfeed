@@ -299,6 +299,7 @@ class TestGetResearcher:
                 SAMPLE_FIELDS_R1,            # fields
                 SAMPLE_PUBLICATIONS_R1,      # publications
                 [{"publication_id": 1, "researcher_id": 1, "first_name": "Max Friedrich", "last_name": "Steinhardt"}],  # batch authors
+                [],                          # coauthors
                 [],                          # batch links
             ]
             response = client.get("/api/researchers/1")
