@@ -66,7 +66,7 @@ def update_openalex_data(paper_id, doi, openalex_id, coauthors, abstract=None):
             )
             if coauthors:
                 cursor.executemany(
-                    "INSERT INTO openalex_coauthors (paper_id, display_name, openalex_author_id) "
+                    "INSERT IGNORE INTO openalex_coauthors (paper_id, display_name, openalex_author_id) "
                     "VALUES (%s, %s, %s)",
                     [(paper_id, ca["display_name"], ca.get("openalex_author_id")) for ca in coauthors],
                 )
