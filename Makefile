@@ -15,7 +15,7 @@ kill:
 	@echo "Killed processes on ports 8000, 8001, 3000, and 3001"
 
 seed:
-	poetry run python database.py
+	poetry run python -c "from database import Database; Database.create_database(); Database.create_tables(); print('Database seeded')"
 
 reset-db:
 	poetry run python -c "from database import Database; from db_config import db_config; \

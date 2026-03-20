@@ -30,3 +30,10 @@ CLAUDE.md
 
 # Worktrees
 .worktrees/
+
+
+.playwright-cli/*
+.full-review/*
+.full-review*/*
+
+*.png
