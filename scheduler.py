@@ -14,7 +14,6 @@ from researcher import Researcher
 from html_fetcher import HTMLFetcher
 from publication import Publication
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
 _LOCK_NAME = 'econ_newsfeed_scrape'
