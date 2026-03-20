@@ -137,3 +137,23 @@ class TestDiscoverUntrustedDomains:
     def test_returns_empty_for_all_trusted(self):
         html = '<div><a href="https://ssrn.com/1">Paper Title</a></div>'
         assert discover_untrusted_domains(html) == {}
+
+
+class TestApiPaperLinks:
+    @patch("api.Database.fetch_all")
+    @patch("api.Database.fetch_one")
+    def test_publication_detail_includes_links(self, mock_fetch_one, mock_fetch_all, client):
+        mock_fetch_one.return_value = {
+            "id": 1, "title": "Test", "year": "2024", "venue": "AER",
+            "source_url": "https://x.com", "discovered_at": "2024-01-01T00:00:00",
+            "status": "working_paper", "draft_url": None,
+            "draft_url_status": "unchecked", "abstract": None,
+        }
+        mock_fetch_all.side_effect = [
+            [{"id": 1, "first_name": "J", "last_name": "S"}],  # authors
+            [{"url": "https://ssrn.com/1", "link_type": "ssrn"}],  # links
+        ]
+        resp = client.get("/api/publications/1")
+        assert resp.status_code == 200
+        assert "links" in resp.json()
+        assert resp.json()["links"][0]["link_type"] == "ssrn"
