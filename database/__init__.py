@@ -19,6 +19,7 @@ from database.schema import (
     create_database as _create_database,
     create_tables as _create_tables,
     seed_research_fields as _seed_research_fields,
+    seed_jel_codes as _seed_jel_codes,
     backfill_seed_publications as _backfill_seed_publications,
 )
 from database.researchers import (
@@ -42,6 +43,13 @@ from database.snapshots import (
     get_paper_snapshots as _get_paper_snapshots,
 )
 from database.llm import log_llm_usage as _log_llm_usage
+from database.jel import (
+    get_all_jel_codes as _get_all_jel_codes,
+    get_jel_codes_for_researcher as _get_jel_codes_for_researcher,
+    get_jel_codes_for_researchers as _get_jel_codes_for_researchers,
+    save_researcher_jel_codes as _save_researcher_jel_codes,
+    get_researchers_needing_classification as _get_researchers_needing_classification,
+)
 
 
 class Database:
@@ -57,6 +65,7 @@ class Database:
     create_database = staticmethod(_create_database)
     create_tables = staticmethod(_create_tables)
     seed_research_fields = staticmethod(_seed_research_fields)
+    seed_jel_codes = staticmethod(_seed_jel_codes)
     backfill_seed_publications = staticmethod(_backfill_seed_publications)
 
     # Researchers
@@ -81,3 +90,10 @@ class Database:
 
     # LLM
     log_llm_usage = staticmethod(_log_llm_usage)
+
+    # JEL codes
+    get_all_jel_codes = staticmethod(_get_all_jel_codes)
+    get_jel_codes_for_researcher = staticmethod(_get_jel_codes_for_researcher)
+    get_jel_codes_for_researchers = staticmethod(_get_jel_codes_for_researchers)
+    save_researcher_jel_codes = staticmethod(_save_researcher_jel_codes)
+    get_researchers_needing_classification = staticmethod(_get_researchers_needing_classification)
