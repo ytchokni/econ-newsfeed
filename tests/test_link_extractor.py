@@ -33,7 +33,7 @@ class TestSaveTextWithRawHtml:
         assert mock_execute.call_args[0][1][-1] is None
 
 
-from link_extractor import extract_trusted_links, match_link_to_paper, discover_untrusted_domains
+from link_extractor import extract_trusted_links, match_link_to_paper, discover_untrusted_domains, match_and_save_paper_links
 
 
 class TestExtractTrustedLinks:
@@ -75,3 +75,52 @@ class TestExtractTrustedLinks:
         links = extract_trusted_links(html)
         assert len(links) == 1
         assert 'Incomplete Take-Up' in links[0]['anchor_text']
+
+
+class TestMatchLinkToPaper:
+    def test_exact_match(self):
+        title, _ = match_link_to_paper("Trade and Wages", ["Trade and Wages", "Other"])
+        assert title == "Trade and Wages"
+
+    def test_no_match_generic(self):
+        title, _ = match_link_to_paper("PDF", ["Trade and Wages"])
+        assert title is None
+
+    def test_css_concatenation(self):
+        title, _ = match_link_to_paper(
+            "Outforgood: Transitory andpersistent labor",
+            ["Out for good: Transitory and persistent labor"])
+        assert title is not None
+
+    def test_no_false_positive_short_substring(self):
+        title, _ = match_link_to_paper("Green Waste", ["The Green Waste Tax Problem"])
+        assert title is None
+
+    def test_accented_characters(self):
+        title, _ = match_link_to_paper(
+            "Économétrie: Résumé des Résultats",
+            ["Econometrie: Resume des Resultats"])
+        assert title is not None
+
+
+class TestMatchAndSavePaperLinks:
+    @patch("link_extractor.Database.execute_query")
+    @patch("link_extractor.Database.fetch_one")
+    @patch("link_extractor.HTMLFetcher.get_raw_html")
+    def test_matches_and_saves(self, mock_get_raw, mock_fetch_one, mock_execute):
+        html = '<div><a href="https://ssrn.com/1">Trade and Wages</a></div>'
+        mock_get_raw.return_value = html
+        mock_fetch_one.return_value = {'id': 10}
+
+        match_and_save_paper_links(url_id=1, publications=[{'title': 'Trade and Wages'}])
+
+        link_calls = [c for c in mock_execute.call_args_list if 'paper_links' in c[0][0]]
+        assert len(link_calls) == 1
+        assert link_calls[0][0][1][0] == 10  # paper_id
+
+    @patch("link_extractor.Database.execute_query")
+    @patch("link_extractor.HTMLFetcher.get_raw_html")
+    def test_skips_no_raw_html(self, mock_get_raw, mock_execute):
+        mock_get_raw.return_value = None
+        match_and_save_paper_links(url_id=1, publications=[{'title': 'X'}])
+        assert not any('paper_links' in str(c) for c in mock_execute.call_args_list)

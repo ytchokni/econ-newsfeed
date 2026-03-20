@@ -7,9 +7,13 @@ import logging
 import os
 import re
 import unicodedata
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup, NavigableString
+
+from database import Database
+from html_fetcher import HTMLFetcher
 
 # ---------------------------------------------------------------------------
 # Trusted domains
@@ -359,6 +363,51 @@ def match_link_to_paper(anchor_text, paper_titles, threshold=0.75):
             best_score, best_title = score, title
 
     return best_title, best_score
+
+
+# ---------------------------------------------------------------------------
+# Persist matched links
+# ---------------------------------------------------------------------------
+
+def match_and_save_paper_links(url_id, publications):
+    """Match page links to papers by anchor text, save to paper_links.
+
+    Called after save_publications(). Extracts trusted-domain links from
+    stored raw HTML, matches each to the best paper by anchor text,
+    and persists matches.
+    """
+    raw_html = HTMLFetcher.get_raw_html(url_id)
+    if not raw_html:
+        return
+
+    page_links = extract_trusted_links(raw_html)
+    if not page_links:
+        return
+
+    paper_ids = {}
+    for pub in publications:
+        title = (pub.get('title') or '').strip()
+        if not title:
+            continue
+        title_hash = Database.compute_title_hash(title)
+        row = Database.fetch_one("SELECT id FROM papers WHERE title_hash = %s", (title_hash,))
+        if row:
+            paper_ids[title] = row['id']
+
+    if not paper_ids:
+        return
+
+    for link in page_links:
+        matched_title, _ = match_link_to_paper(link['anchor_text'], list(paper_ids.keys()))
+        if matched_title:
+            try:
+                Database.execute_query(
+                    """INSERT IGNORE INTO paper_links (paper_id, url, link_type, discovered_at)
+                       VALUES (%s, %s, %s, %s)""",
+                    (paper_ids[matched_title], link['url'], link['link_type'],
+                     datetime.now(timezone.utc)))
+            except Exception as e:
+                logging.warning("Error saving paper link: %s", e)
 
 
 # ---------------------------------------------------------------------------
