@@ -155,6 +155,24 @@ _TABLE_DEFINITIONS = {
             FOREIGN KEY (field_id) REFERENCES research_fields(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "jel_codes": """
+        CREATE TABLE IF NOT EXISTS jel_codes (
+            code VARCHAR(10) NOT NULL PRIMARY KEY,
+            name VARCHAR(255) NOT NULL,
+            parent_code VARCHAR(10) DEFAULT NULL,
+            INDEX idx_parent (parent_code)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "researcher_jel_codes": """
+        CREATE TABLE IF NOT EXISTS researcher_jel_codes (
+            researcher_id INT NOT NULL,
+            jel_code VARCHAR(10) NOT NULL,
+            classified_at DATETIME NOT NULL,
+            PRIMARY KEY (researcher_id, jel_code),
+            FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
+            FOREIGN KEY (jel_code) REFERENCES jel_codes(code) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
     "scrape_log": """
         CREATE TABLE IF NOT EXISTS scrape_log (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -343,6 +361,7 @@ def create_tables() -> None:
                     _ALL_TABLES = [
                         "researchers", "researcher_urls", "papers", "html_content",
                         "authorship", "research_fields", "researcher_fields",
+                        "jel_codes", "researcher_jel_codes",
                         "scrape_log", "researcher_snapshots", "paper_snapshots",
                         "paper_urls", "llm_usage", "feed_events", "batch_jobs",
                     ]
@@ -355,6 +374,17 @@ def create_tables() -> None:
                             conn.commit()
                         except Exception as e:
                             logging.warning("Migration: utf8mb4 for %s: %s", tbl, e)
+
+                    # Add jel_classification to llm_usage.call_type ENUM
+                    try:
+                        cursor.execute(
+                            "ALTER TABLE llm_usage MODIFY COLUMN call_type "
+                            "ENUM('publication_extraction','description_extraction',"
+                            "'researcher_disambiguation','jel_classification') NOT NULL"
+                        )
+                        conn.commit()
+                    except Exception as e:
+                        logging.warning("Migration: llm_usage.call_type ENUM: %s", e)
 
                     # Rename papers.url → papers.source_url
                     try:
@@ -394,6 +424,7 @@ def create_tables() -> None:
 
     logging.info("All tables created successfully")
     seed_research_fields()
+    seed_jel_codes()
 
 
 def seed_research_fields() -> None:
@@ -416,6 +447,37 @@ def seed_research_fields() -> None:
         execute_query(
             "INSERT IGNORE INTO research_fields (name, slug) VALUES (%s, %s)",
             (name, slug),
+        )
+
+
+def seed_jel_codes() -> None:
+    """Insert the standard AEA JEL classification top-level codes."""
+    codes = [
+        ("A", "General Economics and Teaching"),
+        ("B", "History of Economic Thought, Methodology, and Heterodox Approaches"),
+        ("C", "Mathematical and Quantitative Methods"),
+        ("D", "Microeconomics"),
+        ("E", "Macroeconomics and Monetary Economics"),
+        ("F", "International Economics"),
+        ("G", "Financial Economics"),
+        ("H", "Public Economics"),
+        ("I", "Health, Education, and Welfare"),
+        ("J", "Labor and Demographic Economics"),
+        ("K", "Law and Economics"),
+        ("L", "Industrial Organization"),
+        ("M", "Business Administration and Business Economics; Marketing; Accounting; Personnel Economics"),
+        ("N", "Economic History"),
+        ("O", "Economic Development, Innovation, Technological Change, and Growth"),
+        ("P", "Economic Systems"),
+        ("Q", "Agricultural and Natural Resource Economics; Environmental and Ecological Economics"),
+        ("R", "Urban, Rural, Regional, Real Estate, and Transportation Economics"),
+        ("Y", "Miscellaneous Categories"),
+        ("Z", "Other Special Topics"),
+    ]
+    for code, name in codes:
+        execute_query(
+            "INSERT IGNORE INTO jel_codes (code, name) VALUES (%s, %s)",
+            (code, name),
         )
 
 
