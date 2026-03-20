@@ -19,6 +19,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from database import Database
+from publication import VALID_STATUSES
 import scheduler
 from scheduler import (
     start_scheduler,
@@ -340,25 +341,18 @@ def _format_publication(row, authors: list[dict]) -> dict:
 
 def _format_feed_event(row, authors: list[dict]) -> dict:
     """Format a feed_events + papers joined row into the API response shape."""
-    return {
+    # Remap column names to match _format_publication expectations
+    pub_row = {**row, "id": row["paper_id"]}
+    result = _format_publication(pub_row, authors)
+    result.update({
         "id": row['paper_id'],
         "event_id": row['event_id'],
         "event_type": row['event_type'],
         "old_status": row.get('old_status'),
         "new_status": row.get('new_status'),
         "event_date": _iso_z(row.get('created_at')),
-        "title": row['title'],
-        "authors": authors,
-        "year": row['year'],
-        "venue": row['venue'],
-        "source_url": row['source_url'],
-        "discovered_at": _iso_z(row.get('discovered_at')),
-        "status": row.get('status'),
-        "draft_url": row.get('draft_url'),
-        "draft_available": row.get('draft_url_status') == 'valid',
-        "abstract": row.get('abstract'),
-        "draft_url_status": row.get('draft_url_status'),
-    }
+    })
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -372,15 +366,19 @@ def health_check():
 
 
 @app.get("/api/metrics")
-def metrics():
+def metrics(response: Response):
     """Basic application metrics for monitoring."""
-    pub_count = Database.fetch_one("SELECT COUNT(*) AS cnt FROM papers")
-    researcher_count = Database.fetch_one("SELECT COUNT(*) AS cnt FROM researchers")
-    scrape_count = Database.fetch_one("SELECT COUNT(*) AS cnt FROM scrape_log")
+    row = Database.fetch_one(
+        "SELECT "
+        "(SELECT COUNT(*) FROM papers) AS publications, "
+        "(SELECT COUNT(*) FROM researchers) AS researchers, "
+        "(SELECT COUNT(*) FROM scrape_log) AS scrapes"
+    )
+    response.headers["Cache-Control"] = "public, max-age=60"
     return {
-        "publications": pub_count['cnt'] if pub_count else 0,
-        "researchers": researcher_count['cnt'] if researcher_count else 0,
-        "scrapes": scrape_count['cnt'] if scrape_count else 0,
+        "publications": row['publications'] if row else 0,
+        "researchers": row['researchers'] if row else 0,
+        "scrapes": row['scrapes'] if row else 0,
     }
 
 
@@ -408,7 +406,7 @@ def list_publications(
     non-published papers with known status generate events, so no
     include_seed parameter is needed.
     """
-    valid_statuses = {"published", "accepted", "revise_and_resubmit", "reject_and_resubmit", "working_paper"}
+    valid_statuses = VALID_STATUSES
     valid_presets = {"top20"}
 
     # Parse comma-separated multi-values

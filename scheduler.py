@@ -141,6 +141,9 @@ def run_scrape_job():
         return
     _lock_conn = lock_conn
 
+    # Clear stale robots.txt cache from previous cycle
+    HTMLFetcher._robots_cache.clear()
+
     log_id = None
     try:
         log_id = create_scrape_log()

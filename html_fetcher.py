@@ -100,44 +100,9 @@ class HTMLFetcher:
 
     @staticmethod
     def validate_url(url):
-        """
-        Validate a URL for SSRF protection.
-        Rejects non-HTTP(S) schemes, private/reserved IPs, and cloud metadata endpoints.
-
-        Returns True if safe, False otherwise.
-        """
-        try:
-            parsed = urlparse(url)
-        except Exception:
-            return False
-
-        if parsed.scheme not in ('http', 'https'):
-            logging.warning(f"Rejected URL with non-HTTP(S) scheme: {url}")
-            return False
-
-        hostname = parsed.hostname
-        if not hostname:
-            return False
-
-        # Reject cloud metadata endpoints by hostname
-        if hostname in ('169.254.169.254', 'metadata.google.internal'):
-            logging.warning(f"Rejected metadata endpoint URL: {url}")
-            return False
-
-        # Resolve hostname and check for private/reserved IPs
-        try:
-            resolved_ip = socket.getaddrinfo(hostname, None)[0][4][0]
-            ip = ipaddress.ip_address(resolved_ip)
-            if ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local:
-                logging.warning(
-                    "Rejected URL resolving to private/reserved IP: %s -> [redacted]", url
-                )
-                return False
-        except (socket.gaierror, ValueError):
-            logging.warning(f"Could not resolve hostname for URL: {url}")
-            return False
-
-        return True
+        """Validate a URL for SSRF protection. Returns True if safe."""
+        safe, _ = HTMLFetcher.validate_url_with_pin(url)
+        return safe
 
     @staticmethod
     def validate_url_with_pin(url):
