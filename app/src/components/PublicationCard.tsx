@@ -102,6 +102,19 @@ export default function PublicationCard({
             </svg>
           </a>
         )}
+        {publication.doi && (
+          <a
+            href={`https://doi.org/${publication.doi}`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider rounded px-2.5 py-0.5 bg-indigo-100 text-indigo-700 hover:bg-indigo-200 transition-colors"
+          >
+            DOI
+            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
+            </svg>
+          </a>
+        )}
         {publication.abstract && (
           <button
             onClick={() => setAbstractOpen((prev) => !prev)}
@@ -117,6 +130,14 @@ export default function PublicationCard({
           </button>
         )}
       </div>
+
+      {/* OpenAlex co-authors */}
+      {publication.coauthors && publication.coauthors.length > 0 && (
+        <p className="mt-1.5 font-sans text-xs text-[var(--text-muted)]">
+          <span className="font-medium">All authors:</span>{" "}
+          {publication.coauthors.map((ca) => ca.display_name).join(", ")}
+        </p>
+      )}
 
       {/* Abstract expanded */}
       {abstractOpen && publication.abstract && (

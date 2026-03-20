@@ -15,6 +15,11 @@ export type DraftUrlStatus = "unchecked" | "valid" | "invalid" | "timeout";
 
 export type EventType = 'new_paper' | 'status_change';
 
+export interface OpenAlexCoAuthor {
+  display_name: string;
+  openalex_author_id: string | null;
+}
+
 export interface Publication {
   id: number;
   title: string;
@@ -28,6 +33,8 @@ export interface Publication {
   draft_url: string | null;
   draft_url_status: DraftUrlStatus;
   draft_available: boolean;
+  doi: string | null;
+  coauthors: OpenAlexCoAuthor[];
   event_id?: number;
   event_type?: EventType;
   old_status?: PublicationStatus | null;
