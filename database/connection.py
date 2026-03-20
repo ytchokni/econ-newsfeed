@@ -27,7 +27,7 @@ def get_connection() -> PooledMySQLConnection:
     return _get_pool().get_connection()
 
 
-def execute_query(query: str, params: tuple | None = None) -> int:
+def execute_query(query: str, params: tuple | list | None = None) -> int:
     """Execute a query with optional parameters and commit. Returns lastrowid."""
     with get_connection() as conn:
         with conn.cursor() as cursor:
@@ -36,7 +36,7 @@ def execute_query(query: str, params: tuple | None = None) -> int:
             return cursor.lastrowid
 
 
-def fetch_all(query: str, params: tuple | None = None) -> list[dict]:
+def fetch_all(query: str, params: tuple | list | None = None) -> list[dict]:
     """Execute a query and fetch all results as a list of dicts."""
     with get_connection() as conn:
         with conn.cursor(dictionary=True) as cursor:
@@ -44,7 +44,7 @@ def fetch_all(query: str, params: tuple | None = None) -> list[dict]:
             return cursor.fetchall()
 
 
-def fetch_one(query: str, params: tuple | None = None) -> dict | None:
+def fetch_one(query: str, params: tuple | list | None = None) -> dict | None:
     """Execute a query and fetch one result as a dict, or None."""
     with get_connection() as conn:
         with conn.cursor(dictionary=True) as cursor:

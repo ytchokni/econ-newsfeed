@@ -36,6 +36,7 @@ limiter = Limiter(key_func=get_remote_address)
 # Server-side TTL cache for /api/filter-options
 # ---------------------------------------------------------------------------
 _filter_options_cache: dict = {"data": None, "expires_at": 0.0}
+_filter_options_lock = threading.Lock()
 _FILTER_OPTIONS_TTL = 600  # 10 minutes
 
 
@@ -286,7 +287,7 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def _iso_z(dt: object) -> str | None:
+def _iso_z(dt: datetime | None) -> str | None:
     """Format a datetime as ISO 8601 with trailing Z, or None."""
     return dt.isoformat() + "Z" if dt else None
 
@@ -682,30 +683,31 @@ def list_fields(request: Request):
 @limiter.limit("30/minute")
 def get_filter_options(request: Request, response: Response):
     now = time.time()
-    if _filter_options_cache["data"] is not None and now < _filter_options_cache["expires_at"]:
-        response.headers["Cache-Control"] = "public, max-age=600"
-        return _filter_options_cache["data"]
+    with _filter_options_lock:
+        if _filter_options_cache["data"] is not None and now < _filter_options_cache["expires_at"]:
+            response.headers["Cache-Control"] = "public, max-age=600"
+            return _filter_options_cache["data"]
 
-    institutions = Database.fetch_all(
-        "SELECT DISTINCT affiliation FROM researchers "
-        "WHERE affiliation IS NOT NULL AND affiliation != '' "
-        "ORDER BY affiliation"
-    )
-    positions = Database.fetch_all(
-        "SELECT DISTINCT position FROM researchers "
-        "WHERE position IS NOT NULL AND position != '' "
-        "ORDER BY position"
-    )
-    fields = Database.fetch_all(
-        "SELECT id, name, slug FROM research_fields ORDER BY name"
-    )
-    result = {
-        "institutions": [r['affiliation'] for r in institutions],
-        "positions": [r['position'] for r in positions],
-        "fields": [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in fields],
-    }
-    _filter_options_cache["data"] = result
-    _filter_options_cache["expires_at"] = now + _FILTER_OPTIONS_TTL
+        institutions = Database.fetch_all(
+            "SELECT DISTINCT affiliation FROM researchers "
+            "WHERE affiliation IS NOT NULL AND affiliation != '' "
+            "ORDER BY affiliation"
+        )
+        positions = Database.fetch_all(
+            "SELECT DISTINCT position FROM researchers "
+            "WHERE position IS NOT NULL AND position != '' "
+            "ORDER BY position"
+        )
+        fields = Database.fetch_all(
+            "SELECT id, name, slug FROM research_fields ORDER BY name"
+        )
+        result = {
+            "institutions": [r['affiliation'] for r in institutions],
+            "positions": [r['position'] for r in positions],
+            "fields": [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in fields],
+        }
+        _filter_options_cache["data"] = result
+        _filter_options_cache["expires_at"] = now + _FILTER_OPTIONS_TTL
 
     response.headers["Cache-Control"] = "public, max-age=600"
     return result

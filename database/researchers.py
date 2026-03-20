@@ -55,7 +55,7 @@ def _disambiguate_researcher(first_name: str, last_name: str, candidates: list[d
 
 
 def get_researcher_id(first_name: str, last_name: str, position: str | None = None,
-                      affiliation: str | None = None, conn: object | None = None) -> int:
+                      affiliation: str | None = None, conn: "mysql.connector.connection.MySQLConnection | None" = None) -> int:
     """Get the researcher ID based on name. Uses LLM disambiguation for ambiguous matches.
     Accepts optional conn to reuse an existing DB connection (avoids pool exhaustion)."""
     def _fetch_one(query: str, params: tuple) -> dict | None:
