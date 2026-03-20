@@ -1,4 +1,5 @@
-"""Tests for HTMLFetcher: robots.txt caching."""
+"""Tests for HTMLFetcher: robots.txt caching, fetch, change detection, thread safety."""
+import threading
 from unittest.mock import patch, MagicMock
 
 from html_fetcher import HTMLFetcher
@@ -52,8 +53,10 @@ class TestFetchHtml:
         mock_resp.text = "<html>Hello</html>"
         mock_resp.apparent_encoding = "utf-8"
 
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_resp
         with patch.object(HTMLFetcher, '_rate_limit'), \
-             patch.object(HTMLFetcher.session, 'get', return_value=mock_resp):
+             patch.object(HTMLFetcher, '_get_session', return_value=mock_session):
             result = HTMLFetcher.fetch_html("https://example.com")
 
         assert result == "<html>Hello</html>"
@@ -67,9 +70,11 @@ class TestFetchHtml:
         ok_resp.text = "ok"
         ok_resp.apparent_encoding = "utf-8"
 
+        mock_session = MagicMock()
+        mock_session.get.side_effect = [error_resp, ok_resp]
         with patch.object(HTMLFetcher, '_rate_limit'), \
              patch('time.sleep'), \
-             patch.object(HTMLFetcher.session, 'get', side_effect=[error_resp, ok_resp]):
+             patch.object(HTMLFetcher, '_get_session', return_value=mock_session):
             result = HTMLFetcher.fetch_html("https://example.com")
 
         assert result == "ok"
@@ -78,9 +83,11 @@ class TestFetchHtml:
         error_resp = MagicMock()
         error_resp.status_code = 500
 
+        mock_session = MagicMock()
+        mock_session.get.return_value = error_resp
         with patch.object(HTMLFetcher, '_rate_limit'), \
              patch('time.sleep'), \
-             patch.object(HTMLFetcher.session, 'get', return_value=error_resp):
+             patch.object(HTMLFetcher, '_get_session', return_value=mock_session):
             result = HTMLFetcher.fetch_html("https://example.com", max_retries=2)
 
         assert result is None
@@ -90,8 +97,10 @@ class TestFetchHtml:
         mock_resp.status_code = 200
         mock_resp.content = b"x" * 1_000_001  # Just over CONTENT_MAX_BYTES (1MB)
 
+        mock_session = MagicMock()
+        mock_session.get.return_value = mock_resp
         with patch.object(HTMLFetcher, '_rate_limit'), \
-             patch.object(HTMLFetcher.session, 'get', return_value=mock_resp):
+             patch.object(HTMLFetcher, '_get_session', return_value=mock_session):
             result = HTMLFetcher.fetch_html("https://example.com")
 
         assert result is None
@@ -109,3 +118,20 @@ class TestChangeDetection:
     def test_has_text_changed_returns_true_for_different_hash(self):
         with patch("html_fetcher.Database.fetch_one", return_value={"content_hash": "old"}):
             assert HTMLFetcher.has_text_changed(1, "new") is True
+
+
+class TestThreadSafety:
+    def test_sessions_are_thread_local(self):
+        """Each thread should get its own Session instance."""
+        sessions = {}
+
+        def capture_session():
+            sessions[threading.current_thread().name] = HTMLFetcher._get_session()
+
+        t1 = threading.Thread(target=capture_session, name="t1")
+        t2 = threading.Thread(target=capture_session, name="t2")
+        t1.start()
+        t2.start()
+        t1.join()
+        t2.join()
+        assert sessions["t1"] is not sessions["t2"]

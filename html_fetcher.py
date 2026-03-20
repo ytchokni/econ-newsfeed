@@ -45,10 +45,16 @@ def _is_fast_domain(hostname: str) -> bool:
 
 
 class HTMLFetcher:
-    session = requests.Session()
-    session.headers.update({
-        'User-Agent': SCRAPER_USER_AGENT
-    })
+    _thread_local = threading.local()
+
+    @staticmethod
+    def _get_session() -> requests.Session:
+        """Get or create a thread-local requests.Session."""
+        if not hasattr(HTMLFetcher._thread_local, 'session'):
+            s = requests.Session()
+            s.headers.update({'User-Agent': SCRAPER_USER_AGENT})
+            HTMLFetcher._thread_local.session = s
+        return HTMLFetcher._thread_local.session
 
     # Per-domain rate limiting: domain -> last request timestamp
     _domain_last_request = {}
@@ -159,7 +165,7 @@ class HTMLFetcher:
         Returns the HTML content as a string, or None on failure.
         """
         HTMLFetcher._rate_limit(url)
-        session = HTMLFetcher.session
+        session = HTMLFetcher._get_session()
 
         for attempt in range(max_retries):
             try:
@@ -357,7 +363,7 @@ class HTMLFetcher:
 
         try:
             # Disable auto-redirects to prevent SSRF via redirect to internal IPs
-            response = HTMLFetcher.session.head(url, timeout=10, allow_redirects=False)
+            response = HTMLFetcher._get_session().head(url, timeout=10, allow_redirects=False)
             if response.status_code < 400:
                 return 'valid'
             # Follow redirects manually with SSRF validation
