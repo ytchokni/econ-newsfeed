@@ -286,7 +286,7 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
-def _iso_z(dt) -> str | None:
+def _iso_z(dt: object) -> str | None:
     """Format a datetime as ISO 8601 with trailing Z, or None."""
     return dt.isoformat() + "Z" if dt else None
 
@@ -327,7 +327,7 @@ def _get_authors_for_publications(pub_ids: list[int]) -> dict[int, list[dict]]:
     return result
 
 
-def _format_publication(row, authors: list[dict]) -> dict:
+def _format_publication(row: dict, authors: list[dict]) -> dict:
     """Format a publication DB row + authors into the API response shape."""
     return {
         "id": row['id'],
@@ -345,7 +345,7 @@ def _format_publication(row, authors: list[dict]) -> dict:
     }
 
 
-def _format_feed_event(row, authors: list[dict]) -> dict:
+def _format_feed_event(row: dict, authors: list[dict]) -> dict:
     """Format a feed_events + papers joined row into the API response shape."""
     # Remap column names to match _format_publication expectations
     pub_row = {**row, "id": row["paper_id"]}
