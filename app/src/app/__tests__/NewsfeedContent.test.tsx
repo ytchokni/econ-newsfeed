@@ -19,6 +19,7 @@ const page1: PaginatedResponse<Publication> = {
       draft_url: null,
       draft_url_status: "unchecked" as const,
       draft_available: false,
+      links: [],
     },
     {
       id: 2,
@@ -33,6 +34,7 @@ const page1: PaginatedResponse<Publication> = {
       draft_url: null,
       draft_url_status: "unchecked" as const,
       draft_available: false,
+      links: [],
     },
   ],
   total: 3,
@@ -56,6 +58,7 @@ const page2: PaginatedResponse<Publication> = {
       draft_url: null,
       draft_url_status: "unchecked" as const,
       draft_available: false,
+      links: [],
     },
   ],
   total: 3,

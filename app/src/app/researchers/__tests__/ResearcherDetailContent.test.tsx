@@ -28,6 +28,7 @@ const researcher: ResearcherDetail = {
       draft_url: null,
       draft_url_status: "unchecked" as const,
       draft_available: false,
+      links: [],
     },
     {
       id: 2,
@@ -45,6 +46,7 @@ const researcher: ResearcherDetail = {
       draft_url: null,
       draft_url_status: "unchecked" as const,
       draft_available: false,
+      links: [],
     },
   ],
 };

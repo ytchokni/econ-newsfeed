@@ -16,6 +16,7 @@ const mockPublicationsResponse: PaginatedResponse<Publication> = {
       draft_url: null,
       draft_url_status: "unchecked",
       draft_available: false,
+      links: [],
     },
   ],
   total: 1,
@@ -66,6 +67,7 @@ const mockResearcherDetail: ResearcherDetail = {
       draft_url: null,
       draft_url_status: "unchecked",
       draft_available: false,
+      links: [],
     },
   ],
 };

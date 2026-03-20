@@ -18,6 +18,7 @@ const publication: Publication = {
   draft_url: null,
   draft_url_status: "unchecked",
   draft_available: false,
+  links: [],
 };
 
 describe("PublicationCard", () => {
