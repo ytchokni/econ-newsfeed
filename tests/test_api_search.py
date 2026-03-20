@@ -81,3 +81,57 @@ class TestPublicationSearch:
 
         count_sql = mock_one.call_args[0][0]
         assert "LIKE" not in count_sql
+
+
+SAMPLE_RESEARCHER = {
+    "id": 1, "first_name": "Max", "last_name": "Steinhardt",
+    "position": "Professor", "affiliation": "Freie Universität Berlin",
+    "description": "Labor economist",
+}
+
+
+class TestResearcherSearch:
+    """Tests for ?search= on GET /api/researchers."""
+
+    def test_search_returns_200(self, client):
+        """Basic name search returns 200."""
+        with (
+            patch("api.Database.fetch_one", return_value={"total": 1}),
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_fetch.side_effect = [
+                [SAMPLE_RESEARCHER],  # researchers
+                [],                    # urls
+                [{"researcher_id": 1, "cnt": 5}],  # pub counts
+                [],                    # fields
+            ]
+            response = client.get("/api/researchers?search=Steinhardt")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert len(body["items"]) == 1
+
+    def test_search_matches_first_and_last_name(self, client):
+        """Search checks both first_name and last_name."""
+        with (
+            patch("api.Database.fetch_one", return_value={"total": 0}) as mock_one,
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_fetch.side_effect = [[], [], [], []]
+            client.get("/api/researchers?search=Max")
+
+        count_sql = mock_one.call_args[0][0]
+        assert "first_name LIKE" in count_sql or "last_name LIKE" in count_sql
+
+    def test_search_combined_with_institution(self, client):
+        """Search works alongside institution filter."""
+        with (
+            patch("api.Database.fetch_one", return_value={"total": 1}),
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_fetch.side_effect = [
+                [SAMPLE_RESEARCHER], [], [{"researcher_id": 1, "cnt": 5}], [],
+            ]
+            response = client.get("/api/researchers?search=Max&institution=Berlin")
+
+        assert response.status_code == 200

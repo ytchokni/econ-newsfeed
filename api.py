@@ -730,6 +730,7 @@ def list_researchers(
     field: str | None = Query(None),
     position: str | None = Query(None),
     preset: str | None = Query(None),
+    search: str | None = Query(None, max_length=200),
 ):
     conditions = []
     params: list = []
@@ -761,6 +762,14 @@ def list_researchers(
                 f"WHERE f.slug IN ({placeholders}))"
             )
             params.extend(field_slugs)
+
+    search_term = search.strip() if search else ""
+    if search_term:
+        conditions.append(
+            "(r.first_name LIKE %s ESCAPE '\\\\' OR r.last_name LIKE %s ESCAPE '\\\\')"
+        )
+        escaped = f"%{_escape_like(search_term)}%"
+        params.extend([escaped, escaped])
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
