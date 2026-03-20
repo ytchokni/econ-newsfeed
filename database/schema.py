@@ -102,6 +102,8 @@ _TABLE_DEFINITIONS = {
             draft_url_status ENUM('unchecked', 'valid', 'invalid', 'timeout') DEFAULT 'unchecked',
             draft_url_checked_at DATETIME DEFAULT NULL,
             is_seed BOOLEAN NOT NULL DEFAULT FALSE,
+            doi VARCHAR(255) DEFAULT NULL,
+            openalex_id VARCHAR(255) DEFAULT NULL,
             UNIQUE KEY uq_title_hash (title_hash),
             INDEX idx_discovered_at (discovered_at),
             INDEX idx_status (status),
@@ -264,6 +266,17 @@ _TABLE_DEFINITIONS = {
             INDEX idx_status (status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "openalex_coauthors": """
+        CREATE TABLE IF NOT EXISTS openalex_coauthors (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            paper_id INT NOT NULL,
+            display_name VARCHAR(500) NOT NULL,
+            openalex_author_id VARCHAR(255) DEFAULT NULL,
+            UNIQUE KEY uq_paper_name (paper_id, display_name(200)),
+            INDEX idx_paper_id (paper_id),
+            FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 }
 
 
@@ -285,6 +298,8 @@ def create_tables() -> None:
                         ("scrape_log", "prompt_tokens_total", "INT DEFAULT 0"),
                         ("scrape_log", "completion_tokens_total", "INT DEFAULT 0"),
                         ("papers", "is_seed", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                        ("papers", "doi", "VARCHAR(255) DEFAULT NULL"),
+                        ("papers", "openalex_id", "VARCHAR(255) DEFAULT NULL"),
                     ]
                     for table, col, definition in _migrations:
                         try:
@@ -345,6 +360,7 @@ def create_tables() -> None:
                         "authorship", "research_fields", "researcher_fields",
                         "scrape_log", "researcher_snapshots", "paper_snapshots",
                         "paper_urls", "llm_usage", "feed_events", "batch_jobs",
+                        "openalex_coauthors",
                     ]
                     for tbl in _ALL_TABLES:
                         try:
