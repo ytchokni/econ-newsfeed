@@ -1,4 +1,6 @@
 """LLM usage logging and cost estimation."""
+from __future__ import annotations
+
 import logging
 from datetime import datetime, timezone
 
@@ -11,8 +13,9 @@ _LLM_PRICING = {  # (prompt, completion) cost per 1M tokens
 }
 
 
-def log_llm_usage(call_type, model, usage, context_url=None, researcher_id=None,
-                  scrape_log_id=None, is_batch=False, batch_job_id=None):
+def log_llm_usage(call_type: str, model: str, usage: object, context_url: str | None = None,
+                  researcher_id: int | None = None, scrape_log_id: int | None = None,
+                  is_batch: bool = False, batch_job_id: int | None = None) -> None:
     """Log an LLM API call with token counts and estimated cost. Failures are silenced."""
     try:
         prompt_tokens = getattr(usage, 'prompt_tokens', 0) or 0

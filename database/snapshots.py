@@ -1,4 +1,6 @@
 """Append-only snapshot versioning for researchers and papers."""
+from __future__ import annotations
+
 import hashlib
 import logging
 from datetime import datetime, timezone
@@ -8,13 +10,15 @@ from database.connection import get_connection, fetch_all
 
 # ── Researcher snapshots ──
 
-def _compute_researcher_content_hash(position, affiliation, description):
+def _compute_researcher_content_hash(position: str | None, affiliation: str | None,
+                                     description: str | None) -> str:
     """Compute content hash for researcher change detection."""
     parts = '||'.join(str(v or '') for v in (position, affiliation, description))
     return hashlib.sha256(parts.encode('utf-8')).hexdigest()
 
 
-def append_researcher_snapshot(researcher_id, position, affiliation, description, source_url=None):
+def append_researcher_snapshot(researcher_id: int, position: str | None, affiliation: str | None,
+                               description: str | None, source_url: str | None = None) -> bool:
     """Append a snapshot if profile changed. Updates denormalized researchers table.
     Hash check and insert run in a single transaction to prevent race conditions.
     Returns True if a new snapshot was inserted, False if no change."""
@@ -49,7 +53,7 @@ def append_researcher_snapshot(researcher_id, position, affiliation, description
     return True
 
 
-def get_researcher_snapshots(researcher_id, limit=20):
+def get_researcher_snapshots(researcher_id: int, limit: int = 20) -> list[dict]:
     """Return recent snapshots for a researcher, newest first."""
     return fetch_all(
         """SELECT position, affiliation, description, scraped_at, source_url
@@ -61,13 +65,16 @@ def get_researcher_snapshots(researcher_id, limit=20):
 
 # ── Paper snapshots ──
 
-def _compute_paper_content_hash(status, venue, abstract, draft_url, year):
+def _compute_paper_content_hash(status: str | None, venue: str | None, abstract: str | None,
+                                draft_url: str | None, year: str | None) -> str:
     """Compute content hash for paper change detection."""
     parts = '||'.join(str(v or '') for v in (status, venue, abstract, draft_url, year))
     return hashlib.sha256(parts.encode('utf-8')).hexdigest()
 
 
-def append_paper_snapshot(paper_id, status, venue, abstract, draft_url, year, source_url=None):
+def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
+                          abstract: str | None, draft_url: str | None, year: str | None,
+                          source_url: str | None = None) -> bool:
     """Append a paper snapshot if metadata changed. Updates denormalized papers table.
     Creates a feed_event if status changed.
     Hash check and insert run in a single transaction to prevent race conditions.
@@ -120,7 +127,7 @@ def append_paper_snapshot(paper_id, status, venue, abstract, draft_url, year, so
     return True
 
 
-def get_paper_snapshots(paper_id, limit=20):
+def get_paper_snapshots(paper_id: int, limit: int = 20) -> list[dict]:
     """Return recent snapshots for a paper, newest first."""
     return fetch_all(
         """SELECT status, venue, abstract, draft_url, draft_url_status, year, scraped_at, source_url
