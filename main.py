@@ -318,17 +318,22 @@ def discover_domains() -> None:
     from collections import Counter
     from link_extractor import discover_untrusted_domains
 
-    rows = Database.fetch_all(
-        "SELECT url_id, raw_html FROM html_content WHERE raw_html IS NOT NULL"
+    # Fetch only url_ids first, then load raw HTML one at a time to avoid OOM
+    url_ids = Database.fetch_all(
+        "SELECT url_id FROM html_content WHERE raw_html IS NOT NULL"
     )
-    if not rows:
+    if not url_ids:
         logging.info("No raw HTML stored yet. Run 'make fetch' first.")
         return
 
     totals = Counter()
-    for row in rows:
-        domains = discover_untrusted_domains(row['raw_html'])
-        totals.update(domains)
+    for row in url_ids:
+        html_row = Database.fetch_one(
+            "SELECT raw_html FROM html_content WHERE url_id = %s", (row['url_id'],)
+        )
+        if html_row and html_row['raw_html']:
+            domains = discover_untrusted_domains(html_row['raw_html'])
+            totals.update(domains)
 
     if not totals:
         logging.info("No untrusted domains with paper-title-length anchors found.")
@@ -338,7 +343,6 @@ def discover_domains() -> None:
     for domain, count in totals.most_common(30):
         print(f"  {count:4d}x  {domain}")
     print(f"\nTo add a domain, append it to TRUSTED_LINK_DOMAINS in link_extractor.py")
-    print(f"or set the TRUSTED_LINK_DOMAINS env var (comma-separated).")
 
 def main() -> None:
     """CLI entrypoint — non-interactive, safe for cloud/container environments."""
