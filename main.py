@@ -110,6 +110,33 @@ def extract_data_from_htmls_concurrent() -> None:
     )
 
 
+def classify_jel() -> None:
+    """Classify all researchers with descriptions into JEL codes."""
+    from jel_classifier import classify_researcher
+
+    researchers = Database.get_researchers_needing_classification()
+    total = len(researchers)
+    logging.info("JEL classification: %d researchers to classify", total)
+
+    classified = 0
+    for row in researchers:
+        rid = row["id"]
+        description = row["description"]
+        first_name = row["first_name"]
+        last_name = row["last_name"]
+
+        codes = classify_researcher(rid, first_name, last_name, description)
+        if codes:
+            Database.save_researcher_jel_codes(rid, codes)
+            classified += 1
+            logging.info(
+                "Saved JEL codes for %s %s (id=%d): %s",
+                first_name, last_name, rid, ", ".join(codes),
+            )
+
+    logging.info("JEL classification done: %d/%d classified", classified, total)
+
+
 def batch_submit() -> None:
     """Submit a batch job to the OpenAI Batch API for all URLs needing extraction."""
     from openai import OpenAI
@@ -321,6 +348,7 @@ def main() -> None:
     subparsers.add_parser('extract-concurrent', help='Extract publications concurrently')
     subparsers.add_parser('batch-submit', help='Submit a batch job to OpenAI Batch API')
     subparsers.add_parser('batch-check', help='Check and process completed batch jobs')
+    subparsers.add_parser('classify-jel', help='Classify researchers into JEL codes from bios')
 
     args = parser.parse_args()
 
@@ -336,6 +364,8 @@ def main() -> None:
         batch_submit()
     elif args.command == 'batch-check':
         batch_check()
+    elif args.command == 'classify-jel':
+        classify_jel()
 
 if __name__ == "__main__":
     main()
