@@ -130,6 +130,19 @@ describe("NewsfeedContent", () => {
     expect(screen.getByRole("button", { name: /next/i })).toBeInTheDocument();
   });
 
+  it("renders search input on newsfeed page", async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => page1,
+    });
+
+    renderWithSWR(<NewsfeedContent />);
+
+    await waitFor(() => {
+      expect(screen.getByPlaceholderText(/search/i)).toBeInTheDocument();
+    });
+  });
+
   it("navigates to next page when Next button is clicked", async () => {
     (global.fetch as jest.Mock)
       .mockResolvedValueOnce({
