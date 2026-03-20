@@ -98,6 +98,10 @@ class ResearchFieldResponse(BaseModel):
     name: str
     slug: str
 
+class JelCodeResponse(BaseModel):
+    code: str
+    name: str
+
 class ResearcherResponse(BaseModel):
     id: int
     first_name: str
@@ -109,6 +113,7 @@ class ResearcherResponse(BaseModel):
     website_url: str | None
     publication_count: int
     fields: list[ResearchFieldResponse]
+    jel_codes: list[JelCodeResponse]
 
 class PaginatedResearchers(BaseModel):
     items: list[ResearcherResponse]
@@ -647,6 +652,14 @@ def _get_fields_for_researchers(researcher_ids: list[int]) -> dict[int, list[dic
     return result
 
 
+def _get_jel_codes_for_researcher(researcher_id: int) -> list[dict]:
+    return Database.get_jel_codes_for_researcher(researcher_id)
+
+
+def _get_jel_codes_for_researchers(researcher_ids: list[int]) -> dict[int, list[dict]]:
+    return Database.get_jel_codes_for_researchers(researcher_ids)
+
+
 # Top-20 economics department keywords for preset filtering
 _TOP20_DEPT_KEYWORDS = [
     "MIT", "Massachusetts Institute of Technology",
@@ -677,6 +690,13 @@ _TOP20_DEPT_KEYWORDS = [
 def list_fields(request: Request):
     rows = Database.fetch_all("SELECT id, name, slug FROM research_fields ORDER BY name")
     return {"items": [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in rows]}
+
+
+@app.get("/api/jel-codes")
+@limiter.limit("60/minute")
+def list_jel_codes(request: Request):
+    rows = Database.get_all_jel_codes()
+    return {"items": rows}
 
 
 @app.get("/api/filter-options")
@@ -781,6 +801,7 @@ def list_researchers(
     urls_by_researcher = _get_urls_for_researchers(researcher_ids)
     pub_counts = _get_pub_counts_for_researchers(researcher_ids)
     fields_by_researcher = _get_fields_for_researchers(researcher_ids)
+    jel_map = _get_jel_codes_for_researchers(researcher_ids)
     items = [
         {
             "id": r['id'],
@@ -793,6 +814,7 @@ def list_researchers(
             "website_url": _get_website_url(urls_by_researcher.get(r['id'], [])),
             "publication_count": pub_counts.get(r['id'], 0),
             "fields": fields_by_researcher.get(r['id'], []),
+            "jel_codes": jel_map.get(r['id'], []),
         }
         for r in rows
     ]
@@ -823,6 +845,7 @@ def get_researcher(
     urls = _get_urls_for_researcher(researcher_id)
     pub_count = _get_pub_count_for_researcher(researcher_id)
     fields = _get_fields_for_researcher(researcher_id)
+    jel_codes = _get_jel_codes_for_researcher(researcher_id)
 
     # Fetch this researcher's publications
     pub_rows = Database.fetch_all(
@@ -851,6 +874,7 @@ def get_researcher(
         "website_url": _get_website_url(urls),
         "publication_count": pub_count,
         "fields": fields,
+        "jel_codes": jel_codes,
         "publications": publications,
     }
 
