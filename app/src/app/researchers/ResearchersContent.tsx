@@ -8,6 +8,7 @@ import ResearcherCardSkeleton from "@/components/ResearcherCardSkeleton";
 import ErrorMessage from "@/components/ErrorMessage";
 import EmptyState from "@/components/EmptyState";
 import SearchableCheckboxDropdown from "@/components/SearchableCheckboxDropdown";
+import SearchInput from "@/components/SearchInput";
 
 export default function ResearchersContent() {
   const [filters, setFilters] = useState<ResearcherFilters>({});
@@ -43,7 +44,11 @@ export default function ResearchersContent() {
     setFilters((prev) => ({ ...prev, field: selected.join(",") || undefined }));
   }, []);
 
-  const hasActiveFilters = !!(filters.institution || filters.field || filters.position);
+  const handleSearchChange = useCallback((value: string) => {
+    setFilters((prev) => ({ ...prev, search: value || undefined }));
+  }, []);
+
+  const hasActiveFilters = !!(filters.institution || filters.field || filters.position || filters.search);
 
   if (isLoading) {
     return (
@@ -63,39 +68,48 @@ export default function ResearchersContent() {
   return (
     <div className="space-y-6">
       {/* Filter bar */}
-      <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-4 flex items-center gap-3 flex-wrap">
-        <span className="font-sans text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mr-1">
-          Filter
-        </span>
-        <SearchableCheckboxDropdown
-          label="Institution"
-          options={institutionOptions}
-          selected={selectedInstitutions}
-          onChange={handleInstitutionChange}
-        />
-        <SearchableCheckboxDropdown
-          label="Field"
-          options={fieldOptions}
-          selected={selectedFields}
-          onChange={handleFieldChange}
-        />
-        <SearchableCheckboxDropdown
-          label="Position"
-          options={positionOptions}
-          selected={selectedPositions}
-          onChange={handlePositionChange}
-        />
-        {hasActiveFilters && (
-          <>
-            <span className="w-px h-5 bg-[var(--border)]" />
-            <button
-              onClick={() => setFilters({})}
-              className="font-sans text-xs text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
-            >
-              Clear all
-            </button>
-          </>
-        )}
+      <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-4 space-y-3">
+        <div className="max-w-md">
+          <SearchInput
+            value={filters.search ?? ""}
+            onChange={handleSearchChange}
+            placeholder="Search researchers by name..."
+          />
+        </div>
+        <div className="flex items-center gap-3 flex-wrap">
+          <span className="font-sans text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mr-1">
+            Filter
+          </span>
+          <SearchableCheckboxDropdown
+            label="Institution"
+            options={institutionOptions}
+            selected={selectedInstitutions}
+            onChange={handleInstitutionChange}
+          />
+          <SearchableCheckboxDropdown
+            label="Field"
+            options={fieldOptions}
+            selected={selectedFields}
+            onChange={handleFieldChange}
+          />
+          <SearchableCheckboxDropdown
+            label="Position"
+            options={positionOptions}
+            selected={selectedPositions}
+            onChange={handlePositionChange}
+          />
+          {hasActiveFilters && (
+            <>
+              <span className="w-px h-5 bg-[var(--border)]" />
+              <button
+                onClick={() => setFilters({})}
+                className="font-sans text-xs text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+              >
+                Clear all
+              </button>
+            </>
+          )}
+        </div>
       </div>
 
       {!researchers || researchers.length === 0 ? (

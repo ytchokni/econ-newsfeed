@@ -174,3 +174,29 @@ describe("getResearcher", () => {
     await expect(getResearcher(999)).rejects.toThrow();
   });
 });
+
+describe("buildPublicationsUrl with search", () => {
+  it("includes search param in URL", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockPublicationsResponse),
+    });
+
+    await getPublications(1, 20, { search: "monetary policy" });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("search=monetary+policy")
+    );
+  });
+
+  it("omits search param when empty", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockPublicationsResponse),
+    });
+
+    await getPublications(1, 20, { search: "" });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.not.stringContaining("search")
+    );
+  });
+});

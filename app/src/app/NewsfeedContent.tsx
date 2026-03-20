@@ -7,6 +7,7 @@ import PublicationCard from "@/components/PublicationCard";
 import PublicationCardSkeleton from "@/components/PublicationCardSkeleton";
 import ErrorMessage from "@/components/ErrorMessage";
 import EmptyState from "@/components/EmptyState";
+import SearchInput from "@/components/SearchInput";
 
 /* ---------- helpers ---------- */
 
@@ -178,7 +179,7 @@ function FilterBar({
     return [];
   })();
 
-  const hasActiveFilters = !!(filters.status || filters.institution || filters.preset || filters.year);
+  const hasActiveFilters = !!(filters.status || filters.institution || filters.preset || filters.year || filters.search);
 
   const handleStatusChange = useCallback(
     (selected: string[]) => {
@@ -208,49 +209,58 @@ function FilterBar({
   );
 
   return (
-    <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-4 mb-8 flex items-center gap-3 flex-wrap">
-      <span className="font-sans text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mr-1">
-        Filter
-      </span>
+    <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-4 mb-8 space-y-3">
+      <div className="max-w-md">
+        <SearchInput
+          value={filters.search ?? ""}
+          onChange={(v) => onChange({ ...filters, search: v || undefined })}
+          placeholder="Search papers by title..."
+        />
+      </div>
+      <div className="flex items-center gap-3 flex-wrap">
+        <span className="font-sans text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mr-1">
+          Filter
+        </span>
 
-      <CheckboxDropdown
-        label="Status"
-        options={STATUS_OPTIONS}
-        selected={selectedStatuses}
-        onChange={handleStatusChange}
-      />
+        <CheckboxDropdown
+          label="Status"
+          options={STATUS_OPTIONS}
+          selected={selectedStatuses}
+          onChange={handleStatusChange}
+        />
 
-      <select
-        value={filters.year ?? ""}
-        onChange={(e) => handleYearChange(e.target.value)}
-        className="px-3 py-1.5 font-sans text-sm border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card focus:outline-none focus:ring-1 focus:ring-[var(--link)]"
-      >
-        <option value="">All years</option>
-        {YEAR_OPTIONS.map((y) => (
-          <option key={y} value={y}>
-            {y}
-          </option>
-        ))}
-      </select>
+        <select
+          value={filters.year ?? ""}
+          onChange={(e) => handleYearChange(e.target.value)}
+          className="px-3 py-1.5 font-sans text-sm border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card focus:outline-none focus:ring-1 focus:ring-[var(--link)]"
+        >
+          <option value="">All years</option>
+          {YEAR_OPTIONS.map((y) => (
+            <option key={y} value={y}>
+              {y}
+            </option>
+          ))}
+        </select>
 
-      <CheckboxDropdown
-        label="Institution"
-        options={INSTITUTION_OPTIONS}
-        selected={selectedInstitutions}
-        onChange={handleInstitutionChange}
-      />
+        <CheckboxDropdown
+          label="Institution"
+          options={INSTITUTION_OPTIONS}
+          selected={selectedInstitutions}
+          onChange={handleInstitutionChange}
+        />
 
-      {hasActiveFilters && (
-        <>
-          <span className="w-px h-5 bg-[var(--border)]" />
-          <button
-            onClick={() => onChange({})}
-            className="font-sans text-xs text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
-          >
-            Clear all
-          </button>
-        </>
-      )}
+        {hasActiveFilters && (
+          <>
+            <span className="w-px h-5 bg-[var(--border)]" />
+            <button
+              onClick={() => onChange({})}
+              className="font-sans text-xs text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
+            >
+              Clear all
+            </button>
+          </>
+        )}
+      </div>
     </div>
   );
 }

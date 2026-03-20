@@ -469,6 +469,7 @@ def list_publications(
     since: str | None = Query(None),
     institution: str | None = Query(None),
     preset: str | None = Query(None),
+    search: str | None = Query(None, max_length=200),
 ):
     """List feed events (new papers and status changes).
 
@@ -538,6 +539,11 @@ def list_publications(
             f"WHERE {dept_likes})"
         )
         params.extend(f"%{_escape_like(kw)}%" for kw in _TOP20_DEPT_KEYWORDS)
+    search_term = search.strip() if search else ""
+    if search_term:
+        conditions.append("(p.title LIKE %s ESCAPE '\\\\' OR p.abstract LIKE %s ESCAPE '\\\\')")
+        escaped = f"%{_escape_like(search_term)}%"
+        params.extend([escaped, escaped])
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -796,6 +802,7 @@ def list_researchers(
     field: str | None = Query(None),
     position: str | None = Query(None),
     preset: str | None = Query(None),
+    search: str | None = Query(None, max_length=200),
 ):
     conditions = []
     params: list = []
@@ -827,6 +834,14 @@ def list_researchers(
                 f"WHERE f.slug IN ({placeholders}))"
             )
             params.extend(field_slugs)
+
+    search_term = search.strip() if search else ""
+    if search_term:
+        conditions.append(
+            "(r.first_name LIKE %s ESCAPE '\\\\' OR r.last_name LIKE %s ESCAPE '\\\\')"
+        )
+        escaped = f"%{_escape_like(search_term)}%"
+        params.extend([escaped, escaped])
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 

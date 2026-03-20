@@ -90,6 +90,7 @@ export interface FeedFilters {
   institution?: string;
   preset?: string;
   year?: string;
+  search?: string;
 }
 
 export interface ResearcherDetail extends Researcher {
@@ -106,4 +107,5 @@ export interface ResearcherFilters {
   institution?: string;
   field?: string;
   position?: string;
+  search?: string;
 }
