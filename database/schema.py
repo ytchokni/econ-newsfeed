@@ -234,7 +234,7 @@ _TABLE_DEFINITIONS = {
         CREATE TABLE IF NOT EXISTS llm_usage (
             id INT AUTO_INCREMENT PRIMARY KEY,
             called_at DATETIME NOT NULL,
-            call_type ENUM('publication_extraction','description_extraction','researcher_disambiguation') NOT NULL,
+            call_type ENUM('publication_extraction','description_extraction','researcher_disambiguation','jel_classification') NOT NULL,
             model VARCHAR(100) NOT NULL,
             prompt_tokens INT NOT NULL DEFAULT 0,
             completion_tokens INT NOT NULL DEFAULT 0,
