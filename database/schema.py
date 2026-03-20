@@ -240,7 +240,8 @@ _TABLE_DEFINITIONS = {
             FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
             INDEX idx_paper_id (paper_id),
             INDEX idx_created_at (created_at),
-            INDEX idx_event_type (event_type)
+            INDEX idx_event_type (event_type),
+            INDEX idx_created_at_paper (created_at DESC, paper_id)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     "batch_jobs": """
@@ -320,6 +321,13 @@ def create_tables():
                     except Exception as e:
                         if getattr(e, 'errno', None) != 1061:
                             logging.warning("Migration: scrape_log.idx_scrape_status: %s", e)
+
+                    try:
+                        cursor.execute("ALTER TABLE feed_events ADD INDEX idx_created_at_paper (created_at DESC, paper_id)")
+                        conn.commit()
+                    except Exception as e:
+                        if getattr(e, 'errno', None) != 1061:
+                            logging.warning("Migration: feed_events.idx_created_at_paper: %s", e)
 
                     try:
                         cursor.execute("ALTER TABLE html_content MODIFY content MEDIUMTEXT")
