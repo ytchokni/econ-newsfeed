@@ -213,11 +213,11 @@ class HTMLFetcher:
         """
         query = """
             INSERT INTO html_content (url_id, content, content_hash, timestamp, researcher_id)
-            VALUES (%s, %s, %s, %s, %s)
+            VALUES (%s, %s, %s, %s, %s) AS new_row
             ON DUPLICATE KEY UPDATE
-                content = VALUES(content),
-                content_hash = VALUES(content_hash),
-                timestamp = VALUES(timestamp)
+                content = new_row.content,
+                content_hash = new_row.content_hash,
+                timestamp = new_row.timestamp
         """
         try:
             Database.execute_query(query, (url_id, text_content, text_hash, datetime.now(timezone.utc), researcher_id))
