@@ -4,9 +4,9 @@ Programmatic link extraction — no LLM involvement. Parses <a> tags from HTML,
 filters to trusted academic domains, and matches links to papers by anchor text.
 """
 import logging
-import os
 import re
 import unicodedata
+from collections import Counter
 from datetime import datetime, timezone
 from urllib.parse import urlparse
 
@@ -86,18 +86,33 @@ _BLOCK_TAGS = frozenset({
 # Link classification
 # ---------------------------------------------------------------------------
 
-def classify_link_type(url):
-    hostname = urlparse(url).hostname or ''
+def _classify_by_hostname(hostname):
+    """Classify a link type from its hostname (no URL parsing needed)."""
     if 'ssrn.com' in hostname: return 'ssrn'
     if 'nber.org' in hostname: return 'nber'
     if 'arxiv.org' in hostname: return 'arxiv'
     if 'doi.org' in hostname: return 'doi'
     if 'drive.google.com' in hostname or 'docs.google.com' in hostname: return 'drive'
     if 'dropbox.com' in hostname: return 'dropbox'
-    # Repositories (not journals — don't apply non-article path filter)
     if any(d in hostname for d in ('repec.org', 'econstor.eu', 'cepr.org', 'iza.org', 'diw.de', 'ifo.de', 'cesifo-group.de')):
         return 'repository'
     return 'journal'
+
+
+def classify_link_type(url):
+    return _classify_by_hostname(urlparse(url).hostname or '')
+
+
+def _check_trusted(hostname, path):
+    """Check if hostname is trusted, returning link_type or None."""
+    for domain in TRUSTED_LINK_DOMAINS:
+        if hostname == domain or hostname.endswith('.' + domain):
+            link_type = _classify_by_hostname(hostname)
+            if link_type == 'journal':
+                if any(pat in path for pat in _JOURNAL_NON_ARTICLE_PATTERNS):
+                    return None
+            return link_type
+    return None
 
 
 def is_trusted_domain(url):
@@ -109,15 +124,7 @@ def is_trusted_domain(url):
         return False
     if not hostname:
         return False
-    for domain in TRUSTED_LINK_DOMAINS:
-        if hostname == domain or hostname.endswith('.' + domain):
-            # Only filter non-article paths for journal publisher domains
-            link_type = classify_link_type(url)
-            if link_type == 'journal':
-                if any(pat in path for pat in _JOURNAL_NON_ARTICLE_PATTERNS):
-                    return False
-            return True
-    return False
+    return _check_trusted(hostname, path) is not None
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +252,37 @@ def _get_parent_title_text(a_tag):
 
 
 # ---------------------------------------------------------------------------
+# HTML parsing (shared)
+# ---------------------------------------------------------------------------
+
+_BOILERPLATE_TAGS = ('script', 'style', 'nav', 'header', 'footer', 'aside')
+
+
+def _prepare_soup(html):
+    """Parse HTML and remove boilerplate elements."""
+    soup = BeautifulSoup(html, 'html.parser')
+    for el in soup(_BOILERPLATE_TAGS):
+        el.decompose()
+    return soup
+
+
+def _iter_external_links(soup):
+    """Yield (a_tag, url, hostname, path) for all external http(s) links."""
+    for a in soup.find_all('a', href=True):
+        url = a['href']
+        if not url.startswith(('http://', 'https://')):
+            continue
+        try:
+            parsed = urlparse(url)
+            hostname = parsed.hostname
+            if not hostname:
+                continue
+            yield a, url, hostname, parsed.path.lower()
+        except Exception:
+            continue
+
+
+# ---------------------------------------------------------------------------
 # Link extraction
 # ---------------------------------------------------------------------------
 
@@ -258,21 +296,16 @@ def extract_trusted_links(html):
 
     Collects ALL anchor texts per URL and keeps the best for matching.
     """
-    soup = BeautifulSoup(html, 'html.parser')
-    for el in soup(['script', 'style', 'nav', 'header', 'footer', 'aside']):
-        el.decompose()
+    soup = _prepare_soup(html)
 
     # Collect all anchor texts per URL (fixes URL-dedup-picks-wrong-occurrence bug)
     url_anchors = {}  # url -> [(anchor_text, link_type), ...]
-    for a in soup.find_all('a', href=True):
-        url = a['href']
-        if not url.startswith(('http://', 'https://')):
-            continue
-        if not is_trusted_domain(url):
+    for a, url, hostname, path in _iter_external_links(soup):
+        link_type = _check_trusted(hostname, path)
+        if link_type is None:
             continue
 
         anchor = a.get_text(strip=True)
-        link_type = classify_link_type(url)
 
         # Try resolution chain for generic/empty anchors
         if _is_generic_anchor(anchor):
@@ -289,14 +322,12 @@ def extract_trusted_links(html):
     # For each URL, pick the best (longest non-generic) anchor text
     links = []
     for url, anchors in url_anchors.items():
-        # Prefer non-generic anchors, then longest
         best_anchor = ''
-        best_type = anchors[0][1]  # link_type is same for all occurrences
+        best_type = anchors[0][1]
         for anchor, lt in anchors:
             if not _is_generic_anchor(anchor) and len(anchor) > len(best_anchor):
                 best_anchor = anchor
                 best_type = lt
-        # If all anchors are generic, use the longest one anyway
         if not best_anchor:
             best_anchor = max((a for a, _ in anchors), key=len, default='')
 
@@ -384,15 +415,22 @@ def match_and_save_paper_links(url_id, publications):
     if not page_links:
         return
 
-    paper_ids = {}
+    # Batch lookup: compute all title hashes, then single WHERE IN query
+    hash_to_title = {}
     for pub in publications:
         title = (pub.get('title') or '').strip()
-        if not title:
-            continue
-        title_hash = Database.compute_title_hash(title)
-        row = Database.fetch_one("SELECT id FROM papers WHERE title_hash = %s", (title_hash,))
-        if row:
-            paper_ids[title] = row['id']
+        if title:
+            hash_to_title[Database.compute_title_hash(title)] = title
+
+    if not hash_to_title:
+        return
+
+    placeholders = ",".join(["%s"] * len(hash_to_title))
+    rows = Database.fetch_all(
+        f"SELECT id, title_hash FROM papers WHERE title_hash IN ({placeholders})",
+        tuple(hash_to_title.keys()),
+    )
+    paper_ids = {hash_to_title[r['title_hash']]: r['id'] for r in rows}
 
     if not paper_ids:
         return
@@ -421,24 +459,12 @@ def discover_untrusted_domains(html, min_anchor_len=20):
     long enough to be a paper title but are not in the trusted list.
     Useful for expanding the trusted domain list over time.
     """
-    from collections import Counter
-    soup = BeautifulSoup(html, 'html.parser')
-    for el in soup(['script', 'style', 'nav', 'header', 'footer', 'aside']):
-        el.decompose()
-
+    soup = _prepare_soup(html)
     domains = Counter()
-    for a in soup.find_all('a', href=True):
-        url = a['href']
-        if not url.startswith(('http://', 'https://')):
-            continue
-        if is_trusted_domain(url):
+    for a, url, hostname, path in _iter_external_links(soup):
+        if _check_trusted(hostname, path) is not None:
             continue
         anchor = a.get_text(strip=True)
         if len(anchor) >= min_anchor_len:
-            try:
-                hostname = urlparse(url).hostname
-                if hostname:
-                    domains[hostname] += 1
-            except Exception:
-                pass
+            domains[hostname] += 1
     return dict(domains)

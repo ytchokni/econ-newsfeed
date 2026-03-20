@@ -1,17 +1,7 @@
-"""Tests for link extraction and matching."""
-import os
+"""Tests for link extraction and matching.
 
-os.environ.setdefault("DB_HOST", "localhost")
-os.environ.setdefault("DB_USER", "test")
-os.environ.setdefault("DB_PASSWORD", "test")
-os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
-os.environ.setdefault("OPENAI_API_KEY", "sk-test-key")
-os.environ.setdefault("OPENAI_MODEL", "gpt-4o-mini")
-os.environ.setdefault("CONTENT_MAX_CHARS", "4000")
-os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
-os.environ.setdefault("SCRAPE_API_KEY", "test-secret-key-for-ci-runs")
-os.environ.setdefault("SCRAPE_INTERVAL_HOURS", "24")
-
+Env vars are set by conftest.py (auto-loaded by pytest for tests/).
+"""
 from unittest.mock import patch, MagicMock
 import pytest
 from html_fetcher import HTMLFetcher
@@ -105,12 +95,14 @@ class TestMatchLinkToPaper:
 
 class TestMatchAndSavePaperLinks:
     @patch("link_extractor.Database.execute_query")
-    @patch("link_extractor.Database.fetch_one")
+    @patch("link_extractor.Database.fetch_all")
+    @patch("link_extractor.Database.compute_title_hash", return_value="abc123")
     @patch("link_extractor.HTMLFetcher.get_raw_html")
-    def test_matches_and_saves(self, mock_get_raw, mock_fetch_one, mock_execute):
+    def test_matches_and_saves(self, mock_get_raw, mock_hash, mock_fetch_all, mock_execute):
         html = '<div><a href="https://ssrn.com/1">Trade and Wages</a></div>'
         mock_get_raw.return_value = html
-        mock_fetch_one.return_value = {'id': 10}
+        # Batch query returns matching paper
+        mock_fetch_all.return_value = [{'id': 10, 'title_hash': 'abc123'}]
 
         match_and_save_paper_links(url_id=1, publications=[{'title': 'Trade and Wages'}])
 
