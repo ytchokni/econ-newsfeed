@@ -14,6 +14,7 @@ const researcher: ResearcherDetail = {
   website_url: null,
   publication_count: 2,
   fields: [],
+  jel_codes: [],
   publications: [
     {
       id: 1,

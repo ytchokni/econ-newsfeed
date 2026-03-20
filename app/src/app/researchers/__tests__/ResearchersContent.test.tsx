@@ -15,6 +15,7 @@ const researchers: Researcher[] = [
     website_url: null,
     publication_count: 23,
     fields: [],
+    jel_codes: [],
   },
   {
     id: 2,
@@ -27,6 +28,7 @@ const researchers: Researcher[] = [
     website_url: null,
     publication_count: 5,
     fields: [],
+    jel_codes: [],
   },
 ];
 

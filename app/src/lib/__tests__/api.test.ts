@@ -37,6 +37,7 @@ const mockResearchersResponse: { items: Researcher[] } = {
       website_url: null,
       publication_count: 23,
       fields: [],
+      jel_codes: [],
     },
   ],
 };
@@ -52,6 +53,7 @@ const mockResearcherDetail: ResearcherDetail = {
   website_url: null,
   publication_count: 5,
   fields: [],
+  jel_codes: [],
   publications: [
     {
       id: 1,

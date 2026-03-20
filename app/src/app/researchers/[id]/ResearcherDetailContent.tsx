@@ -84,6 +84,19 @@ export default function ResearcherDetailContent({ id }: { id: number }) {
             ))}
           </div>
         )}
+        {researcher.jel_codes && researcher.jel_codes.length > 0 && (
+          <div className="mt-3 flex flex-wrap gap-2">
+            {researcher.jel_codes.map((jel) => (
+              <span
+                key={jel.code}
+                className="font-sans text-[10px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full"
+                title={jel.name}
+              >
+                JEL {jel.code}
+              </span>
+            ))}
+          </div>
+        )}
       </div>
 
       {/* Working Papers section (includes R&R, accepted, etc.) */}
