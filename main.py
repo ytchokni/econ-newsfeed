@@ -321,6 +321,7 @@ def main() -> None:
     subparsers.add_parser('extract-concurrent', help='Extract publications concurrently')
     subparsers.add_parser('batch-submit', help='Submit a batch job to OpenAI Batch API')
     subparsers.add_parser('batch-check', help='Check and process completed batch jobs')
+    subparsers.add_parser('enrich', help='Enrich publications with OpenAlex metadata')
 
     args = parser.parse_args()
 
@@ -336,6 +337,11 @@ def main() -> None:
         batch_submit()
     elif args.command == 'batch-check':
         batch_check()
+    elif args.command == 'enrich':
+        from database import Database
+        Database.create_tables()
+        from openalex import enrich_new_publications
+        enrich_new_publications()
 
 if __name__ == "__main__":
     main()

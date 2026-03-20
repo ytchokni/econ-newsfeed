@@ -131,6 +131,15 @@ def _validate_draft_urls() -> None:
             logger.error(f"Error validating draft URL for paper {paper_id}: {e}")
 
 
+def _enrich_with_openalex() -> None:
+    """Enrich newly discovered publications with OpenAlex metadata."""
+    try:
+        from openalex import enrich_new_publications
+        enrich_new_publications()
+    except Exception as e:
+        logger.error("OpenAlex enrichment failed: %s: %s", type(e).__name__, e)
+
+
 def run_scrape_job() -> None:
     """Orchestrates a full scraping cycle. Skips if another scrape is running."""
     global _lock_conn
@@ -246,6 +255,12 @@ def run_scrape_job() -> None:
         _validate_draft_urls()
         validate_s = time.time() - t0
         logger.info(f"Draft URL validation: {validate_s:.1f}s")
+
+        # Enrich new publications with OpenAlex data
+        t0 = time.time()
+        _enrich_with_openalex()
+        enrich_s = time.time() - t0
+        logger.info(f"OpenAlex enrichment: {enrich_s:.1f}s")
 
         total_s = time.time() - scrape_start
         update_scrape_log(log_id, "completed", urls_checked, urls_changed, pubs_extracted)
