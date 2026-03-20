@@ -124,3 +124,16 @@ class TestMatchAndSavePaperLinks:
         mock_get_raw.return_value = None
         match_and_save_paper_links(url_id=1, publications=[{'title': 'X'}])
         assert not any('paper_links' in str(c) for c in mock_execute.call_args_list)
+
+
+class TestDiscoverUntrustedDomains:
+    def test_finds_untrusted_domain_with_title_anchor(self):
+        html = '<div><a href="https://ssrn.com/1">Known Link</a><a href="https://newjournal.org/article/123">Some Long Paper Title Here</a><a href="https://twitter.com/x">Short</a></div>'
+        domains = discover_untrusted_domains(html)
+        assert 'newjournal.org' in domains
+        assert 'twitter.com' not in domains
+        assert 'ssrn.com' not in domains
+
+    def test_returns_empty_for_all_trusted(self):
+        html = '<div><a href="https://ssrn.com/1">Paper Title</a></div>'
+        assert discover_untrusted_domains(html) == {}

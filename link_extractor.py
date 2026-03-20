@@ -414,19 +414,31 @@ def match_and_save_paper_links(url_id, publications):
 # Untrusted domain discovery
 # ---------------------------------------------------------------------------
 
-def discover_untrusted_domains(html):
-    """Collect external domains not in TRUSTED_LINK_DOMAINS (for auditing)."""
+def discover_untrusted_domains(html, min_anchor_len=20):
+    """Find untrusted domains with paper-title-length anchor text.
+
+    Returns {domain: count} of domains that have links with anchor text
+    long enough to be a paper title but are not in the trusted list.
+    Useful for expanding the trusted domain list over time.
+    """
+    from collections import Counter
     soup = BeautifulSoup(html, 'html.parser')
-    domains = set()
+    for el in soup(['script', 'style', 'nav', 'header', 'footer', 'aside']):
+        el.decompose()
+
+    domains = Counter()
     for a in soup.find_all('a', href=True):
         url = a['href']
         if not url.startswith(('http://', 'https://')):
             continue
-        if not is_trusted_domain(url):
+        if is_trusted_domain(url):
+            continue
+        anchor = a.get_text(strip=True)
+        if len(anchor) >= min_anchor_len:
             try:
                 hostname = urlparse(url).hostname
                 if hostname:
-                    domains.add(hostname)
+                    domains[hostname] += 1
             except Exception:
                 pass
-    return domains
+    return dict(domains)
