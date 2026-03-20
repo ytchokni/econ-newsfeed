@@ -13,6 +13,15 @@ export type PublicationStatus =
 
 export type DraftUrlStatus = "unchecked" | "valid" | "invalid" | "timeout";
 
+export type LinkType =
+  | "pdf" | "ssrn" | "nber" | "arxiv" | "doi"
+  | "journal" | "drive" | "dropbox" | "repository" | "other";
+
+export interface PaperLink {
+  url: string;
+  link_type: LinkType | null;
+}
+
 export type EventType = 'new_paper' | 'status_change';
 
 export interface OpenAlexCoAuthor {
@@ -35,6 +44,7 @@ export interface Publication {
   draft_available: boolean;
   doi: string | null;
   coauthors: OpenAlexCoAuthor[];
+  links: PaperLink[];
   event_id?: number;
   event_type?: EventType;
   old_status?: PublicationStatus | null;

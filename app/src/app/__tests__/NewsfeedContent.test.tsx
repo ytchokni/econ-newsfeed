@@ -21,6 +21,7 @@ const page1: PaginatedResponse<Publication> = {
       draft_available: false,
       doi: null,
       coauthors: [],
+      links: [],
     },
     {
       id: 2,
@@ -37,6 +38,7 @@ const page1: PaginatedResponse<Publication> = {
       draft_available: false,
       doi: null,
       coauthors: [],
+      links: [],
     },
   ],
   total: 3,
@@ -62,6 +64,7 @@ const page2: PaginatedResponse<Publication> = {
       draft_available: false,
       doi: null,
       coauthors: [],
+      links: [],
     },
   ],
   total: 3,

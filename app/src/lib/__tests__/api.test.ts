@@ -18,6 +18,7 @@ const mockPublicationsResponse: PaginatedResponse<Publication> = {
       draft_available: false,
       doi: null,
       coauthors: [],
+      links: [],
     },
   ],
   total: 1,
@@ -70,6 +71,7 @@ const mockResearcherDetail: ResearcherDetail = {
       draft_available: false,
       doi: null,
       coauthors: [],
+      links: [],
     },
   ],
 };

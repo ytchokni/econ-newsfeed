@@ -30,6 +30,7 @@ const researcher: ResearcherDetail = {
       draft_available: false,
       doi: null,
       coauthors: [],
+      links: [],
     },
     {
       id: 2,
@@ -49,6 +50,7 @@ const researcher: ResearcherDetail = {
       draft_available: false,
       doi: null,
       coauthors: [],
+      links: [],
     },
   ],
 };

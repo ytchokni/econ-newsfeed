@@ -134,7 +134,7 @@ class TestFullCycle:
             patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
         ):
-            mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS, []]
+            mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS, [], []]  # pubs, authors, coauthors, links
             resp = client.get("/api/publications")
         assert resp.status_code == 200
         assert len(resp.json()["items"]) == 1
@@ -144,7 +144,7 @@ class TestFullCycle:
             patch("api.Database.fetch_one", return_value=SAMPLE_PUB_DETAIL),
             patch("api.Database.fetch_all") as mock_all,
         ):
-            mock_all.side_effect = [SAMPLE_AUTHORS_SINGLE, []]
+            mock_all.side_effect = [SAMPLE_AUTHORS_SINGLE, [], []]  # authors, coauthors, links
             resp = client.get("/api/publications/1")
         assert resp.status_code == 200
         assert resp.json()["title"] == "Trade and Wages"
@@ -165,7 +165,7 @@ class TestFullCycle:
             patch("api.Database.fetch_all") as mock_all,
         ):
             mock_one.side_effect = [SAMPLE_RESEARCHER, {"cnt": 5}]
-            mock_all.side_effect = [SAMPLE_URLS_SINGLE, SAMPLE_FIELDS, [SAMPLE_PUB_DETAIL], SAMPLE_AUTHORS, []]
+            mock_all.side_effect = [SAMPLE_URLS_SINGLE, SAMPLE_FIELDS, [SAMPLE_PUB_DETAIL], SAMPLE_AUTHORS, [], []]  # urls, fields, pubs, authors, coauthors, links
             resp = client.get("/api/researchers/10")
         assert resp.status_code == 200
         assert resp.json()["first_name"] == "Max Friedrich"
@@ -262,7 +262,7 @@ class TestPublicationsSmoke:
             patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
         ):
-            mock_all.side_effect = [[_SMOKE_PUB], _SMOKE_BATCH_AUTHORS, []]
+            mock_all.side_effect = [[_SMOKE_PUB], _SMOKE_BATCH_AUTHORS, [], []]  # pubs, authors, coauthors, links
             resp = client.get("/api/publications")
 
         assert resp.status_code == 200

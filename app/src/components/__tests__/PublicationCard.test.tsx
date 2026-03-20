@@ -20,6 +20,7 @@ const publication: Publication = {
   draft_available: false,
   doi: null,
   coauthors: [],
+  links: [],
 };
 
 describe("PublicationCard", () => {

@@ -93,11 +93,12 @@ class TestListPublications:
             patch("api.Database.fetch_one", return_value={"total": 3}),  # total count
             patch("api.Database.fetch_all") as mock_fetch,
         ):
-            # First call: publications; second: batch authors for all pubs; third: coauthors
+            # First call: publications; second: batch authors; third: coauthors; fourth: links
             mock_fetch.side_effect = [
                 SAMPLE_PUBLICATIONS,
                 BATCH_AUTHORS_PUBS_1_2_3,
-                [],
+                [],  # coauthors
+                [],  # links
             ]
             response = client.get("/api/publications")
 
@@ -118,7 +119,8 @@ class TestListPublications:
             mock_fetch.side_effect = [
                 [SAMPLE_PUBLICATIONS[1]],
                 BATCH_AUTHORS_PUB2,
-                [],
+                [],  # coauthors
+                [],  # links
             ]
             response = client.get("/api/publications?page=2&per_page=1")
 
@@ -142,7 +144,8 @@ class TestListPublications:
             mock_fetch.side_effect = [
                 [SAMPLE_PUBLICATIONS[0]],
                 BATCH_AUTHORS_PUB1,
-                [],
+                [],  # coauthors
+                [],  # links
             ]
             response = client.get("/api/publications?year=2024")
 
@@ -159,7 +162,8 @@ class TestListPublications:
             mock_fetch.side_effect = [
                 [SAMPLE_PUBLICATIONS[0]],
                 BATCH_AUTHORS_PUB1,
-                [],
+                [],  # coauthors
+                [],  # links
             ]
             response = client.get("/api/publications?researcher_id=10")
 
@@ -178,7 +182,8 @@ class TestListPublications:
             mock_fetch.side_effect = [
                 [SAMPLE_PUBLICATIONS[0]],
                 BATCH_AUTHORS_PUB1,
-                [],
+                [],  # coauthors
+                [],  # links
             ]
             response = client.get("/api/publications?since=2026-03-15T00:00:00Z")
 
@@ -200,7 +205,8 @@ class TestListPublications:
             mock_fetch.side_effect = [
                 [SAMPLE_PUBLICATIONS[0]],
                 BATCH_AUTHORS_PUB1,
-                [],
+                [],  # coauthors
+                [],  # links
             ]
             response = client.get("/api/publications")
 
@@ -233,7 +239,7 @@ class TestGetPublication:
             patch("api.Database.fetch_one", return_value=SAMPLE_PUB_DETAIL),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
-            mock_fetch.side_effect = [SAMPLE_AUTHORS_PUB1, []]
+            mock_fetch.side_effect = [SAMPLE_AUTHORS_PUB1, [], []]  # authors, coauthors, links
             response = client.get("/api/publications/1")
 
         assert response.status_code == 200
@@ -276,6 +282,7 @@ class TestPublicationOpenAlexFields:
                 sample_pubs,
                 BATCH_AUTHORS_PUB1,
                 coauthors_data,
+                [],  # links
             ]
             response = client.get("/api/publications")
 
@@ -298,6 +305,7 @@ class TestPublicationOpenAlexFields:
             mock_fetch.side_effect = [
                 SAMPLE_AUTHORS_PUB1,
                 coauthors_data,
+                [],  # links
             ]
             response = client.get("/api/publications/1")
 

@@ -10,6 +10,7 @@ from database import Database
 from researcher import Researcher
 from publication import Publication
 from html_fetcher import HTMLFetcher
+from link_extractor import match_and_save_paper_links
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -54,6 +55,7 @@ def extract_data_from_htmls() -> None:
             extracted_publications = Publication.extract_publications(html_content, url)
             if extracted_publications:
                 Publication.save_publications(url, extracted_publications)
+                match_and_save_paper_links(id, extracted_publications)
             else:
                 logging.warning(f"No publications extracted for URL ID: {id}, URL: {url}")
             HTMLFetcher.mark_extracted(id)
@@ -73,6 +75,7 @@ def _process_one_url(url_id: int, researcher_id: int, url: str, page_type: str) 
         pubs = Publication.extract_publications(html_content, url)
         if pubs:
             Publication.save_publications(url, pubs)
+            match_and_save_paper_links(url_id, pubs)
         HTMLFetcher.mark_extracted(url_id)
         return url, len(pubs), None
     except Exception as e:
@@ -269,6 +272,7 @@ def batch_check() -> None:
 
                 if validated:
                     Publication.save_publications(url, validated)
+                    match_and_save_paper_links(url_id, validated)
                     saved_pubs += len(validated)
                 HTMLFetcher.mark_extracted(url_id)
                 processed_urls += 1
@@ -308,6 +312,38 @@ def batch_check() -> None:
             logging.info("Batch %s status: %s — %s", openai_batch_id, status, req_counts)
 
 
+
+def discover_domains() -> None:
+    """Scan all stored raw HTML to find untrusted domains that may host paper links."""
+    from collections import Counter
+    from link_extractor import discover_untrusted_domains
+
+    # Fetch only url_ids first, then load raw HTML one at a time to avoid OOM
+    url_ids = Database.fetch_all(
+        "SELECT url_id FROM html_content WHERE raw_html IS NOT NULL"
+    )
+    if not url_ids:
+        logging.info("No raw HTML stored yet. Run 'make fetch' first.")
+        return
+
+    totals = Counter()
+    for row in url_ids:
+        html_row = Database.fetch_one(
+            "SELECT raw_html FROM html_content WHERE url_id = %s", (row['url_id'],)
+        )
+        if html_row and html_row['raw_html']:
+            domains = discover_untrusted_domains(html_row['raw_html'])
+            totals.update(domains)
+
+    if not totals:
+        logging.info("No untrusted domains with paper-title-length anchors found.")
+        return
+
+    print(f"\nUntrusted domains with paper-title-length anchor text ({len(totals)} domains):\n")
+    for domain, count in totals.most_common(30):
+        print(f"  {count:4d}x  {domain}")
+    print(f"\nTo add a domain, append it to TRUSTED_LINK_DOMAINS in link_extractor.py")
+
 def main() -> None:
     """CLI entrypoint — non-interactive, safe for cloud/container environments."""
     parser = argparse.ArgumentParser(description='Econ Newsfeed scraper CLI')
@@ -322,6 +358,7 @@ def main() -> None:
     subparsers.add_parser('batch-submit', help='Submit a batch job to OpenAI Batch API')
     subparsers.add_parser('batch-check', help='Check and process completed batch jobs')
     subparsers.add_parser('enrich', help='Enrich publications with OpenAlex metadata')
+    subparsers.add_parser('discover-domains', help='Scan stored HTML for untrusted domains with paper-title links')
 
     args = parser.parse_args()
 
@@ -341,6 +378,8 @@ def main() -> None:
         Database.create_tables()
         from openalex import enrich_new_publications
         enrich_new_publications()
+    elif args.command == 'discover-domains':
+        discover_domains()
 
 if __name__ == "__main__":
     main()
