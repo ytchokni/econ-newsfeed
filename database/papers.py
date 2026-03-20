@@ -50,16 +50,10 @@ def update_openalex_data(paper_id, doi, openalex_id, coauthors, abstract=None):
     """
     with get_connection() as conn:
         with conn.cursor() as cursor:
-            if abstract is not None:
-                cursor.execute(
-                    "UPDATE papers SET doi = %s, openalex_id = %s, abstract = %s WHERE id = %s",
-                    (doi, openalex_id, abstract, paper_id),
-                )
-            else:
-                cursor.execute(
-                    "UPDATE papers SET doi = %s, openalex_id = %s WHERE id = %s",
-                    (doi, openalex_id, paper_id),
-                )
+            cursor.execute(
+                "UPDATE papers SET doi = %s, openalex_id = %s, abstract = COALESCE(%s, abstract) WHERE id = %s",
+                (doi, openalex_id, abstract, paper_id),
+            )
             # Replace coauthors (handles re-enrichment cleanly)
             cursor.execute(
                 "DELETE FROM openalex_coauthors WHERE paper_id = %s", (paper_id,)

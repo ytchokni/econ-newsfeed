@@ -59,6 +59,17 @@ def reconstruct_abstract(inverted_index: dict) -> str:
     return " ".join(word for _, word in word_positions)
 
 
+def _get_with_retry(session, url, params):
+    """GET with one retry on 429, respecting Retry-After header."""
+    resp = session.get(url, params=params, timeout=10)
+    if resp.status_code == 429:
+        retry_after = int(resp.headers.get("Retry-After", "5"))
+        logger.info("OpenAlex rate limited, waiting %ds", retry_after)
+        time.sleep(retry_after)
+        resp = session.get(url, params=params, timeout=10)
+    return resp
+
+
 def search_work(title: str, author_name: str) -> dict | None:
     """Search OpenAlex for a work matching the given title and author.
 
@@ -74,17 +85,7 @@ def search_work(title: str, author_name: str) -> dict | None:
         params["mailto"] = MAILTO
 
     try:
-        resp = session.get(
-            f"{OPENALEX_BASE_URL}/works", params=params, timeout=10
-        )
-        # Retry once on 429 after waiting
-        if resp.status_code == 429:
-            retry_after = int(resp.headers.get("Retry-After", "5"))
-            logger.info("OpenAlex rate limited, waiting %ds", retry_after)
-            time.sleep(retry_after)
-            resp = session.get(
-                f"{OPENALEX_BASE_URL}/works", params=params, timeout=10
-            )
+        resp = _get_with_retry(session, f"{OPENALEX_BASE_URL}/works", params)
         resp.raise_for_status()
         _increment_budget()
         results = resp.json().get("results", [])
@@ -169,7 +170,6 @@ def enrich_new_publications(limit=50):
     Returns the number of papers processed (matched or not).
     """
     if not _check_budget():
-        remaining = DAILY_BUDGET - _daily_counter["count"]
         logger.info("OpenAlex daily budget exhausted (%d/%d), skipping", _daily_counter["count"], DAILY_BUDGET)
         return 0
 

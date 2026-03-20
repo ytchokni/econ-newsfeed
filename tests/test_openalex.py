@@ -33,10 +33,11 @@ class TestUpdateOpenalexData:
                 ],
             )
 
-        # UPDATE papers SET doi, openalex_id
+        # UPDATE papers SET doi, openalex_id, abstract via COALESCE
         update_call = mock_cursor.execute.call_args_list[0]
         assert "UPDATE papers SET doi" in update_call[0][0]
-        assert update_call[0][1] == ("10.1257/aer.20181234", "W2741809807", 1)
+        assert "COALESCE" in update_call[0][0]
+        assert update_call[0][1] == ("10.1257/aer.20181234", "W2741809807", None, 1)
 
         # DELETE old coauthors + executemany for inserts
         assert mock_cursor.execute.call_count == 2  # 1 update + 1 delete
@@ -62,8 +63,8 @@ class TestUpdateOpenalexData:
             )
 
         update_call = mock_cursor.execute.call_args_list[0]
-        assert "abstract" in update_call[0][0]
-        assert "This paper studies..." in update_call[0][1]
+        assert "COALESCE" in update_call[0][0]
+        assert update_call[0][1] == ("10.1234/test", "W123", "This paper studies...", 1)
 
 
 class TestGetUnenrichedPapers:
