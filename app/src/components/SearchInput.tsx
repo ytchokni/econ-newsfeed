@@ -17,6 +17,11 @@ export default function SearchInput({ value, onChange, placeholder = "Search..."
     setLocal(value);
   }, [value]);
 
+  // Clean up debounce timer on unmount
+  useEffect(() => {
+    return () => { if (timerRef.current) clearTimeout(timerRef.current); };
+  }, []);
+
   const handleChange = (next: string) => {
     setLocal(next);
     if (timerRef.current) clearTimeout(timerRef.current);

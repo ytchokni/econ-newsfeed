@@ -168,13 +168,9 @@ function CheckboxDropdown({
 function FilterBar({
   filters,
   onChange,
-  searchValue,
-  onSearchChange,
 }: {
   filters: FeedFilters;
   onChange: (next: FeedFilters) => void;
-  searchValue: string;
-  onSearchChange: (value: string) => void;
 }) {
   const selectedStatuses = filters.status ? filters.status.split(",") : [];
   const selectedInstitutions = (() => {
@@ -183,7 +179,7 @@ function FilterBar({
     return [];
   })();
 
-  const hasActiveFilters = !!(filters.status || filters.institution || filters.preset || filters.year || searchValue);
+  const hasActiveFilters = !!(filters.status || filters.institution || filters.preset || filters.year || filters.search);
 
   const handleStatusChange = useCallback(
     (selected: string[]) => {
@@ -216,8 +212,8 @@ function FilterBar({
     <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-4 mb-8 space-y-3">
       <div className="max-w-md">
         <SearchInput
-          value={searchValue}
-          onChange={onSearchChange}
+          value={filters.search ?? ""}
+          onChange={(v) => onChange({ ...filters, search: v || undefined })}
           placeholder="Search papers by title..."
         />
       </div>
@@ -257,7 +253,7 @@ function FilterBar({
           <>
             <span className="w-px h-5 bg-[var(--border)]" />
             <button
-              onClick={() => { onChange({}); onSearchChange(""); }}
+              onClick={() => onChange({})}
               className="font-sans text-xs text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
             >
               Clear all
@@ -274,7 +270,6 @@ function FilterBar({
 export default function NewsfeedContent() {
   const [page, setPage] = useState(1);
   const [filters, setFilters] = useState<FeedFilters>({});
-  const [searchValue, setSearchValue] = useState("");
   const { data, error, isLoading } = usePublications(page, 20, filters);
 
   /* Reset page to 1 whenever filters change */
@@ -283,20 +278,9 @@ export default function NewsfeedContent() {
     setPage(1);
   }, []);
 
-  const handleSearchChange = useCallback((value: string) => {
-    setSearchValue(value);
-    setFilters((prev) => ({ ...prev, search: value || undefined }));
-    setPage(1);
-  }, []);
-
   return (
     <div className="space-y-8">
-      <FilterBar
-        filters={filters}
-        onChange={handleFilterChange}
-        searchValue={searchValue}
-        onSearchChange={handleSearchChange}
-      />
+      <FilterBar filters={filters} onChange={handleFilterChange} />
 
       {isLoading && (
         <div className="space-y-4">

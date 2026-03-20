@@ -12,7 +12,6 @@ import SearchInput from "@/components/SearchInput";
 
 export default function ResearchersContent() {
   const [filters, setFilters] = useState<ResearcherFilters>({});
-  const [searchValue, setSearchValue] = useState("");
   const { data: filterOptions } = useFilterOptions();
   const { data: researchers, error, isLoading } = useResearchersFiltered(filters);
 
@@ -46,11 +45,10 @@ export default function ResearchersContent() {
   }, []);
 
   const handleSearchChange = useCallback((value: string) => {
-    setSearchValue(value);
     setFilters((prev) => ({ ...prev, search: value || undefined }));
   }, []);
 
-  const hasActiveFilters = !!(filters.institution || filters.field || filters.position || searchValue);
+  const hasActiveFilters = !!(filters.institution || filters.field || filters.position || filters.search);
 
   if (isLoading) {
     return (
@@ -73,7 +71,7 @@ export default function ResearchersContent() {
       <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-4 space-y-3">
         <div className="max-w-md">
           <SearchInput
-            value={searchValue}
+            value={filters.search ?? ""}
             onChange={handleSearchChange}
             placeholder="Search researchers by name..."
           />
@@ -82,7 +80,6 @@ export default function ResearchersContent() {
           <span className="font-sans text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mr-1">
             Filter
           </span>
-          {/* Keep existing SearchableCheckboxDropdown components for Institution, Field, Position */}
           <SearchableCheckboxDropdown
             label="Institution"
             options={institutionOptions}
@@ -105,7 +102,7 @@ export default function ResearchersContent() {
             <>
               <span className="w-px h-5 bg-[var(--border)]" />
               <button
-                onClick={() => { setFilters({}); setSearchValue(""); }}
+                onClick={() => setFilters({})}
                 className="font-sans text-xs text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
               >
                 Clear all
