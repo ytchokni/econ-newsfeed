@@ -1,4 +1,4 @@
-.PHONY: setup dev kill seed reset-db scrape fetch parse parse-fast batch-submit batch-check check
+.PHONY: setup dev kill seed reset-db scrape fetch parse parse-fast batch-submit batch-check enrich check
 
 setup:
 	poetry install
@@ -45,6 +45,9 @@ batch-submit:
 
 batch-check:
 	poetry run python -c "from main import batch_check; batch_check()"
+
+enrich:
+	poetry run python main.py enrich
 
 check:
 	@echo "=== Step 1: Env validation ==="
