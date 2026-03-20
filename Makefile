@@ -1,4 +1,4 @@
-.PHONY: setup dev kill seed reset-db scrape fetch parse parse-fast batch-submit batch-check check
+.PHONY: setup dev kill seed reset-db scrape fetch parse parse-fast batch-submit batch-check discover-domains check
 
 setup:
 	poetry install
@@ -45,6 +45,9 @@ batch-submit:
 
 batch-check:
 	poetry run python -c "from main import batch_check; batch_check()"
+
+discover-domains:  ## Scan for untrusted domains that may host paper links
+	poetry run python main.py discover-domains
 
 check:
 	@echo "=== Step 1: Env validation ==="
