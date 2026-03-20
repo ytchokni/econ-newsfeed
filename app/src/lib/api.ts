@@ -74,7 +74,7 @@ export function useResearcher(id: number) {
 
 export async function getFields(): Promise<ResearchField[]> {
   const data = await fetchJson<{ items: ResearchField[] }>(
-    `${API_BASE_URL}/api/fields`
+    `/api/fields`
   );
   return data.items;
 }
