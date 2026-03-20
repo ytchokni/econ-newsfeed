@@ -210,20 +210,22 @@ class HTMLFetcher:
         return hashlib.sha256(text_content.encode('utf-8')).hexdigest()
 
     @staticmethod
-    def save_text(url_id: int, text_content: str, text_hash: str, researcher_id: int) -> None:
+    def save_text(url_id: int, text_content: str, text_hash: str, researcher_id: int, raw_html=None) -> None:
         """
         Save pre-extracted text content and hash to the database using upsert.
+        Also stores raw_html if provided.
         """
         query = """
-            INSERT INTO html_content (url_id, content, content_hash, timestamp, researcher_id)
-            VALUES (%s, %s, %s, %s, %s) AS new_row
+            INSERT INTO html_content (url_id, content, content_hash, timestamp, researcher_id, raw_html)
+            VALUES (%s, %s, %s, %s, %s, %s) AS new_row
             ON DUPLICATE KEY UPDATE
                 content = new_row.content,
                 content_hash = new_row.content_hash,
-                timestamp = new_row.timestamp
+                timestamp = new_row.timestamp,
+                raw_html = new_row.raw_html
         """
         try:
-            Database.execute_query(query, (url_id, text_content, text_hash, datetime.now(timezone.utc), researcher_id))
+            Database.execute_query(query, (url_id, text_content, text_hash, datetime.now(timezone.utc), researcher_id, raw_html))
             logging.info(f"Text content saved for URL ID: {url_id} (Researcher ID: {researcher_id})")
         except Exception as e:
             logging.error("Error saving text content for URL ID %s: %s", url_id, type(e).__name__)
@@ -281,13 +283,13 @@ class HTMLFetcher:
         if not HTMLFetcher.is_allowed_by_robots(url):
             return False
 
-        html_content = HTMLFetcher.fetch_html(url)
-        if not html_content:
+        raw_html = HTMLFetcher.fetch_html(url)
+        if not raw_html:
             logging.warning(f"Failed to fetch HTML content for URL ID: {url_id}, URL: {url}")
             return False
 
         # Parse HTML once, reuse for both comparison and storage
-        text_content = HTMLFetcher.extract_text_content(html_content)
+        text_content = HTMLFetcher.extract_text_content(raw_html)
         if len(text_content) > CONTENT_MAX_CHARS:
             dropped = len(text_content) - CONTENT_MAX_CHARS
             logging.info(f"Truncating content for URL ID {url_id}: {len(text_content)} -> {CONTENT_MAX_CHARS} chars ({dropped} dropped)")
@@ -295,7 +297,7 @@ class HTMLFetcher:
         text_hash = HTMLFetcher.hash_text_content(text_content)
 
         if HTMLFetcher.has_text_changed(url_id, text_hash):
-            HTMLFetcher.save_text(url_id, text_content, text_hash, researcher_id)
+            HTMLFetcher.save_text(url_id, text_content, text_hash, researcher_id, raw_html=raw_html)
             logging.info(f"New version of text content saved for URL ID: {url_id}, URL: {url}")
             return True
 
@@ -391,6 +393,14 @@ class HTMLFetcher:
         """
         result = Database.fetch_one(query, (url_id,))
         return result['content'] if result else None
+
+    @staticmethod
+    def get_raw_html(url_id: int) -> str | None:
+        """Retrieve stored raw HTML for a URL ID."""
+        result = Database.fetch_one(
+            "SELECT raw_html FROM html_content WHERE url_id = %s", (url_id,),
+        )
+        return result['raw_html'] if result else None
 
     @staticmethod
     def needs_extraction(url_id: int) -> bool:
