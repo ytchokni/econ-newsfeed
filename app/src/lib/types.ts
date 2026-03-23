@@ -97,6 +97,7 @@ export interface FeedFilters {
   preset?: string;
   year?: string;
   search?: string;
+  event_type?: "new_paper" | "status_change";
 }
 
 export interface ResearcherDetail extends Researcher {

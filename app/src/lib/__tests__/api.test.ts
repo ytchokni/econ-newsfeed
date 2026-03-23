@@ -202,3 +202,41 @@ describe("buildPublicationsUrl with search", () => {
     );
   });
 });
+
+describe("buildPublicationsUrl with event_type", () => {
+  it("includes event_type param in URL", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockPublicationsResponse),
+    });
+
+    await getPublications(1, 20, { event_type: "new_paper" });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("event_type=new_paper")
+    );
+  });
+
+  it("includes event_type=status_change param in URL", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockPublicationsResponse),
+    });
+
+    await getPublications(1, 20, { event_type: "status_change" });
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("event_type=status_change")
+    );
+  });
+
+  it("omits event_type when not provided", async () => {
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve(mockPublicationsResponse),
+    });
+
+    await getPublications(1, 20, {});
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.not.stringContaining("event_type")
+    );
+  });
+});
