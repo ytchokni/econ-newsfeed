@@ -422,6 +422,19 @@ class HTMLFetcher:
         return content_hash != extracted_hash
 
     @staticmethod
+    def is_first_extraction(url_id: int) -> bool:
+        """Return True if this URL has never been extracted before.
+
+        Checks whether extracted_at is NULL in html_content — meaning
+        mark_extracted() has never been called for this URL.
+        """
+        result = Database.fetch_one(
+            "SELECT extracted_at FROM html_content WHERE url_id = %s",
+            (url_id,),
+        )
+        return result is not None and result['extracted_at'] is None
+
+    @staticmethod
     def mark_extracted(url_id: int) -> None:
         """
         Record that extraction has been run on the current content by setting
