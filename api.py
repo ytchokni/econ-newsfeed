@@ -608,7 +608,7 @@ def get_publication(
     include_history: bool = Query(False),
 ):
     row = Database.fetch_one(
-        "SELECT id, title, year, venue, source_url, discovered_at, status, draft_url, abstract, draft_url_status, doi FROM papers WHERE id = %s",
+        "SELECT id, title, year, venue, source_url, discovered_at, status, draft_url, abstract, draft_url_status, doi, is_seed, title_hash, openalex_id FROM papers WHERE id = %s",
         (publication_id,),
     )
     if not row:
@@ -634,6 +634,25 @@ def get_publication(
             }
             for s in snapshots
         ]
+
+        feed_events = Database.fetch_all(
+            "SELECT id, event_type, old_status, new_status, created_at FROM feed_events WHERE paper_id = %s ORDER BY created_at DESC",
+            (publication_id,),
+        )
+        result["feed_events"] = [
+            {
+                "id": fe['id'],
+                "event_type": fe['event_type'],
+                "old_status": fe['old_status'],
+                "new_status": fe['new_status'],
+                "created_at": _iso_z(fe['created_at']),
+            }
+            for fe in feed_events
+        ]
+
+        result["is_seed"] = bool(row.get('is_seed'))
+        result["title_hash"] = row.get('title_hash')
+        result["openalex_id"] = row.get('openalex_id')
 
     return result
 

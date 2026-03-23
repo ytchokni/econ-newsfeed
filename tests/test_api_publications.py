@@ -44,7 +44,7 @@ SAMPLE_PUBLICATIONS = [
      "doi": None},
 ]
 
-# 10-key papers dict for single publication detail endpoint
+# 14-key papers dict for single publication detail endpoint
 SAMPLE_PUB_DETAIL = {
     "id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
     "source_url": "https://example.com/pub", "discovered_at": datetime(2026, 3, 15, 14, 30),
@@ -313,3 +313,93 @@ class TestPublicationOpenAlexFields:
         body = response.json()
         assert body["doi"] == "10.1257/aer.20181234"
         assert body["coauthors"][0]["display_name"] == "Max Steinhardt"
+
+
+# ---------------------------------------------------------------------------
+# Task 1: GET /api/publications/{id}?include_history=true — feed_events + extra fields
+# ---------------------------------------------------------------------------
+
+SAMPLE_FEED_EVENTS = [
+    {"id": 5, "event_type": "status_change", "old_status": "working_paper",
+     "new_status": "published", "created_at": datetime(2026, 3, 20, 12, 0)},
+    {"id": 1, "event_type": "new_paper", "old_status": None,
+     "new_status": None, "created_at": datetime(2026, 3, 15, 14, 30)},
+]
+
+SAMPLE_SNAPSHOTS = [
+    {"status": "published", "venue": "JLE", "abstract": None,
+     "draft_url": "https://ssrn.com/abstract=1", "draft_url_status": "valid",
+     "year": "2024", "scraped_at": datetime(2026, 3, 20, 12, 0),
+     "source_url": "https://example.com/pub"},
+]
+
+
+class TestGetPublicationHistory:
+    """Tests for GET /api/publications/{id}?include_history=true."""
+
+    def test_includes_feed_events(self, client):
+        """Response includes feed_events when include_history=true."""
+        pub_detail = {**SAMPLE_PUB_DETAIL, "is_seed": False,
+                      "title_hash": "abc123", "openalex_id": "W12345"}
+        with (
+            patch("api.Database.fetch_one", return_value=pub_detail),
+            patch("api.Database.fetch_all") as mock_fetch,
+            patch("api.Database.get_paper_snapshots", return_value=SAMPLE_SNAPSHOTS),
+        ):
+            mock_fetch.side_effect = [
+                SAMPLE_AUTHORS_PUB1,  # authors
+                [],  # coauthors
+                [],  # links
+                SAMPLE_FEED_EVENTS,  # feed_events
+            ]
+            response = client.get("/api/publications/1?include_history=true")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "feed_events" in body
+        assert len(body["feed_events"]) == 2
+        assert body["feed_events"][0]["event_type"] == "status_change"
+        assert body["feed_events"][0]["old_status"] == "working_paper"
+        assert body["feed_events"][1]["event_type"] == "new_paper"
+        assert "history" in body
+        assert len(body["history"]) == 1
+
+    def test_includes_extra_fields(self, client):
+        """Response includes is_seed, title_hash, openalex_id when include_history=true."""
+        pub_detail = {**SAMPLE_PUB_DETAIL, "is_seed": False,
+                      "title_hash": "abc123", "openalex_id": "W12345"}
+        with (
+            patch("api.Database.fetch_one", return_value=pub_detail),
+            patch("api.Database.fetch_all") as mock_fetch,
+            patch("api.Database.get_paper_snapshots", return_value=[]),
+        ):
+            mock_fetch.side_effect = [
+                SAMPLE_AUTHORS_PUB1,
+                [],  # coauthors
+                [],  # links
+                [],  # feed_events
+            ]
+            response = client.get("/api/publications/1?include_history=true")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert body["is_seed"] is False
+        assert body["title_hash"] == "abc123"
+        assert body["openalex_id"] == "W12345"
+
+    def test_no_history_without_flag(self, client):
+        """feed_events and history are not included without include_history=true."""
+        with (
+            patch("api.Database.fetch_one", return_value=SAMPLE_PUB_DETAIL),
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_fetch.side_effect = [SAMPLE_AUTHORS_PUB1, [], []]
+            response = client.get("/api/publications/1")
+
+        assert response.status_code == 200
+        body = response.json()
+        assert "feed_events" not in body
+        assert "history" not in body
+        assert "is_seed" not in body
+        assert "title_hash" not in body
+        assert "openalex_id" not in body
