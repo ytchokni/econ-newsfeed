@@ -1,7 +1,7 @@
 """Tests for post-enrichment duplicate paper merging."""
 import pytest
 from unittest.mock import patch, MagicMock, call
-from paper_merge import find_duplicate_groups, merge_paper_group
+from paper_merge import find_duplicate_groups, find_fuzzy_duplicate_groups, merge_paper_group, _title_similarity
 
 
 class TestFindDuplicateGroups:
@@ -98,3 +98,64 @@ class TestMergePaperGroup:
             if "COALESCE" in str(c)
         ]
         assert len(update_calls) >= 1
+
+
+class TestTitleSimilarity:
+    """Word-level title similarity for fuzzy matching."""
+
+    def test_similar_titles_high_score(self):
+        score = _title_similarity(
+            "Levels and Drivers of Lifetime Earnings",
+            "Distributions and Drivers of Lifetime Earnings",
+        )
+        assert score >= 0.7
+
+    def test_different_titles_low_score(self):
+        score = _title_similarity(
+            "Levels and Drivers of Lifetime Earnings",
+            "Trade and Wages in Developing Countries",
+        )
+        assert score < 0.4
+
+    def test_empty_title_returns_zero(self):
+        assert _title_similarity("", "Something") == 0.0
+        assert _title_similarity("Something", "") == 0.0
+
+
+class TestFindFuzzyDuplicateGroups:
+    """Fuzzy matching: same authors + similar titles."""
+
+    @patch("paper_merge.Database.fetch_all")
+    def test_finds_fuzzy_duplicates_with_same_authors(self, mock_fetch):
+        mock_fetch.return_value = [
+            {"id": 1, "title": "Ideas Have Consequences: The Impact of Law and Economics on American Justice", "author_ids": "2,6,141"},
+            {"id": 2, "title": "Ideas Have Consequences: The Effect of Law and Economics on American Justice", "author_ids": "2,6,141"},
+        ]
+        groups = find_fuzzy_duplicate_groups()
+        assert len(groups) == 1
+        assert set(groups[0]) == {1, 2}
+
+    @patch("paper_merge.Database.fetch_all")
+    def test_no_match_when_titles_too_different(self, mock_fetch):
+        mock_fetch.return_value = [
+            {"id": 1, "title": "Levels and Drivers of Lifetime Earnings", "author_ids": "2,6,141"},
+            {"id": 2, "title": "Trade Policy in Open Economies", "author_ids": "2,6,141"},
+        ]
+        groups = find_fuzzy_duplicate_groups()
+        assert groups == []
+
+    @patch("paper_merge.Database.fetch_all")
+    def test_no_match_when_different_authors(self, mock_fetch):
+        mock_fetch.return_value = [
+            {"id": 1, "title": "Levels and Drivers of Lifetime Earnings", "author_ids": "2,6,141"},
+            {"id": 2, "title": "Levels and Drivers of Lifetime Earnings", "author_ids": "3,7,200"},
+        ]
+        groups = find_fuzzy_duplicate_groups()
+        assert groups == []
+
+    @patch("paper_merge.Database.fetch_all")
+    def test_skips_single_author_papers(self, mock_fetch):
+        """Only considers papers with 2+ authors to avoid false positives."""
+        mock_fetch.return_value = []  # SQL HAVING COUNT >= 2 filters these out
+        groups = find_fuzzy_duplicate_groups()
+        assert groups == []
