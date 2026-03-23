@@ -1,6 +1,13 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import PublicationCard from "../PublicationCard";
 import type { Publication } from "@/lib/types";
+
+// Mock next/navigation
+const mockPush = jest.fn();
+jest.mock("next/navigation", () => ({
+  useRouter: () => ({ push: mockPush }),
+}));
 
 const publication: Publication = {
   id: 1,
@@ -52,6 +59,28 @@ describe("PublicationCard", () => {
     expect(authorLinks).toHaveLength(2);
     expect(authorLinks[0]).toHaveAttribute("href", "/researchers/1");
     expect(authorLinks[1]).toHaveAttribute("href", "/researchers/2");
+  });
+});
+
+describe("PublicationCard navigation", () => {
+  beforeEach(() => {
+    mockPush.mockClear();
+  });
+
+  it("navigates to paper detail on card click", async () => {
+    const user = userEvent.setup();
+    render(<PublicationCard publication={publication} />);
+    const card = screen.getByText("Immigration and Wages: Evidence from Germany").closest("[data-testid='publication-card']")!;
+    await user.click(card);
+    expect(mockPush).toHaveBeenCalledWith("/papers/1");
+  });
+
+  it("does not navigate when clicking author link", async () => {
+    const user = userEvent.setup();
+    render(<PublicationCard publication={publication} />);
+    const authorLink = screen.getByText(/M\. Steinhardt/);
+    await user.click(authorLink);
+    expect(mockPush).not.toHaveBeenCalled();
   });
 });
 
