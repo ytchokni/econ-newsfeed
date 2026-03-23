@@ -1,6 +1,7 @@
 """Tests for researcher deduplication: initial matching and merge logic."""
 import pytest
-from database.researchers import first_name_is_initial_match
+from unittest.mock import patch, MagicMock
+from database.researchers import first_name_is_initial_match, get_researcher_id
 
 
 class TestFirstNameIsInitialMatch:
@@ -39,10 +40,6 @@ class TestFirstNameIsInitialMatch:
 
     def test_both_empty_returns_false(self):
         assert first_name_is_initial_match("", "") is False
-
-
-from unittest.mock import patch, MagicMock
-from database.researchers import get_researcher_id
 
 
 class TestGetResearcherIdInitialTier:

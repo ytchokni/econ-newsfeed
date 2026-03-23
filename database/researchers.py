@@ -147,7 +147,7 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
         ]
         if len(initial_matches) == 1:
             match = initial_matches[0]
-            longer_name = first_name if len(first_name) > len(match['first_name']) else match['first_name']
+            longer_name = first_name if len(first_name.rstrip('.')) > len(match['first_name'].rstrip('.')) else match['first_name']
             _execute(
                 "UPDATE researchers SET first_name = %s WHERE id = %s",
                 (longer_name, match['id']),
