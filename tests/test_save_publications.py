@@ -1,7 +1,7 @@
 # tests/test_save_publications.py
 """Tests for Publication.save_publications edge cases."""
 import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch, MagicMock, call
 from publication import Publication, _author_id_cache
 
 
@@ -184,3 +184,74 @@ class TestAuthorLookupCache:
 
         # John Doe looked up once across both calls
         assert mock_get_researcher.call_count == 1
+
+
+class TestAbstractBackfill:
+    """When a duplicate paper is found, backfill NULL abstract/year/venue from new extraction."""
+
+    @patch("publication.Database.get_researcher_id", return_value=42)
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_backfills_abstract_when_existing_is_null(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """Duplicate path should UPDATE abstract when existing paper has NULL abstract."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+        # Simulate INSERT IGNORE → duplicate (lastrowid=0)
+        cursor.lastrowid = 0
+        # fetchone for title_hash lookup → returns paper id=10
+        # fetchone for existing paper fields → abstract is NULL
+        cursor.fetchone.side_effect = [
+            (10,),          # SELECT id FROM papers WHERE title_hash = ...
+            (None, None, None),  # SELECT abstract, year, venue FROM papers WHERE id = ...
+            (0,),           # SELECT COUNT(*) FROM feed_events (existing logic)
+        ]
+        cursor.rowcount = 1  # new_to_this_url = True for paper_urls INSERT
+
+        Publication.save_publications("http://new-source.com", [{
+            "title": "Test Paper",
+            "authors": [["John", "Doe"]],
+            "year": "2024",
+            "venue": "AER",
+            "abstract": "This paper studies trade.",
+            "status": "working_paper",
+        }])
+
+        # Verify UPDATE was called to backfill
+        update_calls = [
+            call for call in cursor.execute.call_args_list
+            if 'UPDATE papers SET' in str(call) and 'COALESCE' in str(call)
+        ]
+        assert len(update_calls) == 1, f"Expected 1 backfill UPDATE, got {len(update_calls)}"
+
+    @patch("publication.Database.get_researcher_id", return_value=42)
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_skips_backfill_when_existing_has_all_fields(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """No UPDATE if existing paper already has abstract, year, venue."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+        cursor.lastrowid = 0
+        cursor.fetchone.side_effect = [
+            (10,),                           # title_hash lookup
+            ("Existing abstract", "2023", "QJE"),  # all fields populated
+            (0,),                            # feed_events COUNT
+        ]
+        cursor.rowcount = 1
+
+        Publication.save_publications("http://new-source.com", [{
+            "title": "Test Paper",
+            "authors": [["John", "Doe"]],
+            "abstract": "New abstract",
+            "year": "2024",
+            "venue": "AER",
+        }])
+
+        update_calls = [
+            call for call in cursor.execute.call_args_list
+            if 'UPDATE papers SET' in str(call) and 'COALESCE' in str(call)
+        ]
+        assert len(update_calls) == 0, "Should not backfill when all fields exist"
