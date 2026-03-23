@@ -59,7 +59,7 @@ When `HTMLFetcher.save_text()` is called (text content has changed):
    - INSERT into `html_snapshots` (using `INSERT IGNORE` to handle the unique constraint gracefully if a duplicate exists)
 3. Upsert `html_content` as today — no change to existing logic
 
-Steps 2 and 3 are wrapped in a single database transaction to ensure atomicity.
+Steps 2 and 3 use separate auto-committing connections (matching the existing `Database.execute_query()` pattern). The `UNIQUE KEY (url_id, text_content_hash)` with `INSERT IGNORE` prevents duplicate snapshots if a crash occurs between archive and upsert, making a single transaction unnecessary. `save_text()` wraps the `archive_snapshot()` call in a try/except as an additional safety net.
 
 **Edge cases:**
 - First-ever fetch for a URL: no prior row exists, no snapshot created. History begins on the second text-changing fetch.
