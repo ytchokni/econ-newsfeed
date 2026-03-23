@@ -211,3 +211,14 @@ class TestEnrichJelFromPapers:
             count = enrich_jel_from_papers()
 
         assert count == 0
+
+
+class TestCliIntegration:
+    """Verify the CLI command is registered."""
+
+    def test_enrich_jel_command_registered(self):
+        """The 'enrich-jel' subcommand should be in main.py source."""
+        import inspect
+        import main as main_mod
+        source = inspect.getsource(main_mod)
+        assert "enrich-jel" in source
