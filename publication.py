@@ -65,6 +65,59 @@ class PublicationExtractionList(BaseModel):
     publications: list[PublicationExtraction]
 
 
+# Words too common to count as author-title overlap
+_STOPWORDS = frozenset({
+    'a', 'an', 'the', 'of', 'on', 'in', 'and', 'or', 'for', 'to', 'at',
+    'by', 'is', 'it', 'as', 'do', 'no', 'not', 'with', 'from', 'but',
+})
+
+# Multi-word title phrases indicating software, not academic papers.
+_SOFTWARE_INDICATORS = (
+    'python package', 'r package', 'npm package', 'pip install',
+    'github repository', 'code repository', 'open source software',
+)
+
+
+def validate_publication(pub: dict) -> bool:
+    """Return False for garbage extractions that should be silently dropped."""
+    title = pub.get('title', '')
+    authors = pub.get('authors', [])
+    draft_url = pub.get('draft_url') or ''
+
+    # GitHub exclusion: reject draft URLs pointing to github.com (not github.io)
+    if 'github.com' in draft_url.lower() and 'github.io' not in draft_url.lower():
+        return False
+
+    # Software/package title indicators
+    title_lower = title.lower()
+    if any(indicator in title_lower for indicator in _SOFTWARE_INDICATORS):
+        return False
+
+    # Collect last names (stripped, lowered)
+    last_names = []
+    for author in authors:
+        if not author:
+            continue
+        last = author[-1].strip().lower() if author else ''
+        if last:
+            last_names.append(last)
+
+    # Minimum author quality: reject if ALL last names are < 2 chars
+    if last_names and all(len(ln) < 2 for ln in last_names):
+        return False
+
+    # Author-title overlap: reject if 2+ non-stopword last names appear in the title
+    title_words = set(re.sub(r'[^a-z\s]', '', title_lower).split())
+    overlap_count = sum(
+        1 for ln in last_names
+        if ln in title_words and ln not in _STOPWORDS and len(ln) >= 2
+    )
+    if overlap_count >= 2:
+        return False
+
+    return True
+
+
 class Publication:
     def __init__(self, id: int, title: str, authors: list | None, year: str | None, venue: str | None, url: str | None) -> None:
         self.id = id
@@ -133,6 +186,32 @@ class Publication:
                             logging.error(f"Could not find publication after INSERT IGNORE: {pub['title']}")
                             continue
                         publication_id = row[0]
+                        # Backfill NULL fields from new extraction
+                        cursor.execute(
+                            "SELECT abstract, year, venue FROM papers WHERE id = %s",
+                            (publication_id,),
+                        )
+                        existing = cursor.fetchone()
+                        if existing:
+                            existing_abstract, existing_year, existing_venue = existing
+                            new_abstract = pub.get('abstract')
+                            new_year = pub.get('year')
+                            new_venue = pub.get('venue')
+                            needs_backfill = (
+                                (not existing_abstract and new_abstract)
+                                or (not existing_year and new_year)
+                                or (not existing_venue and new_venue)
+                            )
+                            if needs_backfill:
+                                cursor.execute(
+                                    """UPDATE papers SET
+                                        abstract = COALESCE(abstract, %s),
+                                        year = COALESCE(year, %s),
+                                        venue = COALESCE(venue, %s)
+                                    WHERE id = %s""",
+                                    (new_abstract, new_year, new_venue, publication_id),
+                                )
+                                logging.info(f"Backfilled metadata for duplicate: {pub['title']}")
                         # Add the new source URL to paper_urls for cross-researcher tracking
                         cursor.execute(
                             """
@@ -266,7 +345,14 @@ Content:
                 logging.error(f"Failed to parse structured output for URL: {url}")
                 return []
 
-            return [pub.model_dump() for pub in result.publications]
+            validated = []
+            for pub in result.publications:
+                d = pub.model_dump()
+                if validate_publication(d):
+                    validated.append(d)
+                else:
+                    logging.info(f"Validation dropped: {d.get('title', '<no title>')}")
+            return validated
         except Exception as e:
             logging.error("Error in OpenAI API call for %s: %s: %s", url, type(e).__name__, e)
             return []
