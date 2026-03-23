@@ -4,6 +4,10 @@ import { SWRConfig } from "swr";
 import NewsfeedContent from "../NewsfeedContent";
 import type { PaginatedResponse, Publication } from "@/lib/types";
 
+jest.mock("next/navigation", () => ({
+  useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
+}));
+
 const page1: PaginatedResponse<Publication> = {
   items: [
     {

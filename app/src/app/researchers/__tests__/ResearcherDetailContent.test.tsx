@@ -3,6 +3,10 @@ import { SWRConfig } from "swr";
 import ResearcherDetailContent from "../../researchers/[id]/ResearcherDetailContent";
 import type { ResearcherDetail } from "@/lib/types";
 
+jest.mock("next/navigation", () => ({
+  useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
+}));
+
 const researcher: ResearcherDetail = {
   id: 1,
   first_name: "Max Friedrich",
