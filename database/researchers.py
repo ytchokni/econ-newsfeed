@@ -43,6 +43,11 @@ def first_name_is_initial_match(name_a: str, name_b: str) -> bool:
     return init_b == name_a[0].lower()
 
 
+def _longer_first_name(a: str, b: str) -> str:
+    """Return whichever first name is longer, ignoring trailing periods."""
+    return a if len(a.rstrip('.')) > len(b.rstrip('.')) else b
+
+
 def _disambiguate_researcher(first_name: str, last_name: str, candidates: list[dict]) -> int | None:
     """Use LLM to check if any same-last-name candidate is the same person.
     Returns the matching researcher id (int) or None if no match.
@@ -94,8 +99,8 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
 
     Matching priority:
     1. Exact first_name + last_name match
-    1.5. Initial match — single-char initial matches full first name (same last name)
     2. OpenAlex author ID match (deterministic, free)
+    2.5. Initial match — single-char initial matches full first name (same last name)
     3. LLM disambiguation for same-last-name candidates
     4. Insert new researcher
     """
@@ -135,29 +140,7 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
     if result:
         return result['id']
 
-    # 1.5. Initial match — "L." matches "Liam" for same last name
-    candidates = _fetch_all(
-        "SELECT id, first_name, last_name FROM researchers WHERE last_name = %s",
-        (last_name,),
-    )
-    if candidates:
-        initial_matches = [
-            c for c in candidates
-            if first_name_is_initial_match(first_name, c['first_name'])
-        ]
-        if len(initial_matches) == 1:
-            match = initial_matches[0]
-            longer_name = first_name if len(first_name.rstrip('.')) > len(match['first_name'].rstrip('.')) else match['first_name']
-            _execute(
-                "UPDATE researchers SET first_name = %s WHERE id = %s",
-                (longer_name, match['id']),
-            )
-            logging.info(
-                f"Initial matched '{first_name} {last_name}' to researcher id={match['id']} ('{match['first_name']} {match['last_name']}')"
-            )
-            return match['id']
-
-    # 2. OpenAlex author ID match
+    # 2. OpenAlex author ID match (cheap, deterministic — check before querying candidates)
     if openalex_author_id:
         result = _fetch_one(
             "SELECT id FROM researchers WHERE openalex_author_id = %s",
@@ -169,12 +152,32 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
             )
             return result['id']
 
+    # Fetch same-last-name candidates (shared by Tier 2.5 and Tier 3)
+    candidates = _fetch_all(
+        "SELECT id, first_name, last_name FROM researchers WHERE last_name = %s",
+        (last_name,),
+    )
+
+    # 2.5. Initial match — "L." matches "Liam" for same last name
+    if candidates:
+        initial_matches = [
+            c for c in candidates
+            if first_name_is_initial_match(first_name, c['first_name'])
+        ]
+        if len(initial_matches) == 1:
+            match = initial_matches[0]
+            longer_name = _longer_first_name(first_name, match['first_name'])
+            if longer_name != match['first_name']:
+                _execute(
+                    "UPDATE researchers SET first_name = %s WHERE id = %s",
+                    (longer_name, match['id']),
+                )
+            logging.info(
+                f"Initial matched '{first_name} {last_name}' to researcher id={match['id']} ('{match['first_name']} {match['last_name']}')"
+            )
+            return match['id']
+
     # 3. Same-last-name candidates — let LLM decide if any is the same person
-    if candidates is None:
-        candidates = _fetch_all(
-            "SELECT id, first_name, last_name FROM researchers WHERE last_name = %s",
-            (last_name,),
-        )
     if candidates:
         match_id = _disambiguate_researcher(first_name, last_name, candidates)
         if match_id is not None:
@@ -242,7 +245,7 @@ def merge_researchers(canonical_id: int, duplicate_id: int, conn) -> None:
     )
 
     # 3. Upgrade first_name to the longer variant
-    longer_name = canonical['first_name'] if len(canonical['first_name'].rstrip('.')) > len(duplicate['first_name'].rstrip('.')) else duplicate['first_name']
+    longer_name = _longer_first_name(canonical['first_name'], duplicate['first_name'])
     c.execute(
         "UPDATE researchers SET first_name = %s WHERE id = %s",
         (longer_name, canonical_id),
@@ -267,7 +270,6 @@ def merge_researchers(canonical_id: int, duplicate_id: int, conn) -> None:
     c.close()
     conn.commit()
 
-    # 6. Log
     logging.info(
         f"Merged researcher #{duplicate_id} ({duplicate['first_name']} {duplicate['last_name']}) "
         f"into #{canonical_id} ({canonical['first_name']} {canonical['last_name']})"
