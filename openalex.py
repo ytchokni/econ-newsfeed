@@ -162,12 +162,23 @@ def _parse_work(work: dict) -> dict:
     }
 
 
-def enrich_publication(paper_id, title, author_name, existing_abstract=None):
+def enrich_publication(paper_id, title, author_name, existing_abstract=None, doi=None):
     """Enrich a single publication with OpenAlex data.
 
+    If doi is provided, uses exact DOI lookup (no budget cost).
+    Otherwise falls back to title+author search.
     Returns True if enrichment data was found and stored, False otherwise.
     """
-    result = search_work(title, author_name)
+    result = None
+
+    # Strategy 1: DOI lookup (exact, no budget cost)
+    if doi:
+        result = lookup_by_doi(doi)
+
+    # Strategy 2: Title search (fuzzy, costs budget)
+    if not result:
+        result = search_work(title, author_name)
+
     if not result:
         return False
 
@@ -181,14 +192,47 @@ def enrich_publication(paper_id, title, author_name, existing_abstract=None):
         coauthors=result["coauthors"],
         abstract=abstract,
     )
+
+    # Backfill openalex_author_id on researchers from coauthor data
+    _backfill_researcher_openalex_ids(paper_id, result["coauthors"])
+
     return True
+
+
+def _backfill_researcher_openalex_ids(paper_id, coauthors):
+    """Populate openalex_author_id on researchers matched to this paper's authors."""
+    if not coauthors:
+        return
+    # Build lookup: openalex_author_id -> display_name from coauthors
+    oa_ids = {ca["openalex_author_id"]: ca["display_name"]
+              for ca in coauthors if ca.get("openalex_author_id")}
+    if not oa_ids:
+        return
+    # Get researchers linked to this paper
+    rows = Database.fetch_all(
+        """SELECT r.id, r.first_name, r.last_name, r.openalex_author_id
+           FROM researchers r
+           JOIN authorship a ON a.researcher_id = r.id
+           WHERE a.publication_id = %s AND r.openalex_author_id IS NULL""",
+        (paper_id,),
+    )
+    for r in rows:
+        last_name = r['last_name'].lower()
+        for oa_id, display_name in oa_ids.items():
+            # Match by last name appearing in OpenAlex display name
+            if last_name in display_name.lower().split():
+                Database.execute_query(
+                    "UPDATE researchers SET openalex_author_id = %s WHERE id = %s",
+                    (oa_id, r['id']),
+                )
+                break
 
 
 def enrich_new_publications(limit=50):
     """Enrich unenriched publications with OpenAlex data.
 
-    Stops early if the daily API budget is exhausted.
-    Returns the number of papers processed (matched or not).
+    Papers with DOIs from paper_links are enriched first (exact match).
+    Papers without links are only enriched if published (title search fallback).
     """
     if not _check_budget():
         logger.info("OpenAlex daily budget exhausted (%d/%d), skipping", _daily_counter["count"], DAILY_BUDGET)
@@ -203,7 +247,8 @@ def enrich_new_publications(limit=50):
                 len(papers), _daily_counter["count"], DAILY_BUDGET)
     enriched = 0
     for paper in papers:
-        if not _check_budget():
+        doi = paper.get("link_doi")
+        if not doi and not _check_budget():
             logger.info("OpenAlex daily budget reached, stopping enrichment")
             break
         success = enrich_publication(
@@ -211,10 +256,12 @@ def enrich_new_publications(limit=50):
             title=paper["title"],
             author_name=paper["author_name"],
             existing_abstract=paper.get("abstract"),
+            doi=doi,
         )
         if success:
             enriched += 1
-        time.sleep(0.5)  # ~2 req/s — safe for API key tier
+        if not doi:
+            time.sleep(0.5)  # Only rate-limit title searches
 
     logger.info("OpenAlex enrichment: %d/%d papers matched", enriched, len(papers))
     return len(papers)

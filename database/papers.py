@@ -70,18 +70,26 @@ def update_openalex_data(paper_id, doi, openalex_id, coauthors, abstract=None):
 def get_unenriched_papers(limit=50):
     """Get papers that haven't been enriched via OpenAlex yet.
 
-    Returns list of dicts with keys: id, title, abstract, author_name.
-    Each row includes one author name (for OpenAlex search matching).
+    Returns list of dicts with keys: id, title, abstract, author_name, status, link_doi.
+    Papers with links get priority. Only published papers without links are included.
     """
     return fetch_all(
         """
-        SELECT p.id, p.title, p.abstract,
-               MIN(CONCAT(r.first_name, ' ', r.last_name)) AS author_name
+        SELECT p.id, p.title, p.abstract, p.status,
+               MIN(CONCAT(r.first_name, ' ', r.last_name)) AS author_name,
+               (SELECT pl.doi FROM paper_links pl
+                WHERE pl.paper_id = p.id AND pl.doi IS NOT NULL
+                LIMIT 1) AS link_doi
         FROM papers p
         JOIN authorship a ON a.publication_id = p.id
         JOIN researchers r ON r.id = a.researcher_id
         WHERE p.openalex_id IS NULL
-        GROUP BY p.id, p.title, p.abstract
+          AND (
+            EXISTS (SELECT 1 FROM paper_links pl WHERE pl.paper_id = p.id)
+            OR p.status = 'published'
+          )
+        GROUP BY p.id, p.title, p.abstract, p.status
+        ORDER BY link_doi IS NOT NULL DESC, p.id
         LIMIT %s
         """,
         (limit,),

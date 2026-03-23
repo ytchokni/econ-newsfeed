@@ -228,6 +228,7 @@ class TestEnrichPublication:
         with (
             patch("openalex.search_work", return_value=openalex_result),
             patch("openalex.Database.update_openalex_data") as mock_update,
+            patch("openalex._backfill_researcher_openalex_ids"),
         ):
             from openalex import enrich_publication
             result = enrich_publication(
@@ -257,6 +258,7 @@ class TestEnrichPublication:
         with (
             patch("openalex.search_work", return_value=openalex_result),
             patch("openalex.Database.update_openalex_data") as mock_update,
+            patch("openalex._backfill_researcher_openalex_ids"),
         ):
             from openalex import enrich_publication
             enrich_publication(
@@ -289,8 +291,8 @@ class TestEnrichNewPublications:
 
     def test_enriches_unenriched_papers(self):
         unenriched = [
-            {"id": 1, "title": "Paper A", "abstract": None, "author_name": "Author A"},
-            {"id": 2, "title": "Paper B", "abstract": "Existing", "author_name": "Author B"},
+            {"id": 1, "title": "Paper A", "abstract": None, "author_name": "Author A", "link_doi": None},
+            {"id": 2, "title": "Paper B", "abstract": "Existing", "author_name": "Author B", "link_doi": None},
         ]
         openalex_result = {
             "doi": "10.1234/test",
@@ -302,6 +304,7 @@ class TestEnrichNewPublications:
             patch("openalex.Database.get_unenriched_papers", return_value=unenriched),
             patch("openalex.search_work", return_value=openalex_result),
             patch("openalex.Database.update_openalex_data"),
+            patch("openalex._backfill_researcher_openalex_ids"),
             patch("openalex.time.sleep"),  # skip rate-limit delay in tests
         ):
             from openalex import enrich_new_publications
@@ -372,3 +375,63 @@ class TestLookupByDoi:
             result = lookup_by_doi("10.1257/aer.20181234")
 
         assert result is None
+
+
+class TestEnrichWithDoiFirst:
+    """enrich_publication should try DOI lookup before title search."""
+
+    def test_uses_doi_from_paper_links(self):
+        """If paper has a DOI in paper_links, use it instead of title search."""
+        openalex_result = {
+            "doi": "10.1007/s40641-016-0032-z",
+            "openalex_id": "W123",
+            "title": "Extreme Air Pollution",
+            "coauthors": [{"display_name": "A. Author", "openalex_author_id": "A111"}],
+            "abstract": "Abstract text",
+        }
+        with (
+            patch("openalex.lookup_by_doi", return_value=openalex_result) as mock_lookup,
+            patch("openalex.search_work") as mock_search,
+            patch("openalex.Database.update_openalex_data") as mock_update,
+            patch("openalex._backfill_researcher_openalex_ids"),
+        ):
+            from openalex import enrich_publication
+            result = enrich_publication(
+                paper_id=1,
+                title="Extreme Air Pollution",
+                author_name="Author",
+                existing_abstract=None,
+                doi="10.1007/s40641-016-0032-z",
+            )
+
+        assert result is True
+        mock_lookup.assert_called_once_with("10.1007/s40641-016-0032-z")
+        mock_search.assert_not_called()
+
+
+class TestBackfillResearcherOpenalexIds:
+    """_backfill_researcher_openalex_ids populates openalex_author_id on researchers."""
+
+    def test_updates_researcher_openalex_id(self):
+        coauthors = [
+            {"display_name": "Max Steinhardt", "openalex_author_id": "A5023888391"},
+            {"display_name": "Jane Doe", "openalex_author_id": "A5000000001"},
+        ]
+        with (
+            patch("openalex.Database.fetch_all", return_value=[
+                {"id": 1, "first_name": "Max", "last_name": "Steinhardt", "openalex_author_id": None},
+            ]),
+            patch("openalex.Database.execute_query") as mock_exec,
+        ):
+            from openalex import _backfill_researcher_openalex_ids
+            _backfill_researcher_openalex_ids(paper_id=10, coauthors=coauthors)
+
+        mock_exec.assert_called_once()
+        assert mock_exec.call_args[0][1] == ("A5023888391", 1)
+
+    def test_skips_when_no_openalex_ids(self):
+        coauthors = [{"display_name": "Author", "openalex_author_id": None}]
+        with patch("openalex.Database.fetch_all") as mock_fetch:
+            from openalex import _backfill_researcher_openalex_ids
+            _backfill_researcher_openalex_ids(paper_id=10, coauthors=coauthors)
+        mock_fetch.assert_not_called()
