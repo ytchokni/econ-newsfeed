@@ -1,14 +1,5 @@
 # tests/test_save_publications.py
 """Tests for Publication.save_publications edge cases."""
-import os
-
-os.environ.setdefault("DB_HOST", "localhost")
-os.environ.setdefault("DB_USER", "test")
-os.environ.setdefault("DB_PASSWORD", "test")
-os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
-os.environ.setdefault("OPENAI_API_KEY", "sk-test")
-os.environ.setdefault("SCRAPE_API_KEY", "test-key")
-
 import pytest
 from unittest.mock import patch, MagicMock
 from publication import Publication, _author_id_cache

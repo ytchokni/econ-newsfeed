@@ -16,7 +16,9 @@ _openai_client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
 
 CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS', '4000'))
 
-# Thread safety: benign races under CPython GIL; worst case is a redundant LLM lookup
+# Module-level cache: persists for process lifetime (one batch-check run).
+# Under concurrent workers (parse-fast), CPython GIL makes dict ops atomic;
+# worst case is two threads both resolving the same author (redundant, not incorrect).
 _author_id_cache: dict[tuple[str, str], int] = {}
 
 VALID_STATUSES = frozenset({
