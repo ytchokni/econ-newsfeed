@@ -91,6 +91,33 @@ export interface Researcher {
   jel_codes: JelCode[];
 }
 
+export interface FeedEvent {
+  id: number;
+  event_type: EventType;
+  old_status: PublicationStatus | null;
+  new_status: PublicationStatus | null;
+  created_at: string;
+}
+
+export interface PaperSnapshot {
+  status: PublicationStatus | null;
+  venue: string | null;
+  abstract: string | null;
+  draft_url: string | null;
+  draft_url_status: DraftUrlStatus | null;
+  year: string | null;
+  scraped_at: string;
+  source_url: string | null;
+}
+
+export interface PublicationDetail extends Publication {
+  feed_events: FeedEvent[];
+  history: PaperSnapshot[];
+  is_seed: boolean;
+  title_hash: string;
+  openalex_id: string | null;
+}
+
 export interface FeedFilters {
   status?: string;
   institution?: string;
