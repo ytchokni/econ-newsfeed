@@ -13,7 +13,9 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup, NavigableString
 
 from database import Database
+from doi_resolver import resolve_doi
 from html_fetcher import HTMLFetcher
+from openalex import lookup_by_doi
 
 # ---------------------------------------------------------------------------
 # Trusted domains
@@ -401,12 +403,16 @@ def match_link_to_paper(anchor_text, paper_titles, threshold=0.75):
 # ---------------------------------------------------------------------------
 
 def match_and_save_paper_links(url_id, publications):
-    """Match page links to papers by anchor text, save to paper_links.
+    """Match page links to papers, save to paper_links.
 
-    Called after save_publications(). Extracts trusted-domain links from
-    stored raw HTML, matches each to the best paper by anchor text,
-    and persists matches.
+    Two matching strategies:
+    1. DOI-based: resolve DOI from URL -> get canonical title -> match by title_hash
+    2. Anchor text: fall back to fuzzy matching (existing approach)
+
+    Called after save_publications().
     """
+    import time
+
     raw_html = HTMLFetcher.get_raw_html(url_id)
     if not raw_html:
         return
@@ -415,34 +421,61 @@ def match_and_save_paper_links(url_id, publications):
     if not page_links:
         return
 
-    # Batch lookup: compute all title hashes, then single WHERE IN query
+    # Build title lookup from passed publications (for anchor text fallback)
     hash_to_title = {}
     for pub in publications:
         title = (pub.get('title') or '').strip()
         if title:
             hash_to_title[Database.compute_title_hash(title)] = title
 
-    if not hash_to_title:
-        return
-
-    placeholders = ",".join(["%s"] * len(hash_to_title))
-    rows = Database.fetch_all(
-        f"SELECT id, title_hash FROM papers WHERE title_hash IN ({placeholders})",
-        tuple(hash_to_title.keys()),
-    )
-    paper_ids = {hash_to_title[r['title_hash']]: r['id'] for r in rows}
-
-    if not paper_ids:
-        return
+    if hash_to_title:
+        placeholders = ",".join(["%s"] * len(hash_to_title))
+        rows = Database.fetch_all(
+            f"SELECT id, title_hash FROM papers WHERE title_hash IN ({placeholders})",
+            tuple(hash_to_title.keys()),
+        )
+        paper_ids_by_title = {hash_to_title[r['title_hash']]: r['id'] for r in rows}
+    else:
+        paper_ids_by_title = {}
 
     for link in page_links:
-        matched_title, _ = match_link_to_paper(link['anchor_text'], list(paper_ids.keys()))
-        if matched_title:
+        paper_id = None
+        link_doi = None
+
+        # Strategy 1: DOI-based matching
+        link_doi = resolve_doi(link['url'])
+        if link_doi:
+            # Try to find paper by canonical title from OpenAlex
+            openalex_data = lookup_by_doi(link_doi)
+            if openalex_data and openalex_data.get('title'):
+                canonical_hash = Database.compute_title_hash(openalex_data['title'])
+                paper_row = Database.fetch_one(
+                    "SELECT id FROM papers WHERE title_hash = %s", (canonical_hash,)
+                )
+                if paper_row:
+                    paper_id = paper_row['id']
+            time.sleep(0.2)  # Rate limit OpenAlex calls
+
+            # Also try matching DOI directly against papers.doi
+            if not paper_id:
+                paper_row = Database.fetch_one(
+                    "SELECT id FROM papers WHERE doi = %s", (link_doi,)
+                )
+                if paper_row:
+                    paper_id = paper_row['id']
+
+        # Strategy 2: Anchor text fallback
+        if not paper_id and paper_ids_by_title:
+            matched_title, _ = match_link_to_paper(link['anchor_text'], list(paper_ids_by_title.keys()))
+            if matched_title:
+                paper_id = paper_ids_by_title[matched_title]
+
+        if paper_id:
             try:
                 Database.execute_query(
-                    """INSERT IGNORE INTO paper_links (paper_id, url, link_type, discovered_at)
-                       VALUES (%s, %s, %s, %s)""",
-                    (paper_ids[matched_title], link['url'], link['link_type'],
+                    """INSERT IGNORE INTO paper_links (paper_id, url, link_type, doi, discovered_at)
+                       VALUES (%s, %s, %s, %s, %s)""",
+                    (paper_id, link['url'], link['link_type'], link_doi,
                      datetime.now(timezone.utc)))
             except Exception as e:
                 logging.warning("Error saving paper link: %s", e)

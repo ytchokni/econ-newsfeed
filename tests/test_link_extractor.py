@@ -151,3 +151,55 @@ class TestApiPaperLinks:
         assert resp.status_code == 200
         assert "links" in resp.json()
         assert resp.json()["links"][0]["link_type"] == "ssrn"
+
+
+class TestMatchAndSavePaperLinksWithDoi:
+    """DOI-based matching: resolve DOI from URL, get canonical title, match to paper."""
+
+    @patch("link_extractor.Database.execute_query")
+    @patch("link_extractor.Database.fetch_all")
+    @patch("link_extractor.Database.fetch_one")
+    @patch("link_extractor.Database.compute_title_hash")
+    @patch("link_extractor.HTMLFetcher.get_raw_html")
+    def test_doi_link_matched_by_canonical_title(self, mock_get_raw, mock_hash,
+                                                  mock_fetch_one, mock_fetch_all, mock_execute):
+        """Link with DOI in URL -> resolve DOI -> get canonical title -> match to paper."""
+        html = '<div><a href="https://link.springer.com/article/10.1007/s40641-016-0032-z">Extreme Air Pollution</a></div>'
+        mock_get_raw.return_value = html
+
+        with patch("link_extractor.resolve_doi", return_value="10.1007/s40641-016-0032-z"), \
+             patch("link_extractor.lookup_by_doi", return_value={
+                 "doi": "10.1007/s40641-016-0032-z",
+                 "title": "Extreme Air Pollution in Global Megacities",
+                 "openalex_id": "W123", "coauthors": [], "abstract": None,
+             }):
+            mock_hash.return_value = "abc123"
+            mock_fetch_one.return_value = {"id": 10}
+            mock_fetch_all.return_value = []
+
+            match_and_save_paper_links(url_id=1, publications=[])
+
+        link_calls = [c for c in mock_execute.call_args_list if 'paper_links' in c[0][0]]
+        assert len(link_calls) == 1
+        params = link_calls[0][0][1]
+        assert params[0] == 10  # paper_id
+        assert "10.1007/s40641-016-0032-z" in params  # doi stored
+
+    @patch("link_extractor.Database.execute_query")
+    @patch("link_extractor.Database.fetch_all")
+    @patch("link_extractor.Database.compute_title_hash")
+    @patch("link_extractor.HTMLFetcher.get_raw_html")
+    def test_falls_back_to_anchor_text_when_no_doi(self, mock_get_raw, mock_hash,
+                                                     mock_fetch_all, mock_execute):
+        """Link without DOI -> falls back to anchor text matching."""
+        html = '<div><a href="https://academic.oup.com/restud/article/83/1/87/2461318">Trade and Innovation</a></div>'
+        mock_get_raw.return_value = html
+
+        with patch("link_extractor.resolve_doi", return_value=None):
+            mock_hash.return_value = "abc123"
+            mock_fetch_all.return_value = [{'id': 10, 'title_hash': 'abc123'}]
+
+            match_and_save_paper_links(url_id=1, publications=[{'title': 'Trade and Innovation'}])
+
+        link_calls = [c for c in mock_execute.call_args_list if 'paper_links' in c[0][0]]
+        assert len(link_calls) == 1
