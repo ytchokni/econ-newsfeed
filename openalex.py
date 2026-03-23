@@ -110,6 +110,27 @@ def search_work(title: str, author_name: str) -> dict | None:
     return None
 
 
+def lookup_by_doi(doi: str) -> dict | None:
+    """Look up a work in OpenAlex by exact DOI.
+
+    Returns a dict with keys: doi, openalex_id, coauthors, abstract, title
+    or None if not found. Does not consume the daily search budget.
+    """
+    session = _get_session()
+    try:
+        resp = session.get(f"{OPENALEX_BASE_URL}/works/doi:{doi}", timeout=10)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        work = resp.json()
+        result = _parse_work(work)
+        result["title"] = work.get("title", "")
+        return result
+    except (requests.RequestException, ValueError) as e:
+        logger.warning("OpenAlex DOI lookup failed for '%s': %s", doi, e)
+        return None
+
+
 def _strip_prefix(url: str | None, prefix: str) -> str | None:
     """Strip a URL prefix and return the identifier, or None if empty."""
     return (url or "").replace(prefix, "") or None

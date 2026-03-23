@@ -315,3 +315,60 @@ class TestEnrichNewPublications:
             count = enrich_new_publications()
 
         assert count == 0
+
+
+SAMPLE_OPENALEX_WORK = {
+    "id": "https://openalex.org/W2741809807",
+    "doi": "https://doi.org/10.1257/aer.20181234",
+    "title": "Trade and Wages",
+    "authorships": [
+        {
+            "author": {
+                "id": "https://openalex.org/A5023888391",
+                "display_name": "Max Friedrich Steinhardt",
+            },
+        },
+    ],
+    "abstract_inverted_index": {"This": [0], "paper": [1], "studies": [2], "trade.": [3]},
+}
+
+
+class TestLookupByDoi:
+    """Tests for openalex.lookup_by_doi — exact DOI lookup."""
+
+    def test_returns_parsed_result(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = SAMPLE_OPENALEX_WORK
+
+        with patch("openalex._get_session") as mock_session:
+            mock_session.return_value.get.return_value = mock_resp
+            from openalex import lookup_by_doi
+            result = lookup_by_doi("10.1257/aer.20181234")
+
+        assert result is not None
+        assert result["doi"] == "10.1257/aer.20181234"
+        assert result["openalex_id"] == "W2741809807"
+        assert result["title"] == "Trade and Wages"
+        assert len(result["coauthors"]) == 1
+
+    def test_returns_none_on_404(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 404
+
+        with patch("openalex._get_session") as mock_session:
+            mock_session.return_value.get.return_value = mock_resp
+            from openalex import lookup_by_doi
+            result = lookup_by_doi("10.9999/nonexistent")
+
+        assert result is None
+
+    def test_returns_none_on_network_error(self):
+        import requests as req
+        with patch("openalex._get_session") as mock_session:
+            mock_session.return_value.get.side_effect = req.RequestException("timeout")
+            from openalex import lookup_by_doi
+            result = lookup_by_doi("10.1257/aer.20181234")
+
+        assert result is None
