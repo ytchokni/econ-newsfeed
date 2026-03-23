@@ -16,6 +16,11 @@ _openai_client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
 
 CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS', '4000'))
 
+# Module-level cache: persists for process lifetime (one batch-check run).
+# Under concurrent workers (parse-fast), CPython GIL makes dict ops atomic;
+# worst case is two threads both resolving the same author (redundant, not incorrect).
+_author_id_cache: dict[tuple[str, str], int] = {}
+
 VALID_STATUSES = frozenset({
     'published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper',
 })
@@ -78,11 +83,12 @@ class Publication:
         """Save extracted publications to the database, using title_hash for cross-researcher dedup."""
         with Database.get_connection() as conn:
             for pub in publications:
+                cursor = None
                 try:
                     title = pub['title'].strip() if pub['title'] else ''
                     title_hash = Database.compute_title_hash(pub['title'])
 
-                    cursor = conn.cursor()
+                    cursor = conn.cursor(buffered=True)
 
                     # INSERT IGNORE leverages uq_title_hash index for cross-researcher dedup.
                     # is_seed is set on INSERT but NOT updated on duplicate (preserves original).
@@ -125,7 +131,6 @@ class Publication:
                         row = cursor.fetchone()
                         if not row:
                             logging.error(f"Could not find publication after INSERT IGNORE: {pub['title']}")
-                            cursor.close()
                             continue
                         publication_id = row[0]
                         # Add the new source URL to paper_urls for cross-researcher tracking
@@ -140,8 +145,22 @@ class Publication:
 
                     # Process authors
                     for author_order, author in enumerate(pub['authors'], start=1):
-                        first_name, last_name = author
-                        author_id = Database.get_researcher_id(first_name, last_name, conn=conn)
+                        if not author:
+                            continue
+                        if len(author) == 1:
+                            first_name, last_name = "", author[0]
+                        elif len(author) == 2:
+                            first_name, last_name = author
+                        else:
+                            # e.g. ["Jose", "Luis", "Garcia"] -> "Jose Luis", "Garcia"
+                            first_name = " ".join(author[:-1])
+                            last_name = author[-1]
+                        cache_key = (first_name, last_name)
+                        if cache_key in _author_id_cache:
+                            author_id = _author_id_cache[cache_key]
+                        else:
+                            author_id = Database.get_researcher_id(first_name, last_name, conn=conn)
+                            _author_id_cache[cache_key] = author_id
 
                         # INSERT IGNORE prevents duplicate authorship entries (uq_researcher_pub)
                         cursor.execute(
@@ -153,7 +172,6 @@ class Publication:
                         )
 
                     conn.commit()
-                    cursor.close()
                     logging.info(f"Publication saved successfully: {pub['title']}")
 
                 except Exception as e:
@@ -162,6 +180,9 @@ class Publication:
                         pub.get('title', '<unknown>'), type(e).__name__, e,
                     )
                     conn.rollback()
+                finally:
+                    if cursor:
+                        cursor.close()
 
         logging.info(f"{len(publications)} publications processed for {url}")
 

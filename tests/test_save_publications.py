@@ -1,0 +1,186 @@
+# tests/test_save_publications.py
+"""Tests for Publication.save_publications edge cases."""
+import pytest
+from unittest.mock import patch, MagicMock
+from publication import Publication, _author_id_cache
+
+
+def _mock_conn():
+    """Create a mock DB connection that simulates INSERT IGNORE with new row."""
+    mock_cursor = MagicMock()
+    mock_cursor.lastrowid = 1  # Simulate new paper inserted
+    mock_conn = MagicMock()
+    mock_conn.cursor.return_value = mock_cursor
+    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    return mock_conn, mock_cursor
+
+
+@pytest.fixture(autouse=True)
+def clear_author_cache():
+    """Ensure each test starts with a clean author cache."""
+    _author_id_cache.clear()
+    yield
+    _author_id_cache.clear()
+
+
+class TestAuthorNormalization:
+    """Author lists with != 2 elements should not crash save_publications."""
+
+    @patch("publication.Database.get_researcher_id", return_value=42)
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_three_element_author_joins_first_names(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """['Jose', 'Luis', 'Garcia'] -> first_name='Jose Luis', last_name='Garcia'."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+
+        Publication.save_publications("http://example.com", [{
+            "title": "Test Paper",
+            "authors": [["Jose", "Luis", "Garcia"]],
+            "year": "2024",
+        }])
+
+        mock_get_researcher.assert_called_once_with("Jose Luis", "Garcia", conn=conn)
+
+    @patch("publication.Database.get_researcher_id", return_value=42)
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_single_element_author_uses_empty_first_name(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """['Garcia'] -> first_name='', last_name='Garcia'."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+
+        Publication.save_publications("http://example.com", [{
+            "title": "Test Paper",
+            "authors": [["Garcia"]],
+            "year": "2024",
+        }])
+
+        mock_get_researcher.assert_called_once_with("", "Garcia", conn=conn)
+
+    @patch("publication.Database.get_researcher_id", return_value=42)
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_empty_author_list_is_skipped(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """[] -> skip, don't crash."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+
+        Publication.save_publications("http://example.com", [{
+            "title": "Test Paper",
+            "authors": [[]],
+            "year": "2024",
+        }])
+
+        mock_get_researcher.assert_not_called()
+
+    @patch("publication.Database.get_researcher_id", return_value=42)
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_normal_two_element_author_unchanged(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """['John', 'Doe'] -> first_name='John', last_name='Doe' (normal case)."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+
+        Publication.save_publications("http://example.com", [{
+            "title": "Test Paper",
+            "authors": [["John", "Doe"]],
+            "year": "2024",
+        }])
+
+        mock_get_researcher.assert_called_once_with("John", "Doe", conn=conn)
+
+
+class TestCursorCleanup:
+    """Cursor must be closed even when an exception occurs mid-save."""
+
+    @patch("publication.Database.get_researcher_id", side_effect=RuntimeError("db error"))
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_cursor_closed_on_author_error(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """Cursor.close() called even when author processing raises."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+
+        # Should not raise — error is caught and logged
+        Publication.save_publications("http://example.com", [{
+            "title": "Paper A",
+            "authors": [["John", "Doe"]],
+            "year": "2024",
+        }])
+
+        cursor.close.assert_called()
+
+    @patch("publication.Database.get_researcher_id", return_value=42)
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_second_pub_succeeds_after_first_pub_fails(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """A failed publication must not prevent subsequent publications from saving."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+
+        # First call raises, second succeeds
+        mock_get_researcher.side_effect = [RuntimeError("fail"), 42]
+
+        Publication.save_publications("http://example.com", [
+            {"title": "Paper A", "authors": [["Bad", "Author"]], "year": "2024"},
+            {"title": "Paper B", "authors": [["Good", "Author"]], "year": "2024"},
+        ])
+
+        # Paper B should still be committed
+        assert conn.commit.call_count >= 1
+
+
+class TestAuthorLookupCache:
+    """get_researcher_id should be called once per unique author, not per occurrence."""
+
+    @patch("publication.Database.get_researcher_id", return_value=42)
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_same_author_across_pubs_looked_up_once(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """If 'John Doe' appears in 3 publications, get_researcher_id called once."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+
+        pubs = [
+            {"title": f"Paper {i}", "authors": [["John", "Doe"], ["Jane", "Smith"]], "year": "2024"}
+            for i in range(3)
+        ]
+
+        Publication.save_publications("http://example.com", pubs)
+
+        # 2 unique authors x 1 call each = 2 calls total (not 6)
+        assert mock_get_researcher.call_count == 2
+
+    @patch("publication.Database.get_researcher_id", return_value=42)
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_cache_persists_across_save_publications_calls(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """Cache carries over between save_publications calls (same process, different URLs)."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+
+        pub = [{"title": "Paper A", "authors": [["John", "Doe"]], "year": "2024"}]
+
+        Publication.save_publications("http://url1.com", pub)
+        Publication.save_publications("http://url2.com", pub)
+
+        # John Doe looked up once across both calls
+        assert mock_get_researcher.call_count == 1
