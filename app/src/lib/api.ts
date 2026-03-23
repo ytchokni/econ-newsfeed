@@ -37,6 +37,7 @@ function buildPublicationsUrl(
   if (filters?.preset) params.set("preset", filters.preset);
   if (filters?.year) params.set("year", filters.year);
   if (filters?.search) params.set("search", filters.search);
+  if (filters?.event_type) params.set("event_type", filters.event_type);
   return `/api/publications?${params.toString()}`;
 }
 

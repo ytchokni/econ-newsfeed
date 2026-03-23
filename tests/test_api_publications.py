@@ -225,6 +225,76 @@ class TestListPublications:
         assert item["authors"][0]["first_name"] == "Max Friedrich"
         assert item["authors"][0]["last_name"] == "Steinhardt"
 
+    def test_event_type_filter_new_paper(self, client):
+        """?event_type=new_paper returns only new_paper events."""
+        with (
+            patch("api.Database.fetch_one", return_value={"total": 2}),
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_fetch.side_effect = [
+                SAMPLE_PUBLICATIONS[:2],
+                BATCH_AUTHORS_PUBS_1_2_3,
+                [],  # coauthors
+                [],  # links
+            ]
+            response = client.get("/api/publications?event_type=new_paper")
+
+        assert response.status_code == 200
+        # Verify the SQL received the event_type condition
+        call_args = mock_fetch.call_args_list[0]
+        sql = call_args[0][0]
+        assert "fe.event_type = %s" in sql
+
+    def test_event_type_filter_status_change(self, client):
+        """?event_type=status_change returns only status_change events."""
+        status_change_pub = {
+            **SAMPLE_PUBLICATIONS[0],
+            "event_id": 200,
+            "event_type": "status_change",
+            "old_status": "working_paper",
+            "new_status": "accepted",
+        }
+        with (
+            patch("api.Database.fetch_one", return_value={"total": 1}),
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_fetch.side_effect = [
+                [status_change_pub],
+                BATCH_AUTHORS_PUB1,
+                [],  # coauthors
+                [],  # links
+            ]
+            response = client.get("/api/publications?event_type=status_change")
+
+        assert response.status_code == 200
+        call_args = mock_fetch.call_args_list[0]
+        sql = call_args[0][0]
+        assert "fe.event_type = %s" in sql
+
+    def test_event_type_omitted_returns_both(self, client):
+        """Omitting event_type returns all events (backward compatible)."""
+        with (
+            patch("api.Database.fetch_one", return_value={"total": 3}),
+            patch("api.Database.fetch_all") as mock_fetch,
+        ):
+            mock_fetch.side_effect = [
+                SAMPLE_PUBLICATIONS,
+                BATCH_AUTHORS_PUBS_1_2_3,
+                [],  # coauthors
+                [],  # links
+            ]
+            response = client.get("/api/publications")
+
+        assert response.status_code == 200
+        call_args = mock_fetch.call_args_list[0]
+        sql = call_args[0][0]
+        assert "fe.event_type = %s" not in sql
+
+    def test_event_type_invalid_returns_400(self, client):
+        """Invalid event_type value returns 400."""
+        response = client.get("/api/publications?event_type=invalid")
+        assert response.status_code == 400
+
 
 # ---------------------------------------------------------------------------
 # Task 2.3: GET /api/publications/{id}
