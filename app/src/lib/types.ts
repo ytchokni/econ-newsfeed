@@ -114,7 +114,7 @@ export interface PublicationDetail extends Publication {
   feed_events: FeedEvent[];
   history: PaperSnapshot[];
   is_seed: boolean;
-  title_hash: string;
+  title_hash: string | null;
   openalex_id: string | null;
 }
 

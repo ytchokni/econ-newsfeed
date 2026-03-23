@@ -12,3 +12,11 @@ export function formatAuthor(author: { id: number; first_name: string; last_name
   const initial = author.first_name.charAt(0);
   return { display: `${initial}. ${author.last_name}`, id: author.id };
 }
+
+export function formatDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", {
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+}

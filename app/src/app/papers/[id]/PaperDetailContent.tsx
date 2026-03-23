@@ -1,19 +1,14 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { usePublication } from "@/lib/api";
-import { statusPillConfig, formatAuthor } from "@/lib/publication-utils";
+import { statusPillConfig, formatAuthor, formatDate } from "@/lib/publication-utils";
+import ErrorMessage from "@/components/ErrorMessage";
 import type { FeedEvent, PaperSnapshot, PublicationStatus } from "@/lib/types";
 
-function formatDate(iso: string): string {
-  return new Date(iso).toLocaleDateString("en-US", {
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
-}
+const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
 function SnapshotDiff({ current, previous }: { current: PaperSnapshot; previous: PaperSnapshot }) {
   const changes: { field: string; from: string | null; to: string | null }[] = [];
@@ -64,7 +59,7 @@ function TimelineEntry({
 
   const eventDate = new Date(event.created_at).getTime();
   const snapshotIdx = snapshots.findIndex(
-    (s) => Math.abs(new Date(s.scraped_at).getTime() - eventDate) < 86400000
+    (s) => Math.abs(new Date(s.scraped_at).getTime() - eventDate) < ONE_DAY_MS
   );
   const hasSnapshotDiff =
     event.event_type === "status_change" && snapshotIdx >= 0 && snapshotIdx < snapshots.length - 1;
@@ -114,11 +109,9 @@ export default function PaperDetailContent({ id }: { id: number }) {
 
   if (error || !publication) {
     return (
-      <div className="text-center py-12">
-        <p className="text-[var(--text-muted)] mb-4">
-          {error?.message || "Paper not found."}
-        </p>
-        <Link href="/" className="text-[var(--link)] hover:underline">
+      <div className="space-y-4">
+        <ErrorMessage message={error?.message || "Paper not found."} />
+        <Link href="/" className="text-sm text-[var(--link)] hover:underline">
           &larr; Back to feed
         </Link>
       </div>
@@ -128,12 +121,13 @@ export default function PaperDetailContent({ id }: { id: number }) {
   const authors = publication.authors.map(formatAuthor);
   const venueYear = [publication.venue, publication.year].filter(Boolean).join(", ");
 
-  const events = [...publication.feed_events].sort(
-    (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-  );
+  const events = publication.feed_events;
 
-  const snapshots = [...publication.history].sort(
-    (a, b) => new Date(b.scraped_at).getTime() - new Date(a.scraped_at).getTime()
+  const snapshots = useMemo(
+    () => [...publication.history].sort(
+      (a, b) => new Date(b.scraped_at).getTime() - new Date(a.scraped_at).getTime()
+    ),
+    [publication.history]
   );
 
   return (
