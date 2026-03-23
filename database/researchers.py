@@ -94,6 +94,7 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
 
     Matching priority:
     1. Exact first_name + last_name match
+    1.5. Initial match — single-char initial matches full first name (same last name)
     2. OpenAlex author ID match (deterministic, free)
     3. LLM disambiguation for same-last-name candidates
     4. Insert new researcher
@@ -134,6 +135,28 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
     if result:
         return result['id']
 
+    # 1.5. Initial match — "L." matches "Liam" for same last name
+    candidates = _fetch_all(
+        "SELECT id, first_name, last_name FROM researchers WHERE last_name = %s",
+        (last_name,),
+    )
+    if candidates:
+        initial_matches = [
+            c for c in candidates
+            if first_name_is_initial_match(first_name, c['first_name'])
+        ]
+        if len(initial_matches) == 1:
+            match = initial_matches[0]
+            longer_name = first_name if len(first_name) > len(match['first_name']) else match['first_name']
+            _execute(
+                "UPDATE researchers SET first_name = %s WHERE id = %s",
+                (longer_name, match['id']),
+            )
+            logging.info(
+                f"Initial matched '{first_name} {last_name}' to researcher id={match['id']} ('{match['first_name']} {match['last_name']}')"
+            )
+            return match['id']
+
     # 2. OpenAlex author ID match
     if openalex_author_id:
         result = _fetch_one(
@@ -147,10 +170,11 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
             return result['id']
 
     # 3. Same-last-name candidates — let LLM decide if any is the same person
-    candidates = _fetch_all(
-        "SELECT id, first_name, last_name FROM researchers WHERE last_name = %s",
-        (last_name,),
-    )
+    if candidates is None:
+        candidates = _fetch_all(
+            "SELECT id, first_name, last_name FROM researchers WHERE last_name = %s",
+            (last_name,),
+        )
     if candidates:
         match_id = _disambiguate_researcher(first_name, last_name, candidates)
         if match_id is not None:
