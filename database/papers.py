@@ -77,15 +77,14 @@ def get_unenriched_papers(limit=50):
         """
         SELECT p.id, p.title, p.abstract, p.status,
                MIN(CONCAT(r.first_name, ' ', r.last_name)) AS author_name,
-               (SELECT pl.doi FROM paper_links pl
-                WHERE pl.paper_id = p.id AND pl.doi IS NOT NULL
-                LIMIT 1) AS link_doi
+               MAX(pl.doi) AS link_doi
         FROM papers p
         JOIN authorship a ON a.publication_id = p.id
         JOIN researchers r ON r.id = a.researcher_id
+        LEFT JOIN paper_links pl ON pl.paper_id = p.id AND pl.doi IS NOT NULL
         WHERE p.openalex_id IS NULL
           AND (
-            EXISTS (SELECT 1 FROM paper_links pl WHERE pl.paper_id = p.id)
+            EXISTS (SELECT 1 FROM paper_links pl2 WHERE pl2.paper_id = p.id)
             OR p.status = 'published'
           )
         GROUP BY p.id, p.title, p.abstract, p.status

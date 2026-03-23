@@ -7,6 +7,16 @@ import requests
 logger = logging.getLogger(__name__)
 
 _CROSSREF_BASE = "https://api.crossref.org"
+_session = None
+
+
+def _get_session():
+    """Lazily create a requests session for Crossref API calls."""
+    global _session
+    if _session is None:
+        _session = requests.Session()
+        _session.headers.update({"User-Agent": "econ-newsfeed/1.0"})
+    return _session
 
 
 def extract_doi_from_url(url: str) -> str | None:
@@ -45,10 +55,9 @@ def extract_pii_from_url(url: str) -> str | None:
 def resolve_pii_via_crossref(pii: str) -> str | None:
     """Resolve a ScienceDirect PII to a DOI via Crossref alternative-id filter."""
     try:
-        resp = requests.get(
+        resp = _get_session().get(
             f"{_CROSSREF_BASE}/works",
             params={"filter": f"alternative-id:{pii}", "rows": 1},
-            headers={"User-Agent": "econ-newsfeed/1.0"},
             timeout=10,
         )
         resp.raise_for_status()

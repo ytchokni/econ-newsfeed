@@ -264,4 +264,4 @@ def enrich_new_publications(limit=50):
             time.sleep(0.5)  # Only rate-limit title searches
 
     logger.info("OpenAlex enrichment: %d/%d papers matched", enriched, len(papers))
-    return len(papers)
+    return enriched

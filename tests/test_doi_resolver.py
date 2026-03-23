@@ -108,23 +108,26 @@ class TestResolvePiiViaCrossref:
                 "items": [{"DOI": "10.1016/j.gloenvcha.2013.12.011", "title": ["Smallholder farmer"]}]
             }
         }
-        with patch("doi_resolver.requests.get", return_value=mock_resp) as mock_get:
+        with patch("doi_resolver._get_session") as mock_session:
+            mock_session.return_value.get.return_value = mock_resp
             result = resolve_pii_via_crossref("S0959378013002410")
 
         assert result == "10.1016/j.gloenvcha.2013.12.011"
-        mock_get.assert_called_once()
-        assert "alternative-id:S0959378013002410" in str(mock_get.call_args)
+        mock_session.return_value.get.assert_called_once()
+        assert "alternative-id:S0959378013002410" in str(mock_session.return_value.get.call_args)
 
     def test_returns_none_on_no_results(self):
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json.return_value = {"message": {"items": []}}
-        with patch("doi_resolver.requests.get", return_value=mock_resp):
+        with patch("doi_resolver._get_session") as mock_session:
+            mock_session.return_value.get.return_value = mock_resp
             assert resolve_pii_via_crossref("S0000000000000000") is None
 
     def test_returns_none_on_network_error(self):
         import requests as req
-        with patch("doi_resolver.requests.get", side_effect=req.RequestException("timeout")):
+        with patch("doi_resolver._get_session") as mock_session:
+            mock_session.return_value.get.side_effect = req.RequestException("timeout")
             assert resolve_pii_via_crossref("S0959378013002410") is None
 
 

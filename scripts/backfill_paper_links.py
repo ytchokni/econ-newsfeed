@@ -18,13 +18,16 @@ logger = logging.getLogger(__name__)
 
 from database import Database
 from html_fetcher import HTMLFetcher
-from link_extractor import extract_trusted_links, match_link_to_paper
-from doi_resolver import resolve_doi
-from openalex import lookup_by_doi
+from link_extractor import match_and_save_paper_links
 
 
 def backfill_links():
-    """Extract links from all stored HTML and save to paper_links."""
+    """Extract links from all stored HTML and save to paper_links.
+
+    Reuses match_and_save_paper_links() — the same function used during scraping.
+    For backfill, we pass an empty publications list so it relies on DOI-based
+    matching and falls back to anchor text matching against all researcher papers.
+    """
     all_urls = Database.fetch_all(
         "SELECT hc.url_id, ru.url, ru.researcher_id "
         "FROM html_content hc "
@@ -33,76 +36,23 @@ def backfill_links():
     )
     logger.info("Processing %d HTML pages for link extraction", len(all_urls))
 
-    total_links = 0
-    total_matched = 0
-    total_doi_resolved = 0
-
     for i, row in enumerate(all_urls):
-        raw_html = HTMLFetcher.get_raw_html(row['url_id'])
-        if not raw_html:
-            continue
-
-        page_links = extract_trusted_links(raw_html)
-        if not page_links:
-            continue
-
-        # Get all papers for this researcher
+        # Get all papers for this researcher to pass as publications
         papers = Database.fetch_all(
-            "SELECT p.id, p.title, p.title_hash FROM papers p "
+            "SELECT p.title FROM papers p "
             "JOIN authorship a ON a.publication_id = p.id "
             "WHERE a.researcher_id = %s",
             (row['researcher_id'],),
         )
-        paper_titles = {p['title']: p['id'] for p in papers}
+        pubs = [{'title': p['title']} for p in papers]
 
-        for link in page_links:
-            if link['link_type'] not in ('journal', 'doi', 'ssrn', 'nber', 'arxiv', 'repository'):
-                continue
-
-            total_links += 1
-            paper_id = None
-            link_doi = None
-
-            # Try DOI resolution
-            link_doi = resolve_doi(link['url'])
-            if link_doi:
-                total_doi_resolved += 1
-                # Match by canonical title
-                openalex_data = lookup_by_doi(link_doi)
-                if openalex_data and openalex_data.get('title'):
-                    canonical_hash = Database.compute_title_hash(openalex_data['title'])
-                    paper_row = Database.fetch_one(
-                        "SELECT id FROM papers WHERE title_hash = %s", (canonical_hash,)
-                    )
-                    if paper_row:
-                        paper_id = paper_row['id']
-                time.sleep(0.2)  # Rate limit OpenAlex
-
-            # Fallback: anchor text matching
-            if not paper_id and paper_titles:
-                matched_title, _ = match_link_to_paper(link['anchor_text'], list(paper_titles.keys()))
-                if matched_title:
-                    paper_id = paper_titles[matched_title]
-
-            if paper_id:
-                total_matched += 1
-                try:
-                    from datetime import datetime, timezone
-                    Database.execute_query(
-                        """INSERT IGNORE INTO paper_links (paper_id, url, link_type, doi, discovered_at)
-                           VALUES (%s, %s, %s, %s, %s)""",
-                        (paper_id, link['url'], link['link_type'], link_doi,
-                         datetime.now(timezone.utc)),
-                    )
-                except Exception as e:
-                    logger.warning("Error saving link: %s", e)
+        match_and_save_paper_links(row['url_id'], pubs)
 
         if (i + 1) % 50 == 0:
-            logger.info("Progress: %d/%d pages, %d links found, %d matched, %d DOIs resolved",
-                        i + 1, len(all_urls), total_links, total_matched, total_doi_resolved)
+            logger.info("Progress: %d/%d pages", i + 1, len(all_urls))
 
-    logger.info("Backfill complete: %d links found, %d matched to papers, %d DOIs resolved",
-                total_links, total_matched, total_doi_resolved)
+    count = Database.fetch_one("SELECT COUNT(*) AS c FROM paper_links")
+    logger.info("Backfill complete: %d paper_links rows", count['c'])
 
 
 def enrich_from_links():
