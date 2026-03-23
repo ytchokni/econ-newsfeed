@@ -24,6 +24,7 @@ def extract_doi_from_url(url: str) -> str | None:
 
     Returns the DOI string (e.g. '10.1257/aer.20181234') or None.
     Only extracts DOIs that appear to be article-level identifiers.
+    Synthesizes DOIs for SSRN URLs from the abstract_id parameter.
     """
     if not url:
         return None
@@ -34,6 +35,11 @@ def extract_doi_from_url(url: str) -> str | None:
 
     # Strip fragment
     url_clean = url.split('#')[0]
+
+    # SSRN URLs: synthesize DOI from abstract_id parameter
+    ssrn_match = re.search(r'ssrn\.com/.*abstract_id=(\d+)', url_clean)
+    if ssrn_match:
+        return f"10.2139/ssrn.{ssrn_match.group(1)}"
 
     # Match DOI pattern: 10.NNNN/anything-except-whitespace-?-#
     match = re.search(r'(?:^|[/=])(10\.\d{4,}/[^\s?#]+)', url_clean)

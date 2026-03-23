@@ -65,8 +65,20 @@ class TestExtractDoiFromUrl:
             "https://link.springer.com/article/10.1007/s40641-016-0032-z/"
         ) == "10.1007/s40641-016-0032-z"
 
-    def test_none_for_non_article_url(self):
-        assert extract_doi_from_url("https://ssrn.com/abstract=12345") is None
+    def test_ssrn_abstract_url_synthesizes_doi(self):
+        assert extract_doi_from_url(
+            "https://ssrn.com/abstract=12345"
+        ) is None  # no abstract_id param format
+
+    def test_ssrn_papers_url_synthesizes_doi(self):
+        assert extract_doi_from_url(
+            "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=5353691"
+        ) == "10.2139/ssrn.5353691"
+
+    def test_ssrn_with_extra_params(self):
+        assert extract_doi_from_url(
+            "https://papers.ssrn.com/sol3/papers.cfm?abstract_id=4238957&download=yes"
+        ) == "10.2139/ssrn.4238957"
 
     def test_none_for_empty_string(self):
         assert extract_doi_from_url("") is None
