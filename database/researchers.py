@@ -11,6 +11,38 @@ from database.connection import execute_query, fetch_one, fetch_all
 from database.llm import log_llm_usage
 
 
+def _strip_initial(name: str) -> str | None:
+    """If name is a single letter optionally followed by '.', return that letter lowercase. Else None."""
+    stripped = name.strip()
+    if len(stripped) == 1 and stripped.isalpha():
+        return stripped.lower()
+    if len(stripped) == 2 and stripped[0].isalpha() and stripped[1] == '.':
+        return stripped[0].lower()
+    return None
+
+
+def first_name_is_initial_match(name_a: str, name_b: str) -> bool:
+    """Return True when one name is a single-char initial matching the other's first character.
+
+    Handles 'L.', 'L', or 'l.' matching 'Liam'. Returns False for exact matches,
+    multi-char prefixes, or different initials.
+    """
+    if not name_a or not name_b:
+        return False
+    init_a = _strip_initial(name_a)
+    init_b = _strip_initial(name_b)
+    # Both are full names (no initial) — not an initial match
+    if init_a is None and init_b is None:
+        return False
+    # Both are initials — compare them
+    if init_a is not None and init_b is not None:
+        return init_a == init_b
+    # One is initial, one is full name — compare initial to first char
+    if init_a is not None:
+        return init_a == name_b[0].lower()
+    return init_b == name_a[0].lower()
+
+
 def _disambiguate_researcher(first_name: str, last_name: str, candidates: list[dict]) -> int | None:
     """Use LLM to check if any same-last-name candidate is the same person.
     Returns the matching researcher id (int) or None if no match.
