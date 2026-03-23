@@ -163,14 +163,22 @@ function CheckboxDropdown({
   );
 }
 
+/* ---------- types ---------- */
+
+type TabValue = "new_paper" | "status_change";
+
 /* ---------- filter bar ---------- */
 
 function FilterBar({
   filters,
   onChange,
+  activeTab,
+  onTabChange,
 }: {
   filters: FeedFilters;
   onChange: (next: FeedFilters) => void;
+  activeTab: TabValue;
+  onTabChange: (tab: TabValue) => void;
 }) {
   const selectedStatuses = filters.status ? filters.status.split(",") : [];
   const selectedInstitutions = (() => {
@@ -210,6 +218,33 @@ function FilterBar({
 
   return (
     <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-4 mb-8 space-y-3">
+      {/* Event type toggle */}
+      <div className="flex items-center gap-2">
+        <div className="inline-flex bg-[var(--bg)] rounded-lg p-0.5">
+          <button
+            onClick={() => onTabChange("new_paper")}
+            aria-pressed={activeTab === "new_paper"}
+            className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${
+              activeTab === "new_paper"
+                ? "bg-[var(--bg-header)] text-white shadow-sm"
+                : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+            }`}
+          >
+            New Projects
+          </button>
+          <button
+            onClick={() => onTabChange("status_change")}
+            aria-pressed={activeTab === "status_change"}
+            className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${
+              activeTab === "status_change"
+                ? "bg-[var(--bg-header)] text-white shadow-sm"
+                : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+            }`}
+          >
+            Status Changes
+          </button>
+        </div>
+      </div>
       <div className="max-w-md">
         <SearchInput
           value={filters.search ?? ""}
@@ -268,9 +303,20 @@ function FilterBar({
 /* ---------- main component ---------- */
 
 export default function NewsfeedContent() {
+  const [activeTab, setActiveTab] = useState<TabValue>("new_paper");
   const [page, setPage] = useState(1);
+
+  /* Sync tab from URL on mount (avoids SSR hydration mismatch) */
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const tab = params.get("tab");
+    if (tab === "status_change") {
+      setActiveTab("status_change");
+    }
+  }, []);
   const [filters, setFilters] = useState<FeedFilters>({});
-  const { data, error, isLoading } = usePublications(page, 20, filters);
+  const mergedFilters = { ...filters, event_type: activeTab };
+  const { data, error, isLoading } = usePublications(page, 20, mergedFilters);
 
   /* Reset page to 1 whenever filters change */
   const handleFilterChange = useCallback((next: FeedFilters) => {
@@ -278,9 +324,25 @@ export default function NewsfeedContent() {
     setPage(1);
   }, []);
 
+  const handleTabChange = useCallback((tab: TabValue) => {
+    setActiveTab(tab);
+    setFilters({});
+    setPage(1);
+    if (typeof window !== "undefined") {
+      const url = new URL(window.location.href);
+      url.searchParams.set("tab", tab);
+      window.history.replaceState({}, "", url.toString());
+    }
+  }, []);
+
   return (
     <div className="space-y-8">
-      <FilterBar filters={filters} onChange={handleFilterChange} />
+      <FilterBar
+        filters={filters}
+        onChange={handleFilterChange}
+        activeTab={activeTab}
+        onTabChange={handleTabChange}
+      />
 
       {isLoading && (
         <div className="space-y-4">
@@ -296,7 +358,13 @@ export default function NewsfeedContent() {
       )}
 
       {!isLoading && data && data.items.length === 0 && (
-        <EmptyState message="No new publications yet. Papers will appear here as researchers update their pages." />
+        <EmptyState
+          message={
+            activeTab === "new_paper"
+              ? "No new publications yet. Papers will appear here as researchers update their pages."
+              : "No status changes yet. Updates will appear here when papers change status."
+          }
+        />
       )}
 
       {data && data.items.length > 0 && (

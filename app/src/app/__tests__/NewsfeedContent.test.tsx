@@ -152,6 +152,79 @@ describe("NewsfeedContent", () => {
     });
   });
 
+  it("renders New Projects and Status Changes toggle buttons", async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => page1,
+    });
+
+    renderWithSWR(<NewsfeedContent />);
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /new projects/i })).toBeInTheDocument();
+    });
+    expect(screen.getByRole("button", { name: /status changes/i })).toBeInTheDocument();
+  });
+
+  it("defaults to New Projects tab as active", async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => page1,
+    });
+
+    renderWithSWR(<NewsfeedContent />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Immigration and Wages")).toBeInTheDocument();
+    });
+
+    // Verify the API was called with event_type=new_paper
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("event_type=new_paper")
+    );
+  });
+
+  it("switches to Status Changes tab and resets filters", async () => {
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({ ok: true, json: async () => page1 })
+      .mockResolvedValueOnce({ ok: true, json: async () => page1 });
+
+    renderWithSWR(<NewsfeedContent />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Immigration and Wages")).toBeInTheDocument();
+    });
+
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /status changes/i }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("event_type=status_change")
+      );
+    });
+  });
+
+  it("reads ?tab=status_change from URL and activates that tab", async () => {
+    // Use pushState to set the URL — jsdom allows this without navigation.
+    window.history.pushState({}, "", "?tab=status_change");
+
+    (global.fetch as jest.Mock)
+      .mockResolvedValueOnce({ ok: true, json: async () => page1 })   // initial render (new_paper)
+      .mockResolvedValueOnce({ ok: true, json: async () => page1 });  // after useEffect sets status_change
+
+    renderWithSWR(<NewsfeedContent />);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        expect.stringContaining("event_type=status_change")
+      );
+    });
+
+    // Restore URL
+    window.history.pushState({}, "", "/");
+  });
+
   it("navigates to next page when Next button is clicked", async () => {
     (global.fetch as jest.Mock)
       .mockResolvedValueOnce({
