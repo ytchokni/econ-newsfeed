@@ -32,7 +32,7 @@ Examples:
 
 Inserted between the existing Tier 1 (exact match) and Tier 2 (OpenAlex ID match) in `database/researchers.py`:
 
-1. Query `SELECT id, first_name, last_name FROM researchers WHERE last_name = %s` (same query used by Tier 3 today — can be hoisted and shared).
+1. Query `SELECT id, first_name, last_name FROM researchers WHERE last_name = %s`.
 2. Filter candidates using `first_name_is_initial_match(new_first_name, candidate_first_name)`.
 3. If **exactly one** candidate matches:
    - Update the candidate's `first_name` to the longer of the two names.
@@ -44,11 +44,14 @@ Inserted between the existing Tier 1 (exact match) and Tier 2 (OpenAlex ID match
 
 A reusable function `merge_researchers(canonical_id: int, duplicate_id: int, conn)` in `database/researchers.py`:
 
-1. **Transfer authorship**: Move all authorship records from duplicate to canonical. Use `INSERT IGNORE ... ON DUPLICATE KEY UPDATE researcher_id = researcher_id` pattern to handle cases where both are already authors on the same paper — then delete remaining authorship rows for the duplicate.
-2. **Upgrade first name**: Set canonical's `first_name` to the longer of the two.
-3. **Backfill metadata**: Copy `affiliation`, `description`, `position`, `openalex_author_id` from duplicate to canonical where canonical's value is NULL.
-4. **Delete duplicate**: `DELETE FROM researchers WHERE id = %s` — cascade handles leftover `authorship`, `researcher_urls`, `openalex_coauthors` rows.
-5. **Log**: INFO-level message with both IDs, both names, and merge reason.
+1. **Transfer authorship** (two-step to avoid unique constraint violations):
+   - First, delete overlapping rows: `DELETE FROM authorship WHERE researcher_id = <duplicate_id> AND publication_id IN (SELECT publication_id FROM (SELECT publication_id FROM authorship WHERE researcher_id = <canonical_id>) AS tmp)`. The canonical's `author_order` is kept for these papers. (Derived table wrapper required by MySQL to avoid Error 1093.)
+   - Then, move remaining rows: `UPDATE authorship SET researcher_id = <canonical_id> WHERE researcher_id = <duplicate_id>`.
+2. **Transfer JEL codes**: `UPDATE IGNORE researcher_jel_codes SET researcher_id = <canonical_id> WHERE researcher_id = <duplicate_id>` — preserves LLM-derived classifications. Duplicates (same JEL code on both researchers) are silently skipped.
+3. **Upgrade first name**: Set canonical's `first_name` to the longer of the two.
+4. **Backfill metadata**: Copy `affiliation`, `description`, `position`, `openalex_author_id` from duplicate to canonical where canonical's value is NULL.
+5. **Delete duplicate**: `DELETE FROM researchers WHERE id = %s` — cascade handles leftover rows in `researcher_urls`, `html_content` (via `researcher_urls.url_id`), `researcher_fields`, `researcher_snapshots`, and any remaining `authorship`/`researcher_jel_codes` rows.
+6. **Log**: INFO-level message with both IDs, both names, and merge reason.
 
 All steps execute in a single transaction.
 
@@ -80,9 +83,9 @@ poetry run python scripts/merge_duplicate_researchers.py --execute  # actually m
 
 ## Edge Cases
 
-- **Multiple initial matches**: e.g., both "L. Smith" and "Liam Smith" exist, new "L Smith" arrives. Tier 1.5 finds two matches -> falls through to LLM disambiguation. Safe.
+- **Multiple initial matches**: e.g., both "L. Smith" and "Liam Smith" exist, new "L Smith" arrives. Tier 1.5 finds two matches -> falls through to Tier 2 (OpenAlex ID) and Tier 3 (LLM). Safe.
 - **Both records have URLs**: canonical = lower ID. URLs on duplicate are cascade-deleted along with the duplicate (they point to the same person's pages).
-- **Shared authorship**: both researchers are co-authors on the same paper. The `ON DUPLICATE KEY` no-op handles this — no duplicate authorship rows created.
+- **Shared authorship**: both researchers are co-authors on the same paper. The two-step delete-then-update pattern handles this — canonical's `author_order` is preserved for overlapping papers.
 - **openalex_author_id conflict**: if both researchers have different OpenAlex IDs, the canonical keeps its own (backfill only when NULL). This is conservative — avoids overwriting known-good data.
 
 ## Not In Scope
