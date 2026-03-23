@@ -148,6 +148,8 @@ class TestMergeResearchers:
                 params = call[0][1]
                 assert params[0] == "Liam"  # longer name
                 break
+        else:
+            pytest.fail("UPDATE researchers SET first_name was never called")
 
     def test_raises_if_canonical_equals_duplicate(self):
         conn, _ = self._make_mock_conn()

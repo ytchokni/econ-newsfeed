@@ -200,7 +200,7 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
 def merge_researchers(canonical_id: int, duplicate_id: int, conn) -> None:
     """Merge duplicate researcher into canonical: transfer authorship, JEL codes, metadata, then delete.
 
-    All operations run in the provided connection's transaction (caller manages commit/rollback).
+    Commits after all operations complete. The caller is responsible for rollback on exception.
     """
     if canonical_id == duplicate_id:
         raise ValueError(f"Cannot merge researcher into itself (same id={canonical_id})")
