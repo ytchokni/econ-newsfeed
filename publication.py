@@ -140,7 +140,16 @@ class Publication:
 
                     # Process authors
                     for author_order, author in enumerate(pub['authors'], start=1):
-                        first_name, last_name = author
+                        if not author:
+                            continue
+                        if len(author) == 1:
+                            first_name, last_name = "", author[0]
+                        elif len(author) == 2:
+                            first_name, last_name = author
+                        else:
+                            # e.g. ["Jose", "Luis", "Garcia"] -> "Jose Luis", "Garcia"
+                            first_name = " ".join(author[:-1])
+                            last_name = author[-1]
                         author_id = Database.get_researcher_id(first_name, last_name, conn=conn)
 
                         # INSERT IGNORE prevents duplicate authorship entries (uq_researcher_pub)
