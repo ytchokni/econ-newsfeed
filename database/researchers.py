@@ -158,7 +158,7 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
         (last_name,),
     )
 
-    # 2.5. Initial match — "L." matches "Liam" for same last name
+    # 2.5. Initial match — single-char initial vs full first name
     if candidates:
         initial_matches = [
             c for c in candidates
@@ -246,10 +246,11 @@ def merge_researchers(canonical_id: int, duplicate_id: int, conn) -> None:
 
     # 3. Upgrade first_name to the longer variant
     longer_name = _longer_first_name(canonical['first_name'], duplicate['first_name'])
-    c.execute(
-        "UPDATE researchers SET first_name = %s WHERE id = %s",
-        (longer_name, canonical_id),
-    )
+    if longer_name != canonical['first_name']:
+        c.execute(
+            "UPDATE researchers SET first_name = %s WHERE id = %s",
+            (longer_name, canonical_id),
+        )
 
     # 4. Backfill metadata where canonical has NULL
     c.execute(
