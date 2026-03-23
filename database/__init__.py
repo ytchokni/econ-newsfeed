@@ -51,6 +51,10 @@ from database.jel import (
     get_jel_codes_for_researchers as _get_jel_codes_for_researchers,
     save_researcher_jel_codes as _save_researcher_jel_codes,
     get_researchers_needing_classification as _get_researchers_needing_classification,
+    save_paper_topics as _save_paper_topics,
+    get_paper_topics_for_researcher as _get_paper_topics_for_researcher,
+    get_papers_needing_topics as _get_papers_needing_topics,
+    add_researcher_jel_codes as _add_researcher_jel_codes,
 )
 
 
@@ -101,3 +105,7 @@ class Database:
     get_jel_codes_for_researchers = staticmethod(_get_jel_codes_for_researchers)
     save_researcher_jel_codes = staticmethod(_save_researcher_jel_codes)
     get_researchers_needing_classification = staticmethod(_get_researchers_needing_classification)
+    save_paper_topics = staticmethod(_save_paper_topics)
+    get_paper_topics_for_researcher = staticmethod(_get_paper_topics_for_researcher)
+    get_papers_needing_topics = staticmethod(_get_papers_needing_topics)
+    add_researcher_jel_codes = staticmethod(_add_researcher_jel_codes)
