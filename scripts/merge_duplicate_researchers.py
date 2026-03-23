@@ -37,18 +37,33 @@ def find_initial_match_pairs() -> list[tuple[dict, dict]]:
     for last_name, members in groups.items():
         if len(members) < 2:
             continue
-        # Check all pairs within the group
-        for i, a in enumerate(members):
-            for b in members[i + 1:]:
-                if first_name_is_initial_match(a['first_name'], b['first_name']):
-                    # Canonical = has URLs, else lower ID
-                    if b['has_urls'] and not a['has_urls']:
-                        canonical, duplicate = b, a
-                    elif a['has_urls'] and not b['has_urls']:
-                        canonical, duplicate = a, b
-                    else:
-                        canonical, duplicate = (a, b) if a['id'] < b['id'] else (b, a)
-                    pairs.append((canonical, duplicate))
+        # Build match map: for each member, all initial-matching members
+        match_map: dict[int, list[dict]] = {}
+        for a in members:
+            match_map[a['id']] = [
+                b for b in members
+                if b is not a and first_name_is_initial_match(a['first_name'], b['first_name'])
+            ]
+        # Only merge when BOTH sides have exactly one match (mutually unambiguous)
+        seen = set()
+        for a in members:
+            if len(match_map[a['id']]) != 1:
+                continue
+            b = match_map[a['id']][0]
+            if len(match_map[b['id']]) != 1:
+                continue
+            pair_key = (min(a['id'], b['id']), max(a['id'], b['id']))
+            if pair_key in seen:
+                continue
+            seen.add(pair_key)
+            # Canonical = has URLs, else lower ID
+            if b['has_urls'] and not a['has_urls']:
+                canonical, duplicate = b, a
+            elif a['has_urls'] and not b['has_urls']:
+                canonical, duplicate = a, b
+            else:
+                canonical, duplicate = (a, b) if a['id'] < b['id'] else (b, a)
+            pairs.append((canonical, duplicate))
 
     return pairs
 
