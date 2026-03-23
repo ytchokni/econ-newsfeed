@@ -246,3 +246,34 @@ class TestArchiveSnapshot:
         assert mock_execute.call_count == 2
         for call in mock_execute.call_args_list:
             assert "INSERT IGNORE" in call[0][0]
+
+    @patch("html_fetcher.Database.execute_query")
+    def test_save_text_calls_archive_before_upsert(self, mock_execute):
+        """save_text() should call archive_snapshot() before the upsert."""
+        call_order = []
+
+        def track_archive(url_id):
+            call_order.append("archive")
+
+        def track_execute(query, params=None):
+            if "html_content" in query:
+                call_order.append("upsert")
+            return 0
+
+        mock_execute.side_effect = track_execute
+
+        with patch.object(HTMLFetcher, "archive_snapshot", side_effect=track_archive) as mock_archive:
+            HTMLFetcher.save_text(url_id=1, text_content="new text", text_hash="new_hash", researcher_id=10, raw_html="<html>new</html>")
+
+        mock_archive.assert_called_once_with(1)
+        assert call_order == ["archive", "upsert"]
+
+    @patch("html_fetcher.Database.execute_query")
+    def test_save_text_still_saves_when_archive_fails(self, mock_execute):
+        """save_text() should still upsert html_content even if archive_snapshot() fails internally."""
+        with patch.object(HTMLFetcher, "archive_snapshot", side_effect=Exception("archive boom")):
+            HTMLFetcher.save_text(url_id=1, text_content="new text", text_hash="new_hash", researcher_id=10, raw_html="<html>new</html>")
+
+        # The upsert into html_content should still have executed
+        assert mock_execute.called
+        assert "html_content" in mock_execute.call_args[0][0]

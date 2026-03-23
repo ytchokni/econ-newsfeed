@@ -246,8 +246,13 @@ class HTMLFetcher:
     def save_text(url_id: int, text_content: str, text_hash: str, researcher_id: int, raw_html=None) -> None:
         """
         Save pre-extracted text content and hash to the database using upsert.
-        Also stores raw_html if provided.
+        Also stores raw_html if provided. Archives the old version before overwriting.
         """
+        try:
+            HTMLFetcher.archive_snapshot(url_id)
+        except Exception as e:
+            logging.warning("Unexpected error in archive_snapshot for URL ID %s: %s", url_id, e)
+
         query = """
             INSERT INTO html_content (url_id, content, content_hash, timestamp, researcher_id, raw_html)
             VALUES (%s, %s, %s, %s, %s, %s) AS new_row
