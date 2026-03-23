@@ -308,7 +308,7 @@ export default function NewsfeedContent() {
   }, []);
   const [filters, setFilters] = useState<FeedFilters>({});
   const mergedFilters = { ...filters, event_type: activeTab };
-  const { data, error, isLoading } = usePublications(page, 20, mergedFilters);
+  const { data, error, isLoading, isValidating } = usePublications(page, 20, mergedFilters);
 
   /* Reset page to 1 whenever filters change */
   const handleFilterChange = useCallback((next: FeedFilters) => {
@@ -336,7 +336,7 @@ export default function NewsfeedContent() {
         onTabChange={handleTabChange}
       />
 
-      {isLoading && (
+      {isLoading && !data && (
         <div className="space-y-4">
           <p className="font-sans text-sm text-[var(--text-muted)]">Loading publications...</p>
           {Array.from({ length: 3 }).map((_, i) => (
@@ -360,46 +360,48 @@ export default function NewsfeedContent() {
       )}
 
       {data && data.items.length > 0 && (
-        <>
-          {Array.from(groupByDate(data.items).entries()).map(([date, pubs]) => (
-            <section key={date}>
-              <h2 className="font-sans text-xs font-semibold uppercase tracking-widest text-[var(--text-muted)] mb-4 pb-2 border-b border-[var(--border-light)] flex items-center gap-2">
-                <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
-                {date}
-              </h2>
-              <div className="space-y-3 animate-stagger">
-                {pubs.map((pub) => (
-                  <PublicationCard key={pub.event_id ?? pub.id} publication={pub} />
-                ))}
-              </div>
-            </section>
-          ))}
-          <div className="flex items-center justify-center gap-3 pt-4">
-            {page > 1 ? (
-              <button
-                onClick={() => setPage((p) => p - 1)}
-                className="font-sans px-5 py-2 text-sm font-medium border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card hover:shadow-card-hover hover:-translate-y-px transition-all duration-200 text-[var(--text-primary)]"
-              >
-                &larr; Previous
-              </button>
-            ) : (
-              <span />
-            )}
-            {data && data.pages > 0 && (
-              <span className="font-sans text-sm text-[var(--text-muted)]">
-                Page {data.page} of {data.pages}
-              </span>
-            )}
-            {data && data.page < data.pages && (
-              <button
-                onClick={() => setPage((p) => p + 1)}
-                className="font-sans px-5 py-2 text-sm font-medium border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card hover:shadow-card-hover hover:-translate-y-px transition-all duration-200 text-[var(--text-primary)]"
-              >
-                Next &rarr;
-              </button>
-            )}
-          </div>
-        </>
+        <div className={isValidating && !isLoading ? "opacity-60 transition-opacity duration-200" : "transition-opacity duration-200"}>
+          <>
+            {Array.from(groupByDate(data.items).entries()).map(([date, pubs]) => (
+              <section key={date}>
+                <h2 className="font-sans text-xs font-semibold uppercase tracking-widest text-[var(--text-muted)] mb-4 pb-2 border-b border-[var(--border-light)] flex items-center gap-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
+                  {date}
+                </h2>
+                <div className="space-y-3 animate-stagger">
+                  {pubs.map((pub) => (
+                    <PublicationCard key={pub.event_id ?? pub.id} publication={pub} />
+                  ))}
+                </div>
+              </section>
+            ))}
+            <div className="flex items-center justify-center gap-3 pt-4">
+              {page > 1 ? (
+                <button
+                  onClick={() => setPage((p) => p - 1)}
+                  className="font-sans px-5 py-2 text-sm font-medium border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card hover:shadow-card-hover hover:-translate-y-px transition-all duration-200 text-[var(--text-primary)]"
+                >
+                  &larr; Previous
+                </button>
+              ) : (
+                <span />
+              )}
+              {data && data.pages > 0 && (
+                <span className="font-sans text-sm text-[var(--text-muted)]">
+                  Page {data.page} of {data.pages}
+                </span>
+              )}
+              {data && data.page < data.pages && (
+                <button
+                  onClick={() => setPage((p) => p + 1)}
+                  className="font-sans px-5 py-2 text-sm font-medium border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card hover:shadow-card-hover hover:-translate-y-px transition-all duration-200 text-[var(--text-primary)]"
+                >
+                  Next &rarr;
+                </button>
+              )}
+            </div>
+          </>
+        </div>
       )}
     </div>
   );

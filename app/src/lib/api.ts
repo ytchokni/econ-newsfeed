@@ -62,7 +62,9 @@ export async function getResearcher(id: number): Promise<ResearcherDetail> {
 
 export function usePublications(page = 1, perPage = 20, filters?: FeedFilters) {
   const url = buildPublicationsUrl(page, perPage, filters);
-  return useSWR<PaginatedResponse<Publication>>(url, fetchJson);
+  return useSWR<PaginatedResponse<Publication>>(url, fetchJson, {
+    keepPreviousData: true,
+  });
 }
 
 export function useResearchers() {
