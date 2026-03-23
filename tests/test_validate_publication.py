@@ -107,3 +107,45 @@ class TestEdgeCases:
     def test_missing_draft_url_key(self):
         pub = {"title": "Some Title", "authors": [["John", "Doe"]]}
         assert validate_publication(pub) is True
+
+
+class TestWebsiteSnippetRejection:
+    """Reject titles that are clearly website elements, not paper titles."""
+
+    def test_rejects_very_short_title(self):
+        pub = {"title": "CV", "authors": [["John", "Doe"]]}
+        assert validate_publication(pub) is False
+
+    def test_rejects_website_element_titles(self):
+        for title in ["Email", "Follow", "Sitemap", "Feed", "Teaching", "Publications"]:
+            pub = {"title": title, "authors": [["John", "Doe"]]}
+            assert validate_publication(pub) is False, f"Should reject '{title}'"
+
+    def test_rejects_no_publications_hallucination(self):
+        pub = {"title": "No publications found in the provided page content", "authors": []}
+        assert validate_publication(pub) is False
+
+    def test_rejects_copyright_notice(self):
+        pub = {"title": "© 2025 Jason Chen, Powered by Jekyll", "authors": [["Jason", "Chen"]]}
+        assert validate_publication(pub) is False
+
+    def test_rejects_bio_snippet(self):
+        pub = {"title": "I will be on the job market in the 2025-26 academic year.", "authors": []}
+        assert validate_publication(pub) is False
+
+    def test_rejects_welcome_message(self):
+        pub = {"title": "Welcome to my academic webpage.", "authors": []}
+        assert validate_publication(pub) is False
+
+    def test_rejects_github_venue(self):
+        pub = {"title": "My Cool Project", "authors": [["J", "Doe"]], "venue": "GitHub"}
+        assert validate_publication(pub) is False
+
+    def test_accepts_short_but_real_title(self):
+        """Real papers can have short titles like 'Voting' or 'Big G' if they have venue/status."""
+        pub = {"title": "Voting", "authors": [["John", "Smith"]], "status": "published", "venue": "AER"}
+        assert validate_publication(pub) is True
+
+    def test_accepts_normal_paper(self):
+        pub = {"title": "The Effect of Trade on Growth", "authors": [["J", "Smith"]]}
+        assert validate_publication(pub) is True

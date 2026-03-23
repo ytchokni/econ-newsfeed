@@ -77,6 +77,27 @@ _SOFTWARE_INDICATORS = (
     'github repository', 'code repository', 'open source software',
 )
 
+# Website elements that LLMs sometimes extract as paper titles
+_WEBSITE_NOISE = frozenset({
+    'cv', 'feed', 'email', 'follow', 'sitemap', 'teaching', 'publications',
+    'papers', 'research', 'home', 'contact', 'about', 'links', 'news',
+    'jmp', 'bio', 'vita',
+})
+
+# Patterns that indicate an LLM hallucination or website snippet, not a paper
+_GARBAGE_PATTERNS = (
+    'no publications',
+    'powered by',
+    'welcome to my',
+    'i will be on the job market',
+    'i am a ',
+    'i am an ',
+    'my research interests',
+    'site last updated',
+    'academic webpage',
+    'currently, i am',
+)
+
 
 def validate_publication(pub: dict) -> bool:
     """Return False for garbage extractions that should be silently dropped."""
@@ -84,12 +105,34 @@ def validate_publication(pub: dict) -> bool:
     authors = pub.get('authors', [])
     draft_url = pub.get('draft_url') or ''
 
+    title_lower = title.lower().strip()
+
+    # Reject empty or very short titles (< 5 chars) unless they have venue/status
+    if len(title_lower) < 5 and not pub.get('venue') and not pub.get('status'):
+        return False
+
+    # Reject titles that are website elements (exact match after stripping trailing period)
+    if title_lower.rstrip('.') in _WEBSITE_NOISE:
+        return False
+
+    # Reject LLM hallucinations and website snippets
+    if any(pattern in title_lower for pattern in _GARBAGE_PATTERNS):
+        return False
+
+    # Reject copyright notices
+    if title_lower.startswith('©') or title_lower.startswith('(c)'):
+        return False
+
+    # Reject GitHub as venue
+    venue = (pub.get('venue') or '').lower()
+    if 'github' in venue:
+        return False
+
     # GitHub exclusion: reject draft URLs pointing to github.com (not github.io)
     if 'github.com' in draft_url.lower() and 'github.io' not in draft_url.lower():
         return False
 
     # Software/package title indicators
-    title_lower = title.lower()
     if any(indicator in title_lower for indicator in _SOFTWARE_INDICATORS):
         return False
 
