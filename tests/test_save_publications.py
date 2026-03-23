@@ -66,12 +66,14 @@ class TestAuthorNormalization:
     @patch("publication.Database.get_researcher_id", return_value=42)
     @patch("publication.Database.get_connection")
     @patch("publication.Database.compute_title_hash", return_value="abc123")
-    def test_empty_author_list_is_skipped(
+    def test_empty_author_list_falls_back_to_page_owner(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
-        """[] -> skip, don't crash."""
+        """[[]] (empty inner list) -> fall back to page owner, don't crash."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
+        # Page owner lookup returns a researcher
+        cursor.fetchone.return_value = ("Jane", "Doe")
 
         Publication.save_publications("http://example.com", [{
             "title": "Test Paper",
@@ -79,7 +81,7 @@ class TestAuthorNormalization:
             "year": "2024",
         }])
 
-        mock_get_researcher.assert_not_called()
+        mock_get_researcher.assert_called_once_with("Jane", "Doe", conn=conn)
 
     @patch("publication.Database.get_researcher_id", return_value=42)
     @patch("publication.Database.get_connection")
@@ -255,3 +257,64 @@ class TestAbstractBackfill:
             if 'UPDATE papers SET' in str(call) and 'COALESCE' in str(call)
         ]
         assert len(update_calls) == 0, "Should not backfill when all fields exist"
+
+
+class TestFallbackToPageOwner:
+    """When LLM returns no authors, the page owner should be used as default author."""
+
+    @patch("publication.Database.get_researcher_id", return_value=42)
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_uses_page_owner_when_no_authors(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """Empty authors list should trigger lookup of the page owner."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+        # fetchone for page owner lookup
+        cursor.fetchone.return_value = ("Stefanie", "Stantcheva")
+
+        Publication.save_publications("https://www.stantcheva.com/research/", [{
+            "title": "Understanding of Trade",
+            "authors": [],
+            "year": "2022",
+        }])
+
+        mock_get_researcher.assert_called_once_with("Stefanie", "Stantcheva", conn=conn)
+
+    @patch("publication.Database.get_researcher_id", return_value=42)
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_skips_fallback_when_authors_present(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """Non-empty authors list should NOT trigger page owner lookup."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+
+        Publication.save_publications("https://example.com", [{
+            "title": "Test Paper",
+            "authors": [["John", "Doe"]],
+            "year": "2024",
+        }])
+
+        mock_get_researcher.assert_called_once_with("John", "Doe", conn=conn)
+
+    @patch("publication.Database.get_researcher_id", return_value=42)
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_no_crash_when_page_owner_not_found(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """If page owner lookup returns None, no author is added (no crash)."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+        cursor.fetchone.return_value = None  # no owner found
+
+        Publication.save_publications("https://unknown.com", [{
+            "title": "Orphan Paper",
+            "authors": [],
+            "year": "2024",
+        }])
+
+        mock_get_researcher.assert_not_called()

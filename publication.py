@@ -237,8 +237,23 @@ class Publication:
                                 )
                         logging.info(f"Duplicate publication (title_hash match), added source URL: {pub['title']}")
 
+                    # If LLM returned no authors, fall back to the page owner
+                    authors = pub['authors']
+                    if not any(authors):
+                        cursor.execute(
+                            """SELECT r.first_name, r.last_name
+                               FROM researchers r
+                               JOIN researcher_urls ru ON ru.researcher_id = r.id
+                               WHERE ru.url = %s LIMIT 1""",
+                            (url,),
+                        )
+                        owner = cursor.fetchone()
+                        if owner:
+                            authors = [[owner[0], owner[1]]]
+                            logging.info(f"No authors extracted, using page owner: {owner[0]} {owner[1]}")
+
                     # Process authors
-                    for author_order, author in enumerate(pub['authors'], start=1):
+                    for author_order, author in enumerate(authors, start=1):
                         if not author:
                             continue
                         if len(author) == 1:
