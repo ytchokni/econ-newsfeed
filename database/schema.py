@@ -302,6 +302,7 @@ _TABLE_DEFINITIONS = {
             url VARCHAR(2048) NOT NULL,
             link_type ENUM('pdf', 'ssrn', 'nber', 'arxiv', 'doi', 'journal',
                             'drive', 'dropbox', 'repository', 'other') DEFAULT NULL,
+            doi VARCHAR(255) DEFAULT NULL,
             discovered_at DATETIME NOT NULL,
             FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
             UNIQUE KEY uq_paper_link (paper_id, url(500))
@@ -456,6 +457,28 @@ def create_tables() -> None:
                     except Exception as e:
                         if "Duplicate column name" not in str(e):
                             logging.warning("Migration: html_content.raw_html: %s", e)
+
+                    # Add doi column to paper_links
+                    try:
+                        cursor.execute("""
+                            ALTER TABLE paper_links
+                            ADD COLUMN doi VARCHAR(255) DEFAULT NULL AFTER link_type
+                        """)
+                        conn.commit()
+                    except Exception as e:
+                        if "Duplicate column name" not in str(e):
+                            logging.warning("Migration: paper_links.doi: %s", e)
+
+                    # Add openalex_author_id to researchers
+                    try:
+                        cursor.execute("""
+                            ALTER TABLE researchers
+                            ADD COLUMN openalex_author_id VARCHAR(255) DEFAULT NULL
+                        """)
+                        conn.commit()
+                    except Exception as e:
+                        if "Duplicate column name" not in str(e):
+                            logging.warning("Migration: researchers.openalex_author_id: %s", e)
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                     cursor.fetchone()
