@@ -197,6 +197,83 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
     return new_id
 
 
+def merge_researchers(canonical_id: int, duplicate_id: int, conn) -> None:
+    """Merge duplicate researcher into canonical: transfer authorship, JEL codes, metadata, then delete.
+
+    All operations run in the provided connection's transaction (caller manages commit/rollback).
+    """
+    if canonical_id == duplicate_id:
+        raise ValueError(f"Cannot merge researcher into itself (same id={canonical_id})")
+
+    c = conn.cursor(dictionary=True)
+
+    # Fetch both researchers (need metadata columns for backfill)
+    c.execute(
+        "SELECT first_name, last_name, affiliation, description, position, openalex_author_id "
+        "FROM researchers WHERE id = %s", (canonical_id,),
+    )
+    canonical = c.fetchone()
+    c.execute(
+        "SELECT first_name, last_name, affiliation, description, position, openalex_author_id "
+        "FROM researchers WHERE id = %s", (duplicate_id,),
+    )
+    duplicate = c.fetchone()
+
+    if not canonical or not duplicate:
+        c.close()
+        raise ValueError(f"Researcher not found: canonical={canonical_id} duplicate={duplicate_id}")
+
+    # 1. Transfer authorship (two-step to avoid unique constraint violations)
+    c.execute(
+        "DELETE FROM authorship WHERE researcher_id = %s "
+        "AND publication_id IN (SELECT publication_id FROM "
+        "(SELECT publication_id FROM authorship WHERE researcher_id = %s) AS tmp)",
+        (duplicate_id, canonical_id),
+    )
+    c.execute(
+        "UPDATE authorship SET researcher_id = %s WHERE researcher_id = %s",
+        (canonical_id, duplicate_id),
+    )
+
+    # 2. Transfer JEL codes (IGNORE skips duplicates)
+    c.execute(
+        "UPDATE IGNORE researcher_jel_codes SET researcher_id = %s WHERE researcher_id = %s",
+        (canonical_id, duplicate_id),
+    )
+
+    # 3. Upgrade first_name to the longer variant
+    longer_name = canonical['first_name'] if len(canonical['first_name'].rstrip('.')) > len(duplicate['first_name'].rstrip('.')) else duplicate['first_name']
+    c.execute(
+        "UPDATE researchers SET first_name = %s WHERE id = %s",
+        (longer_name, canonical_id),
+    )
+
+    # 4. Backfill metadata where canonical has NULL
+    c.execute(
+        "UPDATE researchers SET "
+        "affiliation = COALESCE(affiliation, %s), "
+        "description = COALESCE(description, %s), "
+        "position = COALESCE(position, %s), "
+        "openalex_author_id = COALESCE(openalex_author_id, %s) "
+        "WHERE id = %s",
+        (duplicate.get('affiliation'), duplicate.get('description'),
+         duplicate.get('position'), duplicate.get('openalex_author_id'),
+         canonical_id),
+    )
+
+    # 5. Delete duplicate (cascade handles researcher_urls, html_content, researcher_fields, etc.)
+    c.execute("DELETE FROM researchers WHERE id = %s", (duplicate_id,))
+
+    c.close()
+    conn.commit()
+
+    # 6. Log
+    logging.info(
+        f"Merged researcher #{duplicate_id} ({duplicate['first_name']} {duplicate['last_name']}) "
+        f"into #{canonical_id} ({canonical['first_name']} {canonical['last_name']})"
+    )
+
+
 def update_researcher_bio(researcher_id: int, bio: str) -> None:
     """Legacy: update researcher description only if the current description is NULL."""
     execute_query(

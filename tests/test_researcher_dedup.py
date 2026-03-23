@@ -1,7 +1,7 @@
 """Tests for researcher deduplication: initial matching and merge logic."""
 import pytest
 from unittest.mock import patch, MagicMock
-from database.researchers import first_name_is_initial_match, get_researcher_id
+from database.researchers import first_name_is_initial_match, get_researcher_id, merge_researchers
 
 
 class TestFirstNameIsInitialMatch:
@@ -94,3 +94,62 @@ class TestGetResearcherIdInitialTier:
 
         result = get_researcher_id("Robert", "Smith")
         assert result == 99
+
+
+class TestMergeResearchers:
+    """merge_researchers transfers authorship, JEL codes, metadata, then deletes duplicate."""
+
+    def _make_mock_conn(self):
+        conn = MagicMock()
+        cursor = MagicMock()
+        conn.cursor.return_value = cursor
+        return conn, cursor
+
+    def test_transfers_authorship_and_deletes_duplicate(self):
+        conn, cursor = self._make_mock_conn()
+        cursor.fetchone.side_effect = [
+            {"first_name": "L.", "last_name": "Smith", "affiliation": None,
+             "description": None, "position": None, "openalex_author_id": None},
+            {"first_name": "Liam", "last_name": "Smith", "affiliation": "Oxford",
+             "description": "Economist", "position": "Prof", "openalex_author_id": "A123"},
+        ]
+        merge_researchers(10, 20, conn)
+
+        executed = [call[0][0] for call in cursor.execute.call_args_list]
+        # Should delete overlapping authorship
+        assert any("DELETE FROM authorship" in q for q in executed)
+        # Should update remaining authorship
+        assert any("UPDATE authorship SET researcher_id" in q for q in executed)
+        # Should transfer JEL codes
+        assert any("UPDATE IGNORE researcher_jel_codes" in q for q in executed)
+        # Should update first_name to longer
+        assert any("UPDATE researchers SET first_name" in q for q in executed)
+        # Should backfill metadata
+        assert any("affiliation" in q and "UPDATE researchers" in q for q in executed)
+        # Should delete duplicate
+        assert any("DELETE FROM researchers WHERE id" in q for q in executed)
+        # Should commit
+        conn.commit.assert_called_once()
+
+    def test_keeps_longer_first_name(self):
+        conn, cursor = self._make_mock_conn()
+        cursor.fetchone.side_effect = [
+            {"first_name": "L.", "last_name": "Smith", "affiliation": None,
+             "description": None, "position": None, "openalex_author_id": None},
+            {"first_name": "Liam", "last_name": "Smith", "affiliation": None,
+             "description": None, "position": None, "openalex_author_id": None},
+        ]
+        merge_researchers(10, 20, conn)
+
+        # Find the UPDATE first_name call
+        for call in cursor.execute.call_args_list:
+            query = call[0][0]
+            if "UPDATE researchers SET first_name" in query:
+                params = call[0][1]
+                assert params[0] == "Liam"  # longer name
+                break
+
+    def test_raises_if_canonical_equals_duplicate(self):
+        conn, _ = self._make_mock_conn()
+        with pytest.raises(ValueError, match="same"):
+            merge_researchers(10, 10, conn)
