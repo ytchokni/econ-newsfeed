@@ -78,11 +78,12 @@ class Publication:
         """Save extracted publications to the database, using title_hash for cross-researcher dedup."""
         with Database.get_connection() as conn:
             for pub in publications:
+                cursor = None
                 try:
                     title = pub['title'].strip() if pub['title'] else ''
                     title_hash = Database.compute_title_hash(pub['title'])
 
-                    cursor = conn.cursor()
+                    cursor = conn.cursor(buffered=True)
 
                     # INSERT IGNORE leverages uq_title_hash index for cross-researcher dedup.
                     # is_seed is set on INSERT but NOT updated on duplicate (preserves original).
@@ -125,7 +126,6 @@ class Publication:
                         row = cursor.fetchone()
                         if not row:
                             logging.error(f"Could not find publication after INSERT IGNORE: {pub['title']}")
-                            cursor.close()
                             continue
                         publication_id = row[0]
                         # Add the new source URL to paper_urls for cross-researcher tracking
@@ -162,7 +162,6 @@ class Publication:
                         )
 
                     conn.commit()
-                    cursor.close()
                     logging.info(f"Publication saved successfully: {pub['title']}")
 
                 except Exception as e:
@@ -171,6 +170,9 @@ class Publication:
                         pub.get('title', '<unknown>'), type(e).__name__, e,
                     )
                     conn.rollback()
+                finally:
+                    if cursor:
+                        cursor.close()
 
         logging.info(f"{len(publications)} publications processed for {url}")
 

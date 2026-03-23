@@ -99,3 +99,47 @@ class TestAuthorNormalization:
         }])
 
         mock_get_researcher.assert_called_once_with("John", "Doe", conn=conn)
+
+
+class TestCursorCleanup:
+    """Cursor must be closed even when an exception occurs mid-save."""
+
+    @patch("publication.Database.get_researcher_id", side_effect=RuntimeError("db error"))
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_cursor_closed_on_author_error(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """Cursor.close() called even when author processing raises."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+
+        # Should not raise — error is caught and logged
+        Publication.save_publications("http://example.com", [{
+            "title": "Paper A",
+            "authors": [["John", "Doe"]],
+            "year": "2024",
+        }])
+
+        cursor.close.assert_called()
+
+    @patch("publication.Database.get_researcher_id", return_value=42)
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_second_pub_succeeds_after_first_pub_fails(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """A failed publication must not prevent subsequent publications from saving."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+
+        # First call raises, second succeeds
+        mock_get_researcher.side_effect = [RuntimeError("fail"), 42]
+
+        Publication.save_publications("http://example.com", [
+            {"title": "Paper A", "authors": [["Bad", "Author"]], "year": "2024"},
+            {"title": "Paper B", "authors": [["Good", "Author"]], "year": "2024"},
+        ])
+
+        # Paper B should still be committed
+        assert conn.commit.call_count >= 1
