@@ -247,8 +247,9 @@ class HTMLFetcher:
         return True  # No previous record — treat as changed
 
     @staticmethod
-    def _was_fetched_recently(url_id: int, hours: int = 24) -> bool:
-        """Return True if this URL was successfully fetched within the last N hours."""
+    def _was_fetched_recently(url_id: int) -> bool:
+        """Return True if this URL was successfully fetched within SCRAPE_INTERVAL_HOURS."""
+        hours = int(os.environ.get('SCRAPE_INTERVAL_HOURS', '24'))
         result = Database.fetch_one(
             "SELECT timestamp FROM html_content WHERE url_id = %s", (url_id,)
         )
@@ -300,6 +301,13 @@ class HTMLFetcher:
             HTMLFetcher.save_text(url_id, text_content, text_hash, researcher_id, raw_html=raw_html)
             logging.info(f"New version of text content saved for URL ID: {url_id}, URL: {url}")
             return True
+
+        # Update timestamp (for cooldown) and backfill raw_html if missing
+        from database import Database
+        Database.execute_query(
+            "UPDATE html_content SET timestamp = %s, raw_html = COALESCE(raw_html, %s) WHERE url_id = %s",
+            (datetime.now(timezone.utc), raw_html, url_id),
+        )
 
         logging.info(f"No text changes detected for URL ID: {url_id}, URL: {url}")
         return False
