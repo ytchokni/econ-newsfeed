@@ -252,7 +252,8 @@ class TestSavePublications:
         """When INSERT IGNORE hits a duplicate (lastrowid=0), existing paper is looked up."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
         # cursor.fetchone() returns a tuple (not dict) inside save_publications
-        cursor.fetchone.return_value = (42,)
+        # Side effects: (1) title_hash lookup, (2) backfill SELECT abstract/year/venue
+        cursor.fetchone.side_effect = [(42,), (None, None, None)]
         mock_get_conn.side_effect = lambda: ctx_factory()
 
         pub = _make_pub_dict()
@@ -448,8 +449,8 @@ class TestSavePublications:
     def test_dedup_new_url_creates_feed_event(self, mock_get_conn, mock_hash, mock_get_rid):
         """Dedup paper appearing on a NEW url (non-seed) should create a feed event."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
-        # fetchone: (42,) for paper lookup, (0,) for COUNT(*) showing no event exists
-        cursor.fetchone.side_effect = [(42,), (0,)]
+        # fetchone: (42,) for paper lookup, backfill check, (0,) for COUNT(*)
+        cursor.fetchone.side_effect = [(42,), (None, None, None), (0,)]
         # Track execute calls to set rowcount dynamically
         original_execute = cursor.execute
         def _tracking_execute(*args, **kwargs):
