@@ -54,7 +54,8 @@ def extract_data_from_htmls() -> None:
         if html_content:
             extracted_publications = Publication.extract_publications(html_content, url)
             if extracted_publications:
-                Publication.save_publications(url, extracted_publications)
+                is_seed = HTMLFetcher.is_first_extraction(id)
+                Publication.save_publications(url, extracted_publications, is_seed=is_seed)
                 match_and_save_paper_links(id, extracted_publications)
             else:
                 logging.warning(f"No publications extracted for URL ID: {id}, URL: {url}")
@@ -74,7 +75,8 @@ def _process_one_url(url_id: int, researcher_id: int, url: str, page_type: str) 
     try:
         pubs = Publication.extract_publications(html_content, url)
         if pubs:
-            Publication.save_publications(url, pubs)
+            is_seed = HTMLFetcher.is_first_extraction(url_id)
+            Publication.save_publications(url, pubs, is_seed=is_seed)
             match_and_save_paper_links(url_id, pubs)
         HTMLFetcher.mark_extracted(url_id)
         return url, len(pubs), None
@@ -298,7 +300,8 @@ def batch_check() -> None:
                         logging.warning(f"Rejected malformed batch publication: {e}")
 
                 if validated:
-                    Publication.save_publications(url, validated)
+                    is_seed = HTMLFetcher.is_first_extraction(url_id)
+                    Publication.save_publications(url, validated, is_seed=is_seed)
                     match_and_save_paper_links(url_id, validated)
                     saved_pubs += len(validated)
                 HTMLFetcher.mark_extracted(url_id)
