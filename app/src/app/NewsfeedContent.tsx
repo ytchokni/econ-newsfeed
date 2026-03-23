@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePublications } from "@/lib/api";
+import { formatDate } from "@/lib/publication-utils";
 import type { FeedFilters, Publication } from "@/lib/types";
 import PublicationCard from "@/components/PublicationCard";
 import PublicationCardSkeleton from "@/components/PublicationCardSkeleton";
@@ -11,20 +12,11 @@ import SearchInput from "@/components/SearchInput";
 
 /* ---------- helpers ---------- */
 
-function formatDateHeader(iso: string): string {
-  const d = new Date(iso);
-  return d.toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    year: "numeric",
-  });
-}
-
 function groupByDate(publications: Publication[]) {
   const groups: Map<string, Publication[]> = new Map();
   for (const pub of publications) {
     const dateStr = pub.event_date ?? pub.discovered_at;
-    const key = formatDateHeader(dateStr);
+    const key = formatDate(dateStr);
     const group = groups.get(key);
     if (group) {
       group.push(pub);

@@ -2,20 +2,9 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import type { Publication, PublicationStatus } from "@/lib/types";
-
-function formatAuthor(author: { id: number; first_name: string; last_name: string }) {
-  const initial = author.first_name.charAt(0);
-  return { display: `${initial}. ${author.last_name}`, id: author.id };
-}
-
-const statusPillConfig: Record<PublicationStatus, { label: string; className: string }> = {
-  published: { label: "Published", className: "bg-teal-100 text-teal-700" },
-  working_paper: { label: "Working Paper", className: "bg-blue-100 text-blue-700" },
-  revise_and_resubmit: { label: "Revise & Resubmit", className: "bg-amber-100 text-amber-700" },
-  reject_and_resubmit: { label: "Reject & Resubmit", className: "bg-rose-100 text-rose-700" },
-  accepted: { label: "Accepted", className: "bg-emerald-100 text-emerald-700" },
-};
+import { useRouter } from "next/navigation";
+import type { Publication } from "@/lib/types";
+import { statusPillConfig, formatAuthor } from "@/lib/publication-utils";
 
 export default function PublicationCard({
   publication,
@@ -24,13 +13,18 @@ export default function PublicationCard({
   publication: Publication;
   primaryAuthorId?: number;
 }) {
+  const router = useRouter();
   const [abstractOpen, setAbstractOpen] = useState(false);
   const authors = publication.authors.map(formatAuthor);
 
   const venueYear = [publication.venue, publication.year].filter(Boolean).join(", ");
 
   return (
-    <div className="rounded-md bg-[var(--bg-card)] border border-[var(--border-light)] hover:border-[var(--border)] transition-colors duration-150 px-5 py-4">
+    <div
+      data-testid="publication-card"
+      className="rounded-md bg-[var(--bg-card)] border border-[var(--border-light)] hover:border-[var(--border)] transition-colors duration-150 px-5 py-4 cursor-pointer"
+      onClick={() => router.push(`/papers/${publication.id}`)}
+    >
       {/* Status change banner (feed only) */}
       {publication.event_type === "status_change" && publication.old_status && publication.new_status && (
         <div className="font-sans flex items-center gap-2 text-xs font-medium mb-2.5 px-3 py-1.5 rounded bg-[#f0f4ff] border border-[#d0daf0]">
@@ -66,6 +60,7 @@ export default function PublicationCard({
                   ? "text-[var(--text-primary)] font-semibold hover:underline"
                   : "text-[var(--link)] hover:underline"
                 }
+                onClick={e => e.stopPropagation()}
               >
                 {a.display}
               </Link>
@@ -95,6 +90,7 @@ export default function PublicationCard({
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider rounded px-2.5 py-0.5 bg-[#c2594b]/10 text-[#c2594b] hover:bg-[#c2594b]/20 transition-colors"
+            onClick={e => e.stopPropagation()}
           >
             Draft
             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
@@ -108,6 +104,7 @@ export default function PublicationCard({
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider rounded px-2.5 py-0.5 bg-indigo-100 text-indigo-700 hover:bg-indigo-200 transition-colors"
+            onClick={e => e.stopPropagation()}
           >
             DOI
             <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
@@ -117,7 +114,7 @@ export default function PublicationCard({
         )}
         {publication.abstract && (
           <button
-            onClick={() => setAbstractOpen((prev) => !prev)}
+            onClick={(e) => { e.stopPropagation(); setAbstractOpen((prev) => !prev); }}
             className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
           >
             Abstract
@@ -137,6 +134,7 @@ export default function PublicationCard({
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider rounded px-2.5 py-0.5 bg-violet-50 text-violet-700 hover:bg-violet-100 transition-colors"
+              onClick={e => e.stopPropagation()}
             >
               {link.link_type?.toUpperCase() || 'LINK'}
               <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>

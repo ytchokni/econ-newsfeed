@@ -5,6 +5,7 @@ import type {
   JelCode,
   PaginatedResponse,
   Publication,
+  PublicationDetail,
   ResearchField,
   Researcher,
   ResearcherDetail,
@@ -90,6 +91,13 @@ export function useJelCodes() {
     const data = await fetchJson<{ items: JelCode[] }>(url);
     return data.items;
   });
+}
+
+export function usePublication(id: number) {
+  return useSWR<PublicationDetail>(
+    `/api/publications/${id}?include_history=true`,
+    fetchJson
+  );
 }
 
 export function useResearchersFiltered(filters?: ResearcherFilters) {
