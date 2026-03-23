@@ -200,6 +200,14 @@ class TestGitHubExclusion:
         }
         assert validate_publication(pub) is False
 
+    def test_allows_legitimate_paper_with_common_words(self):
+        """Papers about software/libraries as economic topics should pass."""
+        pub = {
+            "title": "Labor Market Dynamics in Library Services",
+            "authors": [["John", "Smith"]],
+        }
+        assert validate_publication(pub) is True
+
 
 class TestEdgeCases:
     """Edge cases that should not crash."""
@@ -230,10 +238,12 @@ _STOPWORDS = frozenset({
     'by', 'is', 'it', 'as', 'do', 'no', 'not', 'with', 'from', 'but',
 })
 
-# Title substrings indicating software, not academic papers
+# Multi-word title phrases indicating software, not academic papers.
+# Only specific multi-word phrases to avoid false positives on legitimate papers
+# (e.g., "Labor Market Dynamics in Library Services" should NOT be rejected).
 _SOFTWARE_INDICATORS = (
-    'python package', 'r package', 'repository', 'library', 'github',
-    'npm package', 'pip install', 'software',
+    'python package', 'r package', 'npm package', 'pip install',
+    'github repository', 'code repository', 'open source software',
 )
 
 
@@ -354,6 +364,7 @@ class TestAbstractBackfill:
             "year": "2024",
             "venue": "AER",
             "abstract": "This paper studies trade.",
+            "status": "working_paper",
         }])
 
         # Verify UPDATE was called to backfill
@@ -480,7 +491,8 @@ class TestResearcherValidationFilter:
     def test_researchers_endpoint_filters_unvalidated(self, client):
         """The base query must include a validation filter condition."""
         with patch("api.Database.fetch_one") as mock_count, \
-             patch("api.Database.fetch_all") as mock_data:
+             patch("api.Database.fetch_all") as mock_data, \
+             patch("api.Database.get_jel_codes_for_researchers", return_value={}):
             mock_count.return_value = {"total": 0}
             mock_data.return_value = []
             resp = client.get("/api/researchers")
@@ -616,15 +628,13 @@ class TestMergePaperGroup:
 
         merge_paper_group([2, 5])
 
-        # Verify the duplicate (id=5) was deleted, not the canonical (id=2)
+        # Verify exactly one DELETE targeting paper 5 (not canonical paper 2)
         delete_calls = [
             c for c in mock_cursor.execute.call_args_list
             if "DELETE FROM papers" in str(c)
         ]
-        assert len(delete_calls) >= 1
-        # The delete should target paper 5, not paper 2
-        delete_sql = str(delete_calls[0])
-        assert "5" in delete_sql or any("5" in str(a) for c in delete_calls for a in c[0])
+        assert len(delete_calls) == 1
+        assert delete_calls[0] == call("DELETE FROM papers WHERE id = %s", (5,))
 
     @patch("paper_merge.Database.get_connection")
     @patch("paper_merge.Database.fetch_all")
