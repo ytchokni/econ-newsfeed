@@ -277,3 +277,62 @@ class TestArchiveSnapshot:
         # The upsert into html_content should still have executed
         assert mock_execute.called
         assert "html_content" in mock_execute.call_args[0][0]
+
+
+class TestSnapshotRetrieval:
+    """Tests for HTMLFetcher.get_snapshot() and list_snapshots()."""
+
+    @patch("html_fetcher.Database.fetch_one")
+    def test_get_snapshot_decompresses_and_verifies(self, mock_fetch):
+        """Should decompress and return raw HTML after integrity check."""
+        original_html = "<html><body>Test page</body></html>"
+        compressed = zlib.compress(original_html.encode("utf-8"))
+        html_hash = hashlib.sha256(original_html.encode("utf-8")).hexdigest()
+
+        mock_fetch.return_value = {
+            "raw_html_compressed": compressed,
+            "raw_html_hash": html_hash,
+        }
+
+        result = HTMLFetcher.get_snapshot(url_id=1, snapshot_id=42)
+        assert result == original_html
+
+    @patch("html_fetcher.Database.fetch_one")
+    def test_get_snapshot_integrity_failure(self, mock_fetch):
+        """Should raise ValueError when decompressed HTML doesn't match hash."""
+        original_html = "<html>original</html>"
+        compressed = zlib.compress(original_html.encode("utf-8"))
+
+        mock_fetch.return_value = {
+            "raw_html_compressed": compressed,
+            "raw_html_hash": "wrong_hash_value",
+        }
+
+        with pytest.raises(ValueError, match="[Ii]ntegrity"):
+            HTMLFetcher.get_snapshot(url_id=1, snapshot_id=42)
+
+    @patch("html_fetcher.Database.fetch_one")
+    def test_get_snapshot_not_found(self, mock_fetch):
+        """Should return None when snapshot doesn't exist."""
+        mock_fetch.return_value = None
+        result = HTMLFetcher.get_snapshot(url_id=1, snapshot_id=999)
+        assert result is None
+
+    @patch("html_fetcher.Database.fetch_all")
+    def test_list_snapshots(self, mock_fetch):
+        """Should return snapshots ordered by snapshot_at DESC."""
+        mock_fetch.return_value = [
+            {"id": 2, "text_content_hash": "hash2", "raw_html_hash": "rhash2", "snapshot_at": "2026-03-15"},
+            {"id": 1, "text_content_hash": "hash1", "raw_html_hash": "rhash1", "snapshot_at": "2026-03-01"},
+        ]
+
+        result = HTMLFetcher.list_snapshots(url_id=1)
+        assert len(result) == 2
+        assert result[0]["id"] == 2
+
+    @patch("html_fetcher.Database.fetch_all")
+    def test_list_snapshots_empty(self, mock_fetch):
+        """Should return empty list when no snapshots exist."""
+        mock_fetch.return_value = []
+        result = HTMLFetcher.list_snapshots(url_id=1)
+        assert result == []

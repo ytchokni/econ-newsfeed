@@ -243,6 +243,38 @@ class HTMLFetcher:
             logging.warning("Failed to archive snapshot for URL ID %s: %s", url_id, e)
 
     @staticmethod
+    def get_snapshot(url_id: int, snapshot_id: int) -> str | None:
+        """Retrieve and decompress a historical raw_html snapshot.
+
+        Returns the decompressed HTML string, or None if not found.
+        Raises ValueError if integrity check fails.
+        """
+        row = Database.fetch_one(
+            "SELECT raw_html_compressed, raw_html_hash FROM html_snapshots WHERE id = %s AND url_id = %s",
+            (snapshot_id, url_id),
+        )
+        if not row:
+            return None
+
+        raw_bytes = zlib.decompress(row["raw_html_compressed"])
+        actual_hash = hashlib.sha256(raw_bytes).hexdigest()
+        if actual_hash != row["raw_html_hash"]:
+            raise ValueError(
+                f"Integrity check failed for snapshot {snapshot_id}: "
+                f"expected {row['raw_html_hash']}, got {actual_hash}"
+            )
+        return raw_bytes.decode("utf-8")
+
+    @staticmethod
+    def list_snapshots(url_id: int) -> list[dict]:
+        """List all snapshots for a URL, ordered by most recent first."""
+        return Database.fetch_all(
+            "SELECT id, text_content_hash, raw_html_hash, snapshot_at "
+            "FROM html_snapshots WHERE url_id = %s ORDER BY snapshot_at DESC",
+            (url_id,),
+        )
+
+    @staticmethod
     def save_text(url_id: int, text_content: str, text_hash: str, researcher_id: int, raw_html=None) -> None:
         """
         Save pre-extracted text content and hash to the database using upsert.
