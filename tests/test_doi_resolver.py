@@ -7,7 +7,7 @@ os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
 os.environ.setdefault("OPENAI_API_KEY", "sk-test")
 os.environ.setdefault("SCRAPE_API_KEY", "test-key")
 
-from doi_resolver import extract_doi_from_url
+from doi_resolver import extract_doi_from_url, extract_pii_from_url
 
 
 class TestExtractDoiFromUrl:
@@ -74,3 +74,23 @@ class TestExtractDoiFromUrl:
             "https://onlinelibrary.wiley.com/store/10.1111/jeea.12174/asset/supinfo/jeea12174-sup-0001-SuppMat.zip"
         )
         assert result is None
+
+
+class TestExtractPiiFromUrl:
+    def test_sciencedirect_pii(self):
+        assert extract_pii_from_url(
+            "https://www.sciencedirect.com/science/article/pii/S0959378013002410"
+        ) == "S0959378013002410"
+
+    def test_sciencedirect_with_query_params(self):
+        assert extract_pii_from_url(
+            "https://www.sciencedirect.com/science/article/pii/S0927537125000715?via=ihub"
+        ) == "S0927537125000715"
+
+    def test_no_pii_in_non_sciencedirect(self):
+        assert extract_pii_from_url(
+            "https://link.springer.com/article/10.1007/s40641-016-0032-z"
+        ) is None
+
+    def test_no_pii_in_empty(self):
+        assert extract_pii_from_url("") is None
