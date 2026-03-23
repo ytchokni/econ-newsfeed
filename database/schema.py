@@ -175,6 +175,21 @@ _TABLE_DEFINITIONS = {
             FOREIGN KEY (jel_code) REFERENCES jel_codes(code) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "paper_topics": """
+        CREATE TABLE IF NOT EXISTS paper_topics (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            paper_id INT NOT NULL,
+            openalex_topic_id VARCHAR(255) NOT NULL,
+            topic_name VARCHAR(500) NOT NULL,
+            subfield_name VARCHAR(255) DEFAULT NULL,
+            field_name VARCHAR(255) DEFAULT NULL,
+            domain_name VARCHAR(255) DEFAULT NULL,
+            score DECIMAL(5,4) DEFAULT NULL,
+            UNIQUE KEY uq_paper_topic (paper_id, openalex_topic_id),
+            INDEX idx_paper_id (paper_id),
+            FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
     "scrape_log": """
         CREATE TABLE IF NOT EXISTS scrape_log (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -393,6 +408,7 @@ def create_tables() -> None:
                         "paper_urls", "llm_usage", "feed_events", "batch_jobs",
                         "openalex_coauthors",
                         "paper_links",
+                        "paper_topics",
                     ]
                     for tbl in _ALL_TABLES:
                         try:

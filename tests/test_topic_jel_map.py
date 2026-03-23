@@ -73,3 +73,15 @@ class TestMapTopicsToJel:
         topics = [{"display_name": "Monetary Policy", "score": 0.9}]
         result = map_topics_to_jel(topics)
         assert "E" in result
+
+
+class TestPaperTopicsSchema:
+    def test_table_definition_exists(self):
+        from database.schema import _TABLE_DEFINITIONS
+        assert "paper_topics" in _TABLE_DEFINITIONS
+        ddl = _TABLE_DEFINITIONS["paper_topics"]
+        assert "paper_id" in ddl
+        assert "openalex_topic_id" in ddl
+        assert "topic_name" in ddl
+        assert "score" in ddl
+        assert "FOREIGN KEY" in ddl
