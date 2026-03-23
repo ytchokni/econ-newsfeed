@@ -43,6 +43,7 @@ def _base_patches():
         "extract_desc": patch("scheduler.HTMLFetcher.extract_description", return_value=None),
         "extract_pubs": patch("scheduler.Publication.extract_publications", return_value=[]),
         "save_pubs": patch("scheduler.Publication.save_publications"),
+        "match_links": patch("scheduler.match_and_save_paper_links"),
         "title_hash": patch("scheduler.Database.compute_title_hash", return_value="abc123"),
         "fetch_one": patch("scheduler.Database.fetch_one", return_value=None),
         "paper_snap": patch("scheduler.Database.append_paper_snapshot"),
