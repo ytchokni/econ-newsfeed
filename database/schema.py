@@ -127,6 +127,19 @@ _TABLE_DEFINITIONS = {
             FOREIGN KEY (url_id) REFERENCES researcher_urls(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "html_snapshots": """
+        CREATE TABLE IF NOT EXISTS html_snapshots (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            url_id INT NOT NULL,
+            text_content_hash VARCHAR(64) NOT NULL,
+            raw_html_hash VARCHAR(64) NOT NULL,
+            raw_html_compressed MEDIUMBLOB NOT NULL,
+            snapshot_at DATETIME NOT NULL,
+            UNIQUE KEY uq_url_snapshot (url_id, text_content_hash),
+            FOREIGN KEY (url_id) REFERENCES researcher_urls(id) ON DELETE CASCADE,
+            INDEX idx_url_id_snapshot (url_id, snapshot_at DESC)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
     "authorship": """
         CREATE TABLE IF NOT EXISTS authorship (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -403,6 +416,7 @@ def create_tables() -> None:
 
                     _ALL_TABLES = [
                         "researchers", "researcher_urls", "papers", "html_content",
+                        "html_snapshots",
                         "authorship", "research_fields", "researcher_fields",
                         "jel_codes", "researcher_jel_codes",
                         "scrape_log", "researcher_snapshots", "paper_snapshots",
