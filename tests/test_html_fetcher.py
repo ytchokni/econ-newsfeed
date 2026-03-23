@@ -1,5 +1,8 @@
 """Tests for HTMLFetcher: robots.txt caching, fetch, change detection, thread safety."""
+import hashlib
 import threading
+import zlib
+import pytest
 from unittest.mock import patch, MagicMock
 
 from html_fetcher import HTMLFetcher
@@ -157,3 +160,89 @@ class TestIsFirstExtraction:
         """No html_content row at all — nothing to extract."""
         mock_fetch.return_value = None
         assert HTMLFetcher.is_first_extraction(1) is False
+
+
+class TestArchiveSnapshot:
+    """Tests for HTMLFetcher.archive_snapshot()."""
+
+    @patch("html_fetcher.Database.fetch_one")
+    @patch("html_fetcher.Database.execute_query")
+    def test_archives_when_prior_row_exists(self, mock_execute, mock_fetch):
+        """Should compress and store old raw_html when a prior row exists."""
+        old_html = "<html>old content</html>"
+        mock_fetch.return_value = {
+            "raw_html": old_html,
+            "content_hash": "old_text_hash",
+            "timestamp": "2026-03-01 12:00:00",
+        }
+
+        HTMLFetcher.archive_snapshot(url_id=1)
+
+        mock_execute.assert_called_once()
+        call_args = mock_execute.call_args[0]
+        assert "INSERT IGNORE INTO html_snapshots" in call_args[0]
+        params = call_args[1]
+        assert params[0] == 1  # url_id
+        assert params[1] == "old_text_hash"  # text_content_hash
+        expected_html_hash = hashlib.sha256(old_html.encode("utf-8")).hexdigest()
+        assert params[2] == expected_html_hash  # raw_html_hash
+        assert zlib.decompress(params[3]).decode("utf-8") == old_html  # compressed blob
+        assert params[4] == "2026-03-01 12:00:00"  # snapshot_at
+
+    @patch("html_fetcher.Database.fetch_one")
+    @patch("html_fetcher.Database.execute_query")
+    def test_no_archive_on_first_fetch(self, mock_execute, mock_fetch):
+        """No prior row means no snapshot to archive."""
+        mock_fetch.return_value = None
+
+        HTMLFetcher.archive_snapshot(url_id=1)
+
+        mock_execute.assert_not_called()
+
+    @patch("html_fetcher.Database.fetch_one")
+    @patch("html_fetcher.Database.execute_query")
+    def test_no_archive_when_raw_html_null(self, mock_execute, mock_fetch):
+        """Legacy rows with raw_html=NULL should be skipped with a warning."""
+        mock_fetch.return_value = {
+            "raw_html": None,
+            "content_hash": "some_hash",
+            "timestamp": "2026-03-01 12:00:00",
+        }
+
+        with patch("html_fetcher.logging.warning") as mock_warn:
+            HTMLFetcher.archive_snapshot(url_id=1)
+
+        mock_execute.assert_not_called()
+        mock_warn.assert_called_once()
+        assert "NULL" in mock_warn.call_args[0][0] or "null" in str(mock_warn.call_args).lower()
+
+    @patch("html_fetcher.Database.fetch_one")
+    @patch("html_fetcher.Database.execute_query", side_effect=Exception("DB error"))
+    def test_archive_failure_doesnt_raise(self, mock_execute, mock_fetch):
+        """Archive errors should be logged, not raised."""
+        mock_fetch.return_value = {
+            "raw_html": "<html>old</html>",
+            "content_hash": "hash",
+            "timestamp": "2026-03-01 12:00:00",
+        }
+
+        # Should not raise
+        HTMLFetcher.archive_snapshot(url_id=1)
+
+    @patch("html_fetcher.Database.fetch_one")
+    @patch("html_fetcher.Database.execute_query")
+    def test_duplicate_archive_ignored(self, mock_execute, mock_fetch):
+        """Calling archive twice with same content should not error (INSERT IGNORE)."""
+        mock_fetch.return_value = {
+            "raw_html": "<html>old</html>",
+            "content_hash": "same_hash",
+            "timestamp": "2026-03-01 12:00:00",
+        }
+
+        HTMLFetcher.archive_snapshot(url_id=1)
+        HTMLFetcher.archive_snapshot(url_id=1)
+
+        # Both calls execute INSERT IGNORE — no errors
+        assert mock_execute.call_count == 2
+        for call in mock_execute.call_args_list:
+            assert "INSERT IGNORE" in call[0][0]

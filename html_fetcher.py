@@ -4,6 +4,7 @@ import os
 import threading
 import time
 import socket
+import zlib
 import requests
 import hashlib
 import logging
@@ -208,6 +209,38 @@ class HTMLFetcher:
         Hash the text content using SHA-256.
         """
         return hashlib.sha256(text_content.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def archive_snapshot(url_id: int) -> None:
+        """Archive the current raw_html for a URL into html_snapshots before overwriting.
+
+        Called before save_text() upserts new content. Compresses the old raw_html
+        with zlib and stores it with integrity hashes. Failures are logged, not raised.
+        """
+        try:
+            row = Database.fetch_one(
+                "SELECT raw_html, content_hash, timestamp FROM html_content WHERE url_id = %s",
+                (url_id,),
+            )
+            if not row:
+                return
+            if row["raw_html"] is None:
+                logging.warning("Skipping snapshot archive for URL ID %s: raw_html is NULL", url_id)
+                return
+
+            old_html = row["raw_html"]
+            raw_html_hash = hashlib.sha256(old_html.encode("utf-8")).hexdigest()
+            compressed = zlib.compress(old_html.encode("utf-8"))
+
+            Database.execute_query(
+                """INSERT IGNORE INTO html_snapshots
+                   (url_id, text_content_hash, raw_html_hash, raw_html_compressed, snapshot_at)
+                   VALUES (%s, %s, %s, %s, %s)""",
+                (url_id, row["content_hash"], raw_html_hash, compressed, row["timestamp"]),
+            )
+            logging.info("Archived snapshot for URL ID %s (hash: %s)", url_id, row["content_hash"])
+        except Exception as e:
+            logging.warning("Failed to archive snapshot for URL ID %s: %s", url_id, e)
 
     @staticmethod
     def save_text(url_id: int, text_content: str, text_hash: str, researcher_id: int, raw_html=None) -> None:
