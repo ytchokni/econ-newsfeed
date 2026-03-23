@@ -141,6 +141,21 @@ class Publication:
                             """,
                             (publication_id, url, datetime.now(timezone.utc)),
                         )
+                        new_to_this_url = cursor.rowcount > 0
+                        pub_status = pub.get('status')
+                        if not is_seed and new_to_this_url and pub_status and pub_status != 'published':
+                            cursor.execute(
+                                "SELECT COUNT(*) FROM feed_events WHERE paper_id = %s AND event_type = 'new_paper'",
+                                (publication_id,),
+                            )
+                            if cursor.fetchone()[0] == 0:
+                                cursor.execute(
+                                    """
+                                    INSERT INTO feed_events (paper_id, event_type, new_status, created_at)
+                                    VALUES (%s, 'new_paper', %s, %s)
+                                    """,
+                                    (publication_id, pub_status, datetime.now(timezone.utc)),
+                                )
                         logging.info(f"Duplicate publication (title_hash match), added source URL: {pub['title']}")
 
                     # Process authors

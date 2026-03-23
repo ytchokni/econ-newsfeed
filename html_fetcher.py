@@ -410,23 +410,20 @@ class HTMLFetcher:
         (content changed since last extraction, or never extracted).
         Returns False if no HTML has been downloaded yet.
         """
-        query = """
-            SELECT content_hash, extracted_hash
-            FROM html_content
-            WHERE url_id = %s
-        """
-        result = Database.fetch_one(query, (url_id,))
+        result = Database.fetch_one(
+            "SELECT content_hash, extracted_hash FROM html_content WHERE url_id = %s",
+            (url_id,),
+        )
         if not result:
-            return False  # No content downloaded yet — nothing to extract
-        content_hash, extracted_hash = result['content_hash'], result['extracted_hash']
-        return content_hash != extracted_hash
+            return False
+        return result['content_hash'] != result['extracted_hash']
 
     @staticmethod
     def is_first_extraction(url_id: int) -> bool:
         """Return True if this URL has never been extracted before.
 
-        Checks whether extracted_at is NULL in html_content — meaning
-        mark_extracted() has never been called for this URL.
+        Uses extracted_at IS NULL as the signal — mark_extracted() has
+        never been called for this URL.
         """
         result = Database.fetch_one(
             "SELECT extracted_at FROM html_content WHERE url_id = %s",

@@ -442,6 +442,110 @@ class TestSavePublications:
 
         assert any("2 publications processed" in r.message for r in caplog.records)
 
+    @patch("publication.Database.get_researcher_id", return_value=99)
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("publication.Database.get_connection")
+    def test_dedup_new_url_creates_feed_event(self, mock_get_conn, mock_hash, mock_get_rid):
+        """Dedup paper appearing on a NEW url (non-seed) should create a feed event."""
+        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
+        # fetchone: (42,) for paper lookup, (0,) for COUNT(*) showing no event exists
+        cursor.fetchone.side_effect = [(42,), (0,)]
+        # Track execute calls to set rowcount dynamically
+        original_execute = cursor.execute
+        def _tracking_execute(*args, **kwargs):
+            original_execute(*args, **kwargs)
+            sql = args[0] if args else ""
+            if "INSERT IGNORE INTO paper_urls" in sql:
+                cursor.rowcount = 1  # new URL association
+            elif "SELECT" in sql:
+                cursor.rowcount = 1  # SELECT always returns rows
+        cursor.execute = MagicMock(side_effect=_tracking_execute)
+        mock_get_conn.side_effect = lambda: ctx_factory()
+
+        pub = _make_pub_dict(status="working_paper")
+        Publication.save_publications("https://newsite.com", [pub], is_seed=False)
+
+        feed_calls = [
+            c for c in cursor.execute.call_args_list
+            if "INSERT INTO feed_events" in c[0][0]
+        ]
+        assert len(feed_calls) == 1
+        params = feed_calls[0][0][1]
+        assert params[0] == 42  # paper_id
+        assert params[1] == "working_paper"  # new_status
+
+    @patch("publication.Database.get_researcher_id", return_value=99)
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("publication.Database.get_connection")
+    def test_dedup_same_url_no_feed_event(self, mock_get_conn, mock_hash, mock_get_rid):
+        """Dedup paper on the SAME url (already known) should NOT create a feed event."""
+        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
+        cursor.fetchone.return_value = (42,)
+        # Track execute calls to set rowcount=0 for paper_urls (duplicate)
+        original_execute = cursor.execute
+        def _tracking_execute(*args, **kwargs):
+            original_execute(*args, **kwargs)
+            sql = args[0] if args else ""
+            if "INSERT IGNORE INTO paper_urls" in sql:
+                cursor.rowcount = 0  # already known URL
+        cursor.execute = MagicMock(side_effect=_tracking_execute)
+        mock_get_conn.side_effect = lambda: ctx_factory()
+
+        pub = _make_pub_dict(status="working_paper")
+        Publication.save_publications("https://example.com", [pub], is_seed=False)
+
+        feed_calls = [
+            c for c in cursor.execute.call_args_list
+            if "INSERT INTO feed_events" in c[0][0]
+        ]
+        assert len(feed_calls) == 0
+
+    @patch("publication.Database.get_researcher_id", return_value=99)
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("publication.Database.get_connection")
+    def test_dedup_new_url_seed_no_feed_event(self, mock_get_conn, mock_hash, mock_get_rid):
+        """Dedup paper on new URL but is_seed=True should NOT create feed event."""
+        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
+        cursor.fetchone.return_value = (42,)
+        cursor.rowcount = 1  # new URL, but seed → should still skip
+        mock_get_conn.side_effect = lambda: ctx_factory()
+
+        pub = _make_pub_dict(status="working_paper")
+        Publication.save_publications("https://newsite.com", [pub], is_seed=True)
+
+        feed_calls = [
+            c for c in cursor.execute.call_args_list
+            if "INSERT INTO feed_events" in c[0][0]
+        ]
+        assert len(feed_calls) == 0
+
+    @patch("publication.Database.get_researcher_id", return_value=99)
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("publication.Database.get_connection")
+    def test_dedup_new_url_existing_event_no_duplicate(self, mock_get_conn, mock_hash, mock_get_rid):
+        """Dedup paper on new URL that already has a feed event should NOT create duplicate."""
+        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
+        # fetchone: (42,) for paper lookup, (1,) for COUNT(*) showing event exists
+        cursor.fetchone.side_effect = [(42,), (1,)]
+        # Track execute to set rowcount=1 for paper_urls INSERT
+        original_execute = cursor.execute
+        def _tracking_execute(*args, **kwargs):
+            original_execute(*args, **kwargs)
+            sql = args[0] if args else ""
+            if "INSERT IGNORE INTO paper_urls" in sql:
+                cursor.rowcount = 1
+        cursor.execute = MagicMock(side_effect=_tracking_execute)
+        mock_get_conn.side_effect = lambda: ctx_factory()
+
+        pub = _make_pub_dict(status="working_paper")
+        Publication.save_publications("https://newsite.com", [pub], is_seed=False)
+
+        feed_calls = [
+            c for c in cursor.execute.call_args_list
+            if "INSERT INTO feed_events" in c[0][0]
+        ]
+        assert len(feed_calls) == 0
+
 
 # ---------------------------------------------------------------------------
 # 3. build_extraction_prompt()
