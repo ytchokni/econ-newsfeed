@@ -11,7 +11,7 @@ os.environ.setdefault("SCRAPE_API_KEY", "test-key")
 
 import pytest
 from unittest.mock import patch, MagicMock
-from publication import Publication
+from publication import Publication, _author_id_cache
 
 
 def _mock_conn():
@@ -23,6 +23,14 @@ def _mock_conn():
     mock_conn.__enter__ = MagicMock(return_value=mock_conn)
     mock_conn.__exit__ = MagicMock(return_value=False)
     return mock_conn, mock_cursor
+
+
+@pytest.fixture(autouse=True)
+def clear_author_cache():
+    """Ensure each test starts with a clean author cache."""
+    _author_id_cache.clear()
+    yield
+    _author_id_cache.clear()
 
 
 class TestAuthorNormalization:
@@ -143,3 +151,45 @@ class TestCursorCleanup:
 
         # Paper B should still be committed
         assert conn.commit.call_count >= 1
+
+
+class TestAuthorLookupCache:
+    """get_researcher_id should be called once per unique author, not per occurrence."""
+
+    @patch("publication.Database.get_researcher_id", return_value=42)
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_same_author_across_pubs_looked_up_once(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """If 'John Doe' appears in 3 publications, get_researcher_id called once."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+
+        pubs = [
+            {"title": f"Paper {i}", "authors": [["John", "Doe"], ["Jane", "Smith"]], "year": "2024"}
+            for i in range(3)
+        ]
+
+        Publication.save_publications("http://example.com", pubs)
+
+        # 2 unique authors x 1 call each = 2 calls total (not 6)
+        assert mock_get_researcher.call_count == 2
+
+    @patch("publication.Database.get_researcher_id", return_value=42)
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_cache_persists_across_save_publications_calls(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """Cache carries over between save_publications calls (same process, different URLs)."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+
+        pub = [{"title": "Paper A", "authors": [["John", "Doe"]], "year": "2024"}]
+
+        Publication.save_publications("http://url1.com", pub)
+        Publication.save_publications("http://url2.com", pub)
+
+        # John Doe looked up once across both calls
+        assert mock_get_researcher.call_count == 1

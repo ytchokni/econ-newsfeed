@@ -16,6 +16,9 @@ _openai_client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
 
 CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS', '4000'))
 
+# Thread safety: benign races under CPython GIL; worst case is a redundant LLM lookup
+_author_id_cache: dict[tuple[str, str], int] = {}
+
 VALID_STATUSES = frozenset({
     'published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper',
 })
@@ -150,7 +153,12 @@ class Publication:
                             # e.g. ["Jose", "Luis", "Garcia"] -> "Jose Luis", "Garcia"
                             first_name = " ".join(author[:-1])
                             last_name = author[-1]
-                        author_id = Database.get_researcher_id(first_name, last_name, conn=conn)
+                        cache_key = (first_name, last_name)
+                        if cache_key in _author_id_cache:
+                            author_id = _author_id_cache[cache_key]
+                        else:
+                            author_id = Database.get_researcher_id(first_name, last_name, conn=conn)
+                            _author_id_cache[cache_key] = author_id
 
                         # INSERT IGNORE prevents duplicate authorship entries (uq_researcher_pub)
                         cursor.execute(
