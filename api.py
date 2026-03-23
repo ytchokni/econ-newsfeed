@@ -846,6 +846,12 @@ def list_researchers(
     conditions = []
     params: list = []
 
+    # Only show validated researchers (have OpenAlex ID or a monitored website)
+    conditions.append(
+        "(r.openalex_author_id IS NOT NULL OR EXISTS "
+        "(SELECT 1 FROM researcher_urls ru WHERE ru.researcher_id = r.id))"
+    )
+
     if institution:
         conditions.append("r.affiliation LIKE %s")
         params.append(f"%{_escape_like(institution)}%")

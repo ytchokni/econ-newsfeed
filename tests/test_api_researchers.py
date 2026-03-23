@@ -330,3 +330,21 @@ class TestGetResearcher:
         assert response.status_code == 404
         body = response.json()
         assert body["error"]["code"] == "not_found"
+
+
+class TestResearcherValidationFilter:
+    """Only researchers with openalex_author_id or researcher_urls should appear."""
+
+    def test_researchers_endpoint_filters_unvalidated(self, client):
+        """The base query must include a validation filter condition."""
+        with patch("api.Database.fetch_one") as mock_count, \
+             patch("api.Database.fetch_all") as mock_data, \
+             patch("api.Database.get_jel_codes_for_researchers", return_value={}):
+            mock_count.return_value = {"total": 0}
+            mock_data.return_value = []
+            resp = client.get("/api/researchers")
+            assert resp.status_code == 200
+            # Verify the SQL includes the validation filter
+            count_sql = mock_count.call_args[0][0]
+            assert "openalex_author_id" in count_sql or "researcher_urls" in count_sql, \
+                "Researchers query must filter by validation status"
