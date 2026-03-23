@@ -7,7 +7,9 @@ os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
 os.environ.setdefault("OPENAI_API_KEY", "sk-test")
 os.environ.setdefault("SCRAPE_API_KEY", "test-key")
 
-from doi_resolver import extract_doi_from_url, extract_pii_from_url
+from unittest.mock import patch, MagicMock
+
+from doi_resolver import extract_doi_from_url, extract_pii_from_url, resolve_pii_via_crossref
 
 
 class TestExtractDoiFromUrl:
@@ -94,3 +96,33 @@ class TestExtractPiiFromUrl:
 
     def test_no_pii_in_empty(self):
         assert extract_pii_from_url("") is None
+
+
+class TestResolvePiiViaCrossref:
+    def test_resolves_pii_to_doi(self):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {
+            "message": {
+                "items": [{"DOI": "10.1016/j.gloenvcha.2013.12.011", "title": ["Smallholder farmer"]}]
+            }
+        }
+        with patch("doi_resolver.requests.get", return_value=mock_resp) as mock_get:
+            result = resolve_pii_via_crossref("S0959378013002410")
+
+        assert result == "10.1016/j.gloenvcha.2013.12.011"
+        mock_get.assert_called_once()
+        assert "alternative-id:S0959378013002410" in str(mock_get.call_args)
+
+    def test_returns_none_on_no_results(self):
+        mock_resp = MagicMock()
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.json.return_value = {"message": {"items": []}}
+        with patch("doi_resolver.requests.get", return_value=mock_resp):
+            assert resolve_pii_via_crossref("S0000000000000000") is None
+
+    def test_returns_none_on_network_error(self):
+        import requests as req
+        with patch("doi_resolver.requests.get", side_effect=req.RequestException("timeout")):
+            assert resolve_pii_via_crossref("S0959378013002410") is None
