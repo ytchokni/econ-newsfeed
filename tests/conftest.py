@@ -6,7 +6,7 @@ db_config.py's sys.exit() on missing vars.
 import os
 
 # Set test environment variables before any app imports
-os.environ.setdefault("CONTENT_MAX_CHARS", "4000")
+os.environ.setdefault("CONTENT_MAX_CHARS", "20000")
 os.environ.setdefault("OPENAI_MODEL", "gpt-4o-mini")
 os.environ.setdefault("OPENAI_API_KEY", "sk-test")
 os.environ.setdefault("SCRAPE_API_KEY", "test-secret-key-for-ci-runs")

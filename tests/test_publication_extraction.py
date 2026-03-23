@@ -14,7 +14,7 @@ os.environ.setdefault("DB_PASSWORD", "test")
 os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
 os.environ.setdefault("OPENAI_API_KEY", "sk-test-key")
 os.environ.setdefault("OPENAI_MODEL", "gpt-4o-mini")
-os.environ.setdefault("CONTENT_MAX_CHARS", "4000")
+os.environ.setdefault("CONTENT_MAX_CHARS", "20000")
 os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
 os.environ.setdefault("SCRAPE_API_KEY", "test-secret-key-for-ci-runs")
 os.environ.setdefault("SCRAPE_INTERVAL_HOURS", "24")
@@ -93,7 +93,7 @@ class TestExtractPublications:
     def _patch_content_max(self):
         """CONTENT_MAX_CHARS is read from env as a string at import time.
         Patch it to an int so text_content[:CONTENT_MAX_CHARS] works."""
-        with patch("publication.CONTENT_MAX_CHARS", 4000):
+        with patch("publication.CONTENT_MAX_CHARS", 20000):
             yield
 
     @patch("publication.Database.log_llm_usage")
@@ -559,7 +559,7 @@ class TestBuildExtractionPrompt:
     def _patch_content_max(self):
         """CONTENT_MAX_CHARS is read from env as a string at import time.
         Patch it to an int so text_content[:CONTENT_MAX_CHARS] works."""
-        with patch("publication.CONTENT_MAX_CHARS", 4000):
+        with patch("publication.CONTENT_MAX_CHARS", 20000):
             yield
 
     def test_contains_url(self):
@@ -574,7 +574,7 @@ class TestBuildExtractionPrompt:
 
     def test_content_truncated_to_max_chars(self):
         """Content in prompt is truncated to CONTENT_MAX_CHARS."""
-        max_chars = 4000  # matches the autouse fixture
+        max_chars = 20000  # matches the autouse fixture
         long_text = "A" * (max_chars + 5000)
 
         prompt = Publication.build_extraction_prompt(long_text, "https://example.com")

@@ -14,7 +14,7 @@ from urllib.parse import urlparse
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL')
 _openai_client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
 
-CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS', '4000'))
+CONTENT_MAX_CHARS = int(os.environ['CONTENT_MAX_CHARS'])
 
 # Module-level cache: persists for process lifetime (one batch-check run).
 # Under concurrent workers (parse-fast), CPython GIL makes dict ops atomic;
