@@ -135,3 +135,25 @@ class TestThreadSafety:
         t1.join()
         t2.join()
         assert sessions["t1"] is not sessions["t2"]
+
+
+class TestIsFirstExtraction:
+    """Tests for HTMLFetcher.is_first_extraction()."""
+
+    @patch("html_fetcher.Database.fetch_one")
+    def test_returns_true_when_never_extracted(self, mock_fetch):
+        """extracted_at IS NULL means first extraction."""
+        mock_fetch.return_value = {"extracted_at": None}
+        assert HTMLFetcher.is_first_extraction(1) is True
+
+    @patch("html_fetcher.Database.fetch_one")
+    def test_returns_false_when_previously_extracted(self, mock_fetch):
+        """extracted_at is set means already extracted before."""
+        mock_fetch.return_value = {"extracted_at": "2026-03-19 12:00:00"}
+        assert HTMLFetcher.is_first_extraction(1) is False
+
+    @patch("html_fetcher.Database.fetch_one")
+    def test_returns_false_when_no_html_content(self, mock_fetch):
+        """No html_content row at all — nothing to extract."""
+        mock_fetch.return_value = None
+        assert HTMLFetcher.is_first_extraction(1) is False

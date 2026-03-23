@@ -13,6 +13,7 @@ from db_config import db_config
 from researcher import Researcher
 from html_fetcher import HTMLFetcher
 from publication import Publication
+from link_extractor import match_and_save_paper_links
 
 logger = logging.getLogger(__name__)
 
@@ -199,6 +200,12 @@ def run_scrape_job() -> None:
                             save_ms = (time.time() - t0) * 1000
                             logger.info(f"  save_publications — {save_ms:.0f}ms")
                             pubs_extracted += len(pubs)
+
+                            # Extract and match trusted links
+                            t0 = time.time()
+                            match_and_save_paper_links(url_id, pubs)
+                            links_ms = (time.time() - t0) * 1000
+                            logger.info(f"  paper links — {links_ms:.0f}ms")
 
                             # Append paper snapshots for versioning
                             t0 = time.time()

@@ -55,10 +55,18 @@ def _disambiguate_researcher(first_name: str, last_name: str, candidates: list[d
 
 
 def get_researcher_id(first_name: str, last_name: str, position: str | None = None,
-                      affiliation: str | None = None, conn: "mysql.connector.connection.MySQLConnection | None" = None) -> int:
-    """Get the researcher ID based on name. Uses LLM disambiguation for ambiguous matches.
-    Accepts optional conn to reuse an existing DB connection (avoids pool exhaustion)."""
-    def _fetch_one(query: str, params: tuple) -> dict | None:
+                      affiliation: str | None = None,
+                      openalex_author_id: str | None = None,
+                      conn: "mysql.connector.connection.MySQLConnection | None" = None) -> int:
+    """Get the researcher ID based on name.
+
+    Matching priority:
+    1. Exact first_name + last_name match
+    2. OpenAlex author ID match (deterministic, free)
+    3. LLM disambiguation for same-last-name candidates
+    4. Insert new researcher
+    """
+    def _fetch_one(query, params):
         if conn is not None:
             c = conn.cursor(dictionary=True)
             c.execute(query, params)
@@ -67,7 +75,7 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
             return row
         return fetch_one(query, params)
 
-    def _fetch_all(query: str, params: tuple) -> list[dict]:
+    def _fetch_all(query, params):
         if conn is not None:
             c = conn.cursor(dictionary=True)
             c.execute(query, params)
@@ -76,7 +84,7 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
             return rows
         return fetch_all(query, params)
 
-    def _execute(query: str, params: tuple) -> int:
+    def _execute(query, params):
         if conn is not None:
             c = conn.cursor()
             c.execute(query, params)
@@ -94,7 +102,19 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
     if result:
         return result['id']
 
-    # 2. Same-last-name candidates — let LLM decide if any is the same person
+    # 2. OpenAlex author ID match
+    if openalex_author_id:
+        result = _fetch_one(
+            "SELECT id FROM researchers WHERE openalex_author_id = %s",
+            (openalex_author_id,),
+        )
+        if result:
+            logging.info(
+                f"OpenAlex ID matched '{first_name} {last_name}' to researcher id={result['id']}"
+            )
+            return result['id']
+
+    # 3. Same-last-name candidates — let LLM decide if any is the same person
     candidates = _fetch_all(
         "SELECT id, first_name, last_name FROM researchers WHERE last_name = %s",
         (last_name,),
@@ -105,12 +125,18 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
             logging.info(
                 f"LLM matched '{first_name} {last_name}' to existing researcher id={match_id}"
             )
+            # Backfill openalex_author_id if we have it
+            if openalex_author_id:
+                _execute(
+                    "UPDATE researchers SET openalex_author_id = %s WHERE id = %s AND openalex_author_id IS NULL",
+                    (openalex_author_id, match_id),
+                )
             return match_id
 
-    # 3. No match found — insert new researcher
+    # 4. No match found — insert new researcher
     new_id = _execute(
-        "INSERT INTO researchers (first_name, last_name, position, affiliation) VALUES (%s, %s, %s, %s)",
-        (first_name, last_name, position, affiliation),
+        "INSERT INTO researchers (first_name, last_name, position, affiliation, openalex_author_id) VALUES (%s, %s, %s, %s, %s)",
+        (first_name, last_name, position, affiliation, openalex_author_id),
     )
     return new_id
 
