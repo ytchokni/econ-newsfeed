@@ -143,6 +143,8 @@ class HealthResponse(BaseModel):
 
 _SCRAPE_API_KEY = os.environ.get("SCRAPE_API_KEY", "")
 
+VALID_EVENT_TYPES = frozenset({"new_paper", "status_change"})
+
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -475,6 +477,7 @@ def list_publications(
     institution: str | None = Query(None),
     preset: str | None = Query(None),
     search: str | None = Query(None, max_length=200),
+    event_type: str | None = Query(None),
 ):
     """List feed events (new papers and status changes).
 
@@ -494,6 +497,8 @@ def list_publications(
             raise HTTPException(status_code=400, detail=f"Invalid status value '{s}'. Must be one of: {', '.join(sorted(valid_statuses))}")
     if preset and preset not in valid_presets:
         raise HTTPException(status_code=400, detail=f"Invalid preset value. Must be one of: {', '.join(sorted(valid_presets))}")
+    if event_type and event_type not in VALID_EVENT_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid event_type value '{event_type}'. Must be one of: {', '.join(sorted(VALID_EVENT_TYPES))}")
 
     # Build WHERE clause
     conditions = []
@@ -549,6 +554,9 @@ def list_publications(
         conditions.append("(p.title LIKE %s ESCAPE '\\\\' OR p.abstract LIKE %s ESCAPE '\\\\')")
         escaped = f"%{_escape_like(search_term)}%"
         params.extend([escaped, escaped])
+    if event_type:
+        conditions.append("fe.event_type = %s")
+        params.append(event_type)
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
