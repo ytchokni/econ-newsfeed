@@ -96,6 +96,15 @@ export default function PaperDetailContent({ id }: { id: number }) {
   const router = useRouter();
   const { data: publication, error, isLoading } = usePublication(id);
 
+  const snapshots = useMemo(
+    () => publication?.history
+      ? [...publication.history].sort(
+          (a, b) => new Date(b.scraped_at).getTime() - new Date(a.scraped_at).getTime()
+        )
+      : [],
+    [publication?.history]
+  );
+
   if (isLoading) {
     return (
       <div className="space-y-4 animate-pulse">
@@ -122,13 +131,6 @@ export default function PaperDetailContent({ id }: { id: number }) {
   const venueYear = [publication.venue, publication.year].filter(Boolean).join(", ");
 
   const events = publication.feed_events;
-
-  const snapshots = useMemo(
-    () => [...publication.history].sort(
-      (a, b) => new Date(b.scraped_at).getTime() - new Date(a.scraped_at).getTime()
-    ),
-    [publication.history]
-  );
 
   return (
     <div className="max-w-2xl mx-auto">
