@@ -27,6 +27,7 @@ from database.researchers import (
     update_researcher_bio as _update_researcher_bio,
     add_researcher_url as _add_researcher_url,
     import_data_from_file as _import_data_from_file,
+    merge_researchers as _merge_researchers,
 )
 from database.papers import (
     normalize_title as _normalize_title,
@@ -80,6 +81,7 @@ class Database:
     update_researcher_bio = staticmethod(_update_researcher_bio)
     add_researcher_url = staticmethod(_add_researcher_url)
     import_data_from_file = staticmethod(_import_data_from_file)
+    merge_researchers = staticmethod(_merge_researchers)
 
     # Papers
     normalize_title = staticmethod(_normalize_title)
