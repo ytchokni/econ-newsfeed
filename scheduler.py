@@ -281,6 +281,16 @@ def run_scrape_job() -> None:
     enrich_s = time.time() - t0
     logger.info(f"OpenAlex enrichment: {enrich_s:.1f}s")
 
+    # Merge duplicate papers identified by shared DOI/OpenAlex ID
+    t0 = time.time()
+    try:
+        from paper_merge import merge_duplicate_papers
+        merge_duplicate_papers()
+    except Exception as e:
+        logger.error("Paper merge failed: %s: %s", type(e).__name__, e)
+    merge_s = time.time() - t0
+    logger.info(f"Paper merge: {merge_s:.1f}s")
+
 
 def _handle_sigterm(signum: int, frame: object) -> None:
     """Handle SIGTERM/SIGINT for graceful shutdown in cloud environments.
