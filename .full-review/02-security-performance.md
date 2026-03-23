@@ -1,46 +1,71 @@
 # Phase 2: Security & Performance Review
 
+**Date:** 2026-03-20
+
+---
+
 ## Security Findings
 
-### Critical (2)
+### Critical (3)
 
-| # | Finding | CVSS | CWE | Location | Description |
-|---|---------|------|-----|----------|-------------|
-| SEC-01 | SQL injection in database creation | 9.8 | CWE-89 | `database.py:24` | F-string interpolation of `DB_NAME` env var into DDL; attacker controlling env can inject arbitrary SQL |
-| SEC-02 | Untrusted LLM output injected into DB | 9.1 | CWE-20, CWE-74 | `publication.py:20-62,75-107` | OpenAI response parsed and inserted without schema validation; poisoned web content can manipulate LLM output (prompt injection via scraped HTML) |
+| ID | Finding | File | CVSS |
+|----|---------|------|------|
+| SEC-C1 | `CONTENT_MAX_CHARS` crashes on missing env var — `int(None)` TypeError | `html_fetcher.py:21` | 8.6 |
+| SEC-C2 | `OPENAI_MODEL` has no default — `None` passed to OpenAI API causes validation error on scrape | `publication.py:14` | 8.6 |
+| SEC-C3 | DNS rebinding vulnerability in SSRF protection — `validate_url_with_pin()` resolves IP but caller discards it, makes second DNS lookup | `html_fetcher.py:273` | 8.1 |
+
+**SEC-C3 detail:** `validate_url_with_pin()` correctly resolves hostname and checks against private IP ranges, but the resolved IP is discarded (`_resolved_ip`). The actual `fetch_html()` call resolves DNS again, allowing a DNS rebinding attack where the second lookup returns an internal IP (e.g., `169.254.169.254` cloud metadata endpoint).
 
 ### High (5)
 
-| # | Finding | CVSS | CWE | Location | Description |
-|---|---------|------|-----|----------|-------------|
-| SEC-03 | No DB config validation — null dereference | 7.5 | CWE-252, CWE-476 | `db_config.py:7-12` | All config values may be `None`; creates DB named "None" or connects to unintended host |
-| SEC-04 | OpenAI API key unvalidated — silent failure | 7.4 | CWE-287 | `publication.py:90` | `None` key causes opaque errors; key potentially exposed in error logs |
-| SEC-05 | Arbitrary file read via user-controlled path | 7.5 | CWE-22 | `main.py:11-12`, `database.py:190-208` | `input()` path passed directly to `open()` without restriction; could read `/etc/passwd`, `/proc/self/environ` |
-| SEC-06 | SSRF via database-stored URLs | 8.1 | CWE-918 | `html_fetcher.py:25` | URLs fetched from DB without scheme/host validation; could target AWS metadata (169.254.169.254), internal services |
-| SEC-07 | Broad exception handling masks security errors | 6.5 | CWE-754, CWE-390 | `database.py:207`, `publication.py:57,105` | SQL injection attempts, auth failures, data corruption all logged as generic errors |
+| ID | Finding | File | CVSS |
+|----|---------|------|------|
+| SEC-H1 | Next.js 14.2.35 has 4 known CVEs including HTTP request smuggling in rewrites | `app/package.json:13` | 7.5 |
+| SEC-H2 | Unbounded IN clause size — `status` and `institution` params accept unlimited comma-separated values enabling resource exhaustion | `api.py:413-414, 448-462` | 7.5 |
+| SEC-H3 | LLM prompt injection — researcher page content inserted directly into LLM prompts without sanitization or delimiters | `publication.py:188-204` | 7.3 |
+| SEC-H4 | Hidden LLM calls in data access layer — `get_researcher_id()` calls OpenAI for disambiguation with no rate limiting or budget | `database/researchers.py:55-112` | 6.5 |
+| SEC-H5 | `glob` dependency command injection (GHSA-5j98-mcp5-4vw2) via `eslint-config-next` | `app/package.json` (transitive) | 7.5 |
 
-### Medium (7)
+### Medium (8)
 
-| # | Finding | CVSS | CWE | Location | Description |
-|---|---------|------|-----|----------|-------------|
-| SEC-08 | Unpinned Python dependencies — supply chain risk | 6.8 | CWE-829 | `requirements.txt` | Most deps unpinned; duplicate `python-dotenv`; no hash verification |
-| SEC-09 | Known CVEs in Next.js 14.2.13 | 6.5-9.1 | CWE-829 | `app/package.json:13` | CVE-2024-46982 (cache poisoning), CVE-2024-51479 (auth bypass), CVE-2025-29927 (middleware bypass) |
-| SEC-10 | No HTTPS enforcement for web scraping | 5.9 | CWE-319, CWE-295 | `html_fetcher.py:12-15,25` | HTTP URLs allow MITM content injection; poisoned content then sent to LLM |
-| SEC-11 | Sensitive data in log messages | 5.3 | CWE-532 | Multiple files | MySQL errors may contain connection strings; OpenAI errors may include API key |
-| SEC-12 | No rate limiting on outbound requests | 5.3 | CWE-799 | `html_fetcher.py:18-35`, `main.py:17-20` | No per-domain throttling; scraper could be abused as DDoS amplifier; no `robots.txt` compliance |
-| SEC-13 | LLM response dumped to filesystem unsanitized | 5.0 | CWE-73, CWE-552 | `publication.py:128-139` | No size limit; world-readable permissions; no rotation; disk exhaustion risk |
-| SEC-14 | Planned API has no authentication | 6.5 | CWE-306 | `DESIGN.md` 4.3 | `POST /api/scrape` triggers costly operations (OpenAI calls, outbound HTTP) without auth |
+| ID | Finding | File | CVSS |
+|----|---------|------|------|
+| SEC-M1 | Health endpoint ignores DB state — returns 200 OK regardless of database connectivity | `api.py:362-365` | 5.3 |
+| SEC-M2 | OpenAI client instantiated at import time — causes side effects during testing and requires env vars at import | `publication.py:15` | 5.3 |
+| SEC-M3 | Metrics + scrape status endpoints expose operational data without authentication | `api.py:368-382, 889-922` | 5.3 |
+| SEC-M4 | CSP allows `unsafe-inline` for scripts in production frontend | `app/next.config.mjs:32` | 5.4 |
+| SEC-M5 | Backend CSP header conflicts with frontend CSP — API JSON responses carry restrictive policy | `api.py:190` | 4.3 |
+| SEC-M6 | Missing HSTS header on frontend (backend has it, frontend does not) | `app/next.config.mjs` | 4.3 |
+| SEC-M7 | Scrape trigger runs in unbounded background thread with no timeout | `api.py:877-879` | 5.3 |
+| SEC-M8 | Gunicorn running without `--timeout` or `--max-requests` flags | `Dockerfile.api:19` | 5.3 |
 
-### Low (5)
+### Low (6)
 
-| # | Finding | CVSS | CWE | Location | Description |
-|---|---------|------|-----|----------|-------------|
-| SEC-15 | Planned API missing security headers & CORS config | 5.3 | CWE-693, CWE-942 | `DESIGN.md` | No CSP, HSTS, X-Frame-Options; CORS config not specified |
-| SEC-16 | DB credentials in Docker Compose as root user | 4.0 | CWE-798, CWE-522 | `DESIGN.md` 8.1, 9.1 | App uses MySQL root; all env vars shared to all containers |
-| SEC-17 | Connection per query — resource exhaustion | 3.7 | CWE-400 | `database.py:34-43` | Under API load, `max_connections` exhausted → DoS |
-| SEC-18 | `@ts-morph/common` unnecessary dependency | 3.1 | CWE-1104 | `app/package.json:12` | Increases attack surface; not needed for Next.js |
-| SEC-19 | LONGTEXT stored without size limits | 3.7 | CWE-400, CWE-770 | `html_fetcher.py:55-69`, `database.py:129` | Malicious page could store GBs of content |
-| SEC-20 | No TLS for database connections | 4.3 | CWE-319 | `db_config.py:7-12` | Credentials in cleartext on wire; critical for AWS RDS |
+| ID | Finding | File | CVSS |
+|----|---------|------|------|
+| SEC-L1 | `.env.example` contains weak placeholder secrets (`secret`, `changeme`) | `.env.example` | 3.7 |
+| SEC-L2 | Database connections default to no SSL — unencrypted over network | `db_config.py:25-37` | 3.7 |
+| SEC-L3 | Outdated FastAPI 0.115.14 and Gunicorn 22.0.0 | `pyproject.toml` | 3.1 |
+| SEC-L4 | CSV import lacks path validation — no directory restriction | `database/researchers.py:131` | 3.3 |
+| SEC-L5 | Inconsistent logging — f-strings risk log injection from attacker-controlled URLs | Multiple files | 2.7 |
+| SEC-L6 | Batch job temporary file not securely created — `delete=False` with default permissions | `main.py:164` | 2.4 |
+
+### Positive Security Controls (already implemented)
+- Parameterized SQL everywhere (no string concatenation)
+- HMAC constant-time API key comparison (`hmac.compare_digest`)
+- SSRF validation with private IP checks (DNS rebinding aside)
+- Security headers on both backend and frontend
+- Non-root Docker containers
+- `SCRAPE_API_KEY` minimum length enforcement (16 chars)
+- Catch-all exception handler preventing stack trace leakage
+- LIKE escaping for user-provided filter values
+- CORS restricted to configured frontend origin
+- Rate limiting via slowapi (60/min or 30/min)
+- Advisory locks preventing concurrent scrapes
+- robots.txt compliance
+- Response size limits (1MB `CONTENT_MAX_BYTES`)
+- No `dangerouslySetInnerHTML` in frontend
+- `DB_NAME` regex validation preventing SQL injection in DDL
 
 ---
 
@@ -48,64 +73,77 @@
 
 ### Critical (3)
 
-| # | Finding | Impact | Location | Description |
-|---|---------|--------|----------|-------------|
-| PERF-01 | No connection pooling — new TCP per query | 3-15ms overhead per query; ~250 unnecessary handshakes per scrape cycle (50 URLs) | `database.py:34-43` | Every `execute_query/fetch_all/fetch_one` opens and closes a fresh MySQL connection |
-| PERF-02 | Mixed connection management in save_publications | 150-300 extra connections per cycle; broken transaction integrity | `publication.py:20-62` | `get_researcher_id()` opens separate connections inside an outer transaction |
-| PERF-03 | Fully sequential URL processing | Total scrape time = sum of all fetch times; 25-250s for 50 URLs | `main.py:15-20,22-38` | No concurrency; I/O-bound work done serially |
+| ID | Finding | Impact |
+|----|---------|--------|
+| PERF-C1 | Synchronous blocking I/O in async FastAPI — all endpoints are sync `def`, `mysql-connector-python` is sync, default threadpool of 40 threads limits concurrency | At >40 concurrent users, API response times spike to seconds. DB pool of 10 creates chokepoint before threadpool fills |
+| PERF-C2 | Connection pool exhaustion in scrape pipeline — advisory lock connections outside pool + 8 concurrent extraction workers holding pool connections = only 2 left for API | During concurrent extraction, API becomes unresponsive. Possible deadlock |
+| PERF-C3 | Unbounded memory growth — `_domain_last_request` and `_domain_locks` dicts never cleared across scrape cycles | Slow memory leak in long-running Gunicorn workers |
 
-### High (5)
+### High (6)
 
-| # | Finding | Impact | Location | Description |
-|---|---------|--------|----------|-------------|
-| PERF-04 | No secondary database indexes | Full table scans on all lookup queries; O(N) degradation | `database.py:91-147` | Missing indexes on `html_content(url_id,timestamp)`, `researchers(first_name,last_name)`, `publications(timestamp)` |
-| PERF-05 | No duplicate publication detection | Linear table growth per scrape cycle | `publication.py:20-62` | Re-extraction inserts duplicates; no unique constraints |
-| PERF-06 | 4000-char content truncation | 50%+ of publications silently dropped on long pages | `publication.py:86` | Hard truncation loses data beyond cutoff |
-| PERF-07 | Unbounded html_content table growth | Disk and query degradation over months | `html_fetcher.py:55-69` | Full LONGTEXT stored for every content change; ~180MB/year at 50 researchers |
-| PERF-08 | Thread-unsafe requests.Session (if concurrency added) | Request corruption under concurrent use | `html_fetcher.py:12-15` | Class-level `Session` shared across threads |
+| ID | Finding | Impact |
+|----|---------|--------|
+| PERF-H1 | Missing composite index on `feed_events(created_at DESC, paper_id)` — primary feed query forces filesort | 50-200ms with 10k+ events instead of 5ms |
+| PERF-H2 | N+1 paper snapshots in scrape pipeline — individual lookup per publication instead of batch | 6000+ queries for 100 URLs × 20 papers, adding 12 seconds of DB round-trip |
+| PERF-H3 | Researcher detail endpoint loads ALL publications unbounded — no LIMIT | 200+ publications = 200KB+ response |
+| PERF-H4 | Concurrent extraction exhausts pool + OpenAI rate limits — 8 workers with no semaphore | During extraction, API has 0-2 available connections; possible 429 errors |
+| PERF-H5 | `get_all_publications()` loads entire papers table — no LIMIT/WHERE | 10k papers = 5-10MB into memory (dead code but callable) |
+| PERF-H6 | Frontend researchers page hardcodes `per_page=100` with no pagination | Silent data truncation at 100+ researchers; 100-200KB payload |
 
 ### Medium (10)
 
-| # | Finding | Impact | Location | Description |
-|---|---------|--------|----------|-------------|
-| PERF-09 | Double BeautifulSoup parse per URL | 2x CPU waste for HTML processing | `html_fetcher.py:72-105` | `has_text_changed()` and `save_text()` each parse the same HTML independently |
-| PERF-10 | OpenAI client recreated per call | 50-100ms TLS handshake overhead per extraction | `publication.py:90` | Connection pool discarded each time |
-| PERF-11 | No researcher ID caching during scrape | Dozens of redundant DB lookups per cycle | `database.py:154-175` | Same author looked up repeatedly across publications |
-| PERF-12 | No HTTP conditional requests (If-Modified-Since/ETag) | Full page download even when unchanged | `html_fetcher.py:18-35` | Wastes bandwidth when servers support caching |
-| PERF-13 | No rate limiting on outbound requests | Risk of IP bans; OpenAI 429 errors | `html_fetcher.py`, `publication.py` | No per-domain throttling; no backoff |
-| PERF-14 | Only timeout errors retried — 5xx treated as permanent | Transient server errors cause data loss | `html_fetcher.py:29-33` | `HTTPError` for 5xx hits `break` instead of retry |
-| PERF-15 | Race condition in researcher upsert | Duplicate rows under concurrent writes | `database.py:154-175` | Check-then-insert without locking; no unique constraint |
-| PERF-16 | In-process scheduler shares resources with API | API latency spikes during scrapes | `DESIGN.md` 10.2 | BeautifulSoup parsing and OpenAI deserialization can block GIL |
-| PERF-17 | No client-side caching strategy in planned frontend | Redundant API refetches on navigation | `DESIGN.md` 5.3 | No SWR/React Query mentioned |
-| PERF-18 | `get_all_publications` fetches entire table unpaginated | Memory proportional to total publications | `publication.py:152-159` | No LIMIT, no pagination, no filtering |
+| ID | Finding | Impact |
+|----|---------|--------|
+| PERF-M1 | Duplicate COUNT query on every paginated request — separate COUNT(*) + SELECT for same WHERE | Doubles query cost; 20-50ms for complex filters |
+| PERF-M2 | `_TOP20_DEPT_KEYWORDS` generates 22 LIKE conditions with leading wildcards | O(researchers × 22) string comparisons per query; forces full table scan |
+| PERF-M3 | `save_publications` commits per publication (not batch) — 30 fsync per scrape URL | 150ms commit overhead per URL on SSD; 10x worse on cloud storage |
+| PERF-M4 | `requests.Session` shared across threads without thread safety | Possible connection errors under high concurrency |
+| PERF-M5 | `_robots_cache` race condition — TOCTOU in concurrent extraction | Duplicate HTTP requests for robots.txt |
+| PERF-M6 | No application-level caching for rarely-changing data (fields, filter-options) | 30+ unnecessary DB queries/min for data changing once/day |
+| PERF-M7 | HTML content stored as MEDIUMTEXT without compression — off-page InnoDB reads | ~1ms latency per access; oversized column type |
+| PERF-M8 | Missing index on `paper_snapshots.content_hash` for change detection | Grows linearly with snapshot count |
+| PERF-M9 | Gunicorn 4-worker config with no `--max-requests` — no worker recycling | Workers grow 50-200MB over weeks without recycling |
+| PERF-M10 | `CONTENT_MAX_CHARS` no default in html_fetcher.py (same as SEC-C1) | Import-time crash = unavailability |
 
-### Low (3)
+### Low (7)
 
-| # | Finding | Impact | Location | Description |
-|---|---------|--------|----------|-------------|
-| PERF-19 | Single MySQL instance, no read replicas | API reads and scraper writes contend on same instance | Architecture | Fine for MVP; post-MVP concern |
-| PERF-20 | Unbounded invalid_json_dumps directory | Disk accumulation over time | `publication.py:128-139` | No rotation or cleanup mechanism |
-| PERF-21 | Spurious `@ts-morph/common` dependency | Minor image size increase | `app/package.json` | Not needed for Next.js frontend |
+| ID | Finding | Impact |
+|----|---------|--------|
+| PERF-L1 | `_validate_draft_urls` uses sequential requests with 100ms sleep | 100 URLs = 30 seconds; could be 3-5x faster with batching |
+| PERF-L2 | LLM disambiguation on every unknown author name — no caching | 600 LLM calls per large scrape = $0.60 and 5 min added latency |
+| PERF-L3 | BeautifulSoup parses HTML twice (fetcher + extractor independently) | 2-10 seconds of redundant CPU for 200 URLs |
+| PERF-L4 | SWR uses defaults — refetches on every tab focus | 40-60 unnecessary API calls per session |
+| PERF-L5 | No connection keep-alive tuning for Next.js rewrites proxy | 20-60ms TCP overhead per page load |
+| PERF-L6 | `seed_research_fields` runs 12 INSERT IGNORE on every startup | 24ms unnecessary per startup |
+| PERF-L7 | No ETags or conditional requests — full payload every time | Missed 304 opportunities |
+
+### Scalability Bottlenecks
+
+| Barrier | Component | Impact at 10x Scale |
+|---------|-----------|---------------------|
+| DB pool size (10) vs workers (4 × 10 = 40 connections) | `connection.py` | 8 workers = 80 connections; exceeds MySQL default `max_connections` (151) |
+| Per-process caches on HTMLFetcher | `html_fetcher.py` | Wasteful but functional |
+| Advisory lock scheduler singleton | `scheduler.py` | Only one worker runs scheduler; correct but fragile |
+| top20 LIKE queries (22 conditions) | `api.py` | Untenable at 1000+ researchers |
+| Sequential URL processing in scraper | `scheduler.py` | 5-hour scrape at 1000 URLs |
 
 ---
 
 ## Critical Issues for Phase 3 Context
 
-The following findings from Phase 2 affect testing and documentation requirements:
+### Testing requirements driven by security findings
+- SEC-C3 (DNS rebinding): Need test verifying pinned IP is actually used for HTTP request
+- SEC-H2 (unbounded IN clauses): Need test for parameter length limits
+- SEC-H3 (LLM prompt injection): Need test verifying prompt delimiters and system message isolation
+- SEC-H4 (hidden LLM in DB layer): Need integration test verifying disambiguation is rate-limited
 
-### Testing Implications
-1. **SQL injection (SEC-01)** — Need input validation tests for database name sanitization
-2. **LLM output validation (SEC-02)** — Need schema validation tests for all possible LLM response shapes (malformed JSON, missing keys, wrong types, extra large arrays)
-3. **SSRF (SEC-06)** — Need URL validation tests covering internal IPs, metadata endpoints, non-HTTP schemes
-4. **Path traversal (SEC-05)** — Need file path validation tests with traversal attempts
-5. **Connection pooling (PERF-01)** — Need load tests to verify pool exhaustion behavior
-6. **Duplicate detection (PERF-05)** — Need idempotency tests for repeated extraction
-7. **Race conditions (PERF-15)** — Need concurrent insertion tests for researcher upsert
+### Testing requirements driven by performance findings
+- PERF-C2 (pool exhaustion): Need load test for concurrent API + scrape
+- PERF-H1 (missing index): Need query explain plan test
+- PERF-H2 (N+1 snapshots): Need performance benchmark for scrape pipeline
+- PERF-M3 (per-publication commit): Need benchmark comparing batch vs per-item commits
 
-### Documentation Implications
-1. **Security controls (SEC-14, SEC-15)** — API authentication and CORS configuration must be documented in DESIGN.md
-2. **Rate limiting (SEC-12)** — Per-domain limits and `robots.txt` policy need documentation
-3. **Environment variables (SEC-03, SEC-04)** — All required env vars with validation rules need a `.env.example`
-4. **Dependency management (SEC-08)** — Pinning strategy and update policy need documentation
-5. **Data retention (PERF-07)** — `html_content` retention policy needs documentation
-6. **Scalability limits (PERF-03, PERF-19)** — Current capacity and scaling path need documentation
+### Documentation requirements
+- Security posture (what's protected, what's not) should be documented
+- Connection pool sizing rationale needs documentation
+- Scalability limits and capacity planning estimates should be documented

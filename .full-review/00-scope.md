@@ -2,41 +2,51 @@
 
 ## Target
 
-Full econ-newsfeed project — a web scraping system for economics research papers that fetches HTML from economist personal websites, uses OpenAI to extract publication metadata, and stores results in MySQL. Includes a Next.js frontend (currently default template) and a design document for the planned MVP architecture.
+Full econ-newsfeed project — Python backend (FastAPI) + Next.js frontend + MySQL. Monitors economics researchers' personal websites, detects new/changed publications via LLM extraction (OpenAI), and displays them in a chronological newsfeed.
 
 ## Files
 
-### Python Backend
-- `main.py` — CLI entry point with menu-driven interface
-- `database.py` — MySQL database layer (connection, queries, table creation, CSV import)
-- `db_config.py` — Database configuration via environment variables
-- `html_fetcher.py` — Web scraping with retry logic and SHA-256 change detection
-- `publication.py` — OpenAI-based publication extraction and database storage
+### Backend (Python — root directory)
+- `api.py` — FastAPI REST API (20+ endpoints, CORS, rate limiting)
+- `database/` — MySQL schema, connection pooling, migrations
+  - `__init__.py`, `connection.py`, `llm.py`, `papers.py`, `researchers.py`, `schema.py`, `snapshots.py`
+- `db_config.py` — Env var validation
+- `html_fetcher.py` — Web scraper with per-domain rate limiting, robots.txt compliance
+- `main.py` — CLI entry points for scraping pipeline
+- `publication.py` — OpenAI extraction with Pydantic structured outputs, Batch API
 - `researcher.py` — Researcher data access layer
+- `scheduler.py` — APScheduler background jobs with advisory locks
+- `scripts/check_env.py` — Environment validation script
 
-### Configuration & Data
-- `requirements.txt` — Python dependencies
-- `urls.csv` — Sample researcher data
-- `.env` (expected, not committed) — Environment variables
+### Frontend (Next.js — `app/` directory)
+- `app/src/app/` — Pages: `/` (newsfeed), `/researchers`, `/researchers/[id]`
+  - `page.tsx`, `layout.tsx`, `NewsfeedContent.tsx`
+  - `researchers/page.tsx`, `researchers/ResearchersContent.tsx`
+  - `researchers/[id]/page.tsx`, `researchers/[id]/ResearcherDetailContent.tsx`
+- `app/src/components/` — Shared UI components
+  - `Header.tsx`, `PublicationCard.tsx`, `ResearcherCard.tsx`
+  - `EmptyState.tsx`, `ErrorMessage.tsx`
+  - `PublicationCardSkeleton.tsx`, `ResearcherCardSkeleton.tsx`
+  - `SearchableCheckboxDropdown.tsx`
+- `app/src/lib/` — API client and types
+  - `api.ts`, `types.ts`
 
-### Next.js Frontend (`app/`)
-- `app/src/app/page.tsx` — Home page (default Next.js template)
-- `app/src/app/layout.tsx` — Root layout (default Next.js template)
-- `app/src/app/globals.css` — Global styles
-- `app/package.json` — Frontend dependencies (Next.js 14, React 18, Tailwind)
-- `app/tailwind.config.ts` — Tailwind configuration
-- `app/tsconfig.json` — TypeScript configuration
+### Tests
+- **Python** (`tests/`): 19 test files covering API, security, scraping, dedup, scheduler
+- **Frontend** (`app/src/`): Jest + React Testing Library tests for components and pages
 
-### Documentation
-- `README.md` — Project overview and setup instructions
-- `DESIGN.md` — MVP design document (API, frontend, scheduler, deployment)
+### Configuration
+- `Makefile`, `docker-compose.yml`, `Dockerfile.api`
+- `pyproject.toml`, `app/package.json`
+- `app/next.config.mjs`, `app/tsconfig.json`, `app/tailwind.config.ts`
+- `.env.example`
 
 ## Flags
 
 - Security Focus: no
 - Performance Critical: no
 - Strict Mode: no
-- Framework: FastAPI + Next.js (auto-detected from DESIGN.md; backend currently CLI-based)
+- Framework: FastAPI + Next.js (auto-detected)
 
 ## Review Phases
 

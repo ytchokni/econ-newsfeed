@@ -2,7 +2,7 @@
 import logging
 from datetime import datetime, timezone
 
-from database.connection import execute_query, fetch_all
+from database.connection import execute_query, fetch_all, get_connection
 
 
 def get_all_jel_codes() -> list[dict]:
@@ -84,3 +84,106 @@ def get_researchers_needing_classification() -> list[dict]:
              AND rjc.researcher_id IS NULL
            ORDER BY r.id"""
     )
+
+
+def save_paper_topics(paper_id: int, topics: list[dict]) -> None:
+    """Store OpenAlex topics for a paper. Replaces existing topics."""
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM paper_topics WHERE paper_id = %s", (paper_id,)
+            )
+            for topic in topics:
+                cursor.execute(
+                    """INSERT INTO paper_topics
+                       (paper_id, openalex_topic_id, topic_name, subfield_name,
+                        field_name, domain_name, score)
+                       VALUES (%s, %s, %s, %s, %s, %s, %s)""",
+                    (
+                        paper_id,
+                        topic["openalex_topic_id"],
+                        topic["topic_name"],
+                        topic.get("subfield_name"),
+                        topic.get("field_name"),
+                        topic.get("domain_name"),
+                        topic.get("score"),
+                    ),
+                )
+            conn.commit()
+
+
+def get_paper_topics_for_researcher(researcher_id: int) -> list[dict]:
+    """Get all OpenAlex topics for papers authored by a researcher."""
+    return fetch_all(
+        """SELECT pt.topic_name, pt.score
+           FROM paper_topics pt
+           JOIN papers p ON p.id = pt.paper_id
+           JOIN authorship a ON a.publication_id = p.id
+           WHERE a.researcher_id = %s
+           ORDER BY pt.score DESC""",
+        (researcher_id,),
+    )
+
+
+def get_papers_needing_topics() -> list[dict]:
+    """Get papers with openalex_id but no topics stored yet."""
+    return fetch_all(
+        """SELECT p.id, p.openalex_id
+           FROM papers p
+           LEFT JOIN paper_topics pt ON pt.paper_id = p.id
+           WHERE p.openalex_id IS NOT NULL
+             AND pt.id IS NULL"""
+    )
+
+
+def get_all_researcher_topics() -> dict[int, list[dict]]:
+    """Batch-fetch all topics grouped by researcher.
+
+    Returns {researcher_id: [{"topic_name": ..., "score": ...}, ...]}.
+    Only includes researchers who have papers with stored topics.
+    """
+    rows = fetch_all(
+        """SELECT a.researcher_id, pt.topic_name, pt.score
+           FROM paper_topics pt
+           JOIN authorship a ON a.publication_id = pt.paper_id
+           ORDER BY a.researcher_id, pt.score DESC"""
+    )
+    result: dict[int, list[dict]] = {}
+    for row in rows:
+        rid = row["researcher_id"]
+        if rid not in result:
+            result[rid] = []
+        result[rid].append({"topic_name": row["topic_name"], "score": row["score"]})
+    return result
+
+
+def add_researcher_jel_codes(researcher_id: int, jel_codes: list[str]) -> None:
+    """Add JEL codes to a researcher without removing existing ones.
+
+    Skips codes already assigned (duplicate key).
+    Logs a warning for unknown JEL codes (FK violation).
+    """
+    from mysql.connector import errorcode
+    from mysql.connector.errors import IntegrityError
+
+    now = datetime.now(timezone.utc)
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            for code in jel_codes:
+                try:
+                    cursor.execute(
+                        """INSERT INTO researcher_jel_codes
+                           (researcher_id, jel_code, classified_at)
+                           VALUES (%s, %s, %s)""",
+                        (researcher_id, code.upper().strip(), now),
+                    )
+                except IntegrityError as e:
+                    if getattr(e, "errno", None) == errorcode.ER_DUP_ENTRY:
+                        pass  # Already assigned — skip silently
+                    else:
+                        logging.warning(
+                            "Skipped unknown JEL code '%s' for researcher %d",
+                            code,
+                            researcher_id,
+                        )
+            conn.commit()

@@ -136,6 +136,21 @@ def _strip_prefix(url: str | None, prefix: str) -> str | None:
     return (url or "").replace(prefix, "") or None
 
 
+def _parse_topics(work: dict) -> list[dict]:
+    """Extract topic metadata from an OpenAlex work object."""
+    return [
+        {
+            "openalex_topic_id": _strip_prefix(t.get("id"), _OPENALEX_PREFIX),
+            "topic_name": t.get("display_name", ""),
+            "subfield_name": (t.get("subfield") or {}).get("display_name"),
+            "field_name": (t.get("field") or {}).get("display_name"),
+            "domain_name": (t.get("domain") or {}).get("display_name"),
+            "score": t.get("score"),
+        }
+        for t in work.get("topics", [])
+    ]
+
+
 def _parse_work(work: dict) -> dict:
     """Parse an OpenAlex work object into our enrichment dict."""
     doi = _strip_prefix(work.get("doi"), _DOI_PREFIX)
@@ -159,6 +174,7 @@ def _parse_work(work: dict) -> dict:
         "openalex_id": openalex_id,
         "coauthors": coauthors,
         "abstract": abstract,
+        "topics": _parse_topics(work),
     }
 
 
@@ -265,3 +281,53 @@ def enrich_new_publications(limit=50):
 
     logger.info("OpenAlex enrichment: %d/%d papers matched", enriched, len(papers))
     return enriched
+
+
+def fetch_topics_batch(openalex_ids: list[str]) -> dict[str, list[dict]]:
+    """Fetch topics for multiple works from OpenAlex.
+
+    Returns dict mapping openalex_id -> list of topic dicts.
+    Processes in chunks of 50 (OpenAlex filter limit).
+    """
+    if not openalex_ids:
+        return {}
+
+    if not _check_budget():
+        logger.info("OpenAlex daily budget exhausted, skipping topic fetch")
+        return {}
+
+    session = _get_session()
+    result: dict[str, list[dict]] = {}
+
+    for i in range(0, len(openalex_ids), 50):
+        if not _check_budget():
+            logger.info("OpenAlex daily budget reached, stopping topic fetch")
+            break
+
+        chunk = openalex_ids[i : i + 50]
+        full_ids = "|".join(f"https://openalex.org/{oid}" for oid in chunk)
+        params: dict[str, str | int] = {
+            "filter": f"openalex:{full_ids}",
+            "per_page": 50,
+            "select": "id,topics",
+        }
+        if MAILTO:
+            params["mailto"] = MAILTO
+
+        try:
+            resp = _get_with_retry(session, f"{OPENALEX_BASE_URL}/works", params)
+            resp.raise_for_status()
+            _increment_budget()
+
+            for work in resp.json().get("results", []):
+                oa_id = _strip_prefix(work.get("id"), _OPENALEX_PREFIX)
+                topics = _parse_topics(work)
+                if topics and oa_id:
+                    result[oa_id] = topics
+        except (requests.RequestException, ValueError) as e:
+            logger.warning("Failed to fetch topics for chunk starting at %d: %s", i, e)
+
+        if i + 50 < len(openalex_ids):
+            time.sleep(0.5)
+
+    return result

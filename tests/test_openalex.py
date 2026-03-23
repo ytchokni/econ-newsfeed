@@ -435,3 +435,89 @@ class TestBackfillResearcherOpenalexIds:
             from openalex import _backfill_researcher_openalex_ids
             _backfill_researcher_openalex_ids(paper_id=10, coauthors=coauthors)
         mock_fetch.assert_not_called()
+
+
+SAMPLE_TOPICS = [
+    {
+        "id": "https://openalex.org/T10001",
+        "display_name": "Labor market dynamics and wage inequality",
+        "score": 0.99,
+        "subfield": {"id": "https://openalex.org/subfields/2002", "display_name": "Economics and Econometrics"},
+        "field": {"id": "https://openalex.org/fields/20", "display_name": "Economics, Econometrics and Finance"},
+        "domain": {"id": "https://openalex.org/domains/2", "display_name": "Social Sciences"},
+    },
+    {
+        "id": "https://openalex.org/T10002",
+        "display_name": "Migration and Labor Dynamics",
+        "score": 0.85,
+        "subfield": {"id": "https://openalex.org/subfields/3312", "display_name": "Sociology and Political Science"},
+        "field": {"id": "https://openalex.org/fields/33", "display_name": "Social Sciences"},
+        "domain": {"id": "https://openalex.org/domains/2", "display_name": "Social Sciences"},
+    },
+]
+
+
+class TestParseWorkTopics:
+    """Tests for topic extraction in _parse_work."""
+
+    def test_parse_work_includes_topics(self):
+        work = {
+            **SAMPLE_OPENALEX_RESPONSE["results"][0],
+            "topics": SAMPLE_TOPICS,
+        }
+        from openalex import _parse_work
+        result = _parse_work(work)
+        assert "topics" in result
+        assert len(result["topics"]) == 2
+        assert result["topics"][0]["openalex_topic_id"] == "T10001"
+        assert result["topics"][0]["topic_name"] == "Labor market dynamics and wage inequality"
+        assert result["topics"][0]["subfield_name"] == "Economics and Econometrics"
+        assert result["topics"][0]["score"] == 0.99
+
+    def test_parse_work_handles_no_topics(self):
+        work = SAMPLE_OPENALEX_RESPONSE["results"][0]  # No topics key
+        from openalex import _parse_work
+        result = _parse_work(work)
+        assert result["topics"] == []
+
+
+class TestFetchTopicsBatch:
+    """Tests for openalex.fetch_topics_batch."""
+
+    def test_fetches_topics_for_multiple_works(self):
+        api_response = {
+            "results": [
+                {"id": "https://openalex.org/W123", "topics": SAMPLE_TOPICS},
+                {"id": "https://openalex.org/W456", "topics": SAMPLE_TOPICS[:1]},
+            ]
+        }
+        mock_resp = MagicMock()
+        mock_resp.json.return_value = api_response
+        mock_resp.raise_for_status = MagicMock()
+        mock_resp.status_code = 200
+
+        with patch("openalex._get_session") as mock_session, \
+             patch("openalex._check_budget", return_value=True):
+            mock_session.return_value.get.return_value = mock_resp
+            from openalex import fetch_topics_batch
+            result = fetch_topics_batch(["W123", "W456"])
+
+        assert "W123" in result
+        assert "W456" in result
+        assert len(result["W123"]) == 2
+        assert len(result["W456"]) == 1
+
+    def test_returns_empty_on_api_error(self):
+        import requests as req
+        with patch("openalex._get_session") as mock_session, \
+             patch("openalex._check_budget", return_value=True):
+            mock_session.return_value.get.side_effect = req.RequestException("timeout")
+            from openalex import fetch_topics_batch
+            result = fetch_topics_batch(["W123"])
+
+        assert result == {}
+
+    def test_handles_empty_input(self):
+        from openalex import fetch_topics_batch
+        result = fetch_topics_batch([])
+        assert result == {}

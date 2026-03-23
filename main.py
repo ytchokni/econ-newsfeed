@@ -389,6 +389,7 @@ def main() -> None:
     subparsers.add_parser('batch-check', help='Check and process completed batch jobs')
     subparsers.add_parser('classify-jel', help='Classify researchers into JEL codes from bios')
     subparsers.add_parser('enrich', help='Enrich publications with OpenAlex metadata')
+    subparsers.add_parser('enrich-jel', help='Enrich researcher JEL codes from paper topics via OpenAlex')
     subparsers.add_parser('discover-domains', help='Scan stored HTML for untrusted domains with paper-title links')
 
     args = parser.parse_args()
@@ -411,6 +412,10 @@ def main() -> None:
         Database.create_tables()
         from openalex import enrich_new_publications
         enrich_new_publications()
+    elif args.command == 'enrich-jel':
+        Database.create_tables()
+        from jel_enrichment import enrich_jel_from_papers
+        enrich_jel_from_papers()
     elif args.command == 'discover-domains':
         discover_domains()
 

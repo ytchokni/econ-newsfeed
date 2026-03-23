@@ -1,4 +1,4 @@
-.PHONY: setup dev kill seed reset-db scrape fetch parse parse-fast batch-submit batch-check classify-jel enrich discover-domains check
+.PHONY: setup dev kill seed reset-db scrape fetch parse parse-fast batch-submit batch-check classify-jel enrich enrich-jel discover-domains check
 
 setup:
 	poetry install
@@ -51,6 +51,9 @@ classify-jel:
 
 enrich:
 	poetry run python main.py enrich
+
+enrich-jel:  ## Enrich researcher JEL codes from paper topics
+	poetry run python main.py enrich-jel
 
 discover-domains:  ## Scan for untrusted domains that may host paper links
 	poetry run python main.py discover-domains

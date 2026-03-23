@@ -1,128 +1,136 @@
 # Phase 1: Code Quality & Architecture Review
 
+**Date:** 2026-03-20
+
+---
+
 ## Code Quality Findings
 
-### Critical (5)
+### Critical
 
-| # | Finding | Location | Description |
-|---|---------|----------|-------------|
-| CQ-1 | SQL injection via f-string in database name | `database.py:24` | Database name interpolated directly into DDL without sanitization |
-| CQ-2 | Connection/cursor leak in `create_database()` | `database.py:17-31` | `finally` block references `conn` which may be unbound if `connect()` fails, causing `NameError` |
-| CQ-3 | `get_connection()` returns `None` crashing callers | `database.py:34-43` | Callers use `with Database.get_connection() as conn:` which raises `AttributeError` on `None` -- not caught by `except Error` |
-| CQ-4 | Unreliable transaction rollback in `save_publications` | `publication.py:57-61` | Checks `if 'conn' in locals()` but `conn` from `with` block may already be closed |
-| CQ-5 | No validation of OpenAI-extracted data before DB insert | `publication.py:20-62` | LLM output parsed and inserted directly; missing keys or wrong shapes cause unhandled crashes |
+| ID | Finding | File | Line(s) |
+|----|---------|------|---------|
+| CQ-C1 | `CONTENT_MAX_CHARS` crashes on startup if env var missing — `int(None)` TypeError | `html_fetcher.py` | 21 |
+| CQ-C2 | Tuple unpacking bug in `_validate_draft_urls` — `get_unchecked_draft_urls()` returns dicts but code expects tuples | `scheduler.py` | 120-127 |
+| CQ-C3 | `OPENAI_MODEL` has no default — `None` passed to OpenAI API causes validation error | `publication.py` | 14 |
+| CQ-C4 | Inconsistent `CONTENT_MAX_CHARS` between modules — `html_fetcher.py` has no default, `publication.py` defaults to `'4000'` | `html_fetcher.py:21`, `publication.py:17` | — |
 
-### High (11)
+### High
 
-| # | Finding | Location | Description |
-|---|---------|----------|-------------|
-| CQ-6 | New DB connection opened per query (no pooling) | `database.py:34-43` | Every query opens/closes a TCP connection; during imports this means 2+ connections per CSV row |
-| CQ-7 | Mixed connection management breaks transaction integrity | `publication.py:20-62` | `save_publications` opens its own connection but calls `get_researcher_id()` which opens a separate connection |
-| CQ-8 | `datetime.utcnow()` deprecated, timezone-naive | `html_fetcher.py:66` | Creates ambiguous timestamps; inconsistent with `datetime.now()` in `publication.py:33` |
-| CQ-9 | OpenAI client instantiated per function call | `publication.py:90` | Discards HTTP connection pool each time |
-| CQ-10 | 4000-char truncation with Python comment in prompt | `publication.py:86` | Comment `# Limit content...` sent to LLM; magic number not configurable |
-| CQ-11 | No rate limiting or retry for OpenAI API calls | `publication.py:92-107` | Rate-limit errors (429) silently skip publications |
-| CQ-12 | `RETURNING` clause not supported by MySQL | `researcher.py:48,64` | PostgreSQL syntax will throw runtime syntax errors |
-| CQ-13 | `add_url_to_researcher()` missing `page_type` param | `researcher.py:64` | NOT NULL column omitted from INSERT |
-| CQ-14 | Duplicate `python-dotenv` in requirements.txt | `requirements.txt:2,6` | Contradictory version pins; most deps unpinned |
-| CQ-15 | No OpenAI API key validation | `publication.py:90` | `None` key causes opaque errors at call time |
-| CQ-16 | `db_config` values may all be `None` | `db_config.py:7-12` | No startup validation of required env vars |
+| ID | Finding | File | Line(s) |
+|----|---------|------|---------|
+| CQ-H1 | `list_publications` excessive complexity (~18 cyclomatic) — 123 lines, deeply nested SQL building | `api.py` | 389-512 |
+| CQ-H2 | `list_researchers` duplicates query-building pattern from `list_publications` | `api.py` | 699-789 |
+| CQ-H3 | `Database` facade class is a maintenance liability — every new function requires two-file changes | `database/__init__.py` | 1-84 |
+| CQ-H4 | Connection pool leak risk in scheduler lock management — raw connections outside pool | `scheduler.py` | 27-53 |
+| CQ-H5 | `database/researchers.py` creates nested closures duplicating connection logic on every call | `database/researchers.py` | 55-84 |
+| CQ-H6 | `save_publications` performs N+1 queries for author resolution inside a loop | `publication.py` | 142-153 |
+| CQ-H7 | Hardcoded year range in frontend `YEAR_OPTIONS` — will need code change in 2027 | `app/src/app/NewsfeedContent.tsx` | 61-67 |
+| CQ-H8 | `HTMLFetcher` uses class-level mutable state without thread-safe access to `_robots_cache` | `html_fetcher.py` | 51-65, 72-88 |
 
-### Medium (14)
+### Medium
 
-| # | Finding | Location | Description |
-|---|---------|----------|-------------|
-| CQ-17 | God class: `Database` does everything | `database.py` | Mixes connection mgmt, schema mgmt, query execution, and domain logic |
-| CQ-18 | All static methods prevent dependency injection | All Python files | No way to substitute test doubles |
-| CQ-19 | Shared mutable `requests.Session` at class level | `html_fetcher.py:12-15` | Cookies persist across unrelated requests; not thread-safe |
-| CQ-20 | Duplicate HTML-to-text extraction logic | `html_fetcher.py:42`, `publication.py:68` | Two different stripping functions; `extract_relevant_html` likely dead code |
-| CQ-21 | Redundant `url` column in `html_content` table | `database.py:129` | Denormalized; derivable via `url_id` FK |
-| CQ-22 | No duplicate publication detection | `publication.py:20-63` | Re-running extraction inserts duplicates |
-| CQ-23 | Triple `logging.basicConfig()` calls | `main.py:7`, `database.py:9`, `html_fetcher.py:9` | Different formats; only first call takes effect |
-| CQ-24 | `extract_publications()` / `extract_relevant_html()` confusion | `publication.py:66-86` | Parallel unused code paths suggest incomplete refactoring |
-| CQ-25 | Broad `except Exception` silences programming bugs | `database.py:207`, `publication.py:57,105` | `KeyError`, `TypeError` caught and logged as operational failures |
-| CQ-26 | No `robots.txt` respect in scraper | `html_fetcher.py` | Identified in DESIGN.md as a risk but not addressed |
-| CQ-27 | Only timeout errors retried in `fetch_html` | `html_fetcher.py:23-34` | Server 5xx errors are not retried |
-| CQ-28 | Hardcoded OpenAI model name | `publication.py:94` | Should be configurable via env var |
-| CQ-29 | CSV import has no idempotency | `database.py:190-208` | `add_researcher_url()` always inserts without duplicate check |
-| CQ-30 | Next.js 14.2.13 outdated; `@ts-morph/common` unnecessary | `app/package.json` | Security patches missed; accidental dependency |
+| ID | Finding | File | Line(s) |
+|----|---------|------|---------|
+| CQ-M1 | Duplicated `CheckboxDropdown` component alongside `SearchableCheckboxDropdown` | `NewsfeedContent.tsx:71-163`, `SearchableCheckboxDropdown.tsx` | — |
+| CQ-M2 | Frontend API client inconsistent URL base — `getFields()` uses absolute URL, others use relative | `app/src/lib/api.ts` | 77 |
+| CQ-M3 | `schema.py` `create_tables` is 125 lines of linear procedural migration code | `database/schema.py` | 267-393 |
+| CQ-M4 | No input length validation on query string parameters — arbitrarily long IN clauses possible | `api.py` | 396-401, 706-710 |
+| CQ-M5 | `_iso_z` doesn't handle timezone-aware datetimes correctly | `api.py` | 283-285 |
+| CQ-M6 | `Publication` class mixes data class and service class responsibilities (SRP violation) | `publication.py` | 63-285 |
+| CQ-M7 | `Researcher` class has the same SRP violation as `Publication` | `researcher.py` | — |
+| CQ-M8 | `_disambiguate_researcher` creates inline OpenAI client on every call (inconsistent with singleton pattern) | `database/researchers.py` | 29-30 |
+| CQ-M9 | `run_scrape_job` is 120 lines with ~22 cognitive complexity | `scheduler.py` | 135-261 |
+| CQ-M10 | Health endpoint returns `ok` without checking database connectivity | `api.py` | 362-365 |
+| CQ-M11 | Test `client` fixture duplicated across multiple test files, shadowing `conftest.py` | `tests/test_api_publications.py`, `tests/test_security.py` | — |
+| CQ-M12 | `batch_check` function is 100 lines with multiple responsibilities (God Function) | `main.py` | 198-308 |
 
-### Low (9)
+### Low
 
-| # | Finding | Location | Description |
-|---|---------|----------|-------------|
-| CQ-31 | Variable `id` shadows built-in | `main.py:18,25` | Should use `url_id` or `record_id` |
-| CQ-32 | `Publication.__init__` never used in main flow | `publication.py:11-17` | Hybrid class -- sometimes data model, sometimes static utility |
-| CQ-33 | `Researcher.name` loses first/last name separation | `researcher.py:5-10` | Cannot reconstruct components from concatenated name |
-| CQ-34 | Unused `BeautifulSoup` import if dead code removed | `publication.py:3` | Tied to `extract_relevant_html()` |
-| CQ-35 | `is_valid_json` logs error for expected cases | `publication.py:141-149` | First call always fails; spurious error logged |
-| CQ-36 | No `.env.example` file | Project root | New devs must read source to find required vars |
-| CQ-37 | URL columns limited to VARCHAR(255) | `database.py:110,117,129` | Academic URLs can exceed 255 chars |
-| CQ-38 | No backoff between retry attempts | `html_fetcher.py:23-34` | Immediate retries may be treated as abusive |
-| CQ-39 | Zero test files in repository | Entire project | No unit, integration, or test configuration |
+| ID | Finding | File | Line(s) |
+|----|---------|------|---------|
+| CQ-L1 | Redundant `logging.basicConfig` calls in multiple modules | `html_fetcher.py:17`, `main.py:14`, `scheduler.py:17` | — |
+| CQ-L2 | `_TOP20_DEPT_KEYWORDS` hardcoded in API layer — business logic in web layer | `api.py` | 644-661 |
+| CQ-L3 | f-strings used in logging calls instead of lazy `%s` formatting | Multiple files | — |
+| CQ-L4 | `Makefile` `seed` target references `database.py` which no longer exists as standalone file | `Makefile` | 13 |
+| CQ-L5 | `_UsageDict` helper duplicates what `types.SimpleNamespace` provides | `main.py` | 190-195 |
+| CQ-L6 | `parse_openai_response` / `is_valid_json` partially dead code (only used in batch fallback) | `publication.py` | 239-275 |
+| CQ-L7 | `get_previous_text` is a trivial alias for `get_latest_text` | `html_fetcher.py` | 424-431 |
+| CQ-L8 | `extract_bio` is dead legacy wrapper | `html_fetcher.py` | 302-305 |
+| CQ-L9 | Docker Compose does not pin MySQL image version | `docker-compose.yml` | 3 |
 
 ---
 
 ## Architecture Findings
 
-### Critical (2)
+### Critical
 
-| # | Finding | Location | Description |
-|---|---------|----------|-------------|
-| AR-1 | SQL injection in database creation | `database.py:24` | F-string interpolation of DB name into DDL |
-| AR-2 | Transaction safety gap in publication saving | `publication.py:20-62` | Multi-connection writes cause partial commits and orphaned researcher records |
+| ID | Finding | Impact |
+|----|---------|--------|
+| AR-C1 | `HTMLFetcher` violates SRP — contains LLM calls and database I/O in a data acquisition module, creating circular conceptual dependencies | Any change to OpenAI client config or LLM cost logging can break the HTML fetcher; impossible to test fetching in isolation from LLM subsystem |
+| AR-C2 | `Database` facade conflates data access, schema management, and business logic (LLM disambiguation in `get_researcher_id`) — data access layer has runtime dependency on paid external API | Consumers cannot distinguish cheap operations from expensive ones; cost implications hidden from callers |
 
-### High (4)
+### High
 
-| # | Finding | Location | Description |
-|---|---------|----------|-------------|
-| AR-3 | God-class `Database` combines 4 distinct responsibilities | `database.py` | Connection mgmt + query execution + schema mgmt + domain data access |
-| AR-4 | All modules depend concretely on `Database` | All Python files | Violates Dependency Inversion; blocks async migration for FastAPI |
-| AR-5 | `RETURNING` clause will fail on MySQL at runtime | `researcher.py:47,64` | PostgreSQL-specific syntax in MySQL codebase |
-| AR-6 | No domain model -- data flows as raw dicts/tuples | `publication.py`, `researcher.py` | No type safety, no business rule enforcement |
+| ID | Finding | Impact |
+|----|---------|--------|
+| AR-H1 | Class-level mutable state on `HTMLFetcher` — globals for session, caches, locks; scheduler reaches into internal state to clear caches | Non-deterministic tests, cannot run multiple fetcher configs; implicit temporal coupling |
+| AR-H2 | `api.py` contains raw SQL construction belonging in repository layer — SQL logic spread across 5+ files | No reusable query layer; adding endpoints requires SQL in API file |
+| AR-H3 | Synchronous blocking I/O in async FastAPI application — `mysql-connector-python` doesn't support async, `requests.Session` is sync, `time.sleep()` blocks threads | Concurrency ceiling; thread pool exhaustion risk under load |
+| AR-H4 | Frontend API client inconsistent URL construction — `getFields()` bypasses Next.js proxy | Silent SSR/container failures |
+| AR-H5 | No API versioning strategy — all endpoints under `/api/` with no version prefix | Breaking changes require coordinated frontend+backend deployment |
+| AR-H6 | Module-level OpenAI client instantiation causes import-time side effects | Import `publication.py` requires `OPENAI_API_KEY` set; fragile boot ordering |
 
-### Medium (8)
+### Medium
 
-| # | Finding | Location | Description |
-|---|---------|----------|-------------|
-| AR-7 | Static-method-only classes prevent DI and testing | All Python classes | Cannot substitute test doubles or use FastAPI Depends() |
-| AR-8 | `HTMLFetcher` conflates HTTP, transformation, and persistence | `html_fetcher.py` | Three concerns in one class |
-| AR-9 | No validation layer for CSV import or LLM output | `database.py:190-208`, `publication.py:40-41` | Missing Pydantic models at trust boundaries |
-| AR-10 | Publications store bare URL string instead of FK | `database.py:115-123` | No referential integrity to source scrape |
-| AR-11 | No secondary indexes on frequently queried columns | `database.py:91-147` | Change detection and newsfeed queries will degrade |
-| AR-12 | No concurrency guard for overlapping scrapes | `DESIGN.md` 4.3/6.2 | Manual + scheduled scrapes could create duplicates |
-| AR-13 | `fetch_and_save_if_changed` returns None, not boolean | `html_fetcher.py:93` | Breaks planned scheduler integration per DESIGN.md |
-| AR-14 | Missing error response contract in planned API | `DESIGN.md` 4.x | Success schemas defined but no error envelope |
+| ID | Finding | Impact |
+|----|---------|--------|
+| AR-M1 | `Publication` class conflates data model, extraction logic, and persistence | SRP violation; legacy `__init__` only used in dead code |
+| AR-M2 | `Researcher` class duplicates data access in `database/researchers.py` | Dual data access paths create confusion about authority |
+| AR-M3 | `save_publications` swallows exceptions per-publication; scrape log overcounts extractions | Inaccurate `pubs_extracted` metric |
+| AR-M4 | `get_unchecked_draft_urls` returns dicts but `_validate_draft_urls` destructures as tuples | Latent runtime bug in draft URL validation |
+| AR-M5 | Hardcoded institution keywords in both API layer and frontend — no single source of truth | Requires modifying both codebases to change institution list |
+| AR-M6 | Duplicate CheckboxDropdown component | Bug fixes/styling must be applied in two places |
+| AR-M7 | Test fixtures duplicated across test files, shadowing `conftest.py` | Maintenance burden; changes to shared fixtures don't propagate |
+| AR-M8 | Frontend `useResearchersFiltered` hardcodes `per_page=100` with no pagination | Silent data truncation as researcher count grows |
 
-### Low (5)
+### Low
 
-| # | Finding | Location | Description |
-|---|---------|----------|-------------|
-| AR-15 | Duplicate python-dotenv and unpinned deps | `requirements.txt` | Non-reproducible builds |
-| AR-16 | Unnecessary `@ts-morph/common` in frontend | `app/package.json` | Accidental dependency |
-| AR-17 | Redundant `url` column in `html_content` | `database.py:129` | Denormalization risk |
-| AR-18 | Inconsistent logging across modules | `main.py`, `database.py`, `html_fetcher.py` | Format depends on import order |
-| AR-19 | Hardcoded OpenAI model name | `publication.py:94` | Should be env-configurable |
+| ID | Finding | Impact |
+|----|---------|--------|
+| AR-L1 | Mixed naming conventions — backend snake_case in TypeScript properties | Non-idiomatic TS but functionally correct |
+| AR-L2 | Makefile `seed` target references removed `database.py` file | Broken make target |
+| AR-L3 | `Publication.get_all_publications()` constructs instances but no caller uses it | Dead code |
+| AR-L4 | Year options hardcoded to 2020-2026 | Requires annual maintenance |
+| AR-L5 | Docker API container copies entire project including frontend/tests | Unnecessary image bloat |
 
 ---
 
 ## Critical Issues for Phase 2 Context
 
-The following findings from Phase 1 should directly inform the Security and Performance reviews in Phase 2:
+The following findings from Phase 1 should inform the Security and Performance reviews:
 
-### Security-Relevant
-1. **SQL injection in `create_database()`** (CQ-1/AR-1) — f-string interpolation of config value into DDL
-2. **No input validation on LLM output** (CQ-5) — untrusted data inserted directly into DB
-3. **No OpenAI API key validation** (CQ-15) — `None` key silently passed
-4. **No `db_config` validation** (CQ-16) — all config values could be `None`
-5. **No `robots.txt` respect** (CQ-26) — legal/ethical scraping risk
-6. **Broad exception catching** (CQ-25) — may mask security-relevant errors
+### Security-relevant
+- **CQ-C1/CQ-C3**: Missing env var defaults could crash app or leak error details in production
+- **AR-C2**: LLM call hidden in database layer — unexpected external network calls from data access
+- **AR-H6**: Import-time side effects require specific env var ordering
+- **CQ-M4**: No input length validation on query parameters — potential for abuse via oversized IN clauses
+- **CQ-M10**: Health endpoint doesn't verify database connectivity — could mask failures
 
-### Performance-Relevant
-1. **New DB connection per query** (CQ-6) — no connection pooling; TCP overhead on every operation
-2. **OpenAI client recreated per call** (CQ-9) — discards HTTP connection pool
-3. **No secondary database indexes** (AR-11) — queries will degrade with data volume
-4. **No duplicate publication detection** (CQ-22) — unbounded table growth
-5. **No retry/backoff for OpenAI** (CQ-11) — transient failures cause data loss
-6. **Only timeout errors retried in HTTP fetcher** (CQ-27) — 5xx errors not retried
-7. **Mixed transaction management** (CQ-7/AR-2) — excessive connection churn during publication saves
+### Performance-relevant
+- **CQ-H6**: N+1 queries for author resolution (90-270 queries per page)
+- **AR-H3**: Synchronous blocking I/O limits concurrency
+- **CQ-H1/CQ-H2**: Complex query building with no query caching or optimization
+- **CQ-H4**: Connection pool leak risk in scheduler
+- **CQ-H8**: Race condition in `_robots_cache` under concurrent extraction
+- **AR-M8**: Frontend hardcodes `per_page=100` with no pagination for researchers
+
+### Architectural strengths to preserve
+1. Content-hash-based change detection (avoids redundant LLM calls)
+2. Append-only snapshot versioning with hash deduplication
+3. Advisory locks for distributed scheduling
+4. SSRF protection with DNS pinning
+5. Parameterized SQL everywhere
+6. Feed events architecture (event-sourced newsfeed)
+7. LLM cost tracking via `llm_usage` table
+8. Constant-time API key comparison via `hmac.compare_digest`
