@@ -32,7 +32,6 @@ def download_htmls() -> None:
         for row in researcher_urls:
             id, researcher_id, url, page_type = row['id'], row['researcher_id'], row['url'], row['page_type']
             urls_checked += 1
-            logging.info(f"Downloading HTML for URL ID: {id}, URL: {url}, Page Type: {page_type}")
             changed = HTMLFetcher.fetch_and_save_if_changed(id, url, researcher_id)
             if changed:
                 urls_changed += 1

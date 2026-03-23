@@ -273,7 +273,7 @@ class HTMLFetcher:
         Returns True if content changed, False otherwise.
         """
         if HTMLFetcher._was_fetched_recently(url_id):
-            logging.info(f"Skipping URL ID {url_id} (fetched <24h ago): {url}")
+            logging.info(f"Skipping URL ID {url_id} (fetched recently): {url}")
             return False
 
         is_safe, _resolved_ip = HTMLFetcher.validate_url_with_pin(url)
@@ -284,6 +284,7 @@ class HTMLFetcher:
         if not HTMLFetcher.is_allowed_by_robots(url):
             return False
 
+        logging.info(f"Fetching URL ID {url_id}: {url}")
         raw_html = HTMLFetcher.fetch_html(url)
         if not raw_html:
             logging.warning(f"Failed to fetch HTML content for URL ID: {url_id}, URL: {url}")
