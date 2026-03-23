@@ -113,36 +113,29 @@ class TestAddResearcherJelCodes:
         mock_conn.commit.assert_called_once()
 
 
-from topic_jel_map import map_topic_to_jel
-
-
-class TestAggregateJelForResearcher:
-    """Tests for jel_enrichment.aggregate_jel_for_researcher."""
+class TestAggregateJelFromTopics:
+    """Tests for jel_enrichment.aggregate_jel_from_topics."""
 
     def test_aggregates_jel_from_paper_topics(self):
-        mock_topics = [
+        from jel_enrichment import aggregate_jel_from_topics
+        topics = [
             {"topic_name": "Labor market dynamics", "score": 0.99},
             {"topic_name": "Labor market dynamics", "score": 0.95},
             {"topic_name": "Migration and policy", "score": 0.85},
             {"topic_name": "International trade flows", "score": 0.80},
         ]
-        with patch("jel_enrichment.Database.get_paper_topics_for_researcher", return_value=mock_topics):
-            from jel_enrichment import aggregate_jel_for_researcher
-            codes = aggregate_jel_for_researcher(researcher_id=1)
-
+        codes = aggregate_jel_from_topics(topics)
         assert "J" in codes
         assert "F" in codes
         assert len(codes) <= 5
 
     def test_returns_empty_for_no_topics(self):
-        with patch("jel_enrichment.Database.get_paper_topics_for_researcher", return_value=[]):
-            from jel_enrichment import aggregate_jel_for_researcher
-            codes = aggregate_jel_for_researcher(researcher_id=1)
-
-        assert codes == []
+        from jel_enrichment import aggregate_jel_from_topics
+        assert aggregate_jel_from_topics([]) == []
 
     def test_limits_to_top_5(self):
-        mock_topics = [
+        from jel_enrichment import aggregate_jel_from_topics
+        topics = [
             {"topic_name": "Labor market dynamics", "score": 0.99},
             {"topic_name": "International trade flows", "score": 0.95},
             {"topic_name": "Monetary Policy impact", "score": 0.90},
@@ -151,10 +144,7 @@ class TestAggregateJelForResearcher:
             {"topic_name": "Environmental regulation", "score": 0.75},
             {"topic_name": "Urban housing markets", "score": 0.70},
         ]
-        with patch("jel_enrichment.Database.get_paper_topics_for_researcher", return_value=mock_topics):
-            from jel_enrichment import aggregate_jel_for_researcher
-            codes = aggregate_jel_for_researcher(researcher_id=1)
-
+        codes = aggregate_jel_from_topics(topics)
         assert len(codes) <= 5
 
 
@@ -176,20 +166,18 @@ class TestEnrichJelFromPapers:
                  "subfield_name": "Econ", "field_name": "Econ", "domain_name": "SS", "score": 0.90},
             ],
         }
-        researchers = [
-            {"id": 10, "first_name": "Jane", "last_name": "Doe"},
-        ]
-        researcher_topics = [
-            {"topic_name": "Labor market dynamics", "score": 0.99},
-            {"topic_name": "International trade", "score": 0.90},
-        ]
+        all_researcher_topics = {
+            10: [
+                {"topic_name": "Labor market dynamics", "score": 0.99},
+                {"topic_name": "International trade", "score": 0.90},
+            ],
+        }
 
         with (
             patch("jel_enrichment.Database.get_papers_needing_topics", return_value=papers_needing),
             patch("jel_enrichment.fetch_topics_batch", return_value=topics_by_id),
             patch("jel_enrichment.Database.save_paper_topics") as mock_save_topics,
-            patch("jel_enrichment.Database.fetch_all", return_value=researchers),
-            patch("jel_enrichment.Database.get_paper_topics_for_researcher", return_value=researcher_topics),
+            patch("jel_enrichment.Database.get_all_researcher_topics", return_value=all_researcher_topics),
             patch("jel_enrichment.Database.add_researcher_jel_codes") as mock_add_jel,
         ):
             from jel_enrichment import enrich_jel_from_papers
@@ -205,7 +193,7 @@ class TestEnrichJelFromPapers:
     def test_returns_zero_when_no_papers(self):
         with (
             patch("jel_enrichment.Database.get_papers_needing_topics", return_value=[]),
-            patch("jel_enrichment.Database.fetch_all", return_value=[]),
+            patch("jel_enrichment.Database.get_all_researcher_topics", return_value={}),
         ):
             from jel_enrichment import enrich_jel_from_papers
             count = enrich_jel_from_papers()

@@ -54,6 +54,7 @@ from database.jel import (
     save_paper_topics as _save_paper_topics,
     get_paper_topics_for_researcher as _get_paper_topics_for_researcher,
     get_papers_needing_topics as _get_papers_needing_topics,
+    get_all_researcher_topics as _get_all_researcher_topics,
     add_researcher_jel_codes as _add_researcher_jel_codes,
 )
 
@@ -108,4 +109,5 @@ class Database:
     save_paper_topics = staticmethod(_save_paper_topics)
     get_paper_topics_for_researcher = staticmethod(_get_paper_topics_for_researcher)
     get_papers_needing_topics = staticmethod(_get_papers_needing_topics)
+    get_all_researcher_topics = staticmethod(_get_all_researcher_topics)
     add_researcher_jel_codes = staticmethod(_add_researcher_jel_codes)

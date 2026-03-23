@@ -115,6 +115,21 @@ def _strip_prefix(url: str | None, prefix: str) -> str | None:
     return (url or "").replace(prefix, "") or None
 
 
+def _parse_topics(work: dict) -> list[dict]:
+    """Extract topic metadata from an OpenAlex work object."""
+    return [
+        {
+            "openalex_topic_id": _strip_prefix(t.get("id"), _OPENALEX_PREFIX),
+            "topic_name": t.get("display_name", ""),
+            "subfield_name": (t.get("subfield") or {}).get("display_name"),
+            "field_name": (t.get("field") or {}).get("display_name"),
+            "domain_name": (t.get("domain") or {}).get("display_name"),
+            "score": t.get("score"),
+        }
+        for t in work.get("topics", [])
+    ]
+
+
 def _parse_work(work: dict) -> dict:
     """Parse an OpenAlex work object into our enrichment dict."""
     doi = _strip_prefix(work.get("doi"), _DOI_PREFIX)
@@ -133,23 +148,12 @@ def _parse_work(work: dict) -> dict:
     if inverted_index:
         abstract = reconstruct_abstract(inverted_index)
 
-    topics = []
-    for t in work.get("topics", []):
-        topics.append({
-            "openalex_topic_id": _strip_prefix(t.get("id"), _OPENALEX_PREFIX),
-            "topic_name": t.get("display_name", ""),
-            "subfield_name": (t.get("subfield") or {}).get("display_name"),
-            "field_name": (t.get("field") or {}).get("display_name"),
-            "domain_name": (t.get("domain") or {}).get("display_name"),
-            "score": t.get("score"),
-        })
-
     return {
         "doi": doi,
         "openalex_id": openalex_id,
         "coauthors": coauthors,
         "abstract": abstract,
-        "topics": topics,
+        "topics": _parse_topics(work),
     }
 
 
@@ -249,16 +253,7 @@ def fetch_topics_batch(openalex_ids: list[str]) -> dict[str, list[dict]]:
 
             for work in resp.json().get("results", []):
                 oa_id = _strip_prefix(work.get("id"), _OPENALEX_PREFIX)
-                topics = []
-                for t in work.get("topics", []):
-                    topics.append({
-                        "openalex_topic_id": _strip_prefix(t.get("id"), _OPENALEX_PREFIX),
-                        "topic_name": t.get("display_name", ""),
-                        "subfield_name": (t.get("subfield") or {}).get("display_name"),
-                        "field_name": (t.get("field") or {}).get("display_name"),
-                        "domain_name": (t.get("domain") or {}).get("display_name"),
-                        "score": t.get("score"),
-                    })
+                topics = _parse_topics(work)
                 if topics and oa_id:
                     result[oa_id] = topics
         except (requests.RequestException, ValueError) as e:

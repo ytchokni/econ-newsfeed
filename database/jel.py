@@ -136,12 +136,34 @@ def get_papers_needing_topics() -> list[dict]:
     )
 
 
+def get_all_researcher_topics() -> dict[int, list[dict]]:
+    """Batch-fetch all topics grouped by researcher.
+
+    Returns {researcher_id: [{"topic_name": ..., "score": ...}, ...]}.
+    Only includes researchers who have papers with stored topics.
+    """
+    rows = fetch_all(
+        """SELECT a.researcher_id, pt.topic_name, pt.score
+           FROM paper_topics pt
+           JOIN authorship a ON a.publication_id = pt.paper_id
+           ORDER BY a.researcher_id, pt.score DESC"""
+    )
+    result: dict[int, list[dict]] = {}
+    for row in rows:
+        rid = row["researcher_id"]
+        if rid not in result:
+            result[rid] = []
+        result[rid].append({"topic_name": row["topic_name"], "score": row["score"]})
+    return result
+
+
 def add_researcher_jel_codes(researcher_id: int, jel_codes: list[str]) -> None:
     """Add JEL codes to a researcher without removing existing ones.
 
-    Skips codes already assigned (duplicate key, errno 1062).
-    Logs a warning for unknown JEL codes (FK violation, errno 1452).
+    Skips codes already assigned (duplicate key).
+    Logs a warning for unknown JEL codes (FK violation).
     """
+    from mysql.connector import errorcode
     from mysql.connector.errors import IntegrityError
 
     now = datetime.now(timezone.utc)
@@ -156,7 +178,7 @@ def add_researcher_jel_codes(researcher_id: int, jel_codes: list[str]) -> None:
                         (researcher_id, code.upper().strip(), now),
                     )
                 except IntegrityError as e:
-                    if getattr(e, "errno", None) == 1062:
+                    if getattr(e, "errno", None) == errorcode.ER_DUP_ENTRY:
                         pass  # Already assigned — skip silently
                     else:
                         logging.warning(

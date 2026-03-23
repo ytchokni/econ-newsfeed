@@ -9,7 +9,7 @@ os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
 os.environ.setdefault("OPENAI_API_KEY", "sk-test")
 os.environ.setdefault("SCRAPE_API_KEY", "test-key")
 
-from topic_jel_map import map_topic_to_jel, map_topics_to_jel
+from topic_jel_map import map_topic_to_jel
 
 
 class TestMapTopicToJel:
@@ -44,35 +44,6 @@ class TestMapTopicToJel:
 
     def test_case_insensitive(self):
         assert "J" in map_topic_to_jel("LABOR MARKET DYNAMICS")
-
-
-class TestMapTopicsToJel:
-    def test_aggregates_multiple_topics(self):
-        topics = [
-            {"topic_name": "Labor market dynamics", "score": 0.99},
-            {"topic_name": "Migration and policy", "score": 0.95},
-            {"topic_name": "International trade flows", "score": 0.80},
-        ]
-        result = map_topics_to_jel(topics)
-        assert "J" in result
-        assert "F" in result
-
-    def test_higher_score_wins(self):
-        topics = [
-            {"topic_name": "Labor market", "score": 0.60},
-            {"topic_name": "Wage inequality", "score": 0.95},
-        ]
-        result = map_topics_to_jel(topics)
-        assert result["J"] == 0.95
-
-    def test_empty_topics_returns_empty(self):
-        assert map_topics_to_jel([]) == {}
-
-    def test_handles_display_name_key(self):
-        """OpenAlex raw response uses 'display_name', stored data uses 'topic_name'."""
-        topics = [{"display_name": "Monetary Policy", "score": 0.9}]
-        result = map_topics_to_jel(topics)
-        assert "E" in result
 
 
 class TestPaperTopicsSchema:

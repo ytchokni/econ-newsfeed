@@ -128,20 +128,3 @@ def map_topic_to_jel(topic_name: str) -> list[str]:
                 if code not in codes:
                     codes.append(code)
     return codes
-
-
-def map_topics_to_jel(topics: list[dict]) -> dict[str, float]:
-    """Map multiple OpenAlex topics to JEL codes with scores.
-
-    Accepts dicts with either 'topic_name' or 'display_name' key.
-    Returns dict of {jel_code: max_score} — highest score across matching topics.
-    """
-    jel_scores: dict[str, float] = {}
-    for topic in topics:
-        name = topic.get("topic_name") or topic.get("display_name", "")
-        score = float(topic.get("score", 0.5))
-        codes = map_topic_to_jel(name)
-        for code in codes:
-            if code not in jel_scores or score > jel_scores[code]:
-                jel_scores[code] = score
-    return jel_scores
