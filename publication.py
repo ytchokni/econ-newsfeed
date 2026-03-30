@@ -162,10 +162,10 @@ def validate_publication(pub: dict) -> bool:
 
 
 def _url_has_baseline(cursor, url: str, min_snapshots: int = 2) -> bool:
-    """Check if a URL has enough archived snapshots to establish a baseline.
+    """Return True if the URL has accumulated at least min_snapshots archived HTML states.
 
-    Returns True only when the URL has been seen in >= min_snapshots distinct
-    content states, confirming that new papers are genuine discoveries."""
+    Guards against emitting new_paper events on first-ever extractions of a URL,
+    where all papers would appear 'new' even though they may be years old."""
     cursor.execute(
         """SELECT COALESCE(MAX(cnt), 0) FROM (
             SELECT COUNT(*) AS cnt FROM html_snapshots

@@ -207,7 +207,6 @@ class TestAbstractBackfill:
         cursor.fetchone.side_effect = [
             (10,),          # SELECT id FROM papers WHERE title_hash = ...
             (None, None, None),  # SELECT abstract, year, venue FROM papers WHERE id = ...
-            (0,),           # SELECT COUNT(*) FROM feed_events (existing logic)
         ]
         cursor.rowcount = 1  # new_to_this_url = True for paper_urls INSERT
 
@@ -217,7 +216,6 @@ class TestAbstractBackfill:
             "year": "2024",
             "venue": "AER",
             "abstract": "This paper studies trade.",
-            "status": "working_paper",
         }])
 
         # Verify UPDATE was called to backfill
@@ -240,7 +238,6 @@ class TestAbstractBackfill:
         cursor.fetchone.side_effect = [
             (10,),                           # title_hash lookup
             ("Existing abstract", "2023", "QJE"),  # all fields populated
-            (0,),                            # feed_events COUNT
         ]
         cursor.rowcount = 1
 
