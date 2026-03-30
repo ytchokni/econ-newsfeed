@@ -509,6 +509,49 @@ def create_tables() -> None:
                     except Exception as e:
                         if "Duplicate column name" not in str(e):
                             logging.warning("Migration: researchers.openalex_author_id: %s", e)
+
+                    # DB-level safety net: catches any code path that bypasses
+                    # the application-layer guard in publication._url_has_baseline()
+                    try:
+                        cursor.execute("DROP TRIGGER IF EXISTS trg_feed_events_snapshot_guard")
+                        cursor.execute("""
+                            CREATE TRIGGER trg_feed_events_snapshot_guard
+                            BEFORE INSERT ON feed_events
+                            FOR EACH ROW
+                            BEGIN
+                                DECLARE v_source_url VARCHAR(2048) CHARACTER SET utf8mb4
+                                    COLLATE utf8mb4_unicode_ci;
+                                DECLARE v_snapshot_count INT DEFAULT 0;
+
+                                IF NEW.event_type = 'new_paper' THEN
+                                    SELECT source_url INTO v_source_url
+                                    FROM papers WHERE id = NEW.paper_id;
+
+                                    IF v_source_url IS NOT NULL THEN
+                                        SELECT COALESCE(MAX(cnt), 0) INTO v_snapshot_count
+                                        FROM (
+                                            SELECT COUNT(*) AS cnt
+                                            FROM html_snapshots
+                                            WHERE url_id IN (
+                                                SELECT id FROM researcher_urls
+                                                WHERE url = v_source_url
+                                                    COLLATE utf8mb4_unicode_ci
+                                            )
+                                            GROUP BY url_id
+                                        ) sub;
+                                    END IF;
+
+                                    IF v_snapshot_count < 2 THEN
+                                        SIGNAL SQLSTATE '45000'
+                                        SET MESSAGE_TEXT = 'new_paper blocked: source URL has < 2 snapshots';
+                                    END IF;
+                                END IF;
+                            END
+                        """)
+                        conn.commit()
+                        logging.info("Migration: feed_events snapshot guard trigger created")
+                    except Exception as e:
+                        logging.warning("Migration: feed_events trigger: %s", e)
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                     cursor.fetchone()

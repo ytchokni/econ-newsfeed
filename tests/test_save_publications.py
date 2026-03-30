@@ -9,6 +9,7 @@ def _mock_conn():
     """Create a mock DB connection that simulates INSERT IGNORE with new row."""
     mock_cursor = MagicMock()
     mock_cursor.lastrowid = 1  # Simulate new paper inserted
+    mock_cursor.fetchone.return_value = (0,)  # Default: no snapshot baseline
     mock_conn = MagicMock()
     mock_conn.cursor.return_value = mock_cursor
     mock_conn.__enter__ = MagicMock(return_value=mock_conn)
@@ -72,8 +73,8 @@ class TestAuthorNormalization:
         """[[]] (empty inner list) -> fall back to page owner, don't crash."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        # Page owner lookup returns a researcher
-        cursor.fetchone.return_value = ("Jane", "Doe")
+        # (0,) for baseline snapshot count (hoisted), then page owner lookup
+        cursor.fetchone.side_effect = [(0,), ("Jane", "Doe")]
 
         Publication.save_publications("http://example.com", [{
             "title": "Test Paper",
@@ -205,9 +206,9 @@ class TestAbstractBackfill:
         # fetchone for title_hash lookup → returns paper id=10
         # fetchone for existing paper fields → abstract is NULL
         cursor.fetchone.side_effect = [
-            (10,),          # SELECT id FROM papers WHERE title_hash = ...
+            (0,),                # baseline snapshot count (hoisted before loop)
+            (10,),               # SELECT id FROM papers WHERE title_hash = ...
             (None, None, None),  # SELECT abstract, year, venue FROM papers WHERE id = ...
-            (0,),           # SELECT COUNT(*) FROM feed_events (existing logic)
         ]
         cursor.rowcount = 1  # new_to_this_url = True for paper_urls INSERT
 
@@ -217,7 +218,6 @@ class TestAbstractBackfill:
             "year": "2024",
             "venue": "AER",
             "abstract": "This paper studies trade.",
-            "status": "working_paper",
         }])
 
         # Verify UPDATE was called to backfill
@@ -238,9 +238,9 @@ class TestAbstractBackfill:
         mock_get_conn.return_value = conn
         cursor.lastrowid = 0
         cursor.fetchone.side_effect = [
-            (10,),                           # title_hash lookup
+            (0,),                                  # baseline snapshot count (hoisted)
+            (10,),                                 # title_hash lookup
             ("Existing abstract", "2023", "QJE"),  # all fields populated
-            (0,),                            # feed_events COUNT
         ]
         cursor.rowcount = 1
 
@@ -271,8 +271,8 @@ class TestFallbackToPageOwner:
         """Empty authors list should trigger lookup of the page owner."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        # fetchone for page owner lookup
-        cursor.fetchone.return_value = ("Stefanie", "Stantcheva")
+        # (0,) for baseline snapshot count (hoisted), then page owner lookup
+        cursor.fetchone.side_effect = [(0,), ("Stefanie", "Stantcheva")]
 
         Publication.save_publications("https://www.stantcheva.com/research/", [{
             "title": "Understanding of Trade",
