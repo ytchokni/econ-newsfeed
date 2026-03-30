@@ -336,3 +336,99 @@ class TestSnapshotRetrieval:
         mock_fetch.return_value = []
         result = HTMLFetcher.list_snapshots(url_id=1)
         assert result == []
+
+
+class TestNormalizeText:
+    """Tests for normalize_text() using real false-positive fixtures."""
+
+    def test_collapses_whitespace(self):
+        """Trailing spaces before parens — Hye Young You case."""
+        old = "Pamela Ban and Ju Yeon Park )"
+        new = "Pamela Ban and Ju Yeon Park)"
+        assert HTMLFetcher.normalize_text(old) == HTMLFetcher.normalize_text(new)
+
+    def test_normalizes_curly_quotes(self):
+        """Curly quotes to straight — Lars Svensson case."""
+        old = '\u201cSwedish household debt\u201d and \u2018solvency\u2019'
+        expected = '"Swedish household debt" and \'solvency\''
+        result = HTMLFetcher.normalize_text(old)
+        assert result == expected
+
+    def test_collapses_google_sites_word_splitting(self):
+        """Google Sites rendering splits digits — Laurence van Lent case."""
+        old = "Zhang, 202 6, The Accounting Review (conditionally accepted)"
+        new = "Zhang, 2026, The Accounting Review (conditionally accepted)"
+        assert HTMLFetcher.normalize_text(old) == HTMLFetcher.normalize_text(new)
+
+    def test_strips_google_sites_boilerplate(self):
+        """Google Sites nav/chrome should be stripped."""
+        text = "Search this site Embedded Files Skip to main content Skip to navigation Home Research CV"
+        result = HTMLFetcher.normalize_text(text)
+        assert "Search this site" not in result
+        assert "Skip to main content" not in result
+        assert "Skip to navigation" not in result
+        assert "Embedded Files" not in result
+        # Real content preserved
+        assert "Home" in result
+        assert "Research" in result
+
+    def test_strips_cookie_consent(self):
+        """Cookie consent boilerplate should be stripped."""
+        text = "Research papers This site uses cookies from Google to deliver its services and to analyze traffic Learn more Got it"
+        result = HTMLFetcher.normalize_text(text)
+        assert "cookies from Google" not in result
+        assert "Learn more Got it" not in result
+        assert "Research papers" in result
+
+    def test_preserves_real_content_change(self):
+        """Maria Silfa case — R&R status update must survive normalization."""
+        old = 'How Crisis Reshapes Government Talent with Jacob R. Brown'
+        new = 'How Crisis Reshapes Government Talent with Jacob R. Brown (R&R, American Political Science Review)'
+        assert HTMLFetcher.normalize_text(old) != HTMLFetcher.normalize_text(new)
+
+    def test_preserves_year_changes(self):
+        """Year updates must not be normalized away."""
+        old = "Working Paper, 2025"
+        new = "Published, 2026"
+        assert HTMLFetcher.normalize_text(old) != HTMLFetcher.normalize_text(new)
+
+    def test_preserves_new_paper_title(self):
+        """A new paper appearing must produce a different normalized result."""
+        old = "Paper A, Paper B"
+        new = "Paper A, Paper B, Paper C: New Findings"
+        assert HTMLFetcher.normalize_text(old) != HTMLFetcher.normalize_text(new)
+
+    def test_handles_empty_string(self):
+        assert HTMLFetcher.normalize_text("") == ""
+
+    def test_handles_whitespace_only(self):
+        assert HTMLFetcher.normalize_text("   \n\t  ") == ""
+
+    def test_non_breaking_space_collapsed(self):
+        """Non-breaking spaces (\\u00a0) should be treated as whitespace."""
+        text = "hello\u00a0\u00a0world"
+        assert HTMLFetcher.normalize_text(text) == "hello world"
+
+
+class TestNormalizationIntegration:
+    """Integration: normalize_text is applied before hashing in fetch_and_save_if_changed."""
+
+    def test_whitespace_only_change_not_detected(self):
+        """Content differing only in whitespace should hash identically after normalization."""
+        old_hash = HTMLFetcher.hash_text_content(HTMLFetcher.normalize_text("Paper A (with Author )"))
+        new_hash = HTMLFetcher.hash_text_content(HTMLFetcher.normalize_text("Paper A (with Author)"))
+        assert old_hash == new_hash
+
+    def test_quote_only_change_not_detected(self):
+        """Content differing only in quote style should hash identically after normalization."""
+        old_text = '\u201cA Paper Title\u201d by Smith'
+        new_text = '"A Paper Title" by Smith'
+        assert HTMLFetcher.hash_text_content(HTMLFetcher.normalize_text(old_text)) == \
+               HTMLFetcher.hash_text_content(HTMLFetcher.normalize_text(new_text))
+
+    def test_real_change_still_detected(self):
+        """Substantive changes must still produce different hashes."""
+        old_text = "Paper A, working_paper"
+        new_text = "Paper A, accepted at AER"
+        assert HTMLFetcher.hash_text_content(HTMLFetcher.normalize_text(old_text)) != \
+               HTMLFetcher.hash_text_content(HTMLFetcher.normalize_text(new_text))
