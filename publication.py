@@ -167,11 +167,8 @@ def _url_has_baseline(cursor, url: str, min_snapshots: int = 2) -> bool:
     Guards against emitting new_paper events on first-ever extractions of a URL,
     where all papers would appear 'new' even though they may be years old."""
     cursor.execute(
-        """SELECT COALESCE(MAX(cnt), 0) FROM (
-            SELECT COUNT(*) AS cnt FROM html_snapshots
-            WHERE url_id IN (SELECT id FROM researcher_urls WHERE url = %s)
-            GROUP BY url_id
-        ) sub""",
+        """SELECT COUNT(*) FROM html_snapshots
+           WHERE url_id = (SELECT id FROM researcher_urls WHERE url = %s LIMIT 1)""",
         (url,),
     )
     row = cursor.fetchone()
@@ -195,6 +192,11 @@ class Publication:
     ) -> None:
         """Save extracted publications to the database, using title_hash for cross-researcher dedup."""
         with Database.get_connection() as conn:
+            # Resolve baseline once for the entire batch (same URL for all pubs)
+            baseline_cursor = conn.cursor(buffered=True)
+            has_baseline = _url_has_baseline(baseline_cursor, url)
+            baseline_cursor.close()
+
             for pub in publications:
                 cursor = None
                 try:
@@ -228,7 +230,7 @@ class Publication:
                         # Create new_paper feed event only when source URL has established baseline
                         pub_status = pub.get('status')
                         if not is_seed and pub_status and pub_status != 'published':
-                            if _url_has_baseline(cursor, url):
+                            if has_baseline:
                                 cursor.execute(
                                     """
                                     INSERT INTO feed_events (paper_id, event_type, new_status, created_at)
@@ -289,7 +291,7 @@ class Publication:
                         new_to_this_url = cursor.rowcount > 0
                         pub_status = pub.get('status')
                         if not is_seed and new_to_this_url and pub_status and pub_status != 'published':
-                            if _url_has_baseline(cursor, url):
+                            if has_baseline:
                                 cursor.execute(
                                     "SELECT COUNT(*) FROM feed_events WHERE paper_id = %s AND event_type = 'new_paper'",
                                     (publication_id,),

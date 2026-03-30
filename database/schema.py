@@ -510,8 +510,8 @@ def create_tables() -> None:
                         if "Duplicate column name" not in str(e):
                             logging.warning("Migration: researchers.openalex_author_id: %s", e)
 
-                    # Feed event safety trigger: block new_paper events
-                    # when source URL has < 2 archived snapshots
+                    # DB-level safety net: catches any code path that bypasses
+                    # the application-layer guard in publication._url_has_baseline()
                     try:
                         cursor.execute("DROP TRIGGER IF EXISTS trg_feed_events_snapshot_guard")
                         cursor.execute("""
