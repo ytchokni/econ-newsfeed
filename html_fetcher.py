@@ -430,6 +430,7 @@ class HTMLFetcher:
             dropped = len(text_content) - CONTENT_MAX_CHARS
             logging.info(f"Truncating content for URL ID {url_id}: {len(text_content)} -> {CONTENT_MAX_CHARS} chars ({dropped} dropped)")
             text_content = text_content[:CONTENT_MAX_CHARS]
+        text_content = HTMLFetcher.normalize_text(text_content)
         text_hash = HTMLFetcher.hash_text_content(text_content)
 
         if HTMLFetcher.has_text_changed(url_id, text_hash):

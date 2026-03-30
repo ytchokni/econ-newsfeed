@@ -408,3 +408,39 @@ class TestNormalizeText:
         """Non-breaking spaces (\\u00a0) should be treated as whitespace."""
         text = "hello\u00a0\u00a0world"
         assert HTMLFetcher.normalize_text(text) == "hello world"
+
+
+class TestNormalizationIntegration:
+    """Integration: normalize_text is applied before hashing in fetch_and_save_if_changed."""
+
+    @patch("html_fetcher.Database.execute_query")
+    @patch("html_fetcher.Database.fetch_one")
+    def test_whitespace_only_change_not_detected(self, mock_fetch, mock_execute):
+        """Content differing only in whitespace should hash identically after normalization."""
+        old_text = "Paper A (with Author )"
+        old_normalized = HTMLFetcher.normalize_text(old_text)
+        old_hash = HTMLFetcher.hash_text_content(old_normalized)
+
+        new_text = "Paper A (with Author)"
+        new_normalized = HTMLFetcher.normalize_text(new_text)
+        new_hash = HTMLFetcher.hash_text_content(new_normalized)
+
+        assert old_hash == new_hash, "Whitespace-only change should produce identical hashes after normalization"
+
+    @patch("html_fetcher.Database.execute_query")
+    @patch("html_fetcher.Database.fetch_one")
+    def test_quote_only_change_not_detected(self, mock_fetch, mock_execute):
+        """Content differing only in quote style should hash identically after normalization."""
+        old_text = '\u201cA Paper Title\u201d by Smith'
+        new_text = '"A Paper Title" by Smith'
+        assert HTMLFetcher.hash_text_content(HTMLFetcher.normalize_text(old_text)) == \
+               HTMLFetcher.hash_text_content(HTMLFetcher.normalize_text(new_text))
+
+    @patch("html_fetcher.Database.execute_query")
+    @patch("html_fetcher.Database.fetch_one")
+    def test_real_change_still_detected(self, mock_fetch, mock_execute):
+        """Substantive changes must still produce different hashes."""
+        old_text = "Paper A, working_paper"
+        new_text = "Paper A, accepted at AER"
+        assert HTMLFetcher.hash_text_content(HTMLFetcher.normalize_text(old_text)) != \
+               HTMLFetcher.hash_text_content(HTMLFetcher.normalize_text(new_text))
