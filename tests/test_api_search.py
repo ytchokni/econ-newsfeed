@@ -9,7 +9,7 @@ SAMPLE_PUB = {
     "paper_id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
     "source_url": "https://example.com/pub",
     "discovered_at": datetime(2026, 3, 15, 14, 30), "status": "working_paper",
-    "draft_url": None, "abstract": None, "draft_url_status": None,
+    "draft_url": None, "abstract": None, "draft_url_status": None, "doi": None,
 }
 
 BATCH_AUTHORS = [
@@ -26,7 +26,7 @@ class TestPublicationSearch:
             patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
-            mock_fetch.side_effect = [[SAMPLE_PUB], BATCH_AUTHORS]
+            mock_fetch.side_effect = [[SAMPLE_PUB], BATCH_AUTHORS, [], []]
             response = client.get("/api/publications?search=Trade")
 
         assert response.status_code == 200
@@ -63,7 +63,7 @@ class TestPublicationSearch:
             patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
         ):
-            mock_fetch.side_effect = [[SAMPLE_PUB], BATCH_AUTHORS]
+            mock_fetch.side_effect = [[SAMPLE_PUB], BATCH_AUTHORS, [], []]
             response = client.get("/api/publications?search=Trade&year=2024")
 
         assert response.status_code == 200
@@ -76,7 +76,7 @@ class TestPublicationSearch:
             patch("api.Database.fetch_one", return_value={"total": 1}) as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
         ):
-            mock_fetch.side_effect = [[SAMPLE_PUB], BATCH_AUTHORS]
+            mock_fetch.side_effect = [[SAMPLE_PUB], BATCH_AUTHORS, [], []]
             client.get("/api/publications?search=+")
 
         count_sql = mock_one.call_args[0][0]
@@ -98,6 +98,7 @@ class TestResearcherSearch:
         with (
             patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
+            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
             mock_fetch.side_effect = [
                 [SAMPLE_RESEARCHER],  # researchers
@@ -128,6 +129,7 @@ class TestResearcherSearch:
         with (
             patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_fetch,
+            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
             mock_fetch.side_effect = [
                 [SAMPLE_RESEARCHER], [], [{"researcher_id": 1, "cnt": 5}], [],
