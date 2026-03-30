@@ -254,15 +254,10 @@ class HTMLFetcher:
         5. Known boilerplate substrings removed
         6. Final trim
         """
-        # 1. Quote normalization
         text = text.translate(_QUOTE_MAP)
-        # 2. Whitespace collapsing (includes \u00a0 non-breaking space)
         text = _RE_WHITESPACE.sub(' ', text)
-        # 3. Strip spaces before closing punctuation
         text = _RE_CLOSING_PUNCT.sub(r'\1', text)
-        # 4. Remove spaces between digits (collapses Google Sites digit-split rendering)
         text = _RE_DIGIT_SPLIT.sub(r'\1\2', text)
-        # 5. Boilerplate stripping (case-insensitive)
         text_lower = text.lower()
         for phrase in _BOILERPLATE_NOISE:
             idx = text_lower.find(phrase)
@@ -270,7 +265,6 @@ class HTMLFetcher:
                 text = text[:idx] + text[idx + len(phrase):]
                 text_lower = text.lower()
                 idx = text_lower.find(phrase)
-        # 6. Re-collapse any whitespace gaps left by boilerplate removal, then trim
         text = _RE_WHITESPACE.sub(' ', text).strip()
         return text
 
