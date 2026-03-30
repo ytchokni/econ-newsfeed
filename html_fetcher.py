@@ -1,6 +1,7 @@
 import difflib
 import ipaddress
 import os
+import re
 import threading
 import time
 import socket
@@ -43,6 +44,36 @@ def _is_fast_domain(hostname: str) -> bool:
         if hostname == domain or hostname.endswith('.' + domain):
             return True
     return False
+
+
+# Boilerplate substrings to strip before hashing (case-insensitive).
+# Keep this list short and conservative — only patterns confirmed as noise.
+_BOILERPLATE_NOISE = [
+    "search this site",
+    "embedded files",
+    "skip to main content",
+    "skip to navigation",
+    "report abuse",
+    "page details",
+    "page updated",
+    "this site uses cookies from google to deliver its services and to analyze traffic",
+    "learn more got it",
+    "accept all cookies",
+    "reject all cookies",
+]
+
+# Unicode quote characters to normalize to ASCII equivalents
+_QUOTE_MAP = str.maketrans({
+    '\u201c': '"',   # left double curly quote
+    '\u201d': '"',   # right double curly quote
+    '\u2018': "'",   # left single curly quote
+    '\u2019': "'",   # right single curly quote
+})
+
+# Pre-compiled regex patterns used by normalize_text()
+_RE_WHITESPACE = re.compile(r'[\s\u00a0]+')
+_RE_CLOSING_PUNCT = re.compile(r' +([)\],;])')
+_RE_DIGIT_SPLIT = re.compile(r'(\d) (\d)')
 
 
 class HTMLFetcher:
@@ -209,6 +240,39 @@ class HTMLFetcher:
         Hash the text content using SHA-256.
         """
         return hashlib.sha256(text_content.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def normalize_text(text: str) -> str:
+        """Normalize extracted text to reduce false-positive change detection.
+
+        Applied transformations (in order):
+        1. Curly/smart quotes → straight quotes
+        2. All whitespace runs → single space
+        3. Strip spaces before closing punctuation (e.g. "word )" → "word)")
+        4. Remove spaces between digits to collapse Google Sites digit-split rendering
+           (e.g. "202 6" → "2026")
+        5. Known boilerplate substrings removed
+        6. Final trim
+        """
+        # 1. Quote normalization
+        text = text.translate(_QUOTE_MAP)
+        # 2. Whitespace collapsing (includes \u00a0 non-breaking space)
+        text = _RE_WHITESPACE.sub(' ', text)
+        # 3. Strip spaces before closing punctuation
+        text = _RE_CLOSING_PUNCT.sub(r'\1', text)
+        # 4. Remove spaces between digits (collapses Google Sites digit-split rendering)
+        text = _RE_DIGIT_SPLIT.sub(r'\1\2', text)
+        # 5. Boilerplate stripping (case-insensitive)
+        text_lower = text.lower()
+        for phrase in _BOILERPLATE_NOISE:
+            idx = text_lower.find(phrase)
+            while idx != -1:
+                text = text[:idx] + text[idx + len(phrase):]
+                text_lower = text.lower()
+                idx = text_lower.find(phrase)
+        # 6. Re-collapse any whitespace gaps left by boilerplate removal, then trim
+        text = _RE_WHITESPACE.sub(' ', text).strip()
+        return text
 
     @staticmethod
     def archive_snapshot(url_id: int) -> None:
