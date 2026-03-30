@@ -219,6 +219,7 @@ class TestSavePublications:
     def test_happy_path_insert(self, mock_get_conn, mock_hash, mock_get_rid):
         """New publication is inserted, paper_urls row added, authorship rows created."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=5)
+        cursor.fetchone.side_effect = [(2,)]  # snapshot count → baseline OK
         mock_get_conn.side_effect = lambda: ctx_factory()
 
         pub = _make_pub_dict()
@@ -232,9 +233,13 @@ class TestSavePublications:
         second_call_sql = cursor.execute.call_args_list[1][0][0]
         assert "INSERT IGNORE INTO paper_urls" in second_call_sql
 
-        # feed_event INSERT (status=working_paper, is_seed=False)
+        # Snapshot count query (baseline check)
         third_call_sql = cursor.execute.call_args_list[2][0][0]
-        assert "INSERT INTO feed_events" in third_call_sql
+        assert "html_snapshots" in third_call_sql
+
+        # feed_event INSERT (status=working_paper, is_seed=False)
+        fourth_call_sql = cursor.execute.call_args_list[3][0][0]
+        assert "INSERT INTO feed_events" in fourth_call_sql
 
         # Two authors -> two authorship INSERTs
         authorship_calls = [
@@ -303,6 +308,7 @@ class TestSavePublications:
     def test_feed_event_created_for_non_seed_non_published(self, mock_get_conn, mock_hash, mock_get_rid):
         """Non-seed paper with status != 'published' creates a feed_event."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=10)
+        cursor.fetchone.side_effect = [(2,)]  # snapshot count → baseline OK
         mock_get_conn.side_effect = lambda: ctx_factory()
 
         pub = _make_pub_dict(status="accepted")
@@ -449,8 +455,13 @@ class TestSavePublications:
     def test_dedup_new_url_creates_feed_event(self, mock_get_conn, mock_hash, mock_get_rid):
         """Dedup paper appearing on a NEW url (non-seed) should create a feed event."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
-        # fetchone: (42,) for paper lookup, backfill check, (0,) for COUNT(*)
-        cursor.fetchone.side_effect = [(42,), (None, None, None), (0,)]
+        # fetchone: (42,) for paper lookup, backfill check, (2,) snapshot count, (0,) for COUNT(*)
+        cursor.fetchone.side_effect = [
+            (42,),               # title_hash lookup
+            (None, None, None),  # backfill check
+            (2,),                # snapshot count → baseline OK
+            (0,),                # COUNT(*) from feed_events
+        ]
         # Track execute calls to set rowcount dynamically
         original_execute = cursor.execute
         def _tracking_execute(*args, **kwargs):
@@ -523,11 +534,69 @@ class TestSavePublications:
     @patch("publication.Database.get_researcher_id", return_value=99)
     @patch("publication.Database.compute_title_hash", return_value="abc123")
     @patch("publication.Database.get_connection")
+    def test_no_feed_event_without_baseline_snapshots(self, mock_get_conn, mock_hash, mock_get_rid):
+        """Non-seed paper should NOT get feed event if source URL has < 2 snapshots."""
+        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=10)
+        cursor.fetchone.side_effect = [(0,)]  # snapshot count returns 0
+        mock_get_conn.side_effect = lambda: ctx_factory()
+
+        pub = _make_pub_dict(status="accepted")
+        Publication.save_publications("https://example.com", [pub], is_seed=False)
+
+        feed_calls = [
+            c for c in cursor.execute.call_args_list
+            if "INSERT INTO feed_events" in c[0][0]
+        ]
+        assert len(feed_calls) == 0
+
+    @patch("publication.Database.get_researcher_id", return_value=99)
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("publication.Database.get_connection")
+    def test_feed_event_created_with_baseline_snapshots(self, mock_get_conn, mock_hash, mock_get_rid):
+        """Non-seed paper SHOULD get feed event if source URL has >= 2 snapshots."""
+        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=10)
+        cursor.fetchone.side_effect = [(2,)]  # snapshot count returns 2
+        mock_get_conn.side_effect = lambda: ctx_factory()
+
+        pub = _make_pub_dict(status="accepted")
+        Publication.save_publications("https://example.com", [pub], is_seed=False)
+
+        feed_calls = [
+            c for c in cursor.execute.call_args_list
+            if "INSERT INTO feed_events" in c[0][0]
+        ]
+        assert len(feed_calls) == 1
+        params = feed_calls[0][0][1]
+        assert params[1] == "accepted"
+
+    @patch("publication.Database.get_researcher_id", return_value=99)
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("publication.Database.get_connection")
+    def test_dedup_no_feed_event_without_baseline_snapshots(self, mock_get_conn, mock_hash, mock_get_rid):
+        """Dedup paper on new URL should NOT get feed event if < 2 snapshots."""
+        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
+        # fetchone: (42,) for title lookup, (None, None, None) for backfill check, (1,) for snapshot count
+        cursor.fetchone.side_effect = [(42,), (None, None, None), (1,)]
+        cursor.rowcount = 1  # new URL association
+        mock_get_conn.side_effect = lambda: ctx_factory()
+
+        pub = _make_pub_dict(status="working_paper")
+        Publication.save_publications("https://newsite.com", [pub], is_seed=False)
+
+        feed_calls = [
+            c for c in cursor.execute.call_args_list
+            if "INSERT INTO feed_events" in c[0][0]
+        ]
+        assert len(feed_calls) == 0
+
+    @patch("publication.Database.get_researcher_id", return_value=99)
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("publication.Database.get_connection")
     def test_dedup_new_url_existing_event_no_duplicate(self, mock_get_conn, mock_hash, mock_get_rid):
         """Dedup paper on new URL that already has a feed event should NOT create duplicate."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
-        # fetchone: (42,) for paper lookup, (1,) for COUNT(*) showing event exists
-        cursor.fetchone.side_effect = [(42,), (1,)]
+        # fetchone: (42,) for paper lookup, backfill check, (2,) snapshot count, (1,) for COUNT(*) showing event exists
+        cursor.fetchone.side_effect = [(42,), (None, None, None), (2,), (1,)]
         # Track execute to set rowcount=1 for paper_urls INSERT
         original_execute = cursor.execute
         def _tracking_execute(*args, **kwargs):

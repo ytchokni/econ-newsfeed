@@ -161,6 +161,23 @@ def validate_publication(pub: dict) -> bool:
     return True
 
 
+def _url_has_baseline(cursor, url: str, min_snapshots: int = 2) -> bool:
+    """Check if a URL has enough archived snapshots to establish a baseline.
+
+    Returns True only when the URL has been seen in >= min_snapshots distinct
+    content states, confirming that new papers are genuine discoveries."""
+    cursor.execute(
+        """SELECT COALESCE(MAX(cnt), 0) FROM (
+            SELECT COUNT(*) AS cnt FROM html_snapshots
+            WHERE url_id IN (SELECT id FROM researcher_urls WHERE url = %s)
+            GROUP BY url_id
+        ) sub""",
+        (url,),
+    )
+    row = cursor.fetchone()
+    return (row[0] if row else 0) >= min_snapshots
+
+
 class Publication:
     def __init__(self, id: int, title: str, authors: list | None, year: str | None, venue: str | None, url: str | None) -> None:
         self.id = id
@@ -208,16 +225,22 @@ class Publication:
                             """,
                             (publication_id, url, datetime.now(timezone.utc)),
                         )
-                        # Create new_paper feed event for non-seed papers with known, non-published status
+                        # Create new_paper feed event only when source URL has established baseline
                         pub_status = pub.get('status')
                         if not is_seed and pub_status and pub_status != 'published':
-                            cursor.execute(
-                                """
-                                INSERT INTO feed_events (paper_id, event_type, new_status, created_at)
-                                VALUES (%s, 'new_paper', %s, %s)
-                                """,
-                                (publication_id, pub_status, datetime.now(timezone.utc)),
-                            )
+                            if _url_has_baseline(cursor, url):
+                                cursor.execute(
+                                    """
+                                    INSERT INTO feed_events (paper_id, event_type, new_status, created_at)
+                                    VALUES (%s, 'new_paper', %s, %s)
+                                    """,
+                                    (publication_id, pub_status, datetime.now(timezone.utc)),
+                                )
+                            else:
+                                logging.info(
+                                    "Suppressed new_paper event for '%s': source URL lacks baseline snapshots",
+                                    pub['title'],
+                                )
                     else:
                         # Duplicate found via title_hash — fetch existing id
                         cursor.execute(
@@ -266,17 +289,23 @@ class Publication:
                         new_to_this_url = cursor.rowcount > 0
                         pub_status = pub.get('status')
                         if not is_seed and new_to_this_url and pub_status and pub_status != 'published':
-                            cursor.execute(
-                                "SELECT COUNT(*) FROM feed_events WHERE paper_id = %s AND event_type = 'new_paper'",
-                                (publication_id,),
-                            )
-                            if cursor.fetchone()[0] == 0:
+                            if _url_has_baseline(cursor, url):
                                 cursor.execute(
-                                    """
-                                    INSERT INTO feed_events (paper_id, event_type, new_status, created_at)
-                                    VALUES (%s, 'new_paper', %s, %s)
-                                    """,
-                                    (publication_id, pub_status, datetime.now(timezone.utc)),
+                                    "SELECT COUNT(*) FROM feed_events WHERE paper_id = %s AND event_type = 'new_paper'",
+                                    (publication_id,),
+                                )
+                                if cursor.fetchone()[0] == 0:
+                                    cursor.execute(
+                                        """
+                                        INSERT INTO feed_events (paper_id, event_type, new_status, created_at)
+                                        VALUES (%s, 'new_paper', %s, %s)
+                                        """,
+                                        (publication_id, pub_status, datetime.now(timezone.utc)),
+                                    )
+                            else:
+                                logging.info(
+                                    "Suppressed new_paper event for '%s': source URL lacks baseline snapshots",
+                                    pub['title'],
                                 )
                         logging.info(f"Duplicate publication (title_hash match), added source URL: {pub['title']}")
 
