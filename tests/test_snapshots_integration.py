@@ -114,6 +114,39 @@ class TestAppendPaperSnapshotFeedEvents:
 
         mock_conn.commit.assert_called_once()
 
+    def test_title_included_in_snapshot(self):
+        """When title is provided, it is included in the INSERT."""
+        mock_conn, mock_cursor = _make_mock_conn(prev_row=None)
+        with patch("database.snapshots.get_connection", return_value=mock_conn):
+            result = append_paper_snapshot(
+                1, "accepted", "JLE", "abs", None, "2024",
+                title="My Paper Title",
+            )
+
+        assert result is True
+        sqls = _sql_statements(mock_cursor)
+        insert_calls = [s for s in sqls if "INSERT INTO paper_snapshots" in s]
+        assert len(insert_calls) == 1
+        assert "title" in insert_calls[0]
+
+    def test_title_change_triggers_new_snapshot(self):
+        """A title-only change should produce a new snapshot (different hash)."""
+        old_hash = _compute_paper_content_hash(
+            "accepted", "JLE", "abs", None, "2024", title="Old Title"
+        )
+        mock_conn, mock_cursor = _make_mock_conn(
+            prev_row={"content_hash": old_hash, "status": "accepted"},
+        )
+        with patch("database.snapshots.get_connection", return_value=mock_conn):
+            result = append_paper_snapshot(
+                1, "accepted", "JLE", "abs", None, "2024",
+                title="New Title",
+            )
+
+        assert result is True
+        sqls = _sql_statements(mock_cursor)
+        assert any("INSERT INTO paper_snapshots" in s for s in sqls)
+
 
 # ---------------------------------------------------------------------------
 # Researcher snapshot tests
