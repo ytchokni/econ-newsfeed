@@ -12,7 +12,7 @@ from database import Database
 from db_config import db_config
 from researcher import Researcher
 from html_fetcher import HTMLFetcher
-from publication import Publication
+from publication import Publication, reconcile_title_renames
 from link_extractor import match_and_save_paper_links
 
 logger = logging.getLogger(__name__)
@@ -199,6 +199,13 @@ def run_scrape_job() -> None:
                             Publication.save_publications(url, pubs, is_seed=is_first_scrape)
                             save_ms = (time.time() - t0) * 1000
                             logger.info(f"  save_publications — {save_ms:.0f}ms")
+
+                            # Reconcile title renames before snapshotting
+                            t0_recon = time.time()
+                            reconcile_title_renames(url, pubs)
+                            recon_ms = (time.time() - t0_recon) * 1000
+                            logger.info(f"  title reconciliation — {recon_ms:.0f}ms")
+
                             pubs_extracted += len(pubs)
 
                             # Extract and match trusted links
@@ -223,6 +230,7 @@ def run_scrape_job() -> None:
                                         draft_url=pub.get('draft_url'),
                                         year=pub.get('year'),
                                         source_url=url,
+                                        title=pub.get('title'),
                                     )
                             snapshot_ms = (time.time() - t0) * 1000
                             logger.info(f"  paper snapshots — {snapshot_ms:.0f}ms")

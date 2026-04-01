@@ -494,3 +494,145 @@ Content:
         """
         results = Database.fetch_all(query)
         return [Publication(id=row['id'], url=row['source_url'], title=row['title'], year=row['year'], venue=row['venue'], authors=None) for row in results]
+
+
+def _title_similarity(title_a: str | None, title_b: str | None) -> float:
+    """Jaccard similarity on normalized word tokens. Used to detect title renames."""
+    tokens_a = set(Database.normalize_title(title_a).split())
+    tokens_b = set(Database.normalize_title(title_b).split())
+    if not tokens_a or not tokens_b:
+        return 0.0
+    return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
+
+
+_SIMILARITY_THRESHOLD = 0.5
+
+
+def reconcile_title_renames(source_url: str, extracted_pubs: list[dict]) -> None:
+    """Detect title renames by comparing extracted papers against DB papers for the same URL.
+
+    For each disappeared+appeared title pair with Jaccard similarity >= 0.5:
+    - Update the existing paper's title and title_hash
+    - Record the old title in a paper_snapshot
+    - Delete any duplicate paper row that save_publications may have created
+    - Create a title_change feed_event
+    """
+    existing = Database.fetch_all(
+        "SELECT id, title, title_hash FROM papers WHERE source_url = %s",
+        (source_url,),
+    )
+    if not existing:
+        return
+
+    existing_normalized = {
+        Database.normalize_title(p['title']): p for p in existing
+    }
+    extracted_normalized = {
+        Database.normalize_title(pub['title']): pub for pub in extracted_pubs if pub.get('title')
+    }
+
+    disappeared = set(existing_normalized.keys()) - set(extracted_normalized.keys())
+    appeared = set(extracted_normalized.keys()) - set(existing_normalized.keys())
+
+    if not disappeared or not appeared:
+        return
+
+    # Greedy best-match: pair each appeared title with its best disappeared match
+    matched_disappeared = set()
+    renames = []
+
+    for app_norm in appeared:
+        best_sim = 0.0
+        best_dis = None
+        for dis_norm in disappeared:
+            if dis_norm in matched_disappeared:
+                continue
+            sim = _title_similarity(
+                existing_normalized[dis_norm]['title'],
+                extracted_normalized[app_norm]['title'],
+            )
+            if sim > best_sim:
+                best_sim = sim
+                best_dis = dis_norm
+
+        if best_dis is not None and best_sim >= _SIMILARITY_THRESHOLD:
+            matched_disappeared.add(best_dis)
+            renames.append((
+                existing_normalized[best_dis],  # old paper row
+                extracted_normalized[app_norm],  # new pub dict
+                best_sim,
+            ))
+
+    if not renames:
+        return
+
+    with Database.get_connection() as conn:
+        cursor = conn.cursor(buffered=True)
+        try:
+            for old_paper, new_pub, sim in renames:
+                old_id = old_paper['id']
+                old_title = old_paper['title']
+                new_title = new_pub['title'].strip()
+                new_hash = Database.compute_title_hash(new_title)
+
+                # Record old title in paper_snapshot
+                Database.append_paper_snapshot(
+                    paper_id=old_id,
+                    status=new_pub.get('status'),
+                    venue=new_pub.get('venue'),
+                    abstract=new_pub.get('abstract'),
+                    draft_url=new_pub.get('draft_url'),
+                    year=new_pub.get('year'),
+                    source_url=source_url,
+                    title=old_title,
+                )
+
+                # Update the paper in place
+                cursor.execute(
+                    "UPDATE papers SET title = %s, title_hash = %s WHERE id = %s",
+                    (new_title, new_hash, old_id),
+                )
+
+                # Delete duplicate paper row if save_publications inserted one
+                cursor.execute(
+                    "SELECT id FROM papers WHERE title_hash = %s AND id != %s",
+                    (new_hash, old_id),
+                )
+                dup = cursor.fetchone()
+                if dup:
+                    dup_id = dup[0]
+                    # Transfer paper_urls from duplicate to original
+                    cursor.execute(
+                        "UPDATE IGNORE paper_urls SET paper_id = %s WHERE paper_id = %s",
+                        (old_id, dup_id),
+                    )
+                    # Delete false feed events for the duplicate
+                    cursor.execute(
+                        "DELETE FROM feed_events WHERE paper_id = %s",
+                        (dup_id,),
+                    )
+                    # Delete the duplicate paper (CASCADE deletes authorship, etc.)
+                    cursor.execute(
+                        "DELETE FROM papers WHERE id = %s",
+                        (dup_id,),
+                    )
+
+                # Create title_change feed event
+                cursor.execute(
+                    """INSERT INTO feed_events
+                       (paper_id, event_type, old_title, new_title, created_at)
+                       VALUES (%s, 'title_change', %s, %s, %s)""",
+                    (old_id, old_title, new_title, datetime.now(timezone.utc)),
+                )
+
+                logging.info(
+                    "Title rename detected (sim=%.2f): '%s' → '%s' (paper_id=%d)",
+                    sim, old_title[:50], new_title[:50], old_id,
+                )
+
+            conn.commit()
+        except Exception as e:
+            conn.rollback()
+            logging.error("Error reconciling title renames for %s: %s", source_url, e)
+        finally:
+            cursor.close()

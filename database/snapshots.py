@@ -66,20 +66,21 @@ def get_researcher_snapshots(researcher_id: int, limit: int = 20) -> list[dict]:
 # ── Paper snapshots ──
 
 def _compute_paper_content_hash(status: str | None, venue: str | None, abstract: str | None,
-                                draft_url: str | None, year: str | None) -> str:
+                                draft_url: str | None, year: str | None,
+                                title: str | None = None) -> str:
     """Compute content hash for paper change detection."""
-    parts = '||'.join(str(v or '') for v in (status, venue, abstract, draft_url, year))
+    parts = '||'.join(str(v or '') for v in (title, status, venue, abstract, draft_url, year))
     return hashlib.sha256(parts.encode('utf-8')).hexdigest()
 
 
 def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
                           abstract: str | None, draft_url: str | None, year: str | None,
-                          source_url: str | None = None) -> bool:
+                          source_url: str | None = None, title: str | None = None) -> bool:
     """Append a paper snapshot if metadata changed. Updates denormalized papers table.
     Creates a feed_event if status changed.
     Hash check and insert run in a single transaction to prevent race conditions.
     Returns True if a new snapshot was inserted, False if no change."""
-    content_hash = _compute_paper_content_hash(status, venue, abstract, draft_url, year)
+    content_hash = _compute_paper_content_hash(status, venue, abstract, draft_url, year, title=title)
     now = datetime.now(timezone.utc)
 
     with get_connection() as conn:
@@ -98,10 +99,10 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
 
             cursor.execute(
                 """INSERT INTO paper_snapshots
-                   (paper_id, status, venue, abstract, draft_url, draft_url_status, year,
+                   (paper_id, title, status, venue, abstract, draft_url, draft_url_status, year,
                     scraped_at, source_url, content_hash)
-                   VALUES (%s, %s, %s, %s, %s, 'unchecked', %s, %s, %s, %s)""",
-                (paper_id, status, venue, abstract, draft_url, year, now, source_url, content_hash),
+                   VALUES (%s, %s, %s, %s, %s, %s, 'unchecked', %s, %s, %s, %s)""",
+                (paper_id, title, status, venue, abstract, draft_url, year, now, source_url, content_hash),
             )
             cursor.execute(
                 """UPDATE papers

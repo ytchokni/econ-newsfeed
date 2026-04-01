@@ -48,6 +48,7 @@ def _base_patches():
         "fetch_one": patch("scheduler.Database.fetch_one", return_value=None),
         "paper_snap": patch("scheduler.Database.append_paper_snapshot"),
         "researcher_snap": patch("scheduler.Database.append_researcher_snapshot"),
+        "reconcile_renames": patch("scheduler.reconcile_title_renames"),
     }
 
 

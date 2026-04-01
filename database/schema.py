@@ -236,6 +236,7 @@ _TABLE_DEFINITIONS = {
         CREATE TABLE IF NOT EXISTS paper_snapshots (
             id INT AUTO_INCREMENT PRIMARY KEY,
             paper_id INT NOT NULL,
+            title TEXT DEFAULT NULL,
             status ENUM('published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper') DEFAULT NULL,
             venue TEXT,
             abstract TEXT,
@@ -284,9 +285,11 @@ _TABLE_DEFINITIONS = {
         CREATE TABLE IF NOT EXISTS feed_events (
             id INT AUTO_INCREMENT PRIMARY KEY,
             paper_id INT NOT NULL,
-            event_type ENUM('new_paper', 'status_change') NOT NULL,
+            event_type ENUM('new_paper', 'status_change', 'title_change') NOT NULL,
             old_status ENUM('published','accepted','revise_and_resubmit','reject_and_resubmit','working_paper') DEFAULT NULL,
             new_status ENUM('published','accepted','revise_and_resubmit','reject_and_resubmit','working_paper') DEFAULT NULL,
+            old_title TEXT DEFAULT NULL,
+            new_title TEXT DEFAULT NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
             INDEX idx_paper_id (paper_id),
@@ -552,6 +555,42 @@ def create_tables() -> None:
                         logging.info("Migration: feed_events snapshot guard trigger created")
                     except Exception as e:
                         logging.warning("Migration: feed_events trigger: %s", e)
+
+                    # Add title column to paper_snapshots for rename tracking
+                    try:
+                        cursor.execute("""
+                            ALTER TABLE paper_snapshots
+                            ADD COLUMN title TEXT DEFAULT NULL AFTER paper_id
+                        """)
+                        conn.commit()
+                        logging.info("Migration: added title column to paper_snapshots")
+                    except Exception as e:
+                        if "Duplicate column name" not in str(e):
+                            logging.warning("Migration: paper_snapshots.title: %s", e)
+
+                    # Add title_change event type to feed_events
+                    try:
+                        cursor.execute("""
+                            ALTER TABLE feed_events MODIFY COLUMN event_type
+                            ENUM('new_paper', 'status_change', 'title_change') NOT NULL
+                        """)
+                        conn.commit()
+                        logging.info("Migration: added title_change to feed_events.event_type")
+                    except Exception as e:
+                        logging.warning("Migration: feed_events.event_type ENUM: %s", e)
+
+                    # Add old_title/new_title columns to feed_events
+                    try:
+                        cursor.execute("""
+                            ALTER TABLE feed_events
+                            ADD COLUMN old_title TEXT DEFAULT NULL,
+                            ADD COLUMN new_title TEXT DEFAULT NULL
+                        """)
+                        conn.commit()
+                        logging.info("Migration: added old_title/new_title to feed_events")
+                    except Exception as e:
+                        if "Duplicate column name" not in str(e):
+                            logging.warning("Migration: feed_events title columns: %s", e)
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                     cursor.fetchone()
