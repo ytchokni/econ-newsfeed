@@ -25,7 +25,7 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from publication import Publication, PublicationExtraction, PublicationExtractionList
+from publication import Publication, PublicationExtraction, PublicationExtractionList, _title_similarity, reconcile_title_renames
 
 
 # ---------------------------------------------------------------------------
@@ -593,3 +593,153 @@ class TestPublicationExtractionModel:
         dumped = original.model_dump()
         reconstructed = PublicationExtraction(**dumped)
         assert reconstructed == original
+
+
+# ---------------------------------------------------------------------------
+# 5. _title_similarity()
+# ---------------------------------------------------------------------------
+
+class TestTitleSimilarity:
+    """Tests for _title_similarity() Jaccard word overlap."""
+
+    def test_identical_titles(self):
+        assert _title_similarity("Trade and Wages", "Trade and Wages") == 1.0
+
+    def test_completely_different(self):
+        assert _title_similarity("Trade and Wages", "Climate Change Effects") == 0.0
+
+    def test_partial_overlap_above_threshold(self):
+        old = "Policies, Prejudice, and the Residual Wage Gap between Refugees and Natives"
+        new = "Market Structures, Prejudice, and the Residual Wage Gap between Refugees and Natives"
+        sim = _title_similarity(old, new)
+        assert sim >= 0.5
+
+    def test_empty_title(self):
+        assert _title_similarity("", "Trade and Wages") == 0.0
+        assert _title_similarity("Trade and Wages", "") == 0.0
+
+    def test_none_title(self):
+        assert _title_similarity(None, "Trade and Wages") == 0.0
+
+    def test_low_overlap_below_threshold(self):
+        sim = _title_similarity("International Trade Theory", "Domestic Labor Markets")
+        assert sim < 0.5
+
+
+# ---------------------------------------------------------------------------
+# 6. reconcile_title_renames()
+# ---------------------------------------------------------------------------
+
+class TestReconcileTitleRenames:
+    """Tests for reconcile_title_renames() post-extraction reconciliation."""
+
+    @patch("publication.Database.append_paper_snapshot")
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.fetch_all")
+    def test_detects_rename(self, mock_fetch_all, mock_get_conn, mock_snapshot):
+        """A disappeared title + appeared title with high overlap -> rename."""
+        mock_fetch_all.return_value = [
+            {"id": 10, "title": "Policies, Prejudice, and the Wage Gap", "title_hash": "old_hash"},
+        ]
+        mock_cursor = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchone.return_value = None  # No duplicate paper found
+
+        @contextmanager
+        def _ctx():
+            yield mock_conn
+        mock_get_conn.side_effect = lambda: _ctx()
+
+        extracted = [
+            _make_pub_dict(title="Market Structures, Prejudice, and the Wage Gap"),
+        ]
+
+        reconcile_title_renames("https://example.com", extracted)
+
+        # Should UPDATE the paper title and title_hash
+        update_calls = [
+            c for c in mock_cursor.execute.call_args_list
+            if "UPDATE papers SET title" in str(c)
+        ]
+        assert len(update_calls) == 1
+
+        # Should INSERT a title_change feed event
+        feed_calls = [
+            c for c in mock_cursor.execute.call_args_list
+            if "title_change" in str(c)
+        ]
+        assert len(feed_calls) == 1
+
+    @patch("publication.Database.append_paper_snapshot")
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.fetch_all")
+    def test_no_rename_when_low_similarity(self, mock_fetch_all, mock_get_conn, mock_snapshot):
+        """Titles with < 0.5 Jaccard similarity are NOT treated as renames."""
+        mock_fetch_all.return_value = [
+            {"id": 10, "title": "International Trade Theory", "title_hash": "old_hash"},
+        ]
+        mock_cursor = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+
+        @contextmanager
+        def _ctx():
+            yield mock_conn
+        mock_get_conn.side_effect = lambda: _ctx()
+
+        extracted = [_make_pub_dict(title="Domestic Labor Markets and Employment")]
+
+        reconcile_title_renames("https://example.com", extracted)
+
+        # Should NOT update any paper -- low similarity returns early before get_connection
+        update_calls = [
+            c for c in mock_cursor.execute.call_args_list
+            if "UPDATE papers SET title" in str(c)
+        ]
+        assert len(update_calls) == 0
+
+    @patch("publication.Database.append_paper_snapshot")
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.fetch_all")
+    def test_no_op_when_all_titles_match(self, mock_fetch_all, mock_get_conn, mock_snapshot):
+        """When all extracted titles match DB titles, no reconciliation needed."""
+        mock_fetch_all.return_value = [
+            {"id": 10, "title": "Trade and Wages", "title_hash": "hash1"},
+        ]
+
+        extracted = [_make_pub_dict(title="Trade and Wages")]
+
+        reconcile_title_renames("https://example.com", extracted)
+
+        # get_connection should NOT be called since appeared/disappeared are empty
+        mock_get_conn.assert_not_called()
+
+    @patch("publication.Database.append_paper_snapshot")
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.fetch_all")
+    def test_cleans_up_duplicate_paper(self, mock_fetch_all, mock_get_conn, mock_snapshot):
+        """If save_publications already inserted a duplicate, it should be deleted."""
+        mock_fetch_all.return_value = [
+            {"id": 10, "title": "Policies and the Wage Gap", "title_hash": "old_hash"},
+        ]
+        mock_cursor = MagicMock()
+        mock_conn = MagicMock()
+        mock_conn.cursor.return_value = mock_cursor
+        mock_cursor.fetchone.return_value = (99,)  # Duplicate paper exists
+
+        @contextmanager
+        def _ctx():
+            yield mock_conn
+        mock_get_conn.side_effect = lambda: _ctx()
+
+        extracted = [_make_pub_dict(title="Market Structures and the Wage Gap")]
+
+        reconcile_title_renames("https://example.com", extracted)
+
+        # Should DELETE the duplicate paper
+        delete_calls = [
+            c for c in mock_cursor.execute.call_args_list
+            if "DELETE FROM papers" in str(c)
+        ]
+        assert len(delete_calls) == 1
