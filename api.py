@@ -425,6 +425,8 @@ def _format_feed_event(row: dict, authors: list[dict], coauthors: list[dict] | N
         "event_type": row['event_type'],
         "old_status": row.get('old_status'),
         "new_status": row.get('new_status'),
+        "old_title": row.get('old_title'),
+        "new_title": row.get('new_title'),
         "event_date": _iso_z(row.get('created_at')),
     })
     return result
@@ -567,7 +569,8 @@ def list_publications(
     offset = (page - 1) * per_page
     rows = Database.fetch_all(
         f"""
-        SELECT fe.id AS event_id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
+        SELECT fe.id AS event_id, fe.event_type, fe.old_status, fe.new_status,
+               fe.old_title, fe.new_title, fe.created_at,
                p.id AS paper_id, p.title, p.year, p.venue, p.source_url, p.discovered_at,
                p.status, p.draft_url, p.abstract, p.draft_url_status, p.doi
         FROM feed_events fe
