@@ -32,7 +32,6 @@ def download_htmls() -> None:
         for row in researcher_urls:
             id, researcher_id, url, page_type = row['id'], row['researcher_id'], row['url'], row['page_type']
             urls_checked += 1
-            logging.info(f"Downloading HTML for URL ID: {id}, URL: {url}, Page Type: {page_type}")
             changed = HTMLFetcher.fetch_and_save_if_changed(id, url, researcher_id)
             if changed:
                 urls_changed += 1
@@ -54,7 +53,8 @@ def extract_data_from_htmls() -> None:
         if html_content:
             extracted_publications = Publication.extract_publications(html_content, url)
             if extracted_publications:
-                Publication.save_publications(url, extracted_publications)
+                is_seed = HTMLFetcher.is_first_extraction(id)
+                Publication.save_publications(url, extracted_publications, is_seed=is_seed)
                 reconcile_title_renames(url, extracted_publications)
                 match_and_save_paper_links(id, extracted_publications)
             else:
@@ -75,7 +75,8 @@ def _process_one_url(url_id: int, researcher_id: int, url: str, page_type: str) 
     try:
         pubs = Publication.extract_publications(html_content, url)
         if pubs:
-            Publication.save_publications(url, pubs)
+            is_seed = HTMLFetcher.is_first_extraction(url_id)
+            Publication.save_publications(url, pubs, is_seed=is_seed)
             reconcile_title_renames(url, pubs)
             match_and_save_paper_links(url_id, pubs)
         HTMLFetcher.mark_extracted(url_id)
@@ -300,7 +301,9 @@ def batch_check() -> None:
                         logging.warning(f"Rejected malformed batch publication: {e}")
 
                 if validated:
-                    Publication.save_publications(url, validated)
+                    is_seed = HTMLFetcher.is_first_extraction(url_id)
+                    Publication.save_publications(url, validated, is_seed=is_seed)
+                    reconcile_title_renames(url, validated)
                     match_and_save_paper_links(url_id, validated)
                     saved_pubs += len(validated)
                 HTMLFetcher.mark_extracted(url_id)
@@ -388,6 +391,7 @@ def main() -> None:
     subparsers.add_parser('batch-check', help='Check and process completed batch jobs')
     subparsers.add_parser('classify-jel', help='Classify researchers into JEL codes from bios')
     subparsers.add_parser('enrich', help='Enrich publications with OpenAlex metadata')
+    subparsers.add_parser('enrich-jel', help='Enrich researcher JEL codes from paper topics via OpenAlex')
     subparsers.add_parser('discover-domains', help='Scan stored HTML for untrusted domains with paper-title links')
 
     args = parser.parse_args()
@@ -409,7 +413,11 @@ def main() -> None:
     elif args.command == 'enrich':
         Database.create_tables()
         from openalex import enrich_new_publications
-        enrich_new_publications()
+        enrich_new_publications(limit=500)
+    elif args.command == 'enrich-jel':
+        Database.create_tables()
+        from jel_enrichment import enrich_jel_from_papers
+        enrich_jel_from_papers()
     elif args.command == 'discover-domains':
         discover_domains()
 
