@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 
 from database import Database
 from researcher import Researcher
-from publication import Publication
+from publication import Publication, reconcile_title_renames
 from html_fetcher import HTMLFetcher
 from link_extractor import match_and_save_paper_links
 
@@ -55,6 +55,7 @@ def extract_data_from_htmls() -> None:
             extracted_publications = Publication.extract_publications(html_content, url)
             if extracted_publications:
                 Publication.save_publications(url, extracted_publications)
+                reconcile_title_renames(url, extracted_publications)
                 match_and_save_paper_links(id, extracted_publications)
             else:
                 logging.warning(f"No publications extracted for URL ID: {id}, URL: {url}")
@@ -75,6 +76,7 @@ def _process_one_url(url_id: int, researcher_id: int, url: str, page_type: str) 
         pubs = Publication.extract_publications(html_content, url)
         if pubs:
             Publication.save_publications(url, pubs)
+            reconcile_title_renames(url, pubs)
             match_and_save_paper_links(url_id, pubs)
         HTMLFetcher.mark_extracted(url_id)
         return url, len(pubs), None
