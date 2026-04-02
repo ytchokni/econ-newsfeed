@@ -11,20 +11,30 @@ os.environ.setdefault("SCRAPE_API_KEY", "test-key")
 from unittest.mock import MagicMock, patch
 
 
+def _make_mock_conn():
+    mock_conn = MagicMock()
+    mock_cursor = MagicMock()
+    mock_conn.__enter__ = lambda s: s
+    mock_conn.__exit__ = MagicMock(return_value=False)
+    mock_conn.cursor.return_value.__enter__ = lambda s: mock_cursor
+    mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+    return mock_conn, mock_cursor
+
+
 class TestJelToFieldMapping:
     """Tests for _JEL_TO_FIELD_SLUGS mapping."""
 
     def test_macro_maps_to_macroeconomics(self):
         from database.jel import _JEL_TO_FIELD_SLUGS
-        assert _JEL_TO_FIELD_SLUGS["E"] == ["macroeconomics"]
+        assert _JEL_TO_FIELD_SLUGS["E"] == "macroeconomics"
 
     def test_labour_maps_to_labour_economics(self):
         from database.jel import _JEL_TO_FIELD_SLUGS
-        assert _JEL_TO_FIELD_SLUGS["J"] == ["labour-economics"]
+        assert _JEL_TO_FIELD_SLUGS["J"] == "labour-economics"
 
     def test_finance_maps_to_finance(self):
         from database.jel import _JEL_TO_FIELD_SLUGS
-        assert _JEL_TO_FIELD_SLUGS["G"] == ["finance"]
+        assert _JEL_TO_FIELD_SLUGS["G"] == "finance"
 
     def test_all_11_mapped_codes_present(self):
         from database.jel import _JEL_TO_FIELD_SLUGS
@@ -40,39 +50,28 @@ class TestJelToFieldMapping:
 class TestSyncResearcherFieldsFromJel:
     """Tests for sync_researcher_fields_from_jel."""
 
-    def _make_mock_conn(self):
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_conn.__enter__ = lambda s: s
-        mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_conn.cursor.return_value.__enter__ = lambda s: mock_cursor
-        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-        return mock_conn, mock_cursor
-
     def test_deletes_existing_and_inserts_new_fields(self):
-        mock_conn, mock_cursor = self._make_mock_conn()
+        mock_conn, mock_cursor = _make_mock_conn()
+        # fetchone returns description, fetchall returns field IDs
+        mock_cursor.fetchone.return_value = ("studies labour markets",)
         mock_cursor.fetchall.return_value = [(1,), (2,)]
 
-        with (
-            patch("database.jel.get_connection", return_value=mock_conn),
-            patch("database.jel.fetch_one", return_value={"description": "studies labour markets"}),
-        ):
+        with patch("database.jel.get_connection", return_value=mock_conn):
             from database.jel import sync_researcher_fields_from_jel
             sync_researcher_fields_from_jel(researcher_id=1, jel_codes=["J", "E"])
 
         all_sql = [c[0][0] for c in mock_cursor.execute.call_args_list]
+        assert any("SELECT description FROM researchers" in sql for sql in all_sql)
         assert any("DELETE FROM researcher_fields" in sql for sql in all_sql)
         assert any("SELECT id FROM research_fields" in sql for sql in all_sql)
         assert any("INSERT IGNORE INTO researcher_fields" in sql for sql in all_sql)
         mock_conn.commit.assert_called_once()
 
     def test_empty_jel_codes_still_clears_fields(self):
-        mock_conn, mock_cursor = self._make_mock_conn()
+        mock_conn, mock_cursor = _make_mock_conn()
+        mock_cursor.fetchone.return_value = (None,)
 
-        with (
-            patch("database.jel.get_connection", return_value=mock_conn),
-            patch("database.jel.fetch_one", return_value={"description": None}),
-        ):
+        with patch("database.jel.get_connection", return_value=mock_conn):
             from database.jel import sync_researcher_fields_from_jel
             sync_researcher_fields_from_jel(researcher_id=1, jel_codes=[])
 
@@ -81,13 +80,11 @@ class TestSyncResearcherFieldsFromJel:
         assert not any("INSERT" in sql for sql in all_sql)
 
     def test_migration_keyword_matching(self):
-        mock_conn, mock_cursor = self._make_mock_conn()
+        mock_conn, mock_cursor = _make_mock_conn()
+        mock_cursor.fetchone.return_value = ("studies international migration patterns",)
         mock_cursor.fetchall.return_value = [(1,), (2,)]
 
-        with (
-            patch("database.jel.get_connection", return_value=mock_conn),
-            patch("database.jel.fetch_one", return_value={"description": "studies international migration patterns"}),
-        ):
+        with patch("database.jel.get_connection", return_value=mock_conn):
             from database.jel import sync_researcher_fields_from_jel
             sync_researcher_fields_from_jel(researcher_id=1, jel_codes=["J"])
 
@@ -98,13 +95,11 @@ class TestSyncResearcherFieldsFromJel:
         assert "labour-economics" in slugs_param
 
     def test_no_description_skips_migration_check(self):
-        mock_conn, mock_cursor = self._make_mock_conn()
+        mock_conn, mock_cursor = _make_mock_conn()
+        mock_cursor.fetchone.return_value = None
         mock_cursor.fetchall.return_value = [(1,)]
 
-        with (
-            patch("database.jel.get_connection", return_value=mock_conn),
-            patch("database.jel.fetch_one", return_value=None),
-        ):
+        with patch("database.jel.get_connection", return_value=mock_conn):
             from database.jel import sync_researcher_fields_from_jel
             sync_researcher_fields_from_jel(researcher_id=1, jel_codes=["E"])
 
@@ -118,12 +113,7 @@ class TestSaveResearcherJelCodesCallsSync:
     """Verify save_researcher_jel_codes triggers field sync."""
 
     def test_calls_sync_after_saving_codes(self):
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_conn.__enter__ = lambda s: s
-        mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_conn.cursor.return_value.__enter__ = lambda s: mock_cursor
-        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+        mock_conn, mock_cursor = _make_mock_conn()
 
         with (
             patch("database.jel.get_connection", return_value=mock_conn),
@@ -136,21 +126,19 @@ class TestSaveResearcherJelCodesCallsSync:
 
 
 class TestAddResearcherJelCodesCallsSync:
-    """Verify add_researcher_jel_codes triggers field sync."""
+    """Verify add_researcher_jel_codes syncs with the full code set."""
 
-    def test_calls_sync_after_adding_codes(self):
-        mock_conn = MagicMock()
-        mock_cursor = MagicMock()
-        mock_conn.__enter__ = lambda s: s
-        mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_conn.cursor.return_value.__enter__ = lambda s: mock_cursor
-        mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+    def test_calls_sync_with_all_codes(self):
+        mock_conn, mock_cursor = _make_mock_conn()
 
         with (
             patch("database.jel.get_connection", return_value=mock_conn),
+            patch("database.jel._get_all_jel_codes_for_researcher", return_value=["F", "G", "J"]) as mock_get_all,
             patch("database.jel.sync_researcher_fields_from_jel") as mock_sync,
         ):
             from database.jel import add_researcher_jel_codes
             add_researcher_jel_codes(researcher_id=1, jel_codes=["F", "G"])
 
-        mock_sync.assert_called_once_with(1, ["F", "G"])
+        mock_get_all.assert_called_once_with(1)
+        # Sync should receive the full set (F, G, J), not just the new codes (F, G)
+        mock_sync.assert_called_once_with(1, ["F", "G", "J"])

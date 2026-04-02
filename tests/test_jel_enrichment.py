@@ -102,6 +102,7 @@ class TestAddResearcherJelCodes:
 
         with (
             patch("database.jel.get_connection", return_value=mock_conn),
+            patch("database.jel._get_all_jel_codes_for_researcher", return_value=["J", "F"]),
             patch("database.jel.sync_researcher_fields_from_jel"),
         ):
             from database.jel import add_researcher_jel_codes
