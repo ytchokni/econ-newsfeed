@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
 from mysql.connector.pooling import MySQLConnectionPool
@@ -50,3 +51,27 @@ def fetch_one(query: str, params: tuple | list | None = None) -> dict | None:
         with conn.cursor(dictionary=True) as cursor:
             cursor.execute(query, params)
             return cursor.fetchone()
+
+
+@contextmanager
+def connection_scope():
+    """Hold a single pooled connection for multiple queries."""
+    conn = get_connection()
+    try:
+        yield conn
+    finally:
+        conn.close()
+
+
+def fetch_all_with_conn(conn, query: str, params: tuple | list | None = None) -> list[dict]:
+    """Execute a query using an existing connection and fetch all results as dicts."""
+    with conn.cursor(dictionary=True) as cursor:
+        cursor.execute(query, params)
+        return cursor.fetchall()
+
+
+def fetch_one_with_conn(conn, query: str, params: tuple | list | None = None) -> dict | None:
+    """Execute a query using an existing connection and fetch one result as a dict."""
+    with conn.cursor(dictionary=True) as cursor:
+        cursor.execute(query, params)
+        return cursor.fetchone()
