@@ -1,0 +1,11 @@
+# Caddy reverse proxy for econ-newsfeed API
+# Replace api.example.com with your actual domain before deploying.
+# Caddy auto-provisions Let's Encrypt SSL certificates.
+#
+# Install: sudo apt install caddy
+# Start:   sudo systemctl enable --now caddy
+# Logs:    journalctl -u caddy
+
+api.example.com {
+	reverse_proxy localhost:8000
+}
