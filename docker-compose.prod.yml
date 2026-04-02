@@ -1,0 +1,24 @@
+# Production override — use with: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+#
+# What this changes from the base docker-compose.yml:
+# - Removes the frontend service (Vercel handles it)
+# - Sets restart: always (survive reboots)
+# - Passes FRONTEND_URL and OPENALEX env vars through
+# - Sets WEB_CONCURRENCY=2 for Lightsail's 2GB RAM
+
+services:
+  db:
+    restart: always
+
+  api:
+    restart: always
+    environment:
+      FRONTEND_URL: ${FRONTEND_URL:?FRONTEND_URL is required}
+      OPENALEX_API_KEY: ${OPENALEX_API_KEY:-}
+      OPENALEX_MAILTO: ${OPENALEX_MAILTO:-}
+      OPENALEX_DAILY_BUDGET: ${OPENALEX_DAILY_BUDGET:-1000}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+
+  frontend:
+    profiles:
+      - disabled
