@@ -196,3 +196,32 @@ class TestIsBadResearcherName:
         """Single-letter first names like 'J.' are fine — it's last names we reject."""
         from database.researchers import is_bad_researcher_name
         assert is_bad_researcher_name("J.", "Smith") is False
+
+
+class TestGetResearcherIdNameGuard:
+    """get_researcher_id returns None for bad names instead of inserting."""
+
+    @patch("database.researchers._disambiguate_researcher", return_value=None)
+    @patch("database.researchers.fetch_all", return_value=[])
+    @patch("database.researchers.fetch_one", return_value=None)
+    @patch("database.researchers.execute_query")
+    def test_rejects_empty_first_name(self, mock_exec, mock_one, mock_all, mock_disamb):
+        result = get_researcher_id("", "Anastakis")
+        assert result is None
+        mock_exec.assert_not_called()
+
+    @patch("database.researchers._disambiguate_researcher", return_value=None)
+    @patch("database.researchers.fetch_all", return_value=[])
+    @patch("database.researchers.fetch_one", return_value=None)
+    @patch("database.researchers.execute_query")
+    def test_rejects_initial_last_name(self, mock_exec, mock_one, mock_all, mock_disamb):
+        result = get_researcher_id("Eric", "A.")
+        assert result is None
+        mock_exec.assert_not_called()
+
+    @patch("database.researchers.fetch_all", return_value=[])
+    @patch("database.researchers.fetch_one", return_value=None)
+    @patch("database.researchers.execute_query", return_value=99)
+    def test_allows_valid_name(self, mock_exec, mock_one, mock_all):
+        result = get_researcher_id("John", "Smith")
+        assert result == 99

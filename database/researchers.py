@@ -120,6 +120,13 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
     3. LLM disambiguation for same-last-name candidates
     4. Insert new researcher
     """
+    # Name validation guard — reject bad names before any DB interaction
+    if is_bad_researcher_name(first_name, last_name):
+        logging.warning(
+            "Rejected bad researcher name: first_name=%r last_name=%r", first_name, last_name
+        )
+        return None
+
     def _fetch_one(query, params):
         if conn is not None:
             c = conn.cursor(dictionary=True)
