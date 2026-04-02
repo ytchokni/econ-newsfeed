@@ -22,14 +22,14 @@ def main():
         SELECT r.id, r.first_name, r.last_name,
                ru.url,
                hc.id AS html_id,
-               hc.fetched_at,
+               hc.timestamp AS fetched_at,
                hc.extracted_at,
                hc.content_hash,
                hc.extracted_hash
         FROM researchers r
         JOIN researcher_urls ru ON ru.researcher_id = r.id
         LEFT JOIN authorship a ON a.researcher_id = r.id
-        LEFT JOIN html_content hc ON hc.url = ru.url
+        LEFT JOIN html_content hc ON hc.url_id = ru.id
         WHERE a.researcher_id IS NULL
         ORDER BY r.last_name, r.first_name
     """)
