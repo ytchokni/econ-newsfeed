@@ -601,3 +601,45 @@ class TestParseWorkCoauthorFiltering:
         }
         result = _parse_work(work)
         assert len(result["coauthors"]) == 1
+
+
+class TestParseWorkYearExtraction:
+    """_parse_work extracts publication_year from OpenAlex work objects."""
+
+    def test_extracts_year_as_string(self):
+        from openalex import _parse_work
+        work = {
+            "doi": "https://doi.org/10.1234/test",
+            "id": "https://openalex.org/W123",
+            "authorships": [],
+            "abstract_inverted_index": None,
+            "topics": [],
+            "publication_year": 2024,
+        }
+        result = _parse_work(work)
+        assert result["year"] == "2024"
+
+    def test_missing_year_returns_none(self):
+        from openalex import _parse_work
+        work = {
+            "doi": "https://doi.org/10.1234/test",
+            "id": "https://openalex.org/W123",
+            "authorships": [],
+            "abstract_inverted_index": None,
+            "topics": [],
+        }
+        result = _parse_work(work)
+        assert result["year"] is None
+
+    def test_null_year_returns_none(self):
+        from openalex import _parse_work
+        work = {
+            "doi": "https://doi.org/10.1234/test",
+            "id": "https://openalex.org/W123",
+            "authorships": [],
+            "abstract_inverted_index": None,
+            "topics": [],
+            "publication_year": None,
+        }
+        result = _parse_work(work)
+        assert result["year"] is None
