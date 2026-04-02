@@ -30,7 +30,7 @@ def find_bad_name_researchers() -> list[dict]:
             OR r.first_name IS NULL
             OR TRIM(r.last_name) = ''
             OR r.last_name IS NULL
-            OR r.last_name REGEXP '^[A-Za-z]\\.?$'
+            OR r.last_name REGEXP '^[A-Za-z][.]?$'
         GROUP BY r.id
         ORDER BY r.last_name, r.first_name
     """)
