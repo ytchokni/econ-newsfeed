@@ -18,7 +18,7 @@ def parse_rdf_file(path: str) -> dict | None:
     fields: dict[str, str] = {}
     current_key: str | None = None
 
-    with open(path, encoding="latin-1") as f:
+    with open(path, encoding="utf-8-sig", errors="replace") as f:
         for line in f:
             line = line.rstrip("\n\r")
             # Continuation line for Workplace-Name (starts with "/ ")
