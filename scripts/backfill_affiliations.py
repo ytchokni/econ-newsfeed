@@ -53,14 +53,16 @@ def main():
     dry_run = "--dry-run" in sys.argv
 
     rows = Database.fetch_all("""
-        SELECT id, first_name, last_name, openalex_author_id
-        FROM researchers
-        WHERE openalex_author_id IS NOT NULL
-          AND (affiliation IS NULL OR TRIM(affiliation) = '')
-        ORDER BY id
+        SELECT r.id, r.first_name, r.last_name, r.openalex_author_id
+        FROM researchers r
+        LEFT JOIN researcher_urls ru ON ru.researcher_id = r.id
+        WHERE r.openalex_author_id IS NOT NULL
+          AND (r.affiliation IS NULL OR TRIM(r.affiliation) = '')
+          AND ru.id IS NULL
+        ORDER BY r.id
     """)
 
-    logger.info("Found %d researchers with openalex_author_id but no affiliation", len(rows))
+    logger.info("Found %d coauthor-only researchers with openalex_author_id but no affiliation", len(rows))
 
     updated = 0
     for i, r in enumerate(rows):
