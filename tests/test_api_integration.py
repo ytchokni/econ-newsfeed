@@ -1,9 +1,15 @@
 """Integration tests — full request cycle across all endpoints and OpenAPI verification."""
+from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import patch, MagicMock, call
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+@contextmanager
+def _noop_connection_scope():
+    yield None
 
 
 @pytest.fixture
@@ -13,6 +19,7 @@ def client():
         patch("database.Database.create_tables"),
         patch("scheduler.start_scheduler"),
         patch("scheduler.shutdown_scheduler"),
+        patch("api.connection_scope", _noop_connection_scope),
     ):
         from api import app
 
@@ -105,10 +112,12 @@ class TestOpenAPIResponseModels:
 #   p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url, p.abstract, p.draft_url_status
 SAMPLE_PUB = {
     "event_id": 100, "event_type": "new_paper", "old_status": None, "new_status": "working_paper",
+    "old_title": None, "new_title": None,
     "created_at": datetime(2026, 3, 15, 14, 30),
     "paper_id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
     "source_url": "https://example.com/p", "discovered_at": datetime(2026, 3, 15, 14, 30),
     "status": "working_paper", "draft_url": None, "abstract": None, "draft_url_status": None,
+    "doi": None, "total_count": 1,
 }
 SAMPLE_AUTHORS = [{"publication_id": 1, "researcher_id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]
 SAMPLE_AUTHORS_SINGLE = [{"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]
@@ -118,7 +127,7 @@ SAMPLE_PUB_DETAIL = {
     "source_url": "https://example.com/p", "discovered_at": datetime(2026, 3, 15, 14, 30),
     "status": "working_paper", "draft_url": None, "abstract": None, "draft_url_status": None,
 }
-SAMPLE_RESEARCHER = {"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "FU Berlin", "description": None}
+SAMPLE_RESEARCHER = {"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "FU Berlin", "description": None, "total_count": 1}
 SAMPLE_URLS_BATCH = [{"researcher_id": 10, "id": 1, "page_type": "PUB", "url": "https://example.com/pubs"}]
 SAMPLE_URLS_SINGLE = [{"id": 1, "page_type": "PUB", "url": "https://example.com/pubs"}]
 SAMPLE_FIELDS: list = []
@@ -130,10 +139,7 @@ class TestFullCycle:
 
     def test_full_api_cycle(self, client):
         # 1. List publications
-        with (
-            patch("api.Database.fetch_one", return_value={"total": 1}),
-            patch("api.Database.fetch_all") as mock_all,
-        ):
+        with patch("api.Database.fetch_all") as mock_all:
             mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS, [], []]  # pubs, authors, coauthors, links
             resp = client.get("/api/publications")
         assert resp.status_code == 200
@@ -152,7 +158,6 @@ class TestFullCycle:
         # 3. List researchers
         with (
             patch("api.Database.fetch_all") as mock_all,
-            patch("api.Database.fetch_one", return_value={"total": 5}),
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
             mock_all.side_effect = [[SAMPLE_RESEARCHER], SAMPLE_URLS_BATCH, [{"researcher_id": 10, "cnt": 5}], SAMPLE_FIELDS]
@@ -224,15 +229,17 @@ class TestLifespan:
 # Sample data for smoke tests (publication batch format)
 _SMOKE_PUB = {
     "event_id": 100, "event_type": "new_paper", "old_status": None, "new_status": "working_paper",
+    "old_title": None, "new_title": None,
     "created_at": datetime(2026, 3, 15, 14, 30),
     "paper_id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
     "source_url": "https://example.com/p", "discovered_at": datetime(2026, 3, 15, 14, 30),
     "status": "working_paper", "draft_url": None, "abstract": None, "draft_url_status": None,
+    "doi": None, "total_count": 1,
 }
 _SMOKE_BATCH_AUTHORS = [{"publication_id": 1, "researcher_id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]
 
 # Sample data for researchers (batch format)
-_SMOKE_RESEARCHER = {"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "FU Berlin", "description": "Economist."}
+_SMOKE_RESEARCHER = {"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "FU Berlin", "description": "Economist.", "total_count": 1}
 _SMOKE_BATCH_URLS = [{"researcher_id": 10, "id": 1, "page_type": "homepage", "url": "https://example.com"}]
 _SMOKE_BATCH_PUB_COUNTS = [{"researcher_id": 10, "cnt": 5}]
 _SMOKE_BATCH_FIELDS = [{"researcher_id": 10, "id": 1, "name": "Labour Economics", "slug": "labour-economics"}]
@@ -251,6 +258,7 @@ class TestPublicationsSmoke:
             patch("database.Database.create_tables"),
             patch("scheduler.start_scheduler"),
             patch("scheduler.shutdown_scheduler"),
+            patch("api.connection_scope", _noop_connection_scope),
         ):
             from api import app
 
@@ -260,10 +268,7 @@ class TestPublicationsSmoke:
     @pytest.mark.timeout(5)
     def test_publications_endpoint_responds_with_data(self, client):
         """GET /api/publications must return 200 with the expected shape — not hang."""
-        with (
-            patch("api.Database.fetch_one", return_value={"total": 1}),
-            patch("api.Database.fetch_all") as mock_all,
-        ):
+        with patch("api.Database.fetch_all") as mock_all:
             mock_all.side_effect = [[_SMOKE_PUB], _SMOKE_BATCH_AUTHORS, [], []]  # pubs, authors, coauthors, links
             resp = client.get("/api/publications")
 
@@ -285,7 +290,6 @@ class TestPublicationsSmoke:
     def test_researchers_endpoint_responds_with_data(self, client):
         """GET /api/researchers must return 200 with the expected shape — not hang."""
         with (
-            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):

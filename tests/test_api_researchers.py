@@ -1,9 +1,15 @@
 """Tests for researcher endpoints."""
+from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+@contextmanager
+def _noop_connection_scope():
+    yield None
 
 
 @pytest.fixture
@@ -13,6 +19,7 @@ def client():
         patch("database.Database.create_tables"),
         patch("scheduler.start_scheduler"),
         patch("scheduler.shutdown_scheduler"),
+        patch("api.connection_scope", _noop_connection_scope),
     ):
         from api import app
 
@@ -22,9 +29,9 @@ def client():
 
 # Sample DB return shapes
 SAMPLE_RESEARCHERS = [
-    # {id, first_name, last_name, position, affiliation, description}
-    {"id": 1, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "Freie Universität Berlin", "description": "A leading researcher in trade economics."},
-    {"id": 2, "first_name": "Jane", "last_name": "Doe", "position": "Assistant Professor", "affiliation": "MIT", "description": None},
+    # {id, first_name, last_name, position, affiliation, description, total_count}
+    {"id": 1, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "Freie Universität Berlin", "description": "A leading researcher in trade economics.", "total_count": 2},
+    {"id": 2, "first_name": "Jane", "last_name": "Doe", "position": "Assistant Professor", "affiliation": "MIT", "description": None, "total_count": 2},
 ]
 
 SAMPLE_URLS_R1 = [
@@ -88,13 +95,9 @@ class TestListResearchers:
 
     def test_returns_all_researchers(self, client):
         with (
-            patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
-            mock_one.side_effect = [
-                {"total": 2},            # total count
-            ]
             mock_fetch.side_effect = [
                 SAMPLE_RESEARCHERS,      # paginated researchers
                 BATCH_URLS_ALL,          # batch URLs for all researchers
@@ -114,15 +117,11 @@ class TestListResearchers:
     def test_researcher_item_shape(self, client):
         """Each researcher must have id, first_name, last_name, position, affiliation, bio, urls, website_url, publication_count, fields."""
         with (
-            patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
-            mock_one.side_effect = [
-                {"total": 1},        # total count
-            ]
             mock_fetch.side_effect = [
-                [SAMPLE_RESEARCHERS[0]],
+                [{**SAMPLE_RESEARCHERS[0], "total_count": 1}],
                 BATCH_URLS_R1,
                 BATCH_PUB_COUNTS_R1,
                 BATCH_FIELDS_R1,
@@ -148,13 +147,9 @@ class TestListResearchers:
     def test_default_pagination(self, client):
         """Default page=1, per_page=20; response includes pagination metadata."""
         with (
-            patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
-            mock_one.side_effect = [
-                {"total": 2},            # total count
-            ]
             mock_fetch.side_effect = [
                 SAMPLE_RESEARCHERS,      # paginated researchers
                 BATCH_URLS_ALL,          # batch URLs
@@ -173,15 +168,11 @@ class TestListResearchers:
     def test_custom_pagination(self, client):
         """Custom page and per_page values."""
         with (
-            patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
-            mock_one.side_effect = [
-                {"total": 2},            # total count
-            ]
             mock_fetch.side_effect = [
-                [SAMPLE_RESEARCHERS[1]], # paginated researchers (page 2)
+                [{**SAMPLE_RESEARCHERS[1], "total_count": 2}],  # paginated researchers (page 2)
                 BATCH_URLS_R2,           # batch URLs
                 BATCH_PUB_COUNTS_R2,     # batch pub counts
                 BATCH_FIELDS_R2,         # batch fields
@@ -206,15 +197,11 @@ class TestListResearchers:
     def test_institution_filter(self, client):
         """?institution= performs partial match on affiliation."""
         with (
-            patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
-            mock_one.side_effect = [
-                {"total": 1},            # total count
-            ]
             mock_fetch.side_effect = [
-                [SAMPLE_RESEARCHERS[1]], # paginated researchers
+                [{**SAMPLE_RESEARCHERS[1], "total_count": 1}],  # paginated researchers
                 BATCH_URLS_R2,           # batch URLs
                 BATCH_PUB_COUNTS_R2,     # batch pub counts
                 BATCH_FIELDS_R2,         # batch fields
@@ -227,15 +214,11 @@ class TestListResearchers:
     def test_position_filter(self, client):
         """?position= performs partial match on position."""
         with (
-            patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
-            mock_one.side_effect = [
-                {"total": 1},                # total count
-            ]
             mock_fetch.side_effect = [
-                [SAMPLE_RESEARCHERS[0]],     # paginated researchers
+                [{**SAMPLE_RESEARCHERS[0], "total_count": 1}],  # paginated researchers
                 BATCH_URLS_R1,               # batch URLs
                 BATCH_PUB_COUNTS_R1,         # batch pub counts
                 BATCH_FIELDS_R1,             # batch fields
@@ -248,15 +231,11 @@ class TestListResearchers:
     def test_preset_top20_accepted(self, client):
         """?preset=top20 is accepted and returns 200."""
         with (
-            patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
-            mock_one.side_effect = [
-                {"total": 1},                # total count
-            ]
             mock_fetch.side_effect = [
-                [SAMPLE_RESEARCHERS[1]],     # paginated researchers
+                [{**SAMPLE_RESEARCHERS[1], "total_count": 1}],  # paginated researchers
                 BATCH_URLS_R2,               # batch URLs
                 BATCH_PUB_COUNTS_R2,         # batch pub counts
                 BATCH_FIELDS_R2,             # batch fields
@@ -268,13 +247,9 @@ class TestListResearchers:
     def test_field_filter_stubbed(self, client):
         """?field= is accepted without error (stubbed until taxonomy table lands)."""
         with (
-            patch("api.Database.fetch_one") as mock_one,
             patch("api.Database.fetch_all") as mock_fetch,
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
-            mock_one.side_effect = [
-                {"total": 2},            # total count
-            ]
             mock_fetch.side_effect = [
                 SAMPLE_RESEARCHERS,      # paginated researchers
                 BATCH_URLS_ALL,          # batch URLs
@@ -337,14 +312,12 @@ class TestResearcherValidationFilter:
 
     def test_researchers_endpoint_filters_unvalidated(self, client):
         """The base query must include a validation filter condition."""
-        with patch("api.Database.fetch_one") as mock_count, \
-             patch("api.Database.fetch_all") as mock_data, \
+        with patch("api.Database.fetch_all") as mock_data, \
              patch("api.Database.get_jel_codes_for_researchers", return_value={}):
-            mock_count.return_value = {"total": 0}
             mock_data.return_value = []
             resp = client.get("/api/researchers")
             assert resp.status_code == 200
             # Verify the SQL includes the validation filter
-            count_sql = mock_count.call_args[0][0]
-            assert "openalex_author_id" in count_sql or "researcher_urls" in count_sql, \
+            fetch_sql = mock_data.call_args_list[0][0][0]
+            assert "openalex_author_id" in fetch_sql or "researcher_urls" in fetch_sql, \
                 "Researchers query must filter by validation status"

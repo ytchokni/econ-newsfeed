@@ -17,10 +17,17 @@ os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
 os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
 os.environ.setdefault("SCRAPE_INTERVAL_HOURS", "24")
 
+from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+@contextmanager
+def _noop_connection_scope():
+    """No-op replacement for connection_scope in tests."""
+    yield None
 
 
 @pytest.fixture
@@ -30,6 +37,7 @@ def client():
         patch("database.Database.create_tables"),
         patch("scheduler.start_scheduler"),
         patch("scheduler.shutdown_scheduler"),
+        patch("api.connection_scope", _noop_connection_scope),
     ):
         from api import app
         with TestClient(app) as c:

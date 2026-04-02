@@ -3,10 +3,16 @@
 Covers: SQL injection in query params, SSRF bypass attempts,
 oversized inputs, and verifying error responses contain no stack traces.
 """
+from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+@contextmanager
+def _noop_connection_scope():
+    yield None
 
 
 @pytest.fixture
@@ -19,6 +25,7 @@ def client():
         patch("database.Database.fetch_one", return_value=None),
         patch("scheduler.start_scheduler"),
         patch("scheduler.shutdown_scheduler"),
+        patch("api.connection_scope", _noop_connection_scope),
     ):
         from api import app
 
@@ -44,8 +51,7 @@ class TestSQLInjectionQueryParams:
     def test_year_sql_injection_returns_safe_response(self, client):
         """year= accepts only a 4-char string; SQL payload should not crash the API."""
         for payload in self.SQL_PAYLOADS:
-            with patch("api.Database.fetch_one", return_value={"total": 0}), \
-                 patch("api.Database.fetch_all", return_value=[]):
+            with patch("api.Database.fetch_all", return_value=[]):
                 resp = client.get(f"/api/publications?year={payload}")
             # Must not be a 500 (unhandled exception)
             assert resp.status_code in (200, 400, 422), (
@@ -153,8 +159,7 @@ class TestOversizedInputs:
     def test_oversized_year_param(self, client):
         """A very long year string should not crash the API."""
         payload = "A" * 10_000
-        with patch("api.Database.fetch_one", return_value={"total": 0}), \
-             patch("api.Database.fetch_all", return_value=[]):
+        with patch("api.Database.fetch_all", return_value=[]):
             resp = client.get(f"/api/publications?year={payload}")
         assert resp.status_code != 500
 
@@ -243,6 +248,7 @@ class TestNoStackTraceLeakage:
             patch("database.Database.fetch_one", return_value=None),
             patch("scheduler.start_scheduler"),
             patch("scheduler.shutdown_scheduler"),
+            patch("api.connection_scope", _noop_connection_scope),
         ):
             from api import app
 
