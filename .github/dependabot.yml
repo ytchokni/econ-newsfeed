@@ -8,6 +8,14 @@ updates:
     directory: /app
     schedule:
       interval: weekly
+    ignore:
+      # Tailwind v3→v4 is a breaking migration (new config format, new CSS
+      # syntax). Block major bumps for the CSS toolchain so Dependabot can't
+      # silently break styling again.
+      - dependency-name: "tailwindcss"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "postcss"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
