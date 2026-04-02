@@ -6,8 +6,11 @@
 !api.py
 !database/
 !db_config.py
+!doi_resolver.py
 !html_fetcher.py
+!link_extractor.py
 !main.py
+!openalex.py
 !publication.py
 !researcher.py
 !scheduler.py
