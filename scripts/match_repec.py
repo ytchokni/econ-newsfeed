@@ -5,6 +5,7 @@ import argparse
 import csv
 import os
 import sys
+from collections import defaultdict
 from urllib.parse import urlparse
 
 
@@ -61,3 +62,34 @@ def parse_rdf_file(path: str) -> dict | None:
     fields.setdefault("handle", "")
 
     return fields
+
+
+def build_repec_index(repec_dir: str) -> tuple[dict, dict]:
+    """Walk repec_dir, parse all .rdf files, return two indexes:
+
+    by_name: dict[(first_lower, last_lower)] -> list[record]
+    by_domain: dict[domain_str] -> list[record]
+    """
+    by_name: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    by_domain: dict[str, list[dict]] = defaultdict(list)
+    parsed = 0
+    skipped = 0
+
+    for dirpath, _, filenames in os.walk(repec_dir):
+        for fname in filenames:
+            if not fname.endswith(".rdf"):
+                continue
+            record = parse_rdf_file(os.path.join(dirpath, fname))
+            if record is None:
+                skipped += 1
+                continue
+            parsed += 1
+            key = (record["name_first"].lower().strip(), record["name_last"].lower().strip())
+            by_name[key].append(record)
+
+            domain = urlparse(record["homepage"]).netloc.lower()
+            if domain:
+                by_domain[domain].append(record)
+
+    print(f"RePEC: parsed {parsed} records with homepage, skipped {skipped} without")
+    return dict(by_name), dict(by_domain)
