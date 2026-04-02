@@ -8,7 +8,11 @@ Usage:
 import argparse
 import csv
 import logging
+import os
 import sys
+
+# Ensure project root is on the path (script lives in scripts/)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from encoding_guard import fix_encoding
 
