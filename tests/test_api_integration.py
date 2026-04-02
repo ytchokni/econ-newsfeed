@@ -48,7 +48,7 @@ class TestMetricsEndpoint:
         with patch("api.Database.fetch_one", return_value={
             "publications": 42, "researchers": 10, "scrapes": 5,
         }):
-            response = client.get("/api/metrics")
+            response = client.get("/api/metrics", headers={"X-API-Key": "test-secret-key-for-ci-runs"})
         assert response.status_code == 200
         body = response.json()
         assert body["publications"] == 42
@@ -182,7 +182,7 @@ class TestFullCycle:
             patch("api.Database.fetch_one", return_value=SAMPLE_SCRAPE),
             patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
-            resp = client.get("/api/scrape/status")
+            resp = client.get("/api/scrape/status", headers={"X-API-Key": "test-secret-key-for-ci-runs"})
         assert resp.status_code == 200
         assert resp.json()["last_scrape"]["status"] == "completed"
 

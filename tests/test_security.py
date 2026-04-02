@@ -565,3 +565,33 @@ class TestCurlOptionInjection:
 
         cmd = mock_run.call_args[0][0]
         assert "-L" not in cmd, f"curl should not follow redirects, found -L in: {cmd}"
+
+
+# ---------------------------------------------------------------------------
+# Operational endpoint authentication
+# ---------------------------------------------------------------------------
+
+class TestOperationalEndpointAuth:
+    """Operational endpoints must require API key authentication."""
+
+    def test_metrics_requires_api_key(self, client):
+        """GET /api/metrics without API key must return 401."""
+        resp = client.get("/api/metrics")
+        assert resp.status_code == 401
+
+    def test_metrics_with_valid_key_succeeds(self, client):
+        """GET /api/metrics with valid API key must return 200."""
+        with patch("api.Database.fetch_one", return_value={"publications": 0, "researchers": 0, "scrapes": 0}):
+            resp = client.get("/api/metrics", headers={"X-API-Key": "test-secret-key-for-ci-runs"})
+        assert resp.status_code == 200
+
+    def test_scrape_status_requires_api_key(self, client):
+        """GET /api/scrape/status without API key must return 401."""
+        resp = client.get("/api/scrape/status")
+        assert resp.status_code == 401
+
+    def test_scrape_status_with_valid_key_succeeds(self, client):
+        """GET /api/scrape/status with valid API key must return 200."""
+        with patch("api.Database.fetch_one", return_value=None):
+            resp = client.get("/api/scrape/status", headers={"X-API-Key": "test-secret-key-for-ci-runs"})
+        assert resp.status_code == 200

@@ -247,7 +247,7 @@ class TestScrapeStatusShape:
             patch("api.Database.fetch_one", return_value=SAMPLE_SCRAPE),
             patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
-            body = client.get("/api/scrape/status").json()
+            body = client.get("/api/scrape/status", headers={"X-API-Key": "test-secret-key-for-ci-runs"}).json()
 
         assert set(body.keys()) >= SCRAPE_STATUS_KEYS, (
             f"Missing keys: {SCRAPE_STATUS_KEYS - set(body.keys())}"
@@ -258,7 +258,7 @@ class TestScrapeStatusShape:
             patch("api.Database.fetch_one", return_value=SAMPLE_SCRAPE),
             patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
-            body = client.get("/api/scrape/status").json()
+            body = client.get("/api/scrape/status", headers={"X-API-Key": "test-secret-key-for-ci-runs"}).json()
 
         last = body["last_scrape"]
         assert last is not None

@@ -102,7 +102,7 @@ class TestScrapeStatus:
             patch("api.Database.fetch_one", return_value=last_scrape_row),
             patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
-            response = client.get("/api/scrape/status")
+            response = client.get("/api/scrape/status", headers={"X-API-Key": "test-secret-key-for-ci-runs"})
 
         assert response.status_code == 200
         body = response.json()
@@ -119,7 +119,7 @@ class TestScrapeStatus:
             patch("api.Database.fetch_one", return_value=None),
             patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
-            response = client.get("/api/scrape/status")
+            response = client.get("/api/scrape/status", headers={"X-API-Key": "test-secret-key-for-ci-runs"})
 
         assert response.status_code == 200
         body = response.json()
