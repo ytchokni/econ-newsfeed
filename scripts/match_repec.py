@@ -93,3 +93,51 @@ def build_repec_index(repec_dir: str) -> tuple[dict, dict]:
 
     print(f"RePEC: parsed {parsed} records with homepage, skipped {skipped} without")
     return dict(by_name), dict(by_domain)
+
+
+SHARED_HOSTING_DOMAINS = {
+    "sites.google.com", "github.io", "wordpress.com", "weebly.com",
+    "wixsite.com", "blogspot.com", "squarespace.com", "netlify.app",
+    "vercel.app", "github.com",
+}
+
+
+def _normalize_url(url: str) -> str:
+    """Normalize URL for comparison: lowercase, strip trailing slash."""
+    return url.lower().rstrip("/")
+
+
+def _make_match_row(researcher: dict, record: dict, match_type: str, confidence: str) -> dict:
+    return {
+        "researcher_id": researcher["id"],
+        "first_name": researcher["first_name"],
+        "last_name": researcher["last_name"],
+        "db_affiliation": researcher.get("affiliation") or "",
+        "repec_name": record["name_full"],
+        "repec_workplace": record["workplace"],
+        "repec_homepage": record["homepage"],
+        "repec_handle": record["handle"],
+        "match_type": match_type,
+        "confidence": confidence,
+    }
+
+
+def match_by_url(researcher: dict, by_domain: dict) -> list[dict]:
+    """Match a researcher against RePEC records by URL domain."""
+    matches = []
+    last_lower = researcher["last_name"].lower()
+    for url in researcher.get("urls", []):
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        if not domain or domain not in by_domain:
+            continue
+        candidates = by_domain[domain]
+        is_shared = domain in SHARED_HOSTING_DOMAINS
+        for record in candidates:
+            if record["name_last"].lower() != last_lower:
+                continue
+            if is_shared:
+                if _normalize_url(url) != _normalize_url(record["homepage"]):
+                    continue
+            matches.append(_make_match_row(researcher, record, "url_match", "unique"))
+    return matches

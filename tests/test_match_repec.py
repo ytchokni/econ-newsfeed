@@ -71,3 +71,50 @@ Handle: REPEC:per:1970-01-01:arild_aakvik2
     # Domain index: both homepage domains present
     assert "sites.google.com" in by_domain
     assert "oslo.no" in by_domain
+
+
+from scripts.match_repec import match_by_url, SHARED_HOSTING_DOMAINS
+
+def test_match_by_url_custom_domain():
+    """Non-shared domain: domain-only match + last name confirmation."""
+    repec_records = [
+        {"name_first": "Jaap", "name_last": "Abbring", "name_full": "Jaap Abbring",
+         "workplace": "Tilburg", "homepage": "http://jaap.abbring.org/",
+         "handle": "REPEC:per:abc"}
+    ]
+    by_domain = {"jaap.abbring.org": repec_records}
+    researcher = {"id": 1, "first_name": "Jaap", "last_name": "Abbring",
+                  "affiliation": None, "urls": ["https://jaap.abbring.org/research"]}
+    matches = match_by_url(researcher, by_domain)
+    assert len(matches) == 1
+    assert matches[0]["match_type"] == "url_match"
+    assert matches[0]["confidence"] == "unique"
+
+def test_match_by_url_shared_domain_full_url():
+    """Shared domain (sites.google.com): must compare full URL, not just domain."""
+    rec_a = {"name_first": "Arild", "name_last": "Aakvik", "name_full": "Arild Aakvik",
+             "workplace": "Bergen", "homepage": "https://sites.google.com/site/aakvikarilduib/",
+             "handle": "REPEC:per:aakvik"}
+    rec_b = {"name_first": "Other", "name_last": "Person", "name_full": "Other Person",
+             "workplace": "MIT", "homepage": "https://sites.google.com/site/otherperson/",
+             "handle": "REPEC:per:other"}
+    by_domain = {"sites.google.com": [rec_a, rec_b]}
+    researcher = {"id": 2, "first_name": "Arild", "last_name": "Aakvik",
+                  "affiliation": None,
+                  "urls": ["https://sites.google.com/site/aakvikarilduib/"]}
+    matches = match_by_url(researcher, by_domain)
+    assert len(matches) == 1
+    assert matches[0]["repec_handle"] == "REPEC:per:aakvik"
+
+def test_match_by_url_last_name_mismatch():
+    """Domain matches but last name doesn't — no match."""
+    repec_records = [
+        {"name_first": "Jane", "name_last": "Doe", "name_full": "Jane Doe",
+         "workplace": "MIT", "homepage": "http://example.com/",
+         "handle": "REPEC:per:doe"}
+    ]
+    by_domain = {"example.com": repec_records}
+    researcher = {"id": 3, "first_name": "John", "last_name": "Smith",
+                  "affiliation": None, "urls": ["http://example.com/page"]}
+    matches = match_by_url(researcher, by_domain)
+    assert len(matches) == 0
