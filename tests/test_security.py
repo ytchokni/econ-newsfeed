@@ -6,8 +6,11 @@ oversized inputs, and verifying error responses contain no stack traces.
 from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
 
+import os
 import pytest
 from fastapi.testclient import TestClient
+
+AUTH_HEADERS = {"X-API-Key": os.environ["SCRAPE_API_KEY"]}
 
 
 @contextmanager
@@ -582,7 +585,7 @@ class TestOperationalEndpointAuth:
     def test_metrics_with_valid_key_succeeds(self, client):
         """GET /api/metrics with valid API key must return 200."""
         with patch("api.Database.fetch_one", return_value={"publications": 0, "researchers": 0, "scrapes": 0}):
-            resp = client.get("/api/metrics", headers={"X-API-Key": "test-secret-key-for-ci-runs"})
+            resp = client.get("/api/metrics", headers=AUTH_HEADERS)
         assert resp.status_code == 200
 
     def test_scrape_status_requires_api_key(self, client):
@@ -593,5 +596,5 @@ class TestOperationalEndpointAuth:
     def test_scrape_status_with_valid_key_succeeds(self, client):
         """GET /api/scrape/status with valid API key must return 200."""
         with patch("api.Database.fetch_one", return_value=None):
-            resp = client.get("/api/scrape/status", headers={"X-API-Key": "test-secret-key-for-ci-runs"})
+            resp = client.get("/api/scrape/status", headers=AUTH_HEADERS)
         assert resp.status_code == 200

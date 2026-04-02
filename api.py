@@ -170,7 +170,7 @@ _SCRAPE_API_KEY = os.environ.get("SCRAPE_API_KEY", "")
 
 
 def _require_api_key(request: Request) -> None:
-    """Validate X-API-Key header. Raises 401 if invalid."""
+    """Constant-time API key check to prevent timing oracle attacks."""
     api_key = request.headers.get("X-API-Key", "")
     if not api_key or not hmac.compare_digest(api_key, _SCRAPE_API_KEY):
         raise HTTPException(status_code=401, detail="Missing or invalid API key")

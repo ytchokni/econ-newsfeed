@@ -18,26 +18,33 @@ from database import Database
 from bs4 import BeautifulSoup
 import urllib3.util.connection as _urllib3_cn
 
+# Serialises access to the urllib3 create_connection monkey-patch so
+# concurrent threads (e.g. parse-fast via ThreadPoolExecutor) don't race.
+_pin_dns_lock = threading.Lock()
+
+
 @contextmanager
 def _pin_dns(hostname: str, resolved_ip: str):
     """Pin DNS resolution for a hostname to a specific IP.
 
     Prevents DNS rebinding between SSRF validation and the actual HTTP request
     by monkey-patching urllib3's connection creation to use the pre-resolved IP.
+    Thread-safe: acquires _pin_dns_lock for the duration of the patch.
     """
-    _original_create_connection = _urllib3_cn.create_connection
+    with _pin_dns_lock:
+        _original_create_connection = _urllib3_cn.create_connection
 
-    def _pinned_create_connection(address, *args, **kwargs):
-        host, port = address
-        if host == hostname:
-            return _original_create_connection((resolved_ip, port), *args, **kwargs)
-        return _original_create_connection(address, *args, **kwargs)
+        def _pinned_create_connection(address, *args, **kwargs):
+            host, port = address
+            if host == hostname:
+                return _original_create_connection((resolved_ip, port), *args, **kwargs)
+            return _original_create_connection(address, *args, **kwargs)
 
-    _urllib3_cn.create_connection = _pinned_create_connection
-    try:
-        yield
-    finally:
-        _urllib3_cn.create_connection = _original_create_connection
+        _urllib3_cn.create_connection = _pinned_create_connection
+        try:
+            yield
+        finally:
+            _urllib3_cn.create_connection = _original_create_connection
 
 
 RATE_LIMIT_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_SECONDS', '2'))
@@ -240,11 +247,13 @@ class HTMLFetcher:
                     try:
                         response = session.get(current_url, timeout=timeout, allow_redirects=False)
                         if response.status_code >= 500:
-                            backoff = 2 ** attempt  # 1s, 2s, 4s
+                            backoff = 2 ** attempt
                             logging.warning(f"Server error {response.status_code} for {current_url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
                             time.sleep(backoff)
                             continue
-                        # Handle redirects manually with SSRF validation
+                        if response.status_code == 403:
+                            logging.info("403 from requests for %s, falling back to curl", current_url)
+                            return HTMLFetcher._fetch_with_curl(current_url, timeout)
                         if response.status_code in (301, 302, 303, 307, 308):
                             if redirects_remaining <= 0:
                                 logging.warning(f"Redirect limit exceeded for {current_url}")
@@ -255,7 +264,7 @@ class HTMLFetcher:
                                 return None
                             redirects_remaining -= 1
                             current_url = redirect_url
-                            break  # Break retry loop, continue outer redirect loop
+                            break
                         response.raise_for_status()
                         if len(response.content) > CONTENT_MAX_BYTES:
                             logging.warning(f"Response too large ({len(response.content)} bytes) for {current_url}, rejecting")
@@ -272,7 +281,6 @@ class HTMLFetcher:
                         logging.error(f"Failed to fetch HTML content from {current_url} after {max_retries} attempts")
                         return None  # Non-retryable error
                 else:
-                    # All retries exhausted (for loop completed without break)
                     logging.error(f"Failed to fetch HTML content from {current_url} after {max_retries} attempts")
                     return None
 
@@ -584,7 +592,7 @@ class HTMLFetcher:
                 if max_redirects <= 0:
                     logging.warning(f"Redirect limit reached for URL: {url}")
                     return 'invalid'
-                redirect_url = response.headers.get('Location')
+                redirect_url = urljoin(url, response.headers.get('Location', ''))
                 if redirect_url and HTMLFetcher.validate_url(redirect_url):
                     return HTMLFetcher.validate_draft_url(redirect_url, max_redirects=max_redirects - 1)
                 return 'invalid'

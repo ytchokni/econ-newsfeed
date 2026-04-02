@@ -2,8 +2,11 @@
 from datetime import datetime
 from unittest.mock import patch
 
+import os
 import pytest
 from fastapi.testclient import TestClient
+
+AUTH_HEADERS = {"X-API-Key": os.environ["SCRAPE_API_KEY"]}
 
 
 @pytest.fixture
@@ -47,7 +50,7 @@ class TestTriggerScrape:
         ):
             response = client.post(
                 "/api/scrape",
-                headers={"X-API-Key": "test-secret-key-for-ci-runs"},
+                headers=AUTH_HEADERS,
             )
 
         assert response.status_code == 201
@@ -63,7 +66,7 @@ class TestTriggerScrape:
             patch("api.create_scrape_log", return_value=1),
             patch("api.threading.Thread") as mock_thread_cls,
         ):
-            client.post("/api/scrape", headers={"X-API-Key": "test-secret-key-for-ci-runs"})
+            client.post("/api/scrape", headers=AUTH_HEADERS)
 
         mock_thread_cls.assert_called_once()
         call_kwargs = mock_thread_cls.call_args
@@ -73,7 +76,7 @@ class TestTriggerScrape:
         with patch("api.scheduler.is_scrape_running", return_value=True):
             response = client.post(
                 "/api/scrape",
-                headers={"X-API-Key": "test-secret-key-for-ci-runs"},
+                headers=AUTH_HEADERS,
             )
 
         assert response.status_code == 409
@@ -102,7 +105,7 @@ class TestScrapeStatus:
             patch("api.Database.fetch_one", return_value=last_scrape_row),
             patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
-            response = client.get("/api/scrape/status", headers={"X-API-Key": "test-secret-key-for-ci-runs"})
+            response = client.get("/api/scrape/status", headers=AUTH_HEADERS)
 
         assert response.status_code == 200
         body = response.json()
@@ -119,7 +122,7 @@ class TestScrapeStatus:
             patch("api.Database.fetch_one", return_value=None),
             patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
-            response = client.get("/api/scrape/status", headers={"X-API-Key": "test-secret-key-for-ci-runs"})
+            response = client.get("/api/scrape/status", headers=AUTH_HEADERS)
 
         assert response.status_code == 200
         body = response.json()
