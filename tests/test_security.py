@@ -424,3 +424,103 @@ class TestSSRFRedirectBypass:
             result = HTMLFetcher.fetch_html("https://example.com/page")
 
         assert result is None
+
+
+# ---------------------------------------------------------------------------
+# DNS Rebinding Prevention — resolved IP wired through fetch
+# ---------------------------------------------------------------------------
+
+class TestDNSRebindingPrevention:
+    """fetch_and_save_if_changed must pass the pinned IP to fetch_html."""
+
+    def test_fetch_and_save_passes_resolved_ip(self):
+        """fetch_and_save_if_changed must pass the pinned IP to fetch_html."""
+        from html_fetcher import HTMLFetcher
+
+        with patch.object(HTMLFetcher, "_was_fetched_recently", return_value=False), \
+             patch.object(HTMLFetcher, "validate_url_with_pin", return_value=(True, "93.184.216.34")), \
+             patch.object(HTMLFetcher, "is_allowed_by_robots", return_value=True), \
+             patch.object(HTMLFetcher, "fetch_html", return_value=None) as mock_fetch:
+            HTMLFetcher.fetch_and_save_if_changed(1, "https://example.com/page", 1)
+
+        mock_fetch.assert_called_once()
+        _, kwargs = mock_fetch.call_args
+        assert kwargs.get("resolved_ip") == "93.184.216.34"
+
+    def test_fetch_html_uses_dns_pinning(self):
+        """When resolved_ip is provided, DNS pinning must be active during fetch."""
+        from html_fetcher import HTMLFetcher
+
+        with patch.object(HTMLFetcher, "_rate_limit"), \
+             patch("html_fetcher._pin_dns") as mock_pin_dns, \
+             patch.object(HTMLFetcher, "_get_session") as mock_session_fn:
+            # Set up the context manager mock
+            mock_ctx = MagicMock()
+            mock_ctx.__enter__ = MagicMock(return_value=None)
+            mock_ctx.__exit__ = MagicMock(return_value=False)
+            mock_pin_dns.return_value = mock_ctx
+
+            session = MagicMock()
+            response = MagicMock()
+            response.status_code = 200
+            response.content = b"<html>OK</html>"
+            response.text = "<html>OK</html>"
+            response.apparent_encoding = "utf-8"
+            response.raise_for_status = MagicMock()
+            session.get.return_value = response
+            mock_session_fn.return_value = session
+
+            HTMLFetcher.fetch_html("https://example.com/page", resolved_ip="93.184.216.34")
+
+        mock_pin_dns.assert_called_once_with("example.com", "93.184.216.34")
+        mock_ctx.__enter__.assert_called_once()
+        # URL must NOT be rewritten — original hostname preserved for TLS SNI
+        actual_url = session.get.call_args[0][0]
+        assert actual_url == "https://example.com/page"
+
+    def test_pin_dns_routes_to_resolved_ip(self):
+        """_pin_dns must make urllib3 connect to the pinned IP."""
+        from html_fetcher import _pin_dns
+        import urllib3.util.connection as urllib3_cn
+
+        original_fn = urllib3_cn.create_connection
+
+        with _pin_dns("example.com", "93.184.216.34"):
+            patched_fn = urllib3_cn.create_connection
+            assert patched_fn is not original_fn
+
+        # After exiting, original is restored
+        assert urllib3_cn.create_connection is original_fn
+
+    def test_pin_dns_only_affects_target_hostname(self):
+        """_pin_dns must not affect connections to other hostnames."""
+        from html_fetcher import _pin_dns
+        import urllib3.util.connection as urllib3_cn
+
+        original_fn = urllib3_cn.create_connection
+        calls = []
+
+        # Temporarily replace original to track calls
+        def tracking_create_connection(address, *args, **kwargs):
+            calls.append(address)
+            raise OSError("test — not actually connecting")
+
+        urllib3_cn.create_connection = tracking_create_connection
+        try:
+            with _pin_dns("example.com", "93.184.216.34"):
+                patched = urllib3_cn.create_connection
+                # Call for the pinned hostname — should rewrite to IP
+                try:
+                    patched(("example.com", 443))
+                except OSError:
+                    pass
+                # Call for a different hostname — should pass through unchanged
+                try:
+                    patched(("other.com", 443))
+                except OSError:
+                    pass
+        finally:
+            urllib3_cn.create_connection = original_fn
+
+        assert calls[0] == ("93.184.216.34", 443)
+        assert calls[1] == ("other.com", 443)

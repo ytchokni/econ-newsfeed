@@ -9,11 +9,35 @@ import zlib
 import requests
 import hashlib
 import logging
+from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 from database import Database
 from bs4 import BeautifulSoup
+import urllib3.util.connection as _urllib3_cn
+
+@contextmanager
+def _pin_dns(hostname: str, resolved_ip: str):
+    """Pin DNS resolution for a hostname to a specific IP.
+
+    Prevents DNS rebinding between SSRF validation and the actual HTTP request
+    by monkey-patching urllib3's connection creation to use the pre-resolved IP.
+    """
+    _original_create_connection = _urllib3_cn.create_connection
+
+    def _pinned_create_connection(address, *args, **kwargs):
+        host, port = address
+        if host == hostname:
+            return _original_create_connection((resolved_ip, port), *args, **kwargs)
+        return _original_create_connection(address, *args, **kwargs)
+
+    _urllib3_cn.create_connection = _pinned_create_connection
+    try:
+        yield
+    finally:
+        _urllib3_cn.create_connection = _original_create_connection
+
 
 RATE_LIMIT_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_SECONDS', '2'))
 RATE_LIMIT_FAST_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_FAST_SECONDS', '0.5'))
@@ -189,7 +213,7 @@ class HTMLFetcher:
             HTMLFetcher._domain_last_request[domain] = time.time()
 
     @staticmethod
-    def fetch_html(url: str, timeout: int = 10, max_retries: int = 3, max_redirects: int = 5) -> str | None:
+    def fetch_html(url: str, timeout: int = 10, max_retries: int = 3, max_redirects: int = 5, resolved_ip: str | None = None) -> str | None:
         """
         Fetch HTML content from a given URL with exponential backoff.
         Retries on timeouts and 5xx server errors.
@@ -201,47 +225,55 @@ class HTMLFetcher:
         redirects_remaining = max_redirects
         current_url = url
 
-        while True:
-            HTMLFetcher._rate_limit(current_url)
-            for attempt in range(max_retries):
-                try:
-                    response = session.get(current_url, timeout=timeout, allow_redirects=False)
-                    if response.status_code >= 500:
-                        backoff = 2 ** attempt  # 1s, 2s, 4s
-                        logging.warning(f"Server error {response.status_code} for {current_url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
+        # DNS pinning: force urllib3 to connect to the validated IP,
+        # preserving the original hostname for TLS SNI and cert verification.
+        if resolved_ip:
+            pin_ctx = _pin_dns(urlparse(url).hostname, resolved_ip)
+        else:
+            pin_ctx = nullcontext()
+
+        with pin_ctx:
+            while True:
+                HTMLFetcher._rate_limit(current_url)
+                for attempt in range(max_retries):
+                    try:
+                        response = session.get(current_url, timeout=timeout, allow_redirects=False)
+                        if response.status_code >= 500:
+                            backoff = 2 ** attempt  # 1s, 2s, 4s
+                            logging.warning(f"Server error {response.status_code} for {current_url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
+                            time.sleep(backoff)
+                            continue
+                        # Handle redirects manually with SSRF validation
+                        if response.status_code in (301, 302, 303, 307, 308):
+                            if redirects_remaining <= 0:
+                                logging.warning(f"Redirect limit exceeded for {current_url}")
+                                return None
+                            redirect_url = urljoin(current_url, response.headers.get('Location', ''))
+                            if not redirect_url or not HTMLFetcher.validate_url(redirect_url):
+                                logging.warning(f"Blocked redirect to unsafe URL from {current_url}: {redirect_url}")
+                                return None
+                            redirects_remaining -= 1
+                            current_url = redirect_url
+                            break  # Break retry loop, continue outer redirect loop
+                        response.raise_for_status()
+                        if len(response.content) > CONTENT_MAX_BYTES:
+                            logging.warning(f"Response too large ({len(response.content)} bytes) for {current_url}, rejecting")
+                            return None
+                        logging.info(f"Successfully fetched HTML content from {current_url}")
+                        response.encoding = response.apparent_encoding
+                        return response.text
+                    except requests.exceptions.Timeout:
+                        backoff = 2 ** attempt
+                        logging.warning(f"Timeout for {current_url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
                         time.sleep(backoff)
-                        continue
-                    # Handle redirects manually with SSRF validation
-                    if response.status_code in (301, 302, 303, 307, 308):
-                        if redirects_remaining <= 0:
-                            logging.warning(f"Redirect limit exceeded for {current_url}")
-                            return None
-                        redirect_url = urljoin(current_url, response.headers.get('Location', ''))
-                        if not redirect_url or not HTMLFetcher.validate_url(redirect_url):
-                            logging.warning(f"Blocked redirect to unsafe URL from {current_url}: {redirect_url}")
-                            return None
-                        redirects_remaining -= 1
-                        current_url = redirect_url
-                        break  # Break retry loop, continue outer redirect loop
-                    response.raise_for_status()
-                    if len(response.content) > CONTENT_MAX_BYTES:
-                        logging.warning(f"Response too large ({len(response.content)} bytes) for {current_url}, rejecting")
-                        return None
-                    logging.info(f"Successfully fetched HTML content from {current_url}")
-                    response.encoding = response.apparent_encoding
-                    return response.text
-                except requests.exceptions.Timeout:
-                    backoff = 2 ** attempt
-                    logging.warning(f"Timeout for {current_url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
-                    time.sleep(backoff)
-                except requests.exceptions.RequestException as e:
-                    logging.error("Request exception for %s: %s", current_url, type(e).__name__)
+                    except requests.exceptions.RequestException as e:
+                        logging.error("Request exception for %s: %s", current_url, type(e).__name__)
+                        logging.error(f"Failed to fetch HTML content from {current_url} after {max_retries} attempts")
+                        return None  # Non-retryable error
+                else:
+                    # All retries exhausted (for loop completed without break)
                     logging.error(f"Failed to fetch HTML content from {current_url} after {max_retries} attempts")
-                    return None  # Non-retryable error
-            else:
-                # All retries exhausted (for loop completed without break)
-                logging.error(f"Failed to fetch HTML content from {current_url} after {max_retries} attempts")
-                return None
+                    return None
 
     @staticmethod
     def extract_text_content(html_content: str) -> str:
@@ -423,7 +455,7 @@ class HTMLFetcher:
             logging.info(f"Skipping URL ID {url_id} (fetched recently): {url}")
             return False
 
-        is_safe, _resolved_ip = HTMLFetcher.validate_url_with_pin(url)
+        is_safe, resolved_ip = HTMLFetcher.validate_url_with_pin(url)
         if not is_safe:
             logging.warning(f"URL failed SSRF validation, skipping: {url}")
             return False
@@ -432,7 +464,7 @@ class HTMLFetcher:
             return False
 
         logging.info(f"Fetching URL ID {url_id}: {url}")
-        raw_html = HTMLFetcher.fetch_html(url)
+        raw_html = HTMLFetcher.fetch_html(url, resolved_ip=resolved_ip)
         if not raw_html:
             logging.warning(f"Failed to fetch HTML content for URL ID: {url_id}, URL: {url}")
             return False
