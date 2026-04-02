@@ -104,17 +104,17 @@ class TestValidateDraftUrl:
 
     def test_private_ip_url_returns_invalid(self):
         """SSRF-blocked URLs (private IP) must return 'invalid' without making HTTP call."""
-        with patch("html_fetcher.HTMLFetcher.validate_url", return_value=(False, None)):
+        with patch("html_fetcher.HTMLFetcher.validate_url", return_value=False):
             result = HTMLFetcher.validate_draft_url("http://192.168.1.1/paper.pdf")
         assert result == "invalid"
 
     def test_localhost_url_returns_invalid(self):
-        with patch("html_fetcher.HTMLFetcher.validate_url", return_value=(False, None)):
+        with patch("html_fetcher.HTMLFetcher.validate_url", return_value=False):
             result = HTMLFetcher.validate_draft_url("http://localhost/paper.pdf")
         assert result == "invalid"
 
     def test_non_http_scheme_returns_invalid(self):
-        with patch("html_fetcher.HTMLFetcher.validate_url", return_value=(False, None)):
+        with patch("html_fetcher.HTMLFetcher.validate_url", return_value=False):
             result = HTMLFetcher.validate_draft_url("ftp://example.com/paper.pdf")
         assert result == "invalid"
 
@@ -127,11 +127,11 @@ class TestValidateDraftUrl:
         resp.status_code = status_code
         return resp
 
-    def _patch_for_valid_ssrf(self, resolved_ip="1.2.3.4"):
-        """Context manager: SSRF validation passes, resolved_ip is returned."""
+    def _patch_for_valid_ssrf(self):
+        """Context manager: SSRF validation passes."""
         return patch(
             "html_fetcher.HTMLFetcher.validate_url",
-            return_value=(True, resolved_ip),
+            return_value=True,
         )
 
     def test_200_response_returns_valid(self):
