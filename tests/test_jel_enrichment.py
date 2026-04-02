@@ -100,7 +100,10 @@ class TestAddResearcherJelCodes:
         mock_conn.cursor.return_value.__enter__ = lambda s: mock_cursor
         mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch("database.jel.get_connection", return_value=mock_conn):
+        with (
+            patch("database.jel.get_connection", return_value=mock_conn),
+            patch("database.jel.sync_researcher_fields_from_jel"),
+        ):
             from database.jel import add_researcher_jel_codes
             add_researcher_jel_codes(researcher_id=1, jel_codes=["J", "F"])
 

@@ -2,7 +2,70 @@
 import logging
 from datetime import datetime, timezone
 
-from database.connection import execute_query, fetch_all, get_connection
+from database.connection import execute_query, fetch_all, fetch_one, get_connection
+
+# ── JEL code → research field slug mapping ──────────────────────────
+# Maps top-level JEL codes to research_fields.slug values.
+# "Migration" has no top-level JEL code — handled via description keywords.
+_JEL_TO_FIELD_SLUGS: dict[str, list[str]] = {
+    "C": ["econometrics-methods"],
+    "E": ["macroeconomics"],
+    "F": ["international-trade"],
+    "G": ["finance"],
+    "H": ["public-economics"],
+    "I": ["health-economics"],
+    "J": ["labour-economics"],
+    "L": ["industrial-organisation"],
+    "O": ["development-economics"],
+    "P": ["political-economy"],
+    "Z": ["cultural-economics"],
+}
+
+_MIGRATION_KEYWORDS = ("migration", "immigrant", "immigration", "migrant", "diaspora")
+
+
+def sync_researcher_fields_from_jel(researcher_id: int, jel_codes: list[str]) -> None:
+    """Derive and replace researcher_fields from JEL codes.
+
+    Clears existing field associations and re-derives them from the
+    given JEL codes. The 'migration' field is inferred via keyword
+    matching on the researcher's description.
+    """
+    slugs: set[str] = set()
+    for code in jel_codes:
+        for slug in _JEL_TO_FIELD_SLUGS.get(code.upper().strip(), []):
+            slugs.add(slug)
+
+    # Keyword fallback for the migration field (no direct JEL code)
+    row = fetch_one(
+        "SELECT description FROM researchers WHERE id = %s", (researcher_id,)
+    )
+    description = row["description"] if row else None
+    if description:
+        desc_lower = description.lower()
+        if any(kw in desc_lower for kw in _MIGRATION_KEYWORDS):
+            slugs.add("migration")
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                "DELETE FROM researcher_fields WHERE researcher_id = %s",
+                (researcher_id,),
+            )
+            if slugs:
+                placeholders = ",".join(["%s"] * len(slugs))
+                cursor.execute(
+                    f"SELECT id FROM research_fields WHERE slug IN ({placeholders})",
+                    tuple(slugs),
+                )
+                field_ids = [r[0] for r in cursor.fetchall()]
+                for field_id in field_ids:
+                    cursor.execute(
+                        "INSERT IGNORE INTO researcher_fields (researcher_id, field_id) "
+                        "VALUES (%s, %s)",
+                        (researcher_id, field_id),
+                    )
+            conn.commit()
 
 
 def get_all_jel_codes() -> list[dict]:
@@ -47,7 +110,6 @@ def save_researcher_jel_codes(researcher_id: int, jel_codes: list[str]) -> None:
     Deletes existing codes and inserts the new set in a single transaction.
     Invalid codes (not in jel_codes table) are skipped with a warning.
     """
-    from database.connection import get_connection
     from mysql.connector.errors import IntegrityError
 
     now = datetime.now(timezone.utc)
@@ -71,6 +133,7 @@ def save_researcher_jel_codes(researcher_id: int, jel_codes: list[str]) -> None:
                         code, researcher_id,
                     )
             conn.commit()
+    sync_researcher_fields_from_jel(researcher_id, jel_codes)
 
 
 def get_researchers_needing_classification() -> list[dict]:
@@ -187,3 +250,4 @@ def add_researcher_jel_codes(researcher_id: int, jel_codes: list[str]) -> None:
                             researcher_id,
                         )
             conn.commit()
+    sync_researcher_fields_from_jel(researcher_id, jel_codes)
