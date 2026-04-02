@@ -99,8 +99,7 @@ _GARBAGE_PATTERNS = (
 )
 
 
-_TITLE_METADATA_SUFFIXES = re.compile(
-    r'\s*(?:--|—|–|―)\s*(?:'
+_METADATA_KEYWORDS = (
     r'job\s+market\s+paper'
     r'|jmp'
     r'|working\s+paper'
@@ -114,26 +113,15 @@ _TITLE_METADATA_SUFFIXES = re.compile(
     r'|revised'
     r'|updated'
     r'|r\s*&\s*r'
-    r')\s*$',
+)
+
+_TITLE_METADATA_SUFFIXES = re.compile(
+    r'\s*(?:--|—|–|―)\s*(?:' + _METADATA_KEYWORDS + r')\s*$',
     re.IGNORECASE,
 )
 
 _TITLE_BRACKET_SUFFIXES = re.compile(
-    r'\s*[\[\(]\s*(?:'
-    r'job\s+market\s+paper'
-    r'|jmp'
-    r'|working\s+paper'
-    r'|work\s+in\s+progress'
-    r'|under\s+review'
-    r'|submitted'
-    r'|forthcoming'
-    r'|accepted'
-    r'|draft'
-    r'|new(?:!)?'
-    r'|revised'
-    r'|updated'
-    r'|r\s*&\s*r'
-    r')\s*[\]\)]\s*$',
+    r'\s*[\[\(]\s*(?:' + _METADATA_KEYWORDS + r')\s*[\]\)]\s*$',
     re.IGNORECASE,
 )
 

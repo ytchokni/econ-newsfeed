@@ -2,7 +2,6 @@ import { render, screen } from "@testing-library/react";
 import PublicationCard from "../PublicationCard";
 import type { Publication } from "@/lib/types";
 
-// Mock next/navigation (no longer needed for card click, kept for compatibility)
 jest.mock("next/navigation", () => ({
   useRouter: () => ({ push: jest.fn() }),
 }));
@@ -65,10 +64,9 @@ describe("PublicationCard navigation", () => {
     render(<PublicationCard publication={publication} />);
     const links = screen.getAllByRole("link");
     const paperLinks = links.filter((l) =>
-      l.getAttribute("href")?.startsWith("/papers/")
+      l.getAttribute("href") === "/papers/1"
     );
-    expect(paperLinks.length).toBeGreaterThanOrEqual(1);
-    expect(paperLinks[0]).toHaveAttribute("href", "/papers/1");
+    expect(paperLinks).toHaveLength(2); // stretched link + visible title link
   });
 
   it("has separate author links that don't point to the paper", () => {
