@@ -6,10 +6,16 @@ These tests verify fixes for issues that prevented `make dev` from working:
 - Rewrite destination defaults to localhost for local dev
 """
 import os
+from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+@contextmanager
+def _noop_connection_scope():
+    yield None
 
 
 # ---------------------------------------------------------------------------
@@ -66,8 +72,8 @@ class TestScrapeApiKeyValidation:
                 with TestClient(api_mod.app) as c:
                     # App started successfully — verify it responds
                     with (
-                        patch("api.Database.fetch_one", return_value={"total": 0}),
                         patch("api.Database.fetch_all", return_value=[]),
+                        patch("api.connection_scope", _noop_connection_scope),
                     ):
                         resp = c.get("/api/publications")
                     assert resp.status_code == 200

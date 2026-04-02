@@ -1,9 +1,15 @@
 """Tests for publication endpoints."""
+from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+@contextmanager
+def _noop_connection_scope():
+    yield None
 
 
 @pytest.fixture
@@ -13,6 +19,7 @@ def client():
         patch("database.Database.create_tables"),
         patch("scheduler.start_scheduler"),
         patch("scheduler.shutdown_scheduler"),
+        patch("api.connection_scope", _noop_connection_scope),
     ):
         from api import app
 
@@ -25,23 +32,26 @@ def client():
 #   paper_id, title, year, venue, url, discovered_at, status, draft_url, abstract, draft_url_status
 SAMPLE_PUBLICATIONS = [
     {"event_id": 100, "event_type": "new_paper", "old_status": None, "new_status": "working_paper",
+     "old_title": None, "new_title": None,
      "created_at": datetime(2026, 3, 15, 14, 30), "paper_id": 1, "title": "Trade and Wages",
      "year": "2024", "venue": "JLE", "source_url": "https://example.com/pub",
      "discovered_at": datetime(2026, 3, 15, 14, 30), "status": "working_paper",
      "draft_url": "https://ssrn.com/abstract=1", "abstract": None, "draft_url_status": "valid",
-     "doi": None},
+     "doi": None, "total_count": 3},
     {"event_id": 101, "event_type": "new_paper", "old_status": None, "new_status": "accepted",
+     "old_title": None, "new_title": None,
      "created_at": datetime(2026, 3, 14, 10, 0), "paper_id": 2, "title": "Immigration Effects",
      "year": "2023", "venue": "QJE", "source_url": "https://example.com/pub2",
      "discovered_at": datetime(2026, 3, 14, 10, 0), "status": "accepted",
      "draft_url": None, "abstract": None, "draft_url_status": None,
-     "doi": None},
+     "doi": None, "total_count": 3},
     {"event_id": 102, "event_type": "new_paper", "old_status": None, "new_status": "working_paper",
+     "old_title": None, "new_title": None,
      "created_at": datetime(2026, 3, 13, 9, 0), "paper_id": 3, "title": "Labor Markets",
      "year": "2024", "venue": "AER", "source_url": "https://example.com/pub3",
      "discovered_at": datetime(2026, 3, 13, 9, 0), "status": "working_paper",
      "draft_url": None, "abstract": None, "draft_url_status": None,
-     "doi": None},
+     "doi": None, "total_count": 3},
 ]
 
 # 14-key papers dict for single publication detail endpoint
@@ -89,10 +99,7 @@ class TestListPublications:
 
     def test_default_pagination(self, client):
         """Default page=1, per_page=20."""
-        with (
-            patch("api.Database.fetch_one", return_value={"total": 3}),  # total count
-            patch("api.Database.fetch_all") as mock_fetch,
-        ):
+        with patch("api.Database.fetch_all") as mock_fetch:
             # First call: publications; second: batch authors; third: coauthors; fourth: links
             mock_fetch.side_effect = [
                 SAMPLE_PUBLICATIONS,
@@ -112,12 +119,9 @@ class TestListPublications:
 
     def test_custom_pagination(self, client):
         """Custom page and per_page values."""
-        with (
-            patch("api.Database.fetch_one", return_value={"total": 3}),
-            patch("api.Database.fetch_all") as mock_fetch,
-        ):
+        with patch("api.Database.fetch_all") as mock_fetch:
             mock_fetch.side_effect = [
-                [SAMPLE_PUBLICATIONS[1]],
+                [{**SAMPLE_PUBLICATIONS[1], "total_count": 3}],
                 BATCH_AUTHORS_PUB2,
                 [],  # coauthors
                 [],  # links
@@ -137,12 +141,9 @@ class TestListPublications:
 
     def test_year_filter(self, client):
         """Filter publications by year."""
-        with (
-            patch("api.Database.fetch_one", return_value={"total": 1}),
-            patch("api.Database.fetch_all") as mock_fetch,
-        ):
+        with patch("api.Database.fetch_all") as mock_fetch:
             mock_fetch.side_effect = [
-                [SAMPLE_PUBLICATIONS[0]],
+                [{**SAMPLE_PUBLICATIONS[0], "total_count": 1}],
                 BATCH_AUTHORS_PUB1,
                 [],  # coauthors
                 [],  # links
@@ -155,12 +156,9 @@ class TestListPublications:
 
     def test_researcher_id_filter(self, client):
         """Filter publications by researcher_id."""
-        with (
-            patch("api.Database.fetch_one", return_value={"total": 1}),
-            patch("api.Database.fetch_all") as mock_fetch,
-        ):
+        with patch("api.Database.fetch_all") as mock_fetch:
             mock_fetch.side_effect = [
-                [SAMPLE_PUBLICATIONS[0]],
+                [{**SAMPLE_PUBLICATIONS[0], "total_count": 1}],
                 BATCH_AUTHORS_PUB1,
                 [],  # coauthors
                 [],  # links
@@ -175,12 +173,9 @@ class TestListPublications:
 
     def test_since_filter(self, client):
         """?since= filters publications discovered after the given timestamp."""
-        with (
-            patch("api.Database.fetch_one", return_value={"total": 1}),
-            patch("api.Database.fetch_all") as mock_fetch,
-        ):
+        with patch("api.Database.fetch_all") as mock_fetch:
             mock_fetch.side_effect = [
-                [SAMPLE_PUBLICATIONS[0]],
+                [{**SAMPLE_PUBLICATIONS[0], "total_count": 1}],
                 BATCH_AUTHORS_PUB1,
                 [],  # coauthors
                 [],  # links
@@ -198,12 +193,9 @@ class TestListPublications:
 
     def test_publication_item_shape(self, client):
         """Each item must have id, title, authors, year, venue, source_url, discovered_at."""
-        with (
-            patch("api.Database.fetch_one", return_value={"total": 1}),
-            patch("api.Database.fetch_all") as mock_fetch,
-        ):
+        with patch("api.Database.fetch_all") as mock_fetch:
             mock_fetch.side_effect = [
-                [SAMPLE_PUBLICATIONS[0]],
+                [{**SAMPLE_PUBLICATIONS[0], "total_count": 1}],
                 BATCH_AUTHORS_PUB1,
                 [],  # coauthors
                 [],  # links
@@ -227,12 +219,9 @@ class TestListPublications:
 
     def test_event_type_filter_new_paper(self, client):
         """?event_type=new_paper returns only new_paper events."""
-        with (
-            patch("api.Database.fetch_one", return_value={"total": 2}),
-            patch("api.Database.fetch_all") as mock_fetch,
-        ):
+        with patch("api.Database.fetch_all") as mock_fetch:
             mock_fetch.side_effect = [
-                SAMPLE_PUBLICATIONS[:2],
+                [{**row, "total_count": 2} for row in SAMPLE_PUBLICATIONS[:2]],
                 BATCH_AUTHORS_PUBS_1_2_3,
                 [],  # coauthors
                 [],  # links
@@ -253,11 +242,9 @@ class TestListPublications:
             "event_type": "status_change",
             "old_status": "working_paper",
             "new_status": "accepted",
+            "total_count": 1,
         }
-        with (
-            patch("api.Database.fetch_one", return_value={"total": 1}),
-            patch("api.Database.fetch_all") as mock_fetch,
-        ):
+        with patch("api.Database.fetch_all") as mock_fetch:
             mock_fetch.side_effect = [
                 [status_change_pub],
                 BATCH_AUTHORS_PUB1,
@@ -273,10 +260,7 @@ class TestListPublications:
 
     def test_event_type_omitted_returns_both(self, client):
         """Omitting event_type returns all events (backward compatible)."""
-        with (
-            patch("api.Database.fetch_one", return_value={"total": 3}),
-            patch("api.Database.fetch_all") as mock_fetch,
-        ):
+        with patch("api.Database.fetch_all") as mock_fetch:
             mock_fetch.side_effect = [
                 SAMPLE_PUBLICATIONS,
                 BATCH_AUTHORS_PUBS_1_2_3,
@@ -338,16 +322,13 @@ class TestPublicationOpenAlexFields:
     def test_feed_includes_doi_and_coauthors(self, client):
         """GET /api/publications returns doi and coauthors."""
         sample_pubs = [
-            {**SAMPLE_PUBLICATIONS[0], "doi": "10.1257/aer.20181234"},
+            {**SAMPLE_PUBLICATIONS[0], "doi": "10.1257/aer.20181234", "total_count": 1},
         ]
         coauthors_data = [
             {"paper_id": 1, "display_name": "Max Steinhardt", "openalex_author_id": "A111"},
             {"paper_id": 1, "display_name": "Jane Doe", "openalex_author_id": "A222"},
         ]
-        with (
-            patch("api.Database.fetch_one", return_value={"total": 1}),
-            patch("api.Database.fetch_all") as mock_fetch,
-        ):
+        with patch("api.Database.fetch_all") as mock_fetch:
             mock_fetch.side_effect = [
                 sample_pubs,
                 BATCH_AUTHORS_PUB1,
@@ -391,9 +372,11 @@ class TestPublicationOpenAlexFields:
 
 SAMPLE_FEED_EVENTS = [
     {"id": 5, "event_type": "status_change", "old_status": "working_paper",
-     "new_status": "published", "created_at": datetime(2026, 3, 20, 12, 0)},
+     "new_status": "published", "old_title": None, "new_title": None,
+     "created_at": datetime(2026, 3, 20, 12, 0)},
     {"id": 1, "event_type": "new_paper", "old_status": None,
-     "new_status": None, "created_at": datetime(2026, 3, 15, 14, 30)},
+     "new_status": None, "old_title": None, "new_title": None,
+     "created_at": datetime(2026, 3, 15, 14, 30)},
 ]
 
 SAMPLE_SNAPSHOTS = [
