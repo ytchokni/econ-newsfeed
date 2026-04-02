@@ -118,3 +118,66 @@ def test_match_by_url_last_name_mismatch():
                   "affiliation": None, "urls": ["http://example.com/page"]}
     matches = match_by_url(researcher, by_domain)
     assert len(matches) == 0
+
+
+from scripts.match_repec import match_by_name
+
+def test_match_by_name_unique():
+    """Single RePEC record for name → confidence: unique."""
+    by_name = {
+        ("arild", "aakvik"): [
+            {"name_first": "Arild", "name_last": "Aakvik", "name_full": "Arild Aakvik",
+             "workplace": "Bergen", "homepage": "https://example.com",
+             "handle": "REPEC:per:aakvik"}
+        ]
+    }
+    researcher = {"id": 1, "first_name": "Arild", "last_name": "Aakvik",
+                  "affiliation": "Bergen", "urls": []}
+    matches = match_by_name(researcher, by_name)
+    assert len(matches) == 1
+    assert matches[0]["confidence"] == "unique"
+
+def test_match_by_name_affiliation_tiebreak():
+    """Multiple records, DB affiliation matches one → confidence: affiliation_match."""
+    by_name = {
+        ("john", "smith"): [
+            {"name_first": "John", "name_last": "Smith", "name_full": "John Smith",
+             "workplace": "Massachusetts Institute of Technology",
+             "homepage": "https://mit.edu/~jsmith", "handle": "REPEC:per:smith1"},
+            {"name_first": "John", "name_last": "Smith", "name_full": "John Smith",
+             "workplace": "University of Oxford",
+             "homepage": "https://oxford.ac.uk/~smith", "handle": "REPEC:per:smith2"},
+        ]
+    }
+    researcher = {"id": 2, "first_name": "John", "last_name": "Smith",
+                  "affiliation": "MIT", "urls": []}
+    matches = match_by_name(researcher, by_name)
+    assert len(matches) == 1
+    assert matches[0]["confidence"] == "affiliation_match"
+    assert matches[0]["repec_handle"] == "REPEC:per:smith1"
+
+def test_match_by_name_ambiguous():
+    """Multiple records, no affiliation tiebreak → all written as ambiguous."""
+    by_name = {
+        ("wei", "zhang"): [
+            {"name_first": "Wei", "name_last": "Zhang", "name_full": "Wei Zhang",
+             "workplace": "Peking University",
+             "homepage": "https://a.edu/zhang", "handle": "REPEC:per:zhang1"},
+            {"name_first": "Wei", "name_last": "Zhang", "name_full": "Wei Zhang",
+             "workplace": "Fudan University",
+             "homepage": "https://b.edu/zhang", "handle": "REPEC:per:zhang2"},
+        ]
+    }
+    researcher = {"id": 3, "first_name": "Wei", "last_name": "Zhang",
+                  "affiliation": None, "urls": []}
+    matches = match_by_name(researcher, by_name)
+    assert len(matches) == 2
+    assert all(m["confidence"] == "ambiguous" for m in matches)
+
+def test_match_by_name_no_match():
+    """Name not in index → no matches."""
+    by_name = {}
+    researcher = {"id": 4, "first_name": "Nobody", "last_name": "Here",
+                  "affiliation": None, "urls": []}
+    matches = match_by_name(researcher, by_name)
+    assert len(matches) == 0

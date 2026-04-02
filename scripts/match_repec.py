@@ -141,3 +141,40 @@ def match_by_url(researcher: dict, by_domain: dict) -> list[dict]:
                     continue
             matches.append(_make_match_row(researcher, record, "url_match", "unique"))
     return matches
+
+
+def _affiliation_matches(db_affil: str, repec_workplace: str) -> bool:
+    """Check if DB affiliation matches RePEC workplace (case-insensitive).
+
+    Handles substring matches in either direction, plus acronym matching
+    (e.g. "MIT" matches "Massachusetts Institute of Technology").
+    """
+    if not db_affil or not repec_workplace:
+        return False
+    a = db_affil.lower()
+    b = repec_workplace.lower()
+    if a in b or b in a:
+        return True
+    # Acronym check: db_affil could be an abbreviation of workplace words
+    words = [w for w in b.split() if w.isalpha() and len(w) > 2]
+    if words:
+        acronym = "".join(w[0] for w in words)
+        if a == acronym:
+            return True
+    return False
+
+
+def match_by_name(researcher: dict, by_name: dict) -> list[dict]:
+    """Match a researcher against RePEC records by exact name."""
+    key = (researcher["first_name"].lower().strip(), researcher["last_name"].lower().strip())
+    candidates = by_name.get(key)
+    if not candidates:
+        return []
+    if len(candidates) == 1:
+        return [_make_match_row(researcher, candidates[0], "exact_name", "unique")]
+    db_affil = researcher.get("affiliation") or ""
+    if db_affil:
+        affil_matches = [c for c in candidates if _affiliation_matches(db_affil, c["workplace"])]
+        if len(affil_matches) == 1:
+            return [_make_match_row(researcher, affil_matches[0], "exact_name", "affiliation_match")]
+    return [_make_match_row(researcher, c, "exact_name", "ambiguous") for c in candidates]
