@@ -151,6 +151,20 @@ def _parse_topics(work: dict) -> list[dict]:
     ]
 
 
+def _is_bad_coauthor_name(display_name: str) -> bool:
+    """Return True if a coauthor display_name is too incomplete to store."""
+    name = display_name.strip()
+    if not name:
+        return True
+    parts = name.split()
+    # Single-initial first part: "A.", "A", "J." etc.
+    if len(parts) >= 2:
+        first = parts[0]
+        if len(first.rstrip('.')) <= 1:
+            return True
+    return False
+
+
 def _parse_work(work: dict) -> dict:
     """Parse an OpenAlex work object into our enrichment dict."""
     doi = _strip_prefix(work.get("doi"), _DOI_PREFIX)
@@ -159,8 +173,12 @@ def _parse_work(work: dict) -> dict:
     coauthors = []
     for authorship in work.get("authorships", []):
         author = authorship.get("author", {})
+        display_name = author.get("display_name", "")
+        if _is_bad_coauthor_name(display_name):
+            logger.debug("Skipping coauthor with bad name: %r", display_name)
+            continue
         coauthors.append({
-            "display_name": author.get("display_name", ""),
+            "display_name": display_name,
             "openalex_author_id": _strip_prefix(author.get("id"), _OPENALEX_PREFIX),
         })
 
