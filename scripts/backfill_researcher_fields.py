@@ -7,6 +7,10 @@ fields for all researchers who already have JEL codes assigned.
 Usage: poetry run python scripts/backfill_researcher_fields.py
 """
 import logging
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
