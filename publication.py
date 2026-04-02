@@ -1,4 +1,5 @@
 from database import Database
+from encoding_guard import guard_text_fields
 from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 from openai import OpenAI
@@ -212,6 +213,13 @@ class Publication:
                 cursor = None
                 try:
                     title = pub['title'].strip() if pub['title'] else ''
+                    # Fix any mojibake before saving
+                    pub = guard_text_fields(
+                        dict(pub, title=title),
+                        ["title", "abstract", "venue"],
+                        context=f"papers (url={url})",
+                    )
+                    title = pub['title']
                     title_hash = Database.compute_title_hash(pub['title'])
 
                     cursor = conn.cursor(buffered=True)
