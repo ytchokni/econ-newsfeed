@@ -1,5 +1,4 @@
 import { render, screen } from "@testing-library/react";
-import userEvent from "@testing-library/user-event";
 import PublicationCard from "../PublicationCard";
 import type { Publication } from "@/lib/types";
 
