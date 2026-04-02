@@ -2,6 +2,7 @@ import difflib
 import ipaddress
 import os
 import re
+import subprocess
 import threading
 import time
 import socket
@@ -274,6 +275,27 @@ class HTMLFetcher:
                     # All retries exhausted (for loop completed without break)
                     logging.error(f"Failed to fetch HTML content from {current_url} after {max_retries} attempts")
                     return None
+
+    @staticmethod
+    def _fetch_with_curl(url: str, timeout: int = 10) -> str | None:
+        """Fallback fetcher using curl subprocess to bypass TLS fingerprint blocking."""
+        if not url.startswith(("http://", "https://")):
+            logging.warning("curl fallback rejected non-HTTP URL: %s", url)
+            return None
+        try:
+            result = subprocess.run(
+                ["curl", "-sS", "--max-time", str(timeout),
+                 "--max-filesize", str(CONTENT_MAX_BYTES), "--", url],
+                capture_output=True, text=True, timeout=timeout + 5,
+            )
+            if result.returncode != 0:
+                logging.error("curl failed for %s (exit %d): %s", url, result.returncode, result.stderr.strip())
+                return None
+            logging.info("Successfully fetched %s via curl fallback", url)
+            return result.stdout
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logging.error("curl fallback error for %s: %s", url, e)
+            return None
 
     @staticmethod
     def extract_text_content(html_content: str) -> str:

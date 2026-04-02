@@ -524,3 +524,44 @@ class TestDNSRebindingPrevention:
 
         assert calls[0] == ("93.184.216.34", 443)
         assert calls[1] == ("other.com", 443)
+
+
+# ---------------------------------------------------------------------------
+# Curl option injection prevention
+# ---------------------------------------------------------------------------
+
+class TestCurlOptionInjection:
+    """curl subprocess must use -- to prevent option injection via URL."""
+
+    def test_curl_uses_end_of_options_marker(self):
+        """The curl command must include '--' before the URL argument."""
+        from html_fetcher import HTMLFetcher
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="<html></html>", stderr="")
+            HTMLFetcher._fetch_with_curl("https://example.com/page")
+
+        cmd = mock_run.call_args[0][0]
+        url_index = cmd.index("https://example.com/page")
+        assert cmd[url_index - 1] == "--", f"Expected '--' before URL, got: {cmd}"
+
+    def test_curl_rejects_non_http_url(self):
+        """_fetch_with_curl must reject URLs without http(s) scheme."""
+        from html_fetcher import HTMLFetcher
+
+        with patch("subprocess.run") as mock_run:
+            result = HTMLFetcher._fetch_with_curl("-o /tmp/evil http://attacker.com")
+
+        mock_run.assert_not_called()
+        assert result is None
+
+    def test_curl_does_not_follow_redirects(self):
+        """curl must not use -L flag (redirects handled at application level)."""
+        from html_fetcher import HTMLFetcher
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="<html></html>", stderr="")
+            HTMLFetcher._fetch_with_curl("https://example.com/page")
+
+        cmd = mock_run.call_args[0][0]
+        assert "-L" not in cmd, f"curl should not follow redirects, found -L in: {cmd}"
