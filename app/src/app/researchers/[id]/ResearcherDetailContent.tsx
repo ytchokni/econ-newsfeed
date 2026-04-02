@@ -90,9 +90,8 @@ export default function ResearcherDetailContent({ id }: { id: number }) {
               <span
                 key={jel.code}
                 className="font-sans text-[10px] font-bold uppercase tracking-wider text-blue-600 bg-blue-50 px-2.5 py-1 rounded-full"
-                title={jel.name}
               >
-                JEL {jel.code}
+                {jel.code} — {jel.name}
               </span>
             ))}
           </div>

@@ -480,6 +480,7 @@ def list_publications(
     preset: str | None = Query(None),
     search: str | None = Query(None, max_length=200),
     event_type: str | None = Query(None),
+    jel_code: str | None = Query(None),
 ):
     """List feed events (new papers and status changes).
 
@@ -559,6 +560,15 @@ def list_publications(
     if event_type:
         conditions.append("fe.event_type = %s")
         params.append(event_type)
+    jel_list = [j.strip().upper() for j in jel_code.split(",") if j.strip()] if jel_code else []
+    if jel_list:
+        placeholders = ",".join(["%s"] * len(jel_list))
+        conditions.append(
+            f"p.id IN (SELECT a.publication_id FROM authorship a "
+            f"JOIN researcher_jel_codes rjc ON rjc.researcher_id = a.researcher_id "
+            f"WHERE rjc.jel_code IN ({placeholders}))"
+        )
+        params.extend(jel_list)
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 

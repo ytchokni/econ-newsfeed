@@ -125,6 +125,7 @@ export interface FeedFilters {
   year?: string;
   search?: string;
   event_type?: "new_paper" | "status_change";
+  jel_code?: string;
 }
 
 export interface ResearcherDetail extends Researcher {

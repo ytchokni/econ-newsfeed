@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { usePublications } from "@/lib/api";
+import { usePublications, useJelCodes } from "@/lib/api";
 import { formatDate } from "@/lib/publication-utils";
 import type { FeedFilters, Publication } from "@/lib/types";
 import PublicationCard from "@/components/PublicationCard";
@@ -179,7 +179,21 @@ function FilterBar({
     return [];
   })();
 
-  const hasActiveFilters = !!(filters.status || filters.institution || filters.preset || filters.year || filters.search);
+  const selectedJelCodes = filters.jel_code ? filters.jel_code.split(",") : [];
+  const { data: jelCodes } = useJelCodes();
+  const jelOptions = (jelCodes ?? []).map((jel) => ({
+    label: `${jel.code} — ${jel.name}`,
+    value: jel.code,
+  }));
+
+  const hasActiveFilters = !!(filters.status || filters.institution || filters.preset || filters.year || filters.search || filters.jel_code);
+
+  const handleJelChange = useCallback(
+    (selected: string[]) => {
+      onChange({ ...filters, jel_code: selected.join(",") || undefined });
+    },
+    [filters, onChange]
+  );
 
   const handleStatusChange = useCallback(
     (selected: string[]) => {
@@ -274,6 +288,13 @@ function FilterBar({
           options={INSTITUTION_OPTIONS}
           selected={selectedInstitutions}
           onChange={handleInstitutionChange}
+        />
+
+        <CheckboxDropdown
+          label="Field"
+          options={jelOptions}
+          selected={selectedJelCodes}
+          onChange={handleJelChange}
         />
 
         {hasActiveFilters && (
