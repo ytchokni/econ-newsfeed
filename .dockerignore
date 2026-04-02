@@ -14,5 +14,6 @@
 !publication.py
 !researcher.py
 !scheduler.py
+!scripts/backfill_researcher_fields.py
 !pyproject.toml
 !poetry.lock

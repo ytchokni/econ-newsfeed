@@ -155,3 +155,73 @@ class TestMergeResearchers:
         conn, _ = self._make_mock_conn()
         with pytest.raises(ValueError, match="same"):
             merge_researchers(10, 10, conn)
+
+
+class TestIsBadResearcherName:
+    """is_bad_researcher_name rejects empty first names and initial-only last names."""
+
+    def test_empty_first_name(self):
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("", "Smith") is True
+
+    def test_whitespace_first_name(self):
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("  ", "Smith") is True
+
+    def test_initial_only_last_name_with_period(self):
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("Eric", "A.") is True
+
+    def test_initial_only_last_name_without_period(self):
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("David", "K") is True
+
+    def test_empty_last_name(self):
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("John", "") is True
+
+    def test_whitespace_last_name(self):
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("John", "  ") is True
+
+    def test_valid_name(self):
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("John", "Smith") is False
+
+    def test_short_but_valid_last_name(self):
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("Yi", "Li") is False
+
+    def test_initial_first_name_is_ok(self):
+        """Single-letter first names like 'J.' are fine — it's last names we reject."""
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("J.", "Smith") is False
+
+
+class TestGetResearcherIdNameGuard:
+    """get_researcher_id returns None for bad names instead of inserting."""
+
+    @patch("database.researchers._disambiguate_researcher", return_value=None)
+    @patch("database.researchers.fetch_all", return_value=[])
+    @patch("database.researchers.fetch_one", return_value=None)
+    @patch("database.researchers.execute_query")
+    def test_rejects_empty_first_name(self, mock_exec, mock_one, mock_all, mock_disamb):
+        result = get_researcher_id("", "Anastakis")
+        assert result is None
+        mock_exec.assert_not_called()
+
+    @patch("database.researchers._disambiguate_researcher", return_value=None)
+    @patch("database.researchers.fetch_all", return_value=[])
+    @patch("database.researchers.fetch_one", return_value=None)
+    @patch("database.researchers.execute_query")
+    def test_rejects_initial_last_name(self, mock_exec, mock_one, mock_all, mock_disamb):
+        result = get_researcher_id("Eric", "A.")
+        assert result is None
+        mock_exec.assert_not_called()
+
+    @patch("database.researchers.fetch_all", return_value=[])
+    @patch("database.researchers.fetch_one", return_value=None)
+    @patch("database.researchers.execute_query", return_value=99)
+    def test_allows_valid_name(self, mock_exec, mock_one, mock_all):
+        result = get_researcher_id("John", "Smith")
+        assert result == 99

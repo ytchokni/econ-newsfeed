@@ -9,6 +9,7 @@ import re
 
 from database.connection import execute_query, fetch_one, fetch_all
 from database.llm import log_llm_usage
+from encoding_guard import fix_encoding
 
 
 def _strip_initial(name: str) -> str | None:
@@ -19,6 +20,22 @@ def _strip_initial(name: str) -> str | None:
     if len(stripped) == 2 and stripped[0].isalpha() and stripped[1] == '.':
         return stripped[0].lower()
     return None
+
+
+def is_bad_researcher_name(first_name: str, last_name: str) -> bool:
+    """Return True if the name is too malformed to create a researcher record.
+
+    Rejects: empty/whitespace first or last names, single-letter/initial-only last names.
+    """
+    if not first_name or not first_name.strip():
+        return True
+    if not last_name or not last_name.strip():
+        return True
+    # Single letter with optional period: "A", "A.", "K", "K."
+    stripped_last = last_name.strip()
+    if re.match(r'^[A-Za-z]\.?$', stripped_last):
+        return True
+    return False
 
 
 def first_name_is_initial_match(name_a: str, name_b: str) -> bool:
@@ -104,6 +121,21 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
     3. LLM disambiguation for same-last-name candidates
     4. Insert new researcher
     """
+    # Name validation guard — reject bad names before any DB interaction
+    if is_bad_researcher_name(first_name, last_name):
+        logging.warning(
+            "Rejected bad researcher name: first_name=%r last_name=%r", first_name, last_name
+        )
+        return None
+
+    # Fix any mojibake in name/affiliation fields
+    first_name, _ = fix_encoding(first_name)
+    last_name, _ = fix_encoding(last_name)
+    if position:
+        position, _ = fix_encoding(position)
+    if affiliation:
+        affiliation, _ = fix_encoding(affiliation)
+
     def _fetch_one(query, params):
         if conn is not None:
             c = conn.cursor(dictionary=True)
@@ -279,6 +311,7 @@ def merge_researchers(canonical_id: int, duplicate_id: int, conn) -> None:
 
 def update_researcher_bio(researcher_id: int, bio: str) -> None:
     """Legacy: update researcher description only if the current description is NULL."""
+    bio, _ = fix_encoding(bio)
     execute_query(
         "UPDATE researchers SET description = %s WHERE id = %s AND description IS NULL",
         (bio, researcher_id),
@@ -304,6 +337,10 @@ def import_data_from_file(file_path: str) -> None:
                     logging.warning(f"Skipping incomplete row: {row}")
                     continue
                 first_name, last_name, position, affiliation, page_type, url = row
+                first_name, _ = fix_encoding(first_name)
+                last_name, _ = fix_encoding(last_name)
+                position, _ = fix_encoding(position)
+                affiliation, _ = fix_encoding(affiliation)
                 researcher_id = get_researcher_id(first_name, last_name, position, affiliation)
                 add_researcher_url(researcher_id, page_type, url)
         logging.info("Data imported successfully from file")

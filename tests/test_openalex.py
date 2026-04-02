@@ -521,3 +521,83 @@ class TestFetchTopicsBatch:
         from openalex import fetch_topics_batch
         result = fetch_topics_batch([])
         assert result == {}
+
+
+class TestParseWorkCoauthorFiltering:
+    """_parse_work skips coauthors with bad display_names."""
+
+    def test_skips_empty_display_name(self):
+        from openalex import _parse_work
+        work = {
+            "doi": "https://doi.org/10.1234/test",
+            "id": "https://openalex.org/W123",
+            "authorships": [
+                {"author": {"display_name": "", "id": "https://openalex.org/A1"}},
+                {"author": {"display_name": "John Smith", "id": "https://openalex.org/A2"}},
+            ],
+            "abstract_inverted_index": None,
+            "topics": [],
+        }
+        result = _parse_work(work)
+        assert len(result["coauthors"]) == 1
+        assert result["coauthors"][0]["display_name"] == "John Smith"
+
+    def test_skips_initial_only_first_name(self):
+        from openalex import _parse_work
+        work = {
+            "doi": "https://doi.org/10.1234/test",
+            "id": "https://openalex.org/W123",
+            "authorships": [
+                {"author": {"display_name": "A. Smith", "id": "https://openalex.org/A1"}},
+                {"author": {"display_name": "John Doe", "id": "https://openalex.org/A2"}},
+            ],
+            "abstract_inverted_index": None,
+            "topics": [],
+        }
+        result = _parse_work(work)
+        assert len(result["coauthors"]) == 1
+        assert result["coauthors"][0]["display_name"] == "John Doe"
+
+    def test_keeps_valid_coauthors(self):
+        from openalex import _parse_work
+        work = {
+            "doi": "https://doi.org/10.1234/test",
+            "id": "https://openalex.org/W123",
+            "authorships": [
+                {"author": {"display_name": "Jane Doe", "id": "https://openalex.org/A1"}},
+                {"author": {"display_name": "John Smith", "id": "https://openalex.org/A2"}},
+            ],
+            "abstract_inverted_index": None,
+            "topics": [],
+        }
+        result = _parse_work(work)
+        assert len(result["coauthors"]) == 2
+
+    def test_skips_whitespace_only_name(self):
+        from openalex import _parse_work
+        work = {
+            "doi": "https://doi.org/10.1234/test",
+            "id": "https://openalex.org/W123",
+            "authorships": [
+                {"author": {"display_name": "   ", "id": "https://openalex.org/A1"}},
+            ],
+            "abstract_inverted_index": None,
+            "topics": [],
+        }
+        result = _parse_work(work)
+        assert len(result["coauthors"]) == 0
+
+    def test_keeps_single_word_name(self):
+        """Some authors have mononyms (e.g. 'Sukarno'). These are valid."""
+        from openalex import _parse_work
+        work = {
+            "doi": "https://doi.org/10.1234/test",
+            "id": "https://openalex.org/W123",
+            "authorships": [
+                {"author": {"display_name": "Sukarno", "id": "https://openalex.org/A1"}},
+            ],
+            "abstract_inverted_index": None,
+            "topics": [],
+        }
+        result = _parse_work(work)
+        assert len(result["coauthors"]) == 1

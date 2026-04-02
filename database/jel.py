@@ -4,6 +4,68 @@ from datetime import datetime, timezone
 
 from database.connection import execute_query, fetch_all, get_connection
 
+# Maps top-level JEL codes to research_fields.slug values.
+# "Migration" has no top-level JEL code — handled via description keywords.
+_JEL_TO_FIELD_SLUGS: dict[str, str] = {
+    "C": "econometrics-methods",
+    "E": "macroeconomics",
+    "F": "international-trade",
+    "G": "finance",
+    "H": "public-economics",
+    "I": "health-economics",
+    "J": "labour-economics",
+    "L": "industrial-organisation",
+    "O": "development-economics",
+    "P": "political-economy",
+    "Z": "cultural-economics",
+}
+
+_MIGRATION_KEYWORDS = ("migration", "immigrant", "immigration", "migrant", "diaspora")
+
+
+def sync_researcher_fields_from_jel(researcher_id: int, jel_codes: list[str]) -> None:
+    """Clears existing field associations and re-derives them from the
+    given JEL codes. The 'migration' field is inferred via keyword
+    matching on the researcher's description.
+    """
+    slugs: set[str] = set()
+    for code in jel_codes:
+        slug = _JEL_TO_FIELD_SLUGS.get(code.upper().strip())
+        if slug:
+            slugs.add(slug)
+
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            # Keyword fallback for the migration field (no direct JEL code)
+            cursor.execute(
+                "SELECT description FROM researchers WHERE id = %s",
+                (researcher_id,),
+            )
+            row = cursor.fetchone()
+            description = row[0] if row else None
+            if description:
+                if any(kw in description.lower() for kw in _MIGRATION_KEYWORDS):
+                    slugs.add("migration")
+
+            cursor.execute(
+                "DELETE FROM researcher_fields WHERE researcher_id = %s",
+                (researcher_id,),
+            )
+            if slugs:
+                placeholders = ",".join(["%s"] * len(slugs))
+                cursor.execute(
+                    f"SELECT id FROM research_fields WHERE slug IN ({placeholders})",
+                    tuple(slugs),
+                )
+                field_ids = [r[0] for r in cursor.fetchall()]
+                for field_id in field_ids:
+                    cursor.execute(
+                        "INSERT IGNORE INTO researcher_fields (researcher_id, field_id) "
+                        "VALUES (%s, %s)",
+                        (researcher_id, field_id),
+                    )
+            conn.commit()
+
 
 def get_all_jel_codes() -> list[dict]:
     """Return all JEL codes ordered by code."""
@@ -47,7 +109,6 @@ def save_researcher_jel_codes(researcher_id: int, jel_codes: list[str]) -> None:
     Deletes existing codes and inserts the new set in a single transaction.
     Invalid codes (not in jel_codes table) are skipped with a warning.
     """
-    from database.connection import get_connection
     from mysql.connector.errors import IntegrityError
 
     now = datetime.now(timezone.utc)
@@ -71,6 +132,17 @@ def save_researcher_jel_codes(researcher_id: int, jel_codes: list[str]) -> None:
                         code, researcher_id,
                     )
             conn.commit()
+    sync_researcher_fields_from_jel(researcher_id, jel_codes)
+
+
+def _get_all_jel_codes_for_researcher(researcher_id: int) -> list[str]:
+    """Return all JEL code strings currently assigned to a researcher."""
+    from database.connection import fetch_all as _fetch_all
+    rows = _fetch_all(
+        "SELECT jel_code FROM researcher_jel_codes WHERE researcher_id = %s",
+        (researcher_id,),
+    )
+    return [r["jel_code"] for r in rows]
 
 
 def get_researchers_needing_classification() -> list[dict]:
@@ -187,3 +259,6 @@ def add_researcher_jel_codes(researcher_id: int, jel_codes: list[str]) -> None:
                             researcher_id,
                         )
             conn.commit()
+    # Sync fields from the full set, not just the newly added codes
+    all_codes = _get_all_jel_codes_for_researcher(researcher_id)
+    sync_researcher_fields_from_jel(researcher_id, all_codes)

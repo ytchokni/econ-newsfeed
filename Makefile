@@ -1,4 +1,4 @@
-.PHONY: setup dev kill seed reset-db scrape fetch parse parse-fast batch-submit batch-check classify-jel enrich enrich-jel discover-domains backfill-normalize check
+.PHONY: setup dev kill seed reset-db scrape fetch parse parse-fast batch-submit batch-check classify-jel enrich enrich-jel discover-domains backfill-normalize populate-fields check
 
 setup:
 	poetry install
@@ -60,6 +60,9 @@ discover-domains:  ## Scan for untrusted domains that may host paper links
 
 backfill-normalize:  ## Re-normalize html_content hashes (one-time, after deploying text normalization)
 	poetry run python scripts/backfill_normalized_hashes.py
+
+populate-fields:  ## Backfill researcher_fields from JEL codes (one-time)
+	poetry run python scripts/backfill_researcher_fields.py
 
 check:
 	@echo "=== Step 1: Env validation ==="

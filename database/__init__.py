@@ -57,6 +57,7 @@ from database.jel import (
     get_papers_needing_topics as _get_papers_needing_topics,
     get_all_researcher_topics as _get_all_researcher_topics,
     add_researcher_jel_codes as _add_researcher_jel_codes,
+    sync_researcher_fields_from_jel as _sync_researcher_fields_from_jel,
 )
 
 
@@ -113,3 +114,4 @@ class Database:
     get_papers_needing_topics = staticmethod(_get_papers_needing_topics)
     get_all_researcher_topics = staticmethod(_get_all_researcher_topics)
     add_researcher_jel_codes = staticmethod(_add_researcher_jel_codes)
+    sync_researcher_fields_from_jel = staticmethod(_sync_researcher_fields_from_jel)
