@@ -19,6 +19,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from database import Database
+from database.connection import connection_scope
 from publication import VALID_STATUSES
 import scheduler
 from scheduler import (
@@ -38,6 +39,14 @@ limiter = Limiter(key_func=get_remote_address)
 _filter_options_cache: dict = {"data": None, "expires_at": 0.0}
 _filter_options_lock = threading.Lock()
 _FILTER_OPTIONS_TTL = 600  # 10 minutes
+
+_fields_cache: dict = {"data": None, "expires_at": 0.0}
+_fields_lock = threading.Lock()
+
+_jel_codes_cache: dict = {"data": None, "expires_at": 0.0}
+_jel_codes_lock = threading.Lock()
+
+_STATIC_CACHE_TTL = 3600  # 1 hour for rarely-changing data
 
 
 # ---------------------------------------------------------------------------
@@ -510,7 +519,7 @@ def list_publications(
         conditions.append("p.year = %s")
         params.append(year)
     if researcher_id:
-        conditions.append("p.id IN (SELECT publication_id FROM authorship WHERE researcher_id = %s)")
+        conditions.append("EXISTS (SELECT 1 FROM authorship WHERE publication_id = p.id AND researcher_id = %s)")
         params.append(researcher_id)
     if status_list:
         if len(status_list) == 1:
@@ -531,32 +540,31 @@ def list_publications(
     if institution_list and not preset:
         if len(institution_list) == 1:
             conditions.append(
-                "p.id IN (SELECT a.publication_id FROM authorship a "
+                "EXISTS (SELECT 1 FROM authorship a "
                 "JOIN researchers r ON r.id = a.researcher_id "
-                "WHERE r.affiliation LIKE %s)"
+                "WHERE a.publication_id = p.id AND r.affiliation LIKE %s)"
             )
             params.append(f"%{_escape_like(institution_list[0])}%")
         else:
             inst_likes = " OR ".join(["r.affiliation LIKE %s"] * len(institution_list))
             conditions.append(
-                f"p.id IN (SELECT a.publication_id FROM authorship a "
+                f"EXISTS (SELECT 1 FROM authorship a "
                 f"JOIN researchers r ON r.id = a.researcher_id "
-                f"WHERE {inst_likes})"
+                f"WHERE a.publication_id = p.id AND ({inst_likes}))"
             )
             params.extend(f"%{_escape_like(i)}%" for i in institution_list)
     if preset == "top20":
         dept_likes = " OR ".join(["r.affiliation LIKE %s"] * len(_TOP20_DEPT_KEYWORDS))
         conditions.append(
-            f"p.id IN (SELECT a.publication_id FROM authorship a "
+            f"EXISTS (SELECT 1 FROM authorship a "
             f"JOIN researchers r ON r.id = a.researcher_id "
-            f"WHERE {dept_likes})"
+            f"WHERE a.publication_id = p.id AND ({dept_likes}))"
         )
         params.extend(f"%{_escape_like(kw)}%" for kw in _TOP20_DEPT_KEYWORDS)
     search_term = search.strip() if search else ""
     if search_term:
-        conditions.append("(p.title LIKE %s ESCAPE '\\\\' OR p.abstract LIKE %s ESCAPE '\\\\')")
-        escaped = f"%{_escape_like(search_term)}%"
-        params.extend([escaped, escaped])
+        conditions.append("MATCH(p.title, p.abstract) AGAINST (%s IN BOOLEAN MODE)")
+        params.append(search_term)
     if event_type:
         conditions.append("fe.event_type = %s")
         params.append(event_type)
@@ -564,46 +572,40 @@ def list_publications(
     if jel_list:
         placeholders = ",".join(["%s"] * len(jel_list))
         conditions.append(
-            f"p.id IN (SELECT a.publication_id FROM authorship a "
+            f"EXISTS (SELECT 1 FROM authorship a "
             f"JOIN researcher_jel_codes rjc ON rjc.researcher_id = a.researcher_id "
-            f"WHERE rjc.jel_code IN ({placeholders}))"
+            f"WHERE a.publication_id = p.id AND rjc.jel_code IN ({placeholders}))"
         )
         params.extend(jel_list)
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
-    # Total count
-    count_row = Database.fetch_one(
-        f"""SELECT COUNT(*) AS total
+    # Combined paginated results with total count via window function,
+    # using a single DB connection for all queries in this endpoint
+    offset = (page - 1) * per_page
+    with connection_scope():
+        rows = Database.fetch_all(
+            f"""
+            SELECT fe.id AS event_id, fe.event_type, fe.old_status, fe.new_status,
+                   fe.old_title, fe.new_title, fe.created_at,
+                   p.id AS paper_id, p.title, p.year, p.venue, p.source_url, p.discovered_at,
+                   p.status, p.draft_url, p.abstract, p.draft_url_status, p.doi,
+                   COUNT(*) OVER() AS total_count
             FROM feed_events fe
             JOIN papers p ON p.id = fe.paper_id
-            {where}""",
-        params or None,
-    )
-    total = count_row['total'] if count_row else 0
-    pages = math.ceil(total / per_page) if total else 0
+            {where}
+            ORDER BY fe.created_at DESC
+            LIMIT %s OFFSET %s
+            """,
+            (*params, per_page, offset) if params else (per_page, offset),
+        )
+        total = rows[0]['total_count'] if rows else 0
+        pages = math.ceil(total / per_page) if total else 0
 
-    # Paginated results
-    offset = (page - 1) * per_page
-    rows = Database.fetch_all(
-        f"""
-        SELECT fe.id AS event_id, fe.event_type, fe.old_status, fe.new_status,
-               fe.old_title, fe.new_title, fe.created_at,
-               p.id AS paper_id, p.title, p.year, p.venue, p.source_url, p.discovered_at,
-               p.status, p.draft_url, p.abstract, p.draft_url_status, p.doi
-        FROM feed_events fe
-        JOIN papers p ON p.id = fe.paper_id
-        {where}
-        ORDER BY fe.created_at DESC
-        LIMIT %s OFFSET %s
-        """,
-        (*params, per_page, offset),
-    )
-
-    pub_ids = [row['paper_id'] for row in rows]
-    authors_by_pub = _get_authors_for_publications(pub_ids)
-    coauthors_by_pub = _get_coauthors_for_publications(pub_ids)
-    links_by_pub = _get_links_for_publications(pub_ids)
+        pub_ids = [row['paper_id'] for row in rows]
+        authors_by_pub = _get_authors_for_publications(pub_ids)
+        coauthors_by_pub = _get_coauthors_for_publications(pub_ids)
+        links_by_pub = _get_links_for_publications(pub_ids)
     items = [
         _format_feed_event(row, authors_by_pub.get(row['paper_id'], []),
                            coauthors_by_pub.get(row['paper_id'], []),
@@ -797,16 +799,38 @@ _TOP20_DEPT_KEYWORDS = [
 
 @app.get("/api/fields")
 @limiter.limit("60/minute")
-def list_fields(request: Request):
-    rows = Database.fetch_all("SELECT id, name, slug FROM research_fields ORDER BY name")
-    return {"items": [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in rows]}
+def list_fields(request: Request, response: Response):
+    now = time.time()
+    with _fields_lock:
+        if _fields_cache["data"] is not None and now < _fields_cache["expires_at"]:
+            response.headers["Cache-Control"] = "public, max-age=3600"
+            return _fields_cache["data"]
+
+        rows = Database.fetch_all("SELECT id, name, slug FROM research_fields ORDER BY name")
+        result = {"items": [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in rows]}
+        _fields_cache["data"] = result
+        _fields_cache["expires_at"] = now + _STATIC_CACHE_TTL
+
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return result
 
 
 @app.get("/api/jel-codes")
 @limiter.limit("60/minute")
-def list_jel_codes(request: Request):
-    rows = Database.get_all_jel_codes()
-    return {"items": rows}
+def list_jel_codes(request: Request, response: Response):
+    now = time.time()
+    with _jel_codes_lock:
+        if _jel_codes_cache["data"] is not None and now < _jel_codes_cache["expires_at"]:
+            response.headers["Cache-Control"] = "public, max-age=3600"
+            return _jel_codes_cache["data"]
+
+        rows = Database.get_all_jel_codes()
+        result = {"items": rows}
+        _jel_codes_cache["data"] = result
+        _jel_codes_cache["expires_at"] = now + _STATIC_CACHE_TTL
+
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return result
 
 
 @app.get("/api/filter-options")
@@ -879,17 +903,17 @@ def list_researchers(
         field_slugs = [f.strip() for f in field.split(",") if f.strip()]
         if len(field_slugs) == 1:
             conditions.append(
-                "r.id IN (SELECT rf.researcher_id FROM researcher_fields rf "
+                "EXISTS (SELECT 1 FROM researcher_fields rf "
                 "JOIN research_fields f ON f.id = rf.field_id "
-                "WHERE f.slug = %s)"
+                "WHERE rf.researcher_id = r.id AND f.slug = %s)"
             )
             params.append(field_slugs[0])
         else:
             placeholders = ",".join(["%s"] * len(field_slugs))
             conditions.append(
-                f"r.id IN (SELECT rf.researcher_id FROM researcher_fields rf "
+                f"EXISTS (SELECT 1 FROM researcher_fields rf "
                 f"JOIN research_fields f ON f.id = rf.field_id "
-                f"WHERE f.slug IN ({placeholders}))"
+                f"WHERE rf.researcher_id = r.id AND f.slug IN ({placeholders}))"
             )
             params.extend(field_slugs)
 
@@ -903,30 +927,27 @@ def list_researchers(
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
-    # Total count
-    count_row = Database.fetch_one(
-        f"SELECT COUNT(*) AS total FROM researchers r {where}", params or None
-    )
-    total = count_row['total'] if count_row else 0
-    pages = math.ceil(total / per_page) if total else 0
-
     offset = (page - 1) * per_page
-    rows = Database.fetch_all(
-        f"""
-        SELECT r.id, r.first_name, r.last_name, r.position, r.affiliation, r.description
-        FROM researchers r
-        {where}
-        ORDER BY r.last_name, r.first_name
-        LIMIT %s OFFSET %s
-        """,
-        (*params, per_page, offset),
-    )
+    with connection_scope():
+        rows = Database.fetch_all(
+            f"""
+            SELECT r.id, r.first_name, r.last_name, r.position, r.affiliation, r.description,
+                   COUNT(*) OVER() AS total_count
+            FROM researchers r
+            {where}
+            ORDER BY r.last_name, r.first_name
+            LIMIT %s OFFSET %s
+            """,
+            (*params, per_page, offset),
+        )
+        total = rows[0]['total_count'] if rows else 0
+        pages = math.ceil(total / per_page) if total else 0
 
-    researcher_ids = [r['id'] for r in rows]
-    urls_by_researcher = _get_urls_for_researchers(researcher_ids)
-    pub_counts = _get_pub_counts_for_researchers(researcher_ids)
-    fields_by_researcher = _get_fields_for_researchers(researcher_ids)
-    jel_map = Database.get_jel_codes_for_researchers(researcher_ids)
+        researcher_ids = [r['id'] for r in rows]
+        urls_by_researcher = _get_urls_for_researchers(researcher_ids)
+        pub_counts = _get_pub_counts_for_researchers(researcher_ids)
+        fields_by_researcher = _get_fields_for_researchers(researcher_ids)
+        jel_map = Database.get_jel_codes_for_researchers(researcher_ids)
     items = [
         {
             "id": r['id'],
