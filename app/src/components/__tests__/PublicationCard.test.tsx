@@ -3,10 +3,9 @@ import userEvent from "@testing-library/user-event";
 import PublicationCard from "../PublicationCard";
 import type { Publication } from "@/lib/types";
 
-// Mock next/navigation
-const mockPush = jest.fn();
+// Mock next/navigation (no longer needed for card click, kept for compatibility)
 jest.mock("next/navigation", () => ({
-  useRouter: () => ({ push: mockPush }),
+  useRouter: () => ({ push: jest.fn() }),
 }));
 
 const publication: Publication = {
@@ -63,24 +62,20 @@ describe("PublicationCard", () => {
 });
 
 describe("PublicationCard navigation", () => {
-  beforeEach(() => {
-    mockPush.mockClear();
+  it("has a link to the paper detail page", () => {
+    render(<PublicationCard publication={publication} />);
+    const links = screen.getAllByRole("link");
+    const paperLinks = links.filter((l) =>
+      l.getAttribute("href")?.startsWith("/papers/")
+    );
+    expect(paperLinks.length).toBeGreaterThanOrEqual(1);
+    expect(paperLinks[0]).toHaveAttribute("href", "/papers/1");
   });
 
-  it("navigates to paper detail on card click", async () => {
-    const user = userEvent.setup();
+  it("has separate author links that don't point to the paper", () => {
     render(<PublicationCard publication={publication} />);
-    const card = screen.getByText("Immigration and Wages: Evidence from Germany").closest("[data-testid='publication-card']")!;
-    await user.click(card);
-    expect(mockPush).toHaveBeenCalledWith("/papers/1");
-  });
-
-  it("does not navigate when clicking author link", async () => {
-    const user = userEvent.setup();
-    render(<PublicationCard publication={publication} />);
-    const authorLink = screen.getByText(/M\. Steinhardt/);
-    await user.click(authorLink);
-    expect(mockPush).not.toHaveBeenCalled();
+    const authorLink = screen.getByText(/M\. Steinhardt/).closest("a");
+    expect(authorLink).toHaveAttribute("href", "/researchers/1");
   });
 });
 

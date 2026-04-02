@@ -865,6 +865,12 @@ def list_researchers(
         "(SELECT 1 FROM researcher_urls ru WHERE ru.researcher_id = r.id))"
     )
 
+    # Hide abbreviated/initial-only names (e.g. "R.", "A.", "David K.")
+    conditions.append(
+        "r.first_name IS NOT NULL AND LENGTH(r.first_name) > 2 "
+        "AND r.first_name NOT REGEXP '^[A-Z]\\\\.$'"
+    )
+
     if institution:
         conditions.append("r.affiliation LIKE %s")
         params.append(f"%{_escape_like(institution)}%")
