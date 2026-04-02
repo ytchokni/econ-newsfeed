@@ -1,4 +1,4 @@
-.PHONY: setup dev kill seed reset-db scrape fetch parse parse-fast batch-submit batch-check classify-jel enrich enrich-jel discover-domains backfill-normalize populate-fields check
+.PHONY: setup dev kill seed reset-db scrape fetch parse parse-fast batch-submit batch-check classify-jel enrich enrich-jel discover-domains backfill-normalize populate-fields backfill-affiliations audit-zero-pubs check
 
 setup:
 	poetry install
@@ -63,6 +63,12 @@ backfill-normalize:  ## Re-normalize html_content hashes (one-time, after deploy
 
 populate-fields:  ## Backfill researcher_fields from JEL codes (one-time)
 	poetry run python scripts/backfill_researcher_fields.py
+
+backfill-affiliations:  ## Backfill researcher affiliations from OpenAlex
+	poetry run python scripts/backfill_affiliations.py
+
+audit-zero-pubs:  ## Audit researchers with URLs but 0 publications
+	poetry run python scripts/audit_zero_pub_researchers.py
 
 check:
 	@echo "=== Step 1: Env validation ==="
