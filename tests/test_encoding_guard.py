@@ -24,6 +24,14 @@ CLEAN_UNICODE = [
     "Zürich",
     "François",
     "Ströbele",
+    # Smart quotes and typographic punctuation — must NOT be changed
+    "\u201ccrises\u201d",          # "crises" (curly double quotes)
+    "worker\u2019s",               # worker's (curly apostrophe)
+    "\u2018single\u2019",          # 'single' (curly single quotes)
+    "\u2022 bullet point",         # • bullet point
+    "outcome \u2014 not the",      # em dash
+    "ﬁnancial",                    # fi ligature
+    "p\u2013values",               # en dash
 ]
 
 
