@@ -181,3 +181,27 @@ def test_match_by_name_no_match():
                   "affiliation": None, "urls": []}
     matches = match_by_name(researcher, by_name)
     assert len(matches) == 0
+
+
+from scripts.match_repec import write_csv, CSV_COLUMNS
+
+def test_write_csv(tmp_path):
+    output = str(tmp_path / "out.csv")
+    rows = [
+        {"researcher_id": 1, "first_name": "Arild", "last_name": "Aakvik",
+         "db_affiliation": "Bergen", "repec_name": "Arild Aakvik",
+         "repec_workplace": "Universitetet i Bergen",
+         "repec_homepage": "https://example.com", "repec_handle": "REPEC:per:aakvik",
+         "match_type": "exact_name", "confidence": "unique"},
+    ]
+    write_csv(rows, output)
+
+    import csv
+    with open(output) as f:
+        reader = csv.DictReader(f)
+        result = list(reader)
+    assert len(result) == 1
+    assert result[0]["researcher_id"] == "1"
+    assert result[0]["confidence"] == "unique"
+
+

@@ -178,3 +178,113 @@ def match_by_name(researcher: dict, by_name: dict) -> list[dict]:
         if len(affil_matches) == 1:
             return [_make_match_row(researcher, affil_matches[0], "exact_name", "affiliation_match")]
     return [_make_match_row(researcher, c, "exact_name", "ambiguous") for c in candidates]
+
+
+CSV_COLUMNS = [
+    "researcher_id", "first_name", "last_name", "db_affiliation",
+    "repec_name", "repec_workplace", "repec_homepage", "repec_handle",
+    "match_type", "confidence",
+]
+
+
+def write_csv(rows: list[dict], output_path: str) -> None:
+    """Write match rows to CSV."""
+    with open(output_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+        writer.writeheader()
+        writer.writerows(rows)
+    print(f"Wrote {len(rows)} rows to {output_path}")
+
+
+def load_researchers() -> list[dict]:
+    """Load all researchers with their URLs from the database."""
+    from database.connection import fetch_all
+    researchers = fetch_all(
+        "SELECT r.id, r.first_name, r.last_name, r.affiliation "
+        "FROM researchers r ORDER BY r.id"
+    )
+    urls = fetch_all("SELECT researcher_id, url FROM researcher_urls")
+    url_map: dict[int, list[str]] = defaultdict(list)
+    for row in urls:
+        url_map[row["researcher_id"]].append(row["url"])
+    for r in researchers:
+        r["urls"] = url_map.get(r["id"], [])
+    return researchers
+
+
+def run_matching(researchers: list[dict], by_name: dict, by_domain: dict) -> list[dict]:
+    """Run URL matching then name matching, deduplicate."""
+    all_matches: list[dict] = []
+    url_matched_ids: set[int] = set()
+    for r in researchers:
+        if not r["urls"]:
+            continue
+        url_matches = match_by_url(r, by_domain)
+        if url_matches:
+            all_matches.extend(url_matches)
+            url_matched_ids.add(r["id"])
+    for r in researchers:
+        if r["id"] in url_matched_ids:
+            continue
+        name_matches = match_by_name(r, by_name)
+        all_matches.extend(name_matches)
+    return all_matches
+
+
+def print_summary(matches: list[dict], total_researchers: int) -> None:
+    """Print match statistics."""
+    unique = sum(1 for m in matches if m["confidence"] == "unique")
+    affil = sum(1 for m in matches if m["confidence"] == "affiliation_match")
+    ambiguous = sum(1 for m in matches if m["confidence"] == "ambiguous")
+    matched_ids = {m["researcher_id"] for m in matches}
+    print(f"\n{'='*50}")
+    print(f"RePEC Matching Summary")
+    print(f"{'='*50}")
+    print(f"Total researchers in DB:     {total_researchers}")
+    print(f"Researchers matched:         {len(matched_ids)}")
+    print(f"  - unique:                  {unique}")
+    print(f"  - affiliation_match:       {affil}")
+    print(f"  - ambiguous:               {ambiguous}")
+    print(f"No match:                    {total_researchers - len(matched_ids)}")
+    print(f"Total CSV rows:              {len(matches)}")
+    url_matches = sum(1 for m in matches if m["match_type"] == "url_match")
+    name_matches = sum(1 for m in matches if m["match_type"] == "exact_name")
+    print(f"\nBy match type:")
+    print(f"  - url_match:               {url_matches}")
+    print(f"  - exact_name:              {name_matches}")
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Match DB researchers against RePEC person records")
+    parser.add_argument("--repec-dir", default="RePEc/per/pers/",
+                        help="Path to RePEC person data (default: RePEc/per/pers/)")
+    parser.add_argument("--output", default="repec_matches.csv",
+                        help="Output CSV path (default: repec_matches.csv)")
+    parser.add_argument("--stats-only", action="store_true",
+                        help="Parse RePEC data and report stats without DB lookup")
+    args = parser.parse_args()
+
+    print(f"Parsing RePEC data from {args.repec_dir}...")
+    by_name, by_domain = build_repec_index(args.repec_dir)
+    print(f"Index: {len(by_name)} unique names, {len(by_domain)} unique domains")
+
+    if args.stats_only:
+        total_records = sum(len(v) for v in by_name.values())
+        print(f"\nTotal records with homepage: {total_records}")
+        multi_name = {k: v for k, v in by_name.items() if len(v) > 1}
+        print(f"Names with multiple records: {len(multi_name)}")
+        return
+
+    print("\nLoading researchers from database...")
+    researchers = load_researchers()
+    print(f"Loaded {len(researchers)} researchers ({sum(1 for r in researchers if r['urls'])} with URLs)")
+
+    print("\nRunning matching...")
+    matches = run_matching(researchers, by_name, by_domain)
+
+    write_csv(matches, args.output)
+    print_summary(matches, len(researchers))
+
+
+if __name__ == "__main__":
+    main()
