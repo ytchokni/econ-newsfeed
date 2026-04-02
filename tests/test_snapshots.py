@@ -114,11 +114,11 @@ class TestPaperContentHash:
         assert h1 == h2
 
     def test_matches_manual_sha256(self):
-        """Must equal SHA-256('status||venue||abstract||draft_url||year')."""
+        """Must equal SHA-256('title||status||venue||abstract||draft_url||year')."""
         status, venue, abstract, draft_url, year = (
             "published", "AER", "The abstract.", "https://ssrn.com/3", "2022"
         )
-        expected = _sha256(status, venue, abstract, draft_url, year)
+        expected = _sha256(None, status, venue, abstract, draft_url, year)
         assert (
             Database._compute_paper_content_hash(status, venue, abstract, draft_url, year)
             == expected
@@ -157,7 +157,7 @@ class TestPaperContentHash:
     def test_none_values_handled(self):
         """All-None input must not raise."""
         h = Database._compute_paper_content_hash(None, None, None, None, None)
-        expected = _sha256(None, None, None, None, None)
+        expected = _sha256(None, None, None, None, None, None)
         assert h == expected
 
     def test_none_and_empty_string_are_equivalent(self):
