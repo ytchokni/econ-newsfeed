@@ -224,6 +224,7 @@ class TestEnrichPublication:
                 {"display_name": "Max Steinhardt", "openalex_author_id": "A111"},
             ],
             "abstract": "OpenAlex abstract.",
+            "year": None,
         }
         with (
             patch("openalex.search_work", return_value=openalex_result),
@@ -255,6 +256,7 @@ class TestEnrichPublication:
             "openalex_id": "W999",
             "coauthors": [],
             "abstract": "OpenAlex abstract.",
+            "year": None,
         }
         with (
             patch("openalex.search_work", return_value=openalex_result),
@@ -300,6 +302,7 @@ class TestEnrichNewPublications:
             "openalex_id": "W123",
             "coauthors": [],
             "abstract": None,
+            "year": None,
         }
         with (
             patch("openalex.Database.get_unenriched_papers", return_value=unenriched),
@@ -389,6 +392,7 @@ class TestEnrichWithDoiFirst:
             "title": "Extreme Air Pollution",
             "coauthors": [{"display_name": "A. Author", "openalex_author_id": "A111"}],
             "abstract": "Abstract text",
+            "year": "2016",
         }
         with (
             patch("openalex.lookup_by_doi", return_value=openalex_result) as mock_lookup,
@@ -671,9 +675,4 @@ class TestEnrichPublicationYear:
 
         mock_db.update_openalex_data.assert_called_once()
         call_kwargs = mock_db.update_openalex_data.call_args
-        # Check year was passed (either as kwarg or positional)
-        if call_kwargs.kwargs:
-            assert call_kwargs.kwargs.get("year") == "2024"
-        else:
-            # positional: paper_id, doi, openalex_id, coauthors, abstract, year
-            assert "2024" in call_kwargs.args or any("2024" in str(a) for a in call_kwargs.args)
+        assert call_kwargs.kwargs.get("year") == "2024"

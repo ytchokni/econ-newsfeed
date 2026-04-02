@@ -23,9 +23,7 @@ def main():
                ru.url,
                hc.id AS html_id,
                hc.timestamp AS fetched_at,
-               hc.extracted_at,
-               hc.content_hash,
-               hc.extracted_hash
+               hc.extracted_at
         FROM researchers r
         JOIN researcher_urls ru ON ru.researcher_id = r.id
         LEFT JOIN authorship a ON a.researcher_id = r.id

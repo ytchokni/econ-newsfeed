@@ -13,26 +13,22 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-import requests
 from database import Database
+from openalex import OPENALEX_BASE_URL, _get_session, _get_with_retry
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
-OPENALEX_BASE = "https://api.openalex.org"
-MAILTO = os.environ.get("OPENALEX_MAILTO", "")
-
 
 def fetch_author_affiliation(openalex_author_id: str) -> str | None:
     """Fetch last_known_institution.display_name from OpenAlex author API."""
-    params = {}
-    if MAILTO:
-        params["mailto"] = MAILTO
+    import requests as req
+    session = _get_session()
     try:
-        resp = requests.get(
-            f"{OPENALEX_BASE}/authors/{openalex_author_id}",
-            params=params,
-            timeout=10,
+        resp = _get_with_retry(
+            session,
+            f"{OPENALEX_BASE_URL}/authors/{openalex_author_id}",
+            params={},
         )
         if resp.status_code == 404:
             return None
@@ -44,8 +40,8 @@ def fetch_author_affiliation(openalex_author_id: str) -> str | None:
         # Fallback to legacy field
         legacy = data.get("last_known_institution") or {}
         return legacy.get("display_name")
-    except (requests.RequestException, ValueError) as e:
-        logger.warning("Failed to fetch author A%s: %s", openalex_author_id, e)
+    except (req.RequestException, ValueError) as e:
+        logger.warning("Failed to fetch author %s: %s", openalex_author_id, e)
         return None
 
 
