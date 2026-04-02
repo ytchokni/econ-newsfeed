@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 def fetch_author_affiliation(openalex_author_id: str) -> str | None:
     """Fetch last_known_institution.display_name from OpenAlex author API."""
-    import requests as req
+    from requests.exceptions import RequestException
     session = _get_session()
     try:
         resp = _get_with_retry(
@@ -40,7 +40,7 @@ def fetch_author_affiliation(openalex_author_id: str) -> str | None:
         # Fallback to legacy field
         legacy = data.get("last_known_institution") or {}
         return legacy.get("display_name")
-    except (req.RequestException, ValueError) as e:
+    except (RequestException, ValueError) as e:
         logger.warning("Failed to fetch author %s: %s", openalex_author_id, e)
         return None
 
