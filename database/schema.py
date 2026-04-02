@@ -386,6 +386,13 @@ def create_tables() -> None:
                             logging.warning("Migration warning for papers.ft_title_abstract: %s", e)
 
                     try:
+                        cursor.execute("ALTER TABLE researchers ADD FULLTEXT INDEX ft_name (first_name, last_name)")
+                        conn.commit()
+                    except Exception as e:
+                        if getattr(e, 'errno', None) != 1061:
+                            logging.warning("Migration warning for researchers.ft_name: %s", e)
+
+                    try:
                         cursor.execute("ALTER TABLE feed_events ADD INDEX idx_event_type_created (event_type, created_at DESC)")
                         conn.commit()
                     except Exception as e:

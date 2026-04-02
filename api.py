@@ -36,17 +36,33 @@ limiter = Limiter(key_func=get_remote_address)
 # ---------------------------------------------------------------------------
 # Server-side TTL cache for /api/filter-options
 # ---------------------------------------------------------------------------
-_filter_options_cache: dict = {"data": None, "expires_at": 0.0}
-_filter_options_lock = threading.Lock()
-_FILTER_OPTIONS_TTL = 600  # 10 minutes
+class _TTLCache:
+    """Thread-safe TTL cache for expensive-but-stable DB queries."""
 
-_fields_cache: dict = {"data": None, "expires_at": 0.0}
-_fields_lock = threading.Lock()
+    def __init__(self, ttl: float):
+        self._data = None
+        self._expires_at = 0.0
+        self._lock = threading.Lock()
+        self._ttl = ttl
 
-_jel_codes_cache: dict = {"data": None, "expires_at": 0.0}
-_jel_codes_lock = threading.Lock()
+    def get_or_set(self, factory):
+        now = time.time()
+        with self._lock:
+            if self._data is not None and now < self._expires_at:
+                return self._data
+            self._data = factory()
+            self._expires_at = now + self._ttl
+            return self._data
 
-_STATIC_CACHE_TTL = 3600  # 1 hour for rarely-changing data
+    def clear(self):
+        with self._lock:
+            self._data = None
+            self._expires_at = 0.0
+
+
+_filter_options_cache = _TTLCache(600)   # 10 minutes
+_fields_cache = _TTLCache(3600)          # 1 hour
+_jel_codes_cache = _TTLCache(3600)       # 1 hour
 
 
 # ---------------------------------------------------------------------------
@@ -314,6 +330,18 @@ def _escape_like(value: str) -> str:
     return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
+# MySQL FULLTEXT minimum token size (InnoDB default is 3).
+_FT_MIN_TOKEN_SIZE = int(os.environ.get("FT_MIN_TOKEN_SIZE", "3"))
+
+# Characters with special meaning in BOOLEAN MODE that must be stripped.
+_FT_BOOLEAN_OPERATORS = str.maketrans("", "", '+-~<>()@*"')
+
+
+def _escape_fulltext(value: str) -> str:
+    """Strip BOOLEAN MODE operators so user input is matched literally."""
+    return value.translate(_FT_BOOLEAN_OPERATORS)
+
+
 def _iso_z(dt: datetime | str | None) -> str | None:
     """Format a datetime as ISO 8601 with trailing Z, or None."""
     if not dt:
@@ -563,8 +591,15 @@ def list_publications(
         params.extend(f"%{_escape_like(kw)}%" for kw in _TOP20_DEPT_KEYWORDS)
     search_term = search.strip() if search else ""
     if search_term:
-        conditions.append("MATCH(p.title, p.abstract) AGAINST (%s IN BOOLEAN MODE)")
-        params.append(search_term)
+        # Use FULLTEXT index for terms long enough; fall back to LIKE for
+        # short terms that MySQL's ft parser would silently ignore.
+        if len(search_term) >= _FT_MIN_TOKEN_SIZE:
+            conditions.append("MATCH(p.title, p.abstract) AGAINST (%s IN BOOLEAN MODE)")
+            params.append(_escape_fulltext(search_term))
+        else:
+            escaped = f"%{_escape_like(search_term)}%"
+            conditions.append("(p.title LIKE %s ESCAPE '\\\\' OR p.abstract LIKE %s ESCAPE '\\\\')")
+            params.extend([escaped, escaped])
     if event_type:
         conditions.append("fe.event_type = %s")
         params.append(event_type)
@@ -597,7 +632,7 @@ def list_publications(
             ORDER BY fe.created_at DESC
             LIMIT %s OFFSET %s
             """,
-            (*params, per_page, offset) if params else (per_page, offset),
+            (*params, per_page, offset),
         )
         total = rows[0]['total_count'] if rows else 0
         pages = math.ceil(total / per_page) if total else 0
@@ -800,48 +835,28 @@ _TOP20_DEPT_KEYWORDS = [
 @app.get("/api/fields")
 @limiter.limit("60/minute")
 def list_fields(request: Request, response: Response):
-    now = time.time()
-    with _fields_lock:
-        if _fields_cache["data"] is not None and now < _fields_cache["expires_at"]:
-            response.headers["Cache-Control"] = "public, max-age=3600"
-            return _fields_cache["data"]
-
+    def _fetch():
         rows = Database.fetch_all("SELECT id, name, slug FROM research_fields ORDER BY name")
-        result = {"items": [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in rows]}
-        _fields_cache["data"] = result
-        _fields_cache["expires_at"] = now + _STATIC_CACHE_TTL
+        return {"items": [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in rows]}
 
     response.headers["Cache-Control"] = "public, max-age=3600"
-    return result
+    return _fields_cache.get_or_set(_fetch)
 
 
 @app.get("/api/jel-codes")
 @limiter.limit("60/minute")
 def list_jel_codes(request: Request, response: Response):
-    now = time.time()
-    with _jel_codes_lock:
-        if _jel_codes_cache["data"] is not None and now < _jel_codes_cache["expires_at"]:
-            response.headers["Cache-Control"] = "public, max-age=3600"
-            return _jel_codes_cache["data"]
-
-        rows = Database.get_all_jel_codes()
-        result = {"items": rows}
-        _jel_codes_cache["data"] = result
-        _jel_codes_cache["expires_at"] = now + _STATIC_CACHE_TTL
+    def _fetch():
+        return {"items": Database.get_all_jel_codes()}
 
     response.headers["Cache-Control"] = "public, max-age=3600"
-    return result
+    return _jel_codes_cache.get_or_set(_fetch)
 
 
 @app.get("/api/filter-options")
 @limiter.limit("30/minute")
 def get_filter_options(request: Request, response: Response):
-    now = time.time()
-    with _filter_options_lock:
-        if _filter_options_cache["data"] is not None and now < _filter_options_cache["expires_at"]:
-            response.headers["Cache-Control"] = "public, max-age=600"
-            return _filter_options_cache["data"]
-
+    def _fetch():
         institutions = Database.fetch_all(
             "SELECT DISTINCT affiliation FROM researchers "
             "WHERE affiliation IS NOT NULL AND affiliation != '' "
@@ -855,16 +870,14 @@ def get_filter_options(request: Request, response: Response):
         fields = Database.fetch_all(
             "SELECT id, name, slug FROM research_fields ORDER BY name"
         )
-        result = {
+        return {
             "institutions": [r['affiliation'] for r in institutions],
             "positions": [r['position'] for r in positions],
             "fields": [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in fields],
         }
-        _filter_options_cache["data"] = result
-        _filter_options_cache["expires_at"] = now + _FILTER_OPTIONS_TTL
 
     response.headers["Cache-Control"] = "public, max-age=600"
-    return result
+    return _filter_options_cache.get_or_set(_fetch)
 
 
 @app.get("/api/researchers", response_model=PaginatedResearchers)
@@ -919,11 +932,21 @@ def list_researchers(
 
     search_term = search.strip() if search else ""
     if search_term:
-        conditions.append(
-            "(r.first_name LIKE %s ESCAPE '\\\\' OR r.last_name LIKE %s ESCAPE '\\\\')"
-        )
-        escaped = f"%{_escape_like(search_term)}%"
-        params.extend([escaped, escaped])
+        if len(search_term) >= _FT_MIN_TOKEN_SIZE:
+            conditions.append(
+                "(MATCH(r.first_name, r.last_name) AGAINST (%s IN BOOLEAN MODE)"
+                " OR CONCAT(r.first_name, ' ', r.last_name) LIKE %s ESCAPE '\\\\')"
+            )
+            params.append(_escape_fulltext(search_term))
+            params.append(f"%{_escape_like(search_term)}%")
+        else:
+            escaped = f"%{_escape_like(search_term)}%"
+            conditions.append(
+                "(r.first_name LIKE %s ESCAPE '\\\\'"
+                " OR r.last_name LIKE %s ESCAPE '\\\\'"
+                " OR CONCAT(r.first_name, ' ', r.last_name) LIKE %s ESCAPE '\\\\')"
+            )
+            params.extend([escaped, escaped, escaped])
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 

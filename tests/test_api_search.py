@@ -106,7 +106,7 @@ class TestResearcherSearch:
             client.get("/api/researchers?search=Max")
 
         fetch_sql = mock_fetch.call_args_list[0][0][0]
-        assert "first_name LIKE" in fetch_sql or "last_name LIKE" in fetch_sql
+        assert "first_name" in fetch_sql and "last_name" in fetch_sql
 
     def test_search_combined_with_institution(self, client):
         """Search works alongside institution filter."""

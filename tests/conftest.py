@@ -30,6 +30,19 @@ def _noop_connection_scope():
     yield None
 
 
+@pytest.fixture(autouse=True)
+def _clear_api_caches():
+    """Reset TTL caches between tests to prevent cross-test pollution."""
+    import api
+    api._filter_options_cache.clear()
+    api._fields_cache.clear()
+    api._jel_codes_cache.clear()
+    yield
+    api._filter_options_cache.clear()
+    api._fields_cache.clear()
+    api._jel_codes_cache.clear()
+
+
 @pytest.fixture
 def client():
     """Test client with mocked DB and scheduler."""
