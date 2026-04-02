@@ -332,3 +332,95 @@ class TestDNSPinning:
         from html_fetcher import HTMLFetcher
         safe, _ = HTMLFetcher.validate_url_with_pin("file:///etc/passwd")
         assert safe is False
+
+
+# ---------------------------------------------------------------------------
+# SSRF redirect bypass — fetch_html must validate each redirect hop
+# ---------------------------------------------------------------------------
+
+class TestSSRFRedirectBypass:
+    """fetch_html must validate redirect targets to prevent SSRF via redirect."""
+
+    def test_redirect_to_private_ip_is_blocked(self):
+        """A 302 redirect to 169.254.169.254 must return None."""
+        from html_fetcher import HTMLFetcher
+
+        # First request returns 302 pointing to AWS metadata endpoint
+        redirect_response = MagicMock()
+        redirect_response.status_code = 302
+        redirect_response.headers = {"Location": "http://169.254.169.254/latest/meta-data/"}
+
+        mock_session = MagicMock()
+        mock_session.get.return_value = redirect_response
+
+        with patch.object(HTMLFetcher, "_get_session", return_value=mock_session), \
+             patch.object(HTMLFetcher, "_rate_limit"):
+            result = HTMLFetcher.fetch_html("https://example.com/page")
+
+        assert result is None
+
+    def test_redirect_without_location_header_returns_none(self):
+        """A redirect response with no Location header must return None."""
+        from html_fetcher import HTMLFetcher
+
+        redirect_response = MagicMock()
+        redirect_response.status_code = 302
+        redirect_response.headers = {}  # No Location header
+        redirect_response.raise_for_status = MagicMock()
+
+        with patch.object(HTMLFetcher, "_rate_limit"), \
+             patch.object(HTMLFetcher, "_get_session") as mock_session:
+            session = MagicMock()
+            session.get.return_value = redirect_response
+            mock_session.return_value = session
+            result = HTMLFetcher.fetch_html("https://example.com/redirect")
+
+        assert result is None
+
+    def test_redirect_to_public_ip_is_followed(self):
+        """A 302 redirect to a public IP should follow and return content."""
+        from html_fetcher import HTMLFetcher
+
+        # First request returns 302 to a public URL
+        redirect_response = MagicMock()
+        redirect_response.status_code = 302
+        redirect_response.headers = {"Location": "https://public.example.com/page"}
+
+        # Second request returns 200 with HTML content
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        ok_response.content = b"<html>OK</html>"
+        ok_response.text = "<html>OK</html>"
+        ok_response.apparent_encoding = "utf-8"
+        ok_response.raise_for_status = MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.get.side_effect = [redirect_response, ok_response]
+
+        with patch.object(HTMLFetcher, "_get_session", return_value=mock_session), \
+             patch.object(HTMLFetcher, "_rate_limit"), \
+             patch.object(HTMLFetcher, "validate_url", return_value=True):
+            result = HTMLFetcher.fetch_html("https://example.com/page")
+
+        assert result == "<html>OK</html>"
+
+    def test_redirect_chain_limit(self):
+        """More than 5 redirects must return None."""
+        from html_fetcher import HTMLFetcher
+
+        # Create a redirect response that always redirects
+        def make_redirect():
+            resp = MagicMock()
+            resp.status_code = 302
+            resp.headers = {"Location": "https://public.example.com/hop"}
+            return resp
+
+        mock_session = MagicMock()
+        mock_session.get.side_effect = [make_redirect() for _ in range(10)]
+
+        with patch.object(HTMLFetcher, "_get_session", return_value=mock_session), \
+             patch.object(HTMLFetcher, "_rate_limit"), \
+             patch.object(HTMLFetcher, "validate_url", return_value=True):
+            result = HTMLFetcher.fetch_html("https://example.com/page")
+
+        assert result is None

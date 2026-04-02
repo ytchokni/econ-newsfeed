@@ -10,7 +10,7 @@ import requests
 import hashlib
 import logging
 from datetime import datetime, timezone
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 from database import Database
 from bs4 import BeautifulSoup
@@ -189,40 +189,59 @@ class HTMLFetcher:
             HTMLFetcher._domain_last_request[domain] = time.time()
 
     @staticmethod
-    def fetch_html(url: str, timeout: int = 10, max_retries: int = 3) -> str | None:
+    def fetch_html(url: str, timeout: int = 10, max_retries: int = 3, max_redirects: int = 5) -> str | None:
         """
         Fetch HTML content from a given URL with exponential backoff.
         Retries on timeouts and 5xx server errors.
+        Follows redirects manually with SSRF validation on each hop.
 
         Returns the HTML content as a string, or None on failure.
         """
-        HTMLFetcher._rate_limit(url)
         session = HTMLFetcher._get_session()
+        redirects_remaining = max_redirects
+        current_url = url
 
-        for attempt in range(max_retries):
-            try:
-                response = session.get(url, timeout=timeout)
-                if response.status_code >= 500:
-                    backoff = 2 ** attempt  # 1s, 2s, 4s
-                    logging.warning(f"Server error {response.status_code} for {url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
+        while True:
+            HTMLFetcher._rate_limit(current_url)
+            for attempt in range(max_retries):
+                try:
+                    response = session.get(current_url, timeout=timeout, allow_redirects=False)
+                    if response.status_code >= 500:
+                        backoff = 2 ** attempt  # 1s, 2s, 4s
+                        logging.warning(f"Server error {response.status_code} for {current_url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(backoff)
+                        continue
+                    # Handle redirects manually with SSRF validation
+                    if response.status_code in (301, 302, 303, 307, 308):
+                        if redirects_remaining <= 0:
+                            logging.warning(f"Redirect limit exceeded for {current_url}")
+                            return None
+                        redirect_url = urljoin(current_url, response.headers.get('Location', ''))
+                        if not redirect_url or not HTMLFetcher.validate_url(redirect_url):
+                            logging.warning(f"Blocked redirect to unsafe URL from {current_url}: {redirect_url}")
+                            return None
+                        redirects_remaining -= 1
+                        current_url = redirect_url
+                        break  # Break retry loop, continue outer redirect loop
+                    response.raise_for_status()
+                    if len(response.content) > CONTENT_MAX_BYTES:
+                        logging.warning(f"Response too large ({len(response.content)} bytes) for {current_url}, rejecting")
+                        return None
+                    logging.info(f"Successfully fetched HTML content from {current_url}")
+                    response.encoding = response.apparent_encoding
+                    return response.text
+                except requests.exceptions.Timeout:
+                    backoff = 2 ** attempt
+                    logging.warning(f"Timeout for {current_url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
                     time.sleep(backoff)
-                    continue
-                response.raise_for_status()
-                if len(response.content) > CONTENT_MAX_BYTES:
-                    logging.warning(f"Response too large ({len(response.content)} bytes) for {url}, rejecting")
-                    return None
-                logging.info(f"Successfully fetched HTML content from {url}")
-                response.encoding = response.apparent_encoding
-                return response.text
-            except requests.exceptions.Timeout:
-                backoff = 2 ** attempt
-                logging.warning(f"Timeout for {url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
-                time.sleep(backoff)
-            except requests.exceptions.RequestException as e:
-                logging.error("Request exception for %s: %s", url, type(e).__name__)
-                break  # Non-retryable error
-        logging.error(f"Failed to fetch HTML content from {url} after {max_retries} attempts")
-        return None
+                except requests.exceptions.RequestException as e:
+                    logging.error("Request exception for %s: %s", current_url, type(e).__name__)
+                    logging.error(f"Failed to fetch HTML content from {current_url} after {max_retries} attempts")
+                    return None  # Non-retryable error
+            else:
+                # All retries exhausted (for loop completed without break)
+                logging.error(f"Failed to fetch HTML content from {current_url} after {max_retries} attempts")
+                return None
 
     @staticmethod
     def extract_text_content(html_content: str) -> str:
