@@ -13,6 +13,11 @@
 !openalex.py
 !publication.py
 !researcher.py
+!encoding_guard.py
+!jel_classifier.py
+!jel_enrichment.py
+!paper_merge.py
+!topic_jel_map.py
 !scheduler.py
 !scripts/backfill_researcher_fields.py
 !pyproject.toml
