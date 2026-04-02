@@ -125,6 +125,7 @@ def _make_match_row(researcher: dict, record: dict, match_type: str, confidence:
 def match_by_url(researcher: dict, by_domain: dict) -> list[dict]:
     """Match a researcher against RePEC records by URL domain."""
     matches = []
+    seen_handles: set[str] = set()
     last_lower = researcher["last_name"].lower()
     for url in researcher.get("urls", []):
         parsed = urlparse(url)
@@ -134,11 +135,14 @@ def match_by_url(researcher: dict, by_domain: dict) -> list[dict]:
         candidates = by_domain[domain]
         is_shared = domain in SHARED_HOSTING_DOMAINS
         for record in candidates:
+            if record["handle"] in seen_handles:
+                continue
             if record["name_last"].lower() != last_lower:
                 continue
             if is_shared:
                 if _normalize_url(url) != _normalize_url(record["homepage"]):
                     continue
+            seen_handles.add(record["handle"])
             matches.append(_make_match_row(researcher, record, "url_match", "unique"))
     return matches
 
