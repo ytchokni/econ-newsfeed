@@ -123,6 +123,17 @@ def validate_publication(pub: dict) -> bool:
     if title_lower.startswith('©') or title_lower.startswith('(c)'):
         return False
 
+    # Reject if any author has empty first name or initial-only last name
+    for author in authors:
+        if not author or len(author) < 2:
+            continue
+        first = author[0].strip() if author[0] else ""
+        last = author[-1].strip() if author[-1] else ""
+        if not first:
+            return False
+        if re.match(r'^[A-Za-z]\.?$', last):
+            return False
+
     # Reject GitHub as venue
     venue = (pub.get('venue') or '').lower()
     if 'github' in venue:
