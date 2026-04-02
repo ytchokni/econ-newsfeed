@@ -33,11 +33,11 @@ class TestUpdateOpenalexData:
                 ],
             )
 
-        # UPDATE papers SET doi, openalex_id, abstract via COALESCE
+        # UPDATE papers SET doi, openalex_id, abstract, year via COALESCE
         update_call = mock_cursor.execute.call_args_list[0]
         assert "UPDATE papers SET doi" in update_call[0][0]
         assert "COALESCE" in update_call[0][0]
-        assert update_call[0][1] == ("10.1257/aer.20181234", "W2741809807", None, 1)
+        assert update_call[0][1] == ("10.1257/aer.20181234", "W2741809807", None, None, 1)
 
         # DELETE old coauthors + executemany for inserts
         assert mock_cursor.execute.call_count == 2  # 1 update + 1 delete
@@ -64,7 +64,7 @@ class TestUpdateOpenalexData:
 
         update_call = mock_cursor.execute.call_args_list[0]
         assert "COALESCE" in update_call[0][0]
-        assert update_call[0][1] == ("10.1234/test", "W123", "This paper studies...", 1)
+        assert update_call[0][1] == ("10.1234/test", "W123", "This paper studies...", None, 1)
 
 
 class TestGetUnenrichedPapers:
@@ -245,6 +245,7 @@ class TestEnrichPublication:
             openalex_id="W2741809807",
             coauthors=[{"display_name": "Max Steinhardt", "openalex_author_id": "A111"}],
             abstract="OpenAlex abstract.",
+            year=None,
         )
 
     def test_skips_abstract_when_existing(self):
@@ -643,3 +644,36 @@ class TestParseWorkYearExtraction:
         }
         result = _parse_work(work)
         assert result["year"] is None
+
+
+class TestEnrichPublicationYear:
+    """enrich_publication passes year from OpenAlex to update_openalex_data."""
+
+    @patch("openalex.lookup_by_doi")
+    @patch("openalex.Database")
+    def test_passes_year_to_update(self, mock_db, mock_lookup):
+        mock_lookup.return_value = {
+            "doi": "10.1234/test",
+            "openalex_id": "W123",
+            "coauthors": [],
+            "abstract": None,
+            "topics": [],
+            "year": "2024",
+        }
+
+        from openalex import enrich_publication
+        enrich_publication(
+            paper_id=1,
+            title="Test Paper",
+            author_name="Smith",
+            doi="10.1234/test",
+        )
+
+        mock_db.update_openalex_data.assert_called_once()
+        call_kwargs = mock_db.update_openalex_data.call_args
+        # Check year was passed (either as kwarg or positional)
+        if call_kwargs.kwargs:
+            assert call_kwargs.kwargs.get("year") == "2024"
+        else:
+            # positional: paper_id, doi, openalex_id, coauthors, abstract, year
+            assert "2024" in call_kwargs.args or any("2024" in str(a) for a in call_kwargs.args)

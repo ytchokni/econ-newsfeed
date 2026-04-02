@@ -229,6 +229,7 @@ def enrich_publication(paper_id, title, author_name, existing_abstract=None, doi
         openalex_id=result["openalex_id"],
         coauthors=result["coauthors"],
         abstract=abstract,
+        year=result.get("year"),
     )
 
     # Backfill openalex_author_id on researchers from coauthor data
