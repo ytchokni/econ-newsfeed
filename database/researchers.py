@@ -21,6 +21,22 @@ def _strip_initial(name: str) -> str | None:
     return None
 
 
+def is_bad_researcher_name(first_name: str, last_name: str) -> bool:
+    """Return True if the name is too malformed to create a researcher record.
+
+    Rejects: empty/whitespace first or last names, single-letter/initial-only last names.
+    """
+    if not first_name or not first_name.strip():
+        return True
+    if not last_name or not last_name.strip():
+        return True
+    # Single letter with optional period: "A", "A.", "K", "K."
+    stripped_last = last_name.strip()
+    if re.match(r'^[A-Za-z]\.?$', stripped_last):
+        return True
+    return False
+
+
 def first_name_is_initial_match(name_a: str, name_b: str) -> bool:
     """Return True when one name is a single-char initial matching the other's first character.
 

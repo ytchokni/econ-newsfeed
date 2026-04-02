@@ -155,3 +155,44 @@ class TestMergeResearchers:
         conn, _ = self._make_mock_conn()
         with pytest.raises(ValueError, match="same"):
             merge_researchers(10, 10, conn)
+
+
+class TestIsBadResearcherName:
+    """is_bad_researcher_name rejects empty first names and initial-only last names."""
+
+    def test_empty_first_name(self):
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("", "Smith") is True
+
+    def test_whitespace_first_name(self):
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("  ", "Smith") is True
+
+    def test_initial_only_last_name_with_period(self):
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("Eric", "A.") is True
+
+    def test_initial_only_last_name_without_period(self):
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("David", "K") is True
+
+    def test_empty_last_name(self):
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("John", "") is True
+
+    def test_whitespace_last_name(self):
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("John", "  ") is True
+
+    def test_valid_name(self):
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("John", "Smith") is False
+
+    def test_short_but_valid_last_name(self):
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("Yi", "Li") is False
+
+    def test_initial_first_name_is_ok(self):
+        """Single-letter first names like 'J.' are fine — it's last names we reject."""
+        from database.researchers import is_bad_researcher_name
+        assert is_bad_researcher_name("J.", "Smith") is False
