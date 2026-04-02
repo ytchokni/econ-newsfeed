@@ -30,7 +30,7 @@ def fetch_author_affiliation(openalex_author_id: str) -> str | None:
         params["mailto"] = MAILTO
     try:
         resp = requests.get(
-            f"{OPENALEX_BASE}/authors/A{openalex_author_id}",
+            f"{OPENALEX_BASE}/authors/{openalex_author_id}",
             params=params,
             timeout=10,
         )
