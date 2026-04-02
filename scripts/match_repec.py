@@ -254,6 +254,43 @@ def print_summary(matches: list[dict], total_researchers: int) -> None:
     print(f"  - exact_name:              {name_matches}")
 
 
+def parse_import_csv(path: str) -> list[dict]:
+    """Read reviewed CSV and return list of rows to import."""
+    rows = []
+    with open(path, encoding="utf-8") as f:
+        reader = csv.DictReader(f)
+        for row in reader:
+            row["researcher_id"] = int(row["researcher_id"])
+            rows.append(row)
+    return rows
+
+
+def import_matches(csv_path: str) -> None:
+    """Import approved matches from reviewed CSV into the database."""
+    from database.connection import execute_query
+    rows = parse_import_csv(csv_path)
+    urls_added = 0
+    affil_updated = 0
+    seen_ids: set[int] = set()
+    for row in rows:
+        rid = row["researcher_id"]
+        homepage = row["repec_homepage"]
+        workplace = row["repec_workplace"]
+        execute_query(
+            "INSERT IGNORE INTO researcher_urls (researcher_id, page_type, url) VALUES (%s, %s, %s)",
+            (rid, "HOME", homepage),
+        )
+        urls_added += 1
+        if rid not in seen_ids and workplace:
+            execute_query(
+                "UPDATE researchers SET affiliation = %s WHERE id = %s AND affiliation IS NULL",
+                (workplace, rid),
+            )
+            affil_updated += 1
+            seen_ids.add(rid)
+    print(f"Import complete: {urls_added} URLs added, {affil_updated} affiliations backfilled")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Match DB researchers against RePEC person records")
     parser.add_argument("--repec-dir", default="RePEc/per/pers/",
@@ -262,7 +299,13 @@ def main():
                         help="Output CSV path (default: repec_matches.csv)")
     parser.add_argument("--stats-only", action="store_true",
                         help="Parse RePEC data and report stats without DB lookup")
+    parser.add_argument("--import-csv", metavar="CSV",
+                        help="Import approved matches from a reviewed CSV into the database")
     args = parser.parse_args()
+
+    if args.import_csv:
+        import_matches(args.import_csv)
+        return
 
     print(f"Parsing RePEC data from {args.repec_dir}...")
     by_name, by_domain = build_repec_index(args.repec_dir)

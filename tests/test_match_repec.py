@@ -205,3 +205,23 @@ def test_write_csv(tmp_path):
     assert result[0]["confidence"] == "unique"
 
 
+from scripts.match_repec import parse_import_csv
+
+def test_parse_import_csv(tmp_path):
+    csv_path = str(tmp_path / "matches.csv")
+    import csv
+    with open(csv_path, "w", newline="") as f:
+        writer = csv.DictWriter(f, fieldnames=CSV_COLUMNS)
+        writer.writeheader()
+        writer.writerow({
+            "researcher_id": "1", "first_name": "Arild", "last_name": "Aakvik",
+            "db_affiliation": "", "repec_name": "Arild Aakvik",
+            "repec_workplace": "Universitetet i Bergen",
+            "repec_homepage": "https://example.com", "repec_handle": "REPEC:per:aakvik",
+            "match_type": "exact_name", "confidence": "unique",
+        })
+    rows = parse_import_csv(csv_path)
+    assert len(rows) == 1
+    assert rows[0]["researcher_id"] == 1
+    assert rows[0]["repec_homepage"] == "https://example.com"
+    assert rows[0]["repec_workplace"] == "Universitetet i Bergen"
