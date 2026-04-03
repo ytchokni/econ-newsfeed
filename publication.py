@@ -100,6 +100,40 @@ _GARBAGE_PATTERNS = (
 )
 
 
+_METADATA_KEYWORDS = (
+    r'job\s+market\s+paper'
+    r'|jmp'
+    r'|working\s+paper'
+    r'|work\s+in\s+progress'
+    r'|under\s+review'
+    r'|submitted'
+    r'|forthcoming'
+    r'|accepted'
+    r'|draft'
+    r'|new(?:!)?'
+    r'|revised'
+    r'|updated'
+    r'|r\s*&\s*r'
+)
+
+_TITLE_METADATA_SUFFIXES = re.compile(
+    r'\s*(?:--|—|–|―)\s*(?:' + _METADATA_KEYWORDS + r')\s*$',
+    re.IGNORECASE,
+)
+
+_TITLE_BRACKET_SUFFIXES = re.compile(
+    r'\s*[\[\(]\s*(?:' + _METADATA_KEYWORDS + r')\s*[\]\)]\s*$',
+    re.IGNORECASE,
+)
+
+
+def clean_title(title: str) -> str:
+    """Strip metadata annotations that LLMs sometimes leave in paper titles."""
+    title = _TITLE_METADATA_SUFFIXES.sub('', title)
+    title = _TITLE_BRACKET_SUFFIXES.sub('', title)
+    return title.strip()
+
+
 def validate_publication(pub: dict) -> bool:
     """Return False for garbage extractions that should be silently dropped."""
     title = pub.get('title', '')
@@ -212,7 +246,7 @@ class Publication:
             for pub in publications:
                 cursor = None
                 try:
-                    title = pub['title'].strip() if pub['title'] else ''
+                    title = clean_title(pub['title'].strip()) if pub['title'] else ''
                     # Fix any mojibake before saving
                     pub = guard_text_fields(
                         dict(pub, title=title),
@@ -220,7 +254,7 @@ class Publication:
                         context=f"papers (url={url})",
                     )
                     title = pub['title']
-                    title_hash = Database.compute_title_hash(pub['title'])
+                    title_hash = Database.compute_title_hash(title)
 
                     cursor = conn.cursor(buffered=True)
 

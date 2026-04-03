@@ -33,11 +33,11 @@ class TestUpdateOpenalexData:
                 ],
             )
 
-        # UPDATE papers SET doi, openalex_id, abstract via COALESCE
+        # UPDATE papers SET doi, openalex_id, abstract, year via COALESCE
         update_call = mock_cursor.execute.call_args_list[0]
         assert "UPDATE papers SET doi" in update_call[0][0]
         assert "COALESCE" in update_call[0][0]
-        assert update_call[0][1] == ("10.1257/aer.20181234", "W2741809807", None, 1)
+        assert update_call[0][1] == ("10.1257/aer.20181234", "W2741809807", None, None, 1)
 
         # DELETE old coauthors + executemany for inserts
         assert mock_cursor.execute.call_count == 2  # 1 update + 1 delete
@@ -64,7 +64,7 @@ class TestUpdateOpenalexData:
 
         update_call = mock_cursor.execute.call_args_list[0]
         assert "COALESCE" in update_call[0][0]
-        assert update_call[0][1] == ("10.1234/test", "W123", "This paper studies...", 1)
+        assert update_call[0][1] == ("10.1234/test", "W123", "This paper studies...", None, 1)
 
 
 class TestGetUnenrichedPapers:
@@ -224,6 +224,7 @@ class TestEnrichPublication:
                 {"display_name": "Max Steinhardt", "openalex_author_id": "A111"},
             ],
             "abstract": "OpenAlex abstract.",
+            "year": None,
         }
         with (
             patch("openalex.search_work", return_value=openalex_result),
@@ -245,6 +246,7 @@ class TestEnrichPublication:
             openalex_id="W2741809807",
             coauthors=[{"display_name": "Max Steinhardt", "openalex_author_id": "A111"}],
             abstract="OpenAlex abstract.",
+            year=None,
         )
 
     def test_skips_abstract_when_existing(self):
@@ -254,6 +256,7 @@ class TestEnrichPublication:
             "openalex_id": "W999",
             "coauthors": [],
             "abstract": "OpenAlex abstract.",
+            "year": None,
         }
         with (
             patch("openalex.search_work", return_value=openalex_result),
@@ -299,6 +302,7 @@ class TestEnrichNewPublications:
             "openalex_id": "W123",
             "coauthors": [],
             "abstract": None,
+            "year": None,
         }
         with (
             patch("openalex.Database.get_unenriched_papers", return_value=unenriched),
@@ -388,6 +392,7 @@ class TestEnrichWithDoiFirst:
             "title": "Extreme Air Pollution",
             "coauthors": [{"display_name": "A. Author", "openalex_author_id": "A111"}],
             "abstract": "Abstract text",
+            "year": "2016",
         }
         with (
             patch("openalex.lookup_by_doi", return_value=openalex_result) as mock_lookup,
@@ -601,3 +606,73 @@ class TestParseWorkCoauthorFiltering:
         }
         result = _parse_work(work)
         assert len(result["coauthors"]) == 1
+
+
+class TestParseWorkYearExtraction:
+    """_parse_work extracts publication_year from OpenAlex work objects."""
+
+    def test_extracts_year_as_string(self):
+        from openalex import _parse_work
+        work = {
+            "doi": "https://doi.org/10.1234/test",
+            "id": "https://openalex.org/W123",
+            "authorships": [],
+            "abstract_inverted_index": None,
+            "topics": [],
+            "publication_year": 2024,
+        }
+        result = _parse_work(work)
+        assert result["year"] == "2024"
+
+    def test_missing_year_returns_none(self):
+        from openalex import _parse_work
+        work = {
+            "doi": "https://doi.org/10.1234/test",
+            "id": "https://openalex.org/W123",
+            "authorships": [],
+            "abstract_inverted_index": None,
+            "topics": [],
+        }
+        result = _parse_work(work)
+        assert result["year"] is None
+
+    def test_null_year_returns_none(self):
+        from openalex import _parse_work
+        work = {
+            "doi": "https://doi.org/10.1234/test",
+            "id": "https://openalex.org/W123",
+            "authorships": [],
+            "abstract_inverted_index": None,
+            "topics": [],
+            "publication_year": None,
+        }
+        result = _parse_work(work)
+        assert result["year"] is None
+
+
+class TestEnrichPublicationYear:
+    """enrich_publication passes year from OpenAlex to update_openalex_data."""
+
+    @patch("openalex.lookup_by_doi")
+    @patch("openalex.Database")
+    def test_passes_year_to_update(self, mock_db, mock_lookup):
+        mock_lookup.return_value = {
+            "doi": "10.1234/test",
+            "openalex_id": "W123",
+            "coauthors": [],
+            "abstract": None,
+            "topics": [],
+            "year": "2024",
+        }
+
+        from openalex import enrich_publication
+        enrich_publication(
+            paper_id=1,
+            title="Test Paper",
+            author_name="Smith",
+            doi="10.1234/test",
+        )
+
+        mock_db.update_openalex_data.assert_called_once()
+        call_kwargs = mock_db.update_openalex_data.call_args
+        assert call_kwargs.kwargs.get("year") == "2024"

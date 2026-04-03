@@ -13,7 +13,14 @@
 !openalex.py
 !publication.py
 !researcher.py
+!encoding_guard.py
+!jel_classifier.py
+!jel_enrichment.py
+!paper_merge.py
+!topic_jel_map.py
 !scheduler.py
 !scripts/backfill_researcher_fields.py
+!scripts/backfill_affiliations.py
+!scripts/audit_zero_pub_researchers.py
 !pyproject.toml
 !poetry.lock

@@ -2,7 +2,6 @@
 
 import { useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import type { Publication } from "@/lib/types";
 import { statusPillConfig, formatAuthor } from "@/lib/publication-utils";
 
@@ -13,7 +12,6 @@ export default function PublicationCard({
   publication: Publication;
   primaryAuthorId?: number;
 }) {
-  const router = useRouter();
   const [abstractOpen, setAbstractOpen] = useState(false);
   const authors = publication.authors.map(formatAuthor);
 
@@ -22,9 +20,16 @@ export default function PublicationCard({
   return (
     <div
       data-testid="publication-card"
-      className="rounded-md bg-[var(--bg-card)] border border-[var(--border-light)] hover:border-[var(--border)] transition-colors duration-150 px-5 py-4 cursor-pointer"
-      onClick={() => router.push(`/papers/${publication.id}`)}
+      className="relative rounded-md bg-[var(--bg-card)] border border-[var(--border-light)] hover:border-[var(--border)] transition-colors duration-150 px-5 py-4"
     >
+      {/* Stretched link: covers the entire card for right-click / keyboard nav */}
+      <Link
+        href={`/papers/${publication.id}`}
+        className="absolute inset-0 z-0"
+        aria-label={publication.title}
+        tabIndex={-1}
+      />
+
       {/* Status change banner (feed only) */}
       {publication.event_type === "status_change" && publication.old_status && publication.new_status && (
         <div className="font-sans flex items-center gap-2 text-xs font-medium mb-2.5 px-3 py-1.5 rounded bg-[#f0f4ff] border border-[#d0daf0]">
@@ -44,11 +49,13 @@ export default function PublicationCard({
 
       {/* Title */}
       <h3 className="font-serif font-semibold text-[var(--text-primary)] leading-snug">
-        {publication.title}
+        <Link href={`/papers/${publication.id}`} className="relative z-[1]">
+          {publication.title}
+        </Link>
       </h3>
 
       {/* Authors · Venue — primary author is bold/dark, others are link-colored */}
-      <p className="mt-1 font-sans text-sm font-medium">
+      <p className="relative z-[1] mt-1 font-sans text-sm font-medium">
         {authors.map((a, i) => {
           const isPrimary = primaryAuthorId != null && a.id === primaryAuthorId;
           return (
@@ -76,7 +83,7 @@ export default function PublicationCard({
       </p>
 
       {/* Bottom row: status pill, draft link, abstract toggle */}
-      <div className="mt-2.5 font-sans flex items-center gap-2.5 flex-wrap">
+      <div className="relative z-[1] mt-2.5 font-sans flex items-center gap-2.5 flex-wrap">
         {publication.event_type !== "status_change" && publication.status && (
           <span
             className={`inline-block text-[10px] font-bold uppercase tracking-wider rounded px-2.5 py-0.5 ${statusPillConfig[publication.status].className}`}

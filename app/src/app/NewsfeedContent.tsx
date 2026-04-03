@@ -1,7 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
-import { usePublications, useJelCodes } from "@/lib/api";
+import { useCallback, useEffect, useState } from "react";
+import { usePublications, useJelCodes, useFilterOptions } from "@/lib/api";
 import { formatDate } from "@/lib/publication-utils";
 import type { FeedFilters, Publication } from "@/lib/types";
 import PublicationCard from "@/components/PublicationCard";
@@ -9,6 +9,7 @@ import PublicationCardSkeleton from "@/components/PublicationCardSkeleton";
 import ErrorMessage from "@/components/ErrorMessage";
 import EmptyState from "@/components/EmptyState";
 import SearchInput from "@/components/SearchInput";
+import SearchableCheckboxDropdown from "@/components/SearchableCheckboxDropdown";
 
 /* ---------- helpers ---------- */
 
@@ -36,123 +37,13 @@ const STATUS_OPTIONS = [
   { label: "Working Paper", value: "working_paper" },
 ];
 
-const INSTITUTION_OPTIONS = [
-  { label: "Top 20", value: "top20" },
-  { label: "MIT", value: "MIT" },
-  { label: "Harvard", value: "Harvard" },
-  { label: "Stanford", value: "Stanford" },
-  { label: "Princeton", value: "Princeton" },
-  { label: "Chicago", value: "University of Chicago" },
-  { label: "Berkeley", value: "UC Berkeley" },
-  { label: "Columbia", value: "Columbia" },
-  { label: "Yale", value: "Yale" },
-  { label: "NYU", value: "NYU" },
-  { label: "Northwestern", value: "Northwestern" },
-  { label: "LSE", value: "LSE" },
-];
-
-const YEAR_OPTIONS = (() => {
+function getYearOptions(): string[] {
+  const currentYear = new Date().getFullYear();
   const years: string[] = [];
-  for (let y = 2026; y >= 2020; y--) {
+  for (let y = currentYear; y >= 2020; y--) {
     years.push(String(y));
   }
   return years;
-})();
-
-/* ---------- checkbox dropdown ---------- */
-
-function CheckboxDropdown({
-  label,
-  options,
-  selected,
-  onChange,
-}: {
-  label: string;
-  options: { label: string; value: string }[];
-  selected: string[];
-  onChange: (selected: string[]) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    function handleClick(e: MouseEvent) {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false);
-      }
-    }
-    document.addEventListener("mousedown", handleClick);
-    return () => document.removeEventListener("mousedown", handleClick);
-  }, []);
-
-  const toggle = (value: string) => {
-    if (selected.includes(value)) {
-      onChange(selected.filter((v) => v !== value));
-    } else {
-      onChange([...selected, value]);
-    }
-  };
-
-  const display =
-    selected.length === 0
-      ? label
-      : selected.length <= 2
-        ? options
-            .filter((o) => selected.includes(o.value))
-            .map((o) => o.label)
-            .join(", ")
-        : `${selected.length} selected`;
-
-  const hasSelection = selected.length > 0;
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen(!open)}
-        className={`flex items-center gap-1.5 px-3 py-1.5 font-sans text-sm border rounded-lg shadow-card transition-all min-w-[120px] ${
-          hasSelection
-            ? "bg-[var(--bg-header)] text-white border-[var(--bg-header)]"
-            : "border-[var(--border)] bg-[var(--bg-card)] hover:border-[var(--text-muted)]"
-        }`}
-      >
-        <span>{display}</span>
-        <svg
-          className={`w-3.5 h-3.5 ml-auto ${hasSelection ? "text-white/70" : "text-[var(--text-muted)]"}`}
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-      {open && (
-        <div className="absolute z-10 mt-1 w-56 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg shadow-card-hover py-1 max-h-60 overflow-y-auto animate-dropdown-in">
-          {options.map((opt) => (
-            <label
-              key={opt.value}
-              className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-[var(--bg)] cursor-pointer font-sans"
-            >
-              <input
-                type="checkbox"
-                checked={selected.includes(opt.value)}
-                onChange={() => toggle(opt.value)}
-                className="rounded border-gray-300 text-gray-900 focus:ring-gray-400"
-              />
-              {opt.label}
-            </label>
-          ))}
-          {selected.length > 0 && (
-            <button
-              onClick={() => { onChange([]); setOpen(false); }}
-              className="w-full text-left px-3 py-1.5 text-xs text-[var(--text-muted)] hover:bg-[var(--bg)] border-t border-[var(--border-light)] font-sans"
-            >
-              Clear all
-            </button>
-          )}
-        </div>
-      )}
-    </div>
-  );
 }
 
 /* ---------- types ---------- */
@@ -185,6 +76,17 @@ function FilterBar({
     label: `${jel.code} — ${jel.name}`,
     value: jel.code,
   }));
+
+  const { data: filterOptions } = useFilterOptions();
+  const institutionOptions = [
+    { label: "Top 20", value: "top20" },
+    ...(filterOptions?.institutions ?? []).map((inst) => ({
+      label: inst,
+      value: inst,
+    })),
+  ];
+
+  const yearOptions = getYearOptions();
 
   const hasActiveFilters = !!(filters.status || filters.institution || filters.preset || filters.year || filters.search || filters.jel_code);
 
@@ -263,7 +165,7 @@ function FilterBar({
           Filter
         </span>
 
-        <CheckboxDropdown
+        <SearchableCheckboxDropdown
           label="Status"
           options={STATUS_OPTIONS}
           selected={selectedStatuses}
@@ -276,21 +178,21 @@ function FilterBar({
           className="px-3 py-1.5 font-sans text-sm border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card focus:outline-none focus:ring-1 focus:ring-[var(--link)]"
         >
           <option value="">All years</option>
-          {YEAR_OPTIONS.map((y) => (
+          {yearOptions.map((y) => (
             <option key={y} value={y}>
               {y}
             </option>
           ))}
         </select>
 
-        <CheckboxDropdown
+        <SearchableCheckboxDropdown
           label="Institution"
-          options={INSTITUTION_OPTIONS}
+          options={institutionOptions}
           selected={selectedInstitutions}
           onChange={handleInstitutionChange}
         />
 
-        <CheckboxDropdown
+        <SearchableCheckboxDropdown
           label="Field"
           options={jelOptions}
           selected={selectedJelCodes}

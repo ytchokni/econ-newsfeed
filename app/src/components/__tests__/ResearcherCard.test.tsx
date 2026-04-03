@@ -39,7 +39,10 @@ describe("ResearcherCard", () => {
 
   it("links to the researcher detail page", () => {
     render(<ResearcherCard researcher={researcher} />);
-    const link = screen.getByRole("link");
-    expect(link).toHaveAttribute("href", "/researchers/1");
+    const links = screen.getAllByRole("link");
+    const detailLinks = links.filter((l) =>
+      l.getAttribute("href") === "/researchers/1"
+    );
+    expect(detailLinks).toHaveLength(2); // stretched link + visible name link
   });
 });

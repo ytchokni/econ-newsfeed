@@ -187,12 +187,16 @@ def _parse_work(work: dict) -> dict:
     if inverted_index:
         abstract = reconstruct_abstract(inverted_index)
 
+    pub_year = work.get("publication_year")
+    year = str(pub_year) if pub_year is not None else None
+
     return {
         "doi": doi,
         "openalex_id": openalex_id,
         "coauthors": coauthors,
         "abstract": abstract,
         "topics": _parse_topics(work),
+        "year": year,
     }
 
 
@@ -225,6 +229,7 @@ def enrich_publication(paper_id, title, author_name, existing_abstract=None, doi
         openalex_id=result["openalex_id"],
         coauthors=result["coauthors"],
         abstract=abstract,
+        year=result.get("year"),
     )
 
     # Backfill openalex_author_id on researchers from coauthor data

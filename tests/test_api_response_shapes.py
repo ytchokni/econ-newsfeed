@@ -3,11 +3,20 @@
 These tests verify key presence (not values) to catch frontend/backend
 drift. Field lists are derived from app/src/lib/types.ts interfaces.
 """
+from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import patch
 
+import os
 import pytest
 from fastapi.testclient import TestClient
+
+AUTH_HEADERS = {"X-API-Key": os.environ["SCRAPE_API_KEY"]}
+
+
+@contextmanager
+def _noop_connection_scope():
+    yield None
 
 
 @pytest.fixture
@@ -23,6 +32,7 @@ def client():
         patch("scheduler.shutdown_scheduler"),
         patch("api.start_scheduler"),
         patch("api.shutdown_scheduler"),
+        patch("api.connection_scope", _noop_connection_scope),
     ):
         from api import app
         with TestClient(app) as c:
@@ -72,12 +82,14 @@ SCRAPE_LAST_KEYS = {
 #   p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url, p.abstract, p.draft_url_status
 SAMPLE_PUB = {
     "event_id": 100, "event_type": "new_paper", "old_status": None,
-    "new_status": "working_paper", "created_at": datetime(2026, 3, 15, 14, 30),
+    "new_status": "working_paper", "old_title": None, "new_title": None,
+    "created_at": datetime(2026, 3, 15, 14, 30),
     "paper_id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
     "source_url": "https://example.com/p",
     "discovered_at": datetime(2026, 3, 15, 14, 30), "status": "working_paper",
     "draft_url": "https://ssrn.com/1", "abstract": "An abstract.",
-    "draft_url_status": "valid",
+    "draft_url_status": "valid", "doi": None,
+    "total_count": 1,
 }
 SAMPLE_AUTHORS = [{"publication_id": 1, "researcher_id": 10, "first_name": "Max", "last_name": "Steinhardt"}]
 # Single publication detail (10-column papers row, used by GET /api/publications/{id} and researcher detail)
@@ -92,6 +104,7 @@ SAMPLE_RESEARCHER = {
     "id": 10, "first_name": "Max", "last_name": "Steinhardt",
     "position": "Professor", "affiliation": "FU Berlin",
     "description": "Economist.",
+    "total_count": 1,
 }
 SAMPLE_URLS = [{"researcher_id": 10, "id": 1, "page_type": "homepage", "url": "https://example.com"}]
 SAMPLE_PUB_COUNTS = [{"researcher_id": 10, "cnt": 5}]
@@ -112,20 +125,14 @@ class TestPublicationShape:
     """GET /api/publications response matches types.ts Publication."""
 
     def test_paginated_envelope_keys(self, client):
-        with (
-            patch("api.Database.fetch_one", return_value={"total": 1}),
-            patch("api.Database.fetch_all") as mock_all,
-        ):
+        with patch("api.Database.fetch_all") as mock_all:
             mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS, [], []]  # pubs, authors, coauthors, links
             body = client.get("/api/publications").json()
 
         assert set(body.keys()) >= PAGINATED_KEYS
 
     def test_publication_item_keys(self, client):
-        with (
-            patch("api.Database.fetch_one", return_value={"total": 1}),
-            patch("api.Database.fetch_all") as mock_all,
-        ):
+        with patch("api.Database.fetch_all") as mock_all:
             mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS, [], []]  # pubs, authors, coauthors, links
             body = client.get("/api/publications").json()
 
@@ -135,10 +142,7 @@ class TestPublicationShape:
         )
 
     def test_author_sub_object_keys(self, client):
-        with (
-            patch("api.Database.fetch_one", return_value={"total": 1}),
-            patch("api.Database.fetch_all") as mock_all,
-        ):
+        with patch("api.Database.fetch_all") as mock_all:
             mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS, [], []]  # pubs, authors, coauthors, links
             body = client.get("/api/publications").json()
 
@@ -157,7 +161,6 @@ class TestResearcherShape:
 
     def test_researcher_list_item_keys(self, client):
         with (
-            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
@@ -175,7 +178,6 @@ class TestResearcherShape:
 
     def test_researcher_url_sub_object_keys(self, client):
         with (
-            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
@@ -192,7 +194,6 @@ class TestResearcherShape:
 
     def test_research_field_sub_object_keys(self, client):
         with (
-            patch("api.Database.fetch_one", return_value={"total": 1}),
             patch("api.Database.fetch_all") as mock_all,
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
@@ -249,7 +250,7 @@ class TestScrapeStatusShape:
             patch("api.Database.fetch_one", return_value=SAMPLE_SCRAPE),
             patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
-            body = client.get("/api/scrape/status").json()
+            body = client.get("/api/scrape/status", headers=AUTH_HEADERS).json()
 
         assert set(body.keys()) >= SCRAPE_STATUS_KEYS, (
             f"Missing keys: {SCRAPE_STATUS_KEYS - set(body.keys())}"
@@ -260,7 +261,7 @@ class TestScrapeStatusShape:
             patch("api.Database.fetch_one", return_value=SAMPLE_SCRAPE),
             patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
-            body = client.get("/api/scrape/status").json()
+            body = client.get("/api/scrape/status", headers=AUTH_HEADERS).json()
 
         last = body["last_scrape"]
         assert last is not None

@@ -3,10 +3,19 @@
 Covers: SQL injection in query params, SSRF bypass attempts,
 oversized inputs, and verifying error responses contain no stack traces.
 """
+from contextlib import contextmanager
 from unittest.mock import patch, MagicMock
 
+import os
 import pytest
 from fastapi.testclient import TestClient
+
+AUTH_HEADERS = {"X-API-Key": os.environ["SCRAPE_API_KEY"]}
+
+
+@contextmanager
+def _noop_connection_scope():
+    yield None
 
 
 @pytest.fixture
@@ -19,6 +28,7 @@ def client():
         patch("database.Database.fetch_one", return_value=None),
         patch("scheduler.start_scheduler"),
         patch("scheduler.shutdown_scheduler"),
+        patch("api.connection_scope", _noop_connection_scope),
     ):
         from api import app
 
@@ -44,8 +54,7 @@ class TestSQLInjectionQueryParams:
     def test_year_sql_injection_returns_safe_response(self, client):
         """year= accepts only a 4-char string; SQL payload should not crash the API."""
         for payload in self.SQL_PAYLOADS:
-            with patch("api.Database.fetch_one", return_value={"total": 0}), \
-                 patch("api.Database.fetch_all", return_value=[]):
+            with patch("api.Database.fetch_all", return_value=[]):
                 resp = client.get(f"/api/publications?year={payload}")
             # Must not be a 500 (unhandled exception)
             assert resp.status_code in (200, 400, 422), (
@@ -153,8 +162,7 @@ class TestOversizedInputs:
     def test_oversized_year_param(self, client):
         """A very long year string should not crash the API."""
         payload = "A" * 10_000
-        with patch("api.Database.fetch_one", return_value={"total": 0}), \
-             patch("api.Database.fetch_all", return_value=[]):
+        with patch("api.Database.fetch_all", return_value=[]):
             resp = client.get(f"/api/publications?year={payload}")
         assert resp.status_code != 500
 
@@ -243,6 +251,7 @@ class TestNoStackTraceLeakage:
             patch("database.Database.fetch_one", return_value=None),
             patch("scheduler.start_scheduler"),
             patch("scheduler.shutdown_scheduler"),
+            patch("api.connection_scope", _noop_connection_scope),
         ):
             from api import app
 
@@ -326,3 +335,266 @@ class TestDNSPinning:
         from html_fetcher import HTMLFetcher
         safe, _ = HTMLFetcher.validate_url_with_pin("file:///etc/passwd")
         assert safe is False
+
+
+# ---------------------------------------------------------------------------
+# SSRF redirect bypass — fetch_html must validate each redirect hop
+# ---------------------------------------------------------------------------
+
+class TestSSRFRedirectBypass:
+    """fetch_html must validate redirect targets to prevent SSRF via redirect."""
+
+    def test_redirect_to_private_ip_is_blocked(self):
+        """A 302 redirect to 169.254.169.254 must return None."""
+        from html_fetcher import HTMLFetcher
+
+        # First request returns 302 pointing to AWS metadata endpoint
+        redirect_response = MagicMock()
+        redirect_response.status_code = 302
+        redirect_response.headers = {"Location": "http://169.254.169.254/latest/meta-data/"}
+
+        mock_session = MagicMock()
+        mock_session.get.return_value = redirect_response
+
+        with patch.object(HTMLFetcher, "_get_session", return_value=mock_session), \
+             patch.object(HTMLFetcher, "_rate_limit"):
+            result = HTMLFetcher.fetch_html("https://example.com/page")
+
+        assert result is None
+
+    def test_redirect_without_location_header_returns_none(self):
+        """A redirect response with no Location header must return None."""
+        from html_fetcher import HTMLFetcher
+
+        redirect_response = MagicMock()
+        redirect_response.status_code = 302
+        redirect_response.headers = {}  # No Location header
+        redirect_response.raise_for_status = MagicMock()
+
+        with patch.object(HTMLFetcher, "_rate_limit"), \
+             patch.object(HTMLFetcher, "_get_session") as mock_session:
+            session = MagicMock()
+            session.get.return_value = redirect_response
+            mock_session.return_value = session
+            result = HTMLFetcher.fetch_html("https://example.com/redirect")
+
+        assert result is None
+
+    def test_redirect_to_public_ip_is_followed(self):
+        """A 302 redirect to a public IP should follow and return content."""
+        from html_fetcher import HTMLFetcher
+
+        # First request returns 302 to a public URL
+        redirect_response = MagicMock()
+        redirect_response.status_code = 302
+        redirect_response.headers = {"Location": "https://public.example.com/page"}
+
+        # Second request returns 200 with HTML content
+        ok_response = MagicMock()
+        ok_response.status_code = 200
+        ok_response.content = b"<html>OK</html>"
+        ok_response.text = "<html>OK</html>"
+        ok_response.apparent_encoding = "utf-8"
+        ok_response.raise_for_status = MagicMock()
+
+        mock_session = MagicMock()
+        mock_session.get.side_effect = [redirect_response, ok_response]
+
+        with patch.object(HTMLFetcher, "_get_session", return_value=mock_session), \
+             patch.object(HTMLFetcher, "_rate_limit"), \
+             patch.object(HTMLFetcher, "validate_url_with_pin", return_value=(True, "1.2.3.4")):
+            result = HTMLFetcher.fetch_html("https://example.com/page")
+
+        assert result == "<html>OK</html>"
+
+    def test_redirect_chain_limit(self):
+        """More than 5 redirects must return None."""
+        from html_fetcher import HTMLFetcher
+
+        # Create a redirect response that always redirects
+        def make_redirect():
+            resp = MagicMock()
+            resp.status_code = 302
+            resp.headers = {"Location": "https://public.example.com/hop"}
+            return resp
+
+        mock_session = MagicMock()
+        mock_session.get.side_effect = [make_redirect() for _ in range(10)]
+
+        with patch.object(HTMLFetcher, "_get_session", return_value=mock_session), \
+             patch.object(HTMLFetcher, "_rate_limit"), \
+             patch.object(HTMLFetcher, "validate_url_with_pin", return_value=(True, "1.2.3.4")):
+            result = HTMLFetcher.fetch_html("https://example.com/page")
+
+        assert result is None
+
+
+# ---------------------------------------------------------------------------
+# DNS Rebinding Prevention — resolved IP wired through fetch
+# ---------------------------------------------------------------------------
+
+class TestDNSRebindingPrevention:
+    """fetch_and_save_if_changed must pass the pinned IP to fetch_html."""
+
+    def test_fetch_and_save_passes_resolved_ip(self):
+        """fetch_and_save_if_changed must pass the pinned IP to fetch_html."""
+        from html_fetcher import HTMLFetcher
+
+        with patch.object(HTMLFetcher, "_was_fetched_recently", return_value=False), \
+             patch.object(HTMLFetcher, "validate_url_with_pin", return_value=(True, "93.184.216.34")), \
+             patch.object(HTMLFetcher, "is_allowed_by_robots", return_value=True), \
+             patch.object(HTMLFetcher, "fetch_html", return_value=None) as mock_fetch:
+            HTMLFetcher.fetch_and_save_if_changed(1, "https://example.com/page", 1)
+
+        mock_fetch.assert_called_once()
+        _, kwargs = mock_fetch.call_args
+        assert kwargs.get("resolved_ip") == "93.184.216.34"
+
+    def test_fetch_html_uses_dns_pinning(self):
+        """When resolved_ip is provided, DNS pinning must be active during fetch."""
+        from html_fetcher import HTMLFetcher
+
+        with patch.object(HTMLFetcher, "_rate_limit"), \
+             patch("html_fetcher._pin_dns") as mock_pin_dns, \
+             patch.object(HTMLFetcher, "_get_session") as mock_session_fn:
+            # Set up the context manager mock
+            mock_ctx = MagicMock()
+            mock_ctx.__enter__ = MagicMock(return_value=None)
+            mock_ctx.__exit__ = MagicMock(return_value=False)
+            mock_pin_dns.return_value = mock_ctx
+
+            session = MagicMock()
+            response = MagicMock()
+            response.status_code = 200
+            response.content = b"<html>OK</html>"
+            response.text = "<html>OK</html>"
+            response.apparent_encoding = "utf-8"
+            response.raise_for_status = MagicMock()
+            session.get.return_value = response
+            mock_session_fn.return_value = session
+
+            HTMLFetcher.fetch_html("https://example.com/page", resolved_ip="93.184.216.34")
+
+        mock_pin_dns.assert_called_once_with("example.com", "93.184.216.34")
+        mock_ctx.__enter__.assert_called_once()
+        # URL must NOT be rewritten — original hostname preserved for TLS SNI
+        actual_url = session.get.call_args[0][0]
+        assert actual_url == "https://example.com/page"
+
+    def test_pin_dns_routes_to_resolved_ip(self):
+        """_pin_dns must make urllib3 connect to the pinned IP."""
+        from html_fetcher import _pin_dns
+        import urllib3.util.connection as urllib3_cn
+
+        original_fn = urllib3_cn.create_connection
+
+        with _pin_dns("example.com", "93.184.216.34"):
+            patched_fn = urllib3_cn.create_connection
+            assert patched_fn is not original_fn
+
+        # After exiting, original is restored
+        assert urllib3_cn.create_connection is original_fn
+
+    def test_pin_dns_only_affects_target_hostname(self):
+        """_pin_dns must not affect connections to other hostnames."""
+        from html_fetcher import _pin_dns
+        import urllib3.util.connection as urllib3_cn
+
+        original_fn = urllib3_cn.create_connection
+        calls = []
+
+        # Temporarily replace original to track calls
+        def tracking_create_connection(address, *args, **kwargs):
+            calls.append(address)
+            raise OSError("test — not actually connecting")
+
+        urllib3_cn.create_connection = tracking_create_connection
+        try:
+            with _pin_dns("example.com", "93.184.216.34"):
+                patched = urllib3_cn.create_connection
+                # Call for the pinned hostname — should rewrite to IP
+                try:
+                    patched(("example.com", 443))
+                except OSError:
+                    pass
+                # Call for a different hostname — should pass through unchanged
+                try:
+                    patched(("other.com", 443))
+                except OSError:
+                    pass
+        finally:
+            urllib3_cn.create_connection = original_fn
+
+        assert calls[0] == ("93.184.216.34", 443)
+        assert calls[1] == ("other.com", 443)
+
+
+# ---------------------------------------------------------------------------
+# Curl option injection prevention
+# ---------------------------------------------------------------------------
+
+class TestCurlOptionInjection:
+    """curl subprocess must use -- to prevent option injection via URL."""
+
+    def test_curl_uses_end_of_options_marker(self):
+        """The curl command must include '--' before the URL argument."""
+        from html_fetcher import HTMLFetcher
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="<html></html>", stderr="")
+            HTMLFetcher._fetch_with_curl("https://example.com/page")
+
+        cmd = mock_run.call_args[0][0]
+        url_index = cmd.index("https://example.com/page")
+        assert cmd[url_index - 1] == "--", f"Expected '--' before URL, got: {cmd}"
+
+    def test_curl_rejects_non_http_url(self):
+        """_fetch_with_curl must reject URLs without http(s) scheme."""
+        from html_fetcher import HTMLFetcher
+
+        with patch("subprocess.run") as mock_run:
+            result = HTMLFetcher._fetch_with_curl("-o /tmp/evil http://attacker.com")
+
+        mock_run.assert_not_called()
+        assert result is None
+
+    def test_curl_does_not_follow_redirects(self):
+        """curl must not use -L flag (redirects handled at application level)."""
+        from html_fetcher import HTMLFetcher
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout="<html></html>", stderr="")
+            HTMLFetcher._fetch_with_curl("https://example.com/page")
+
+        cmd = mock_run.call_args[0][0]
+        assert "-L" not in cmd, f"curl should not follow redirects, found -L in: {cmd}"
+
+
+# ---------------------------------------------------------------------------
+# Operational endpoint authentication
+# ---------------------------------------------------------------------------
+
+class TestOperationalEndpointAuth:
+    """Operational endpoints must require API key authentication."""
+
+    def test_metrics_requires_api_key(self, client):
+        """GET /api/metrics without API key must return 401."""
+        resp = client.get("/api/metrics")
+        assert resp.status_code == 401
+
+    def test_metrics_with_valid_key_succeeds(self, client):
+        """GET /api/metrics with valid API key must return 200."""
+        with patch("api.Database.fetch_one", return_value={"publications": 0, "researchers": 0, "scrapes": 0}):
+            resp = client.get("/api/metrics", headers=AUTH_HEADERS)
+        assert resp.status_code == 200
+
+    def test_scrape_status_requires_api_key(self, client):
+        """GET /api/scrape/status without API key must return 401."""
+        resp = client.get("/api/scrape/status")
+        assert resp.status_code == 401
+
+    def test_scrape_status_with_valid_key_succeeds(self, client):
+        """GET /api/scrape/status with valid API key must return 200."""
+        with patch("api.Database.fetch_one", return_value=None):
+            resp = client.get("/api/scrape/status", headers=AUTH_HEADERS)
+        assert resp.status_code == 200

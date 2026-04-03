@@ -43,7 +43,7 @@ def get_unchecked_draft_urls(limit: int = 100) -> list[dict]:
     )
 
 
-def update_openalex_data(paper_id, doi, openalex_id, coauthors, abstract=None):
+def update_openalex_data(paper_id, doi, openalex_id, coauthors, abstract=None, year=None):
     """Store OpenAlex enrichment data for a paper."""
     # Guard abstract against mojibake
     if abstract:
@@ -52,8 +52,11 @@ def update_openalex_data(paper_id, doi, openalex_id, coauthors, abstract=None):
     with get_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
-                "UPDATE papers SET doi = %s, openalex_id = %s, abstract = COALESCE(%s, abstract) WHERE id = %s",
-                (doi, openalex_id, abstract, paper_id),
+                "UPDATE papers SET doi = %s, openalex_id = %s, "
+                "abstract = COALESCE(%s, abstract), "
+                "year = COALESCE(%s, year) "
+                "WHERE id = %s",
+                (doi, openalex_id, abstract, year, paper_id),
             )
             cursor.execute(
                 "DELETE FROM openalex_coauthors WHERE paper_id = %s", (paper_id,)
