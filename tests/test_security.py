@@ -402,7 +402,7 @@ class TestSSRFRedirectBypass:
 
         with patch.object(HTMLFetcher, "_get_session", return_value=mock_session), \
              patch.object(HTMLFetcher, "_rate_limit"), \
-             patch.object(HTMLFetcher, "validate_url", return_value=True):
+             patch.object(HTMLFetcher, "validate_url_with_pin", return_value=(True, "1.2.3.4")):
             result = HTMLFetcher.fetch_html("https://example.com/page")
 
         assert result == "<html>OK</html>"
@@ -423,7 +423,7 @@ class TestSSRFRedirectBypass:
 
         with patch.object(HTMLFetcher, "_get_session", return_value=mock_session), \
              patch.object(HTMLFetcher, "_rate_limit"), \
-             patch.object(HTMLFetcher, "validate_url", return_value=True):
+             patch.object(HTMLFetcher, "validate_url_with_pin", return_value=(True, "1.2.3.4")):
             result = HTMLFetcher.fetch_html("https://example.com/page")
 
         assert result is None

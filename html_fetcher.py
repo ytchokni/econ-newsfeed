@@ -20,7 +20,11 @@ import urllib3.util.connection as _urllib3_cn
 
 # Serialises access to the urllib3 create_connection monkey-patch so
 # concurrent threads (e.g. parse-fast via ThreadPoolExecutor) don't race.
+# Per-hostname locking allows concurrent fetches to different hosts.
 _pin_dns_lock = threading.Lock()
+_pin_dns_pins: dict[str, str] = {}  # hostname -> resolved_ip
+_pin_dns_refcount = 0
+_original_create_connection = None
 
 
 @contextmanager
@@ -29,22 +33,34 @@ def _pin_dns(hostname: str, resolved_ip: str):
 
     Prevents DNS rebinding between SSRF validation and the actual HTTP request
     by monkey-patching urllib3's connection creation to use the pre-resolved IP.
-    Thread-safe: acquires _pin_dns_lock for the duration of the patch.
+    Thread-safe: uses a pin registry so multiple hostnames can be pinned
+    concurrently without serialising all fetches.
     """
+    global _pin_dns_refcount, _original_create_connection
+
     with _pin_dns_lock:
-        _original_create_connection = _urllib3_cn.create_connection
+        _pin_dns_pins[hostname] = resolved_ip
+        _pin_dns_refcount += 1
+        if _pin_dns_refcount == 1:
+            _original_create_connection = _urllib3_cn.create_connection
 
-        def _pinned_create_connection(address, *args, **kwargs):
-            host, port = address
-            if host == hostname:
-                return _original_create_connection((resolved_ip, port), *args, **kwargs)
-            return _original_create_connection(address, *args, **kwargs)
+            def _pinned_create_connection(address, *args, **kwargs):
+                host, port = address
+                pinned_ip = _pin_dns_pins.get(host)
+                if pinned_ip:
+                    return _original_create_connection((pinned_ip, port), *args, **kwargs)
+                return _original_create_connection(address, *args, **kwargs)
 
-        _urllib3_cn.create_connection = _pinned_create_connection
-        try:
-            yield
-        finally:
-            _urllib3_cn.create_connection = _original_create_connection
+            _urllib3_cn.create_connection = _pinned_create_connection
+    try:
+        yield
+    finally:
+        with _pin_dns_lock:
+            _pin_dns_pins.pop(hostname, None)
+            _pin_dns_refcount -= 1
+            if _pin_dns_refcount == 0:
+                _urllib3_cn.create_connection = _original_create_connection
+                _original_create_connection = None
 
 
 RATE_LIMIT_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_SECONDS', '2'))
@@ -235,12 +251,17 @@ class HTMLFetcher:
 
         # DNS pinning: force urllib3 to connect to the validated IP,
         # preserving the original hostname for TLS SNI and cert verification.
+        # Pin registry supports multiple hostnames for redirect chains.
         if resolved_ip:
             pin_ctx = _pin_dns(urlparse(url).hostname, resolved_ip)
         else:
             pin_ctx = nullcontext()
 
+        # Track extra pin contexts from redirect hops so we can clean them up.
+        redirect_pin_ctxs = []
+
         with pin_ctx:
+          try:
             while True:
                 HTMLFetcher._rate_limit(current_url)
                 for attempt in range(max_retries):
@@ -253,15 +274,30 @@ class HTMLFetcher:
                             continue
                         if response.status_code == 403:
                             logging.info("403 from requests for %s, falling back to curl", current_url)
-                            return HTMLFetcher._fetch_with_curl(current_url, timeout)
+                            # Re-validate to get a fresh resolved IP for curl
+                            safe, curl_ip = HTMLFetcher.validate_url_with_pin(current_url)
+                            if not safe:
+                                logging.warning("curl fallback blocked: URL failed SSRF check: %s", current_url)
+                                return None
+                            return HTMLFetcher._fetch_with_curl(current_url, timeout, resolved_ip=curl_ip)
                         if response.status_code in (301, 302, 303, 307, 308):
                             if redirects_remaining <= 0:
                                 logging.warning(f"Redirect limit exceeded for {current_url}")
                                 return None
-                            redirect_url = urljoin(current_url, response.headers.get('Location', ''))
-                            if not redirect_url or not HTMLFetcher.validate_url(redirect_url):
+                            location = response.headers.get('Location')
+                            if not location:
+                                logging.warning("Redirect with no Location header from %s", current_url)
+                                return None
+                            redirect_url = urljoin(current_url, location)
+                            safe, redirect_ip = HTMLFetcher.validate_url_with_pin(redirect_url)
+                            if not safe:
                                 logging.warning(f"Blocked redirect to unsafe URL from {current_url}: {redirect_url}")
                                 return None
+                            # Pin DNS for the redirect target hostname too
+                            if redirect_ip:
+                                redir_ctx = _pin_dns(urlparse(redirect_url).hostname, redirect_ip)
+                                redir_ctx.__enter__()
+                                redirect_pin_ctxs.append(redir_ctx)
                             redirects_remaining -= 1
                             current_url = redirect_url
                             break
@@ -283,17 +319,27 @@ class HTMLFetcher:
                 else:
                     logging.error(f"Failed to fetch HTML content from {current_url} after {max_retries} attempts")
                     return None
+          finally:
+            for ctx in reversed(redirect_pin_ctxs):
+                ctx.__exit__(None, None, None)
 
     @staticmethod
-    def _fetch_with_curl(url: str, timeout: int = 10) -> str | None:
+    def _fetch_with_curl(url: str, timeout: int = 10, resolved_ip: str | None = None) -> str | None:
         """Fallback fetcher using curl subprocess to bypass TLS fingerprint blocking."""
         if not url.startswith(("http://", "https://")):
             logging.warning("curl fallback rejected non-HTTP URL: %s", url)
             return None
         try:
+            cmd = ["curl", "-sS", "--max-time", str(timeout),
+                   "--max-filesize", str(CONTENT_MAX_BYTES)]
+            # Pin DNS in curl to prevent rebinding between validation and fetch
+            if resolved_ip:
+                parsed = urlparse(url)
+                port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                cmd.extend(["--resolve", f"{parsed.hostname}:{port}:{resolved_ip}"])
+            cmd.extend(["--", url])
             result = subprocess.run(
-                ["curl", "-sS", "--max-time", str(timeout),
-                 "--max-filesize", str(CONTENT_MAX_BYTES), "--", url],
+                cmd,
                 capture_output=True, text=True, timeout=timeout + 5,
             )
             if result.returncode != 0:
