@@ -70,6 +70,9 @@ backfill-affiliations:  ## Backfill researcher affiliations from OpenAlex
 audit-zero-pubs:  ## Audit researchers with URLs but 0 publications
 	poetry run python scripts/audit_zero_pub_researchers.py
 
+backfill-page-owner:  ## Backfill page owner as author on papers from their page
+	poetry run python scripts/backfill_page_owner_authorship.py
+
 check:
 	@echo "=== Step 1: Env validation ==="
 	poetry run python scripts/check_env.py
