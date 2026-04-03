@@ -221,6 +221,37 @@ def _url_has_baseline(cursor, url: str, min_snapshots: int = 2) -> bool:
     return (row[0] if row else 0) >= min_snapshots
 
 
+def _title_in_previous_snapshot(title: str, source_url: str) -> bool:
+    """Return True if the paper title appears in the previous HTML snapshot.
+
+    Checks the second-most-recent html_snapshot for this URL. If the title
+    (or its first 40 characters for long titles) is found in the decompressed
+    HTML, the paper was already on the page and should not generate a
+    new_paper feed event.
+    """
+    import zlib
+
+    row = Database.fetch_one(
+        """SELECT hs.raw_html_compressed
+           FROM html_snapshots hs
+           JOIN researcher_urls ru ON ru.id = hs.url_id
+           WHERE ru.url = %s
+           ORDER BY hs.snapshot_at DESC
+           LIMIT 1 OFFSET 1""",
+        (source_url,),
+    )
+    if not row or not row["raw_html_compressed"]:
+        return False
+
+    try:
+        html_text = zlib.decompress(row["raw_html_compressed"]).decode("utf-8", errors="replace").lower()
+    except Exception:
+        return False
+
+    search_term = title[:40].lower() if len(title) > 40 else title.lower()
+    return search_term in html_text
+
+
 class Publication:
     def __init__(self, id: int, title: str, authors: list | None, year: str | None, venue: str | None, url: str | None) -> None:
         self.id = id
