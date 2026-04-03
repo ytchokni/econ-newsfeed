@@ -7,8 +7,11 @@ from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import patch
 
+import os
 import pytest
 from fastapi.testclient import TestClient
+
+AUTH_HEADERS = {"X-API-Key": os.environ["SCRAPE_API_KEY"]}
 
 
 @contextmanager
@@ -247,7 +250,7 @@ class TestScrapeStatusShape:
             patch("api.Database.fetch_one", return_value=SAMPLE_SCRAPE),
             patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
-            body = client.get("/api/scrape/status").json()
+            body = client.get("/api/scrape/status", headers=AUTH_HEADERS).json()
 
         assert set(body.keys()) >= SCRAPE_STATUS_KEYS, (
             f"Missing keys: {SCRAPE_STATUS_KEYS - set(body.keys())}"
@@ -258,7 +261,7 @@ class TestScrapeStatusShape:
             patch("api.Database.fetch_one", return_value=SAMPLE_SCRAPE),
             patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
-            body = client.get("/api/scrape/status").json()
+            body = client.get("/api/scrape/status", headers=AUTH_HEADERS).json()
 
         last = body["last_scrape"]
         assert last is not None

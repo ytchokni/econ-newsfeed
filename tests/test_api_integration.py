@@ -3,8 +3,11 @@ from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import patch, MagicMock, call
 
+import os
 import pytest
 from fastapi.testclient import TestClient
+
+AUTH_HEADERS = {"X-API-Key": os.environ["SCRAPE_API_KEY"]}
 
 
 @contextmanager
@@ -48,7 +51,7 @@ class TestMetricsEndpoint:
         with patch("api.Database.fetch_one", return_value={
             "publications": 42, "researchers": 10, "scrapes": 5,
         }):
-            response = client.get("/api/metrics")
+            response = client.get("/api/metrics", headers=AUTH_HEADERS)
         assert response.status_code == 200
         body = response.json()
         assert body["publications"] == 42
@@ -182,7 +185,7 @@ class TestFullCycle:
             patch("api.Database.fetch_one", return_value=SAMPLE_SCRAPE),
             patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
-            resp = client.get("/api/scrape/status")
+            resp = client.get("/api/scrape/status", headers=AUTH_HEADERS)
         assert resp.status_code == 200
         assert resp.json()["last_scrape"]["status"] == "completed"
 
@@ -196,7 +199,7 @@ class TestFullCycle:
             patch("api.create_scrape_log", return_value=1),
             patch("api.threading.Thread"),
         ):
-            resp = client.post("/api/scrape", headers={"X-API-Key": "test-secret-key-for-ci-runs"})
+            resp = client.post("/api/scrape", headers=AUTH_HEADERS)
         assert resp.status_code == 201
 
 

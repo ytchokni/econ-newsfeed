@@ -168,6 +168,14 @@ class HealthResponse(BaseModel):
 
 _SCRAPE_API_KEY = os.environ.get("SCRAPE_API_KEY", "")
 
+
+def _require_api_key(request: Request) -> None:
+    """Constant-time API key check to prevent timing oracle attacks."""
+    api_key = request.headers.get("X-API-Key", "")
+    if not api_key or not hmac.compare_digest(api_key, _SCRAPE_API_KEY):
+        raise HTTPException(status_code=401, detail="Missing or invalid API key")
+
+
 VALID_EVENT_TYPES = frozenset({"new_paper", "status_change"})
 
 
@@ -482,8 +490,9 @@ def health_check():
 
 
 @app.get("/api/metrics")
-def metrics(response: Response):
+def metrics(request: Request, response: Response):
     """Basic application metrics for monitoring."""
+    _require_api_key(request)
     row = Database.fetch_one(
         "SELECT "
         "(SELECT COUNT(*) FROM papers) AS publications, "
@@ -1084,10 +1093,7 @@ def get_researcher(
 
 @app.post("/api/scrape", status_code=201)
 async def trigger_scrape(request: Request):
-    # Authenticate — use constant-time comparison to prevent timing attacks
-    api_key = request.headers.get("X-API-Key", "")
-    if not api_key or not hmac.compare_digest(api_key, _SCRAPE_API_KEY):
-        raise HTTPException(status_code=401, detail="Missing or invalid API key")
+    _require_api_key(request)
 
     # Check if a scrape is already running (DB advisory lock, works across workers)
     if scheduler.is_scrape_running():
@@ -1114,6 +1120,7 @@ async def trigger_scrape(request: Request):
 @app.get("/api/scrape/status")
 @limiter.limit("60/minute")
 def scrape_status(request: Request):
+    _require_api_key(request)
     row = Database.fetch_one(
         """
         SELECT id, status, started_at, finished_at,
