@@ -507,6 +507,13 @@ def metrics(request: Request, response: Response):
     }
 
 
+@app.get("/api/admin/dashboard")
+def admin_dashboard(request: Request):
+    """Admin dashboard metrics — all stats in one response."""
+    _require_api_key(request)
+    return Database.get_admin_dashboard_stats()
+
+
 # ---------------------------------------------------------------------------
 # Publication endpoints
 # ---------------------------------------------------------------------------

@@ -59,6 +59,7 @@ from database.jel import (
     add_researcher_jel_codes as _add_researcher_jel_codes,
     sync_researcher_fields_from_jel as _sync_researcher_fields_from_jel,
 )
+from database.admin import get_admin_dashboard_stats as _get_admin_dashboard_stats
 
 
 class Database:
@@ -115,3 +116,6 @@ class Database:
     get_all_researcher_topics = staticmethod(_get_all_researcher_topics)
     add_researcher_jel_codes = staticmethod(_add_researcher_jel_codes)
     sync_researcher_fields_from_jel = staticmethod(_sync_researcher_fields_from_jel)
+
+    # Admin
+    get_admin_dashboard_stats = staticmethod(_get_admin_dashboard_stats)
