@@ -89,7 +89,10 @@ eval-export:
 	poetry run python eval/export_test_cases.py
 
 eval-run:
-	cd eval && OPENROUTER_API_KEY=$$(grep OPEN_ROUTER_API_KEY ../.env | cut -d= -f2) npx promptfoo@latest eval --config promptfooconfig.yaml
+	@for f in eval/configs/*.yaml; do \
+		echo "=== Running $$(basename $$f .yaml) ===" && \
+		OPENROUTER_API_KEY=$$(grep OPEN_ROUTER_API_KEY .env | cut -d= -f2) npx promptfoo@latest eval -c "$$f"; \
+	done
 
 eval-view:
 	cd eval && npx promptfoo@latest view
