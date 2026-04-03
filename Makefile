@@ -1,4 +1,4 @@
-.PHONY: setup dev kill seed reset-db scrape fetch parse parse-fast batch-submit batch-check classify-jel enrich enrich-jel discover-domains backfill-normalize populate-fields backfill-affiliations audit-zero-pubs check
+.PHONY: setup dev kill seed reset-db scrape fetch classify-jel enrich enrich-jel discover-domains backfill-normalize populate-fields backfill-affiliations audit-zero-pubs check
 
 setup:
 	poetry install
@@ -33,18 +33,6 @@ scrape:
 
 fetch:
 	poetry run python -c "from main import download_htmls; download_htmls()"
-
-parse:
-	poetry run python -c "from main import extract_data_from_htmls; extract_data_from_htmls()"
-
-parse-fast:
-	poetry run python -c "from main import extract_data_from_htmls_concurrent; extract_data_from_htmls_concurrent()"
-
-batch-submit:
-	poetry run python -c "from main import batch_submit; batch_submit()"
-
-batch-check:
-	poetry run python -c "from main import batch_check; batch_check()"
 
 classify-jel:
 	poetry run python -c "from main import classify_jel; classify_jel()"
