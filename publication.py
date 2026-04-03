@@ -5,11 +5,9 @@ from bs4 import BeautifulSoup
 from openai import OpenAI
 from pydantic import BaseModel, ValidationError, field_validator
 from typing import Literal, Optional
-import json
 import re
 import logging
 import os
-import threading
 from urllib.parse import urlparse
 
 OPENAI_MODEL = os.environ.get('OPENAI_MODEL')
@@ -222,14 +220,6 @@ def _url_has_baseline(cursor, url: str, min_snapshots: int = 2) -> bool:
 
 
 class Publication:
-    def __init__(self, id: int, title: str, authors: list | None, year: str | None, venue: str | None, url: str | None) -> None:
-        self.id = id
-        self.title = title
-        self.authors = authors
-        self.year = year
-        self.venue = venue
-        self.url = url
-
     @staticmethod
     def save_publications(
         url: str,
@@ -502,54 +492,6 @@ Content:
             logging.error("Error in OpenAI API call for %s: %s: %s", url, type(e).__name__, e)
             return []
 
-    @staticmethod
-    def parse_openai_response(response: str) -> list | None:
-        """Parse the OpenAI response and extract the JSON content."""
-        if Publication.is_valid_json(response):
-            return json.loads(response)
-        
-        json_match = re.search(r'\[\s*\{.*?\}\s*\]', response, re.DOTALL)
-        if json_match:
-            json_text = json_match.group(0)
-            if Publication.is_valid_json(json_text):
-                return json.loads(json_text)
-        
-        # Dump invalid JSON to a file
-        Publication.dump_invalid_json(response)
-        
-        logging.error("Failed to extract valid JSON from OpenAI response")
-        return None
-
-    _dump_lock = threading.Lock()
-
-    @staticmethod
-    def dump_invalid_json(response: str) -> None:
-        """Log invalid JSON responses. Uses structured logging instead of filesystem writes
-        to avoid data loss on ephemeral cloud container filesystems."""
-        # Truncate to avoid flooding log aggregators with huge payloads
-        preview = response[:2000] + ("..." if len(response) > 2000 else "")
-        with Publication._dump_lock:
-            logging.warning("Invalid JSON from OpenAI (len=%d): %s", len(response), preview)
-
-    @staticmethod
-    def is_valid_json(json_string: str) -> bool:
-        """Check if the provided string is valid JSON."""
-        try:
-            json.loads(json_string)
-            return True
-        except json.JSONDecodeError as e:
-            logging.error(f"JSON decoding error: {e}")
-            return False
-
-    @staticmethod
-    def get_all_publications() -> list["Publication"]:
-        """Retrieve all publications from the database."""
-        query = """
-            SELECT id, source_url, title, year, venue
-            FROM papers
-        """
-        results = Database.fetch_all(query)
-        return [Publication(id=row['id'], url=row['source_url'], title=row['title'], year=row['year'], venue=row['venue'], authors=None) for row in results]
 
 
 def _title_similarity(title_a: str | None, title_b: str | None) -> float:
