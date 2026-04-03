@@ -34,6 +34,7 @@ const STATUS_OPTIONS = [
   { label: "Published", value: "published" },
   { label: "Accepted", value: "accepted" },
   { label: "Revise & Resubmit", value: "revise_and_resubmit" },
+  { label: "Reject & Resubmit", value: "reject_and_resubmit" },
   { label: "Working Paper", value: "working_paper" },
 ];
 
