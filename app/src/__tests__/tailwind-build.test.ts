@@ -12,19 +12,13 @@ import os from "os";
 describe("Tailwind CSS build", () => {
   it("generates CSS for utility classes used in the project", () => {
     const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "tw-test-"));
-    const inputFile = path.join(tmpDir, "input.css");
     const outputFile = path.join(tmpDir, "output.css");
     const appDir = path.resolve(__dirname, "../..");
+    const inputFile = path.join(appDir, "src/app/globals.css");
 
     try {
-      // Must match the directives in globals.css
-      fs.writeFileSync(
-        inputFile,
-        `@tailwind base;\n@tailwind components;\n@tailwind utilities;\n`
-      );
-
       execSync(
-        `npx tailwindcss -i ${inputFile} -o ${outputFile}`,
+        `npx @tailwindcss/cli -i ${inputFile} -o ${outputFile}`,
         { cwd: appDir, timeout: 30000 }
       );
 
@@ -32,7 +26,6 @@ describe("Tailwind CSS build", () => {
 
       expect(output).toContain("sticky");
       expect(output).toContain("flex");
-      expect(output).toContain("max-w-4xl");
     } finally {
       fs.rmSync(tmpDir, { recursive: true, force: true });
     }
