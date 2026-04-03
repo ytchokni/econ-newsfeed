@@ -252,7 +252,7 @@ class TestSavePublications:
         """Create a mock cursor and wired-up connection context."""
         cursor = MagicMock()
         cursor.lastrowid = lastrowid
-        cursor.fetchone.return_value = (0,)  # Default: no snapshot baseline
+        cursor.fetchone.side_effect = [(0,), None]  # baseline snapshot count, then no page owner
         ctx_factory, conn = _make_connection_context(cursor)
         return cursor, conn, ctx_factory
 
@@ -262,7 +262,7 @@ class TestSavePublications:
     def test_happy_path_insert(self, mock_get_conn, mock_hash, mock_get_rid):
         """New publication is inserted, paper_urls row added, authorship rows created."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=5)
-        cursor.fetchone.side_effect = [(2,)]  # baseline snapshot count (hoisted before loop)
+        cursor.fetchone.side_effect = [(2,), None]  # baseline snapshot count, then no page owner
         mock_get_conn.side_effect = lambda: ctx_factory()
 
         pub = _make_pub_dict()
@@ -299,8 +299,8 @@ class TestSavePublications:
     def test_dedup_lookup_existing(self, mock_get_conn, mock_hash, mock_get_rid):
         """When INSERT IGNORE hits a duplicate (lastrowid=0), existing paper is looked up."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
-        # Side effects: (0) baseline snapshot count, (1) title_hash lookup, (2) backfill SELECT
-        cursor.fetchone.side_effect = [(0,), (42,), (None, None, None)]
+        # Side effects: (0) baseline snapshot count, (1) title_hash lookup, (2) backfill SELECT, (3) page owner lookup
+        cursor.fetchone.side_effect = [(0,), (42,), (None, None, None), None]
         mock_get_conn.side_effect = lambda: ctx_factory()
 
         pub = _make_pub_dict()
