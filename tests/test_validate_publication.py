@@ -48,9 +48,11 @@ class TestMinimumAuthorQuality:
         assert validate_publication(pub) is False
 
     def test_accepts_if_at_least_one_valid_last_name(self):
+        # "Li" is a real 2-char last name — passes the bad-name check (>= 2 chars)
+        # but without it the all-single-char rule would fire.
         pub = {
             "title": "Some Paper Title",
-            "authors": [["X", "A"], ["John", "Smith"]],
+            "authors": [["X", "Li"], ["John", "Smith"]],
         }
         assert validate_publication(pub) is True
 
@@ -149,3 +151,50 @@ class TestWebsiteSnippetRejection:
     def test_accepts_normal_paper(self):
         pub = {"title": "The Effect of Trade on Growth", "authors": [["J", "Smith"]]}
         assert validate_publication(pub) is True
+
+
+class TestBadAuthorNameRejection:
+    """Reject entire publication if any author has a bad name."""
+
+    def test_rejects_empty_first_name(self):
+        pub = {
+            "title": "The Effect of Trade on Growth",
+            "authors": [["", "Anastakis"], ["John", "Smith"]],
+        }
+        assert validate_publication(pub) is False
+
+    def test_rejects_initial_only_last_name_with_period(self):
+        pub = {
+            "title": "The Effect of Trade on Growth",
+            "authors": [["Eric", "A."]],
+        }
+        assert validate_publication(pub) is False
+
+    def test_rejects_initial_only_last_name_without_period(self):
+        pub = {
+            "title": "The Effect of Trade on Growth",
+            "authors": [["David", "K"]],
+        }
+        assert validate_publication(pub) is False
+
+    def test_accepts_valid_authors(self):
+        pub = {
+            "title": "The Effect of Trade on Growth",
+            "authors": [["John", "Smith"], ["Jane", "Doe"]],
+        }
+        assert validate_publication(pub) is True
+
+    def test_accepts_initial_first_name(self):
+        """First name initials like 'J.' are fine — only last name initials are bad."""
+        pub = {
+            "title": "The Effect of Trade on Growth",
+            "authors": [["J.", "Smith"]],
+        }
+        assert validate_publication(pub) is True
+
+    def test_rejects_whitespace_first_name(self):
+        pub = {
+            "title": "The Effect of Trade on Growth",
+            "authors": [["  ", "Smith"]],
+        }
+        assert validate_publication(pub) is False

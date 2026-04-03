@@ -85,25 +85,37 @@ function renderWithSWR(ui: React.ReactElement) {
   );
 }
 
-/** Build a fetch mock that returns empty JEL codes and delegates publications to `pubResponses`. */
-function mockFetch(...pubResponses: Array<{ ok: boolean; json: () => Promise<unknown> }>) {
-  const queue = [...pubResponses];
-  global.fetch = jest.fn((url: string) => {
-    if (url.includes("/api/jel-codes")) {
-      return Promise.resolve({ ok: true, json: async () => ({ items: [] }) });
+const emptyFilterOptions = {
+  institutions: [],
+  positions: [],
+  fields: [],
+};
+
+const emptyJelCodes = { items: [] };
+
+function mockFetch(publicationsResponse: unknown) {
+  (global.fetch as jest.Mock).mockImplementation((url: string) => {
+    if (url.includes("/api/filter-options")) {
+      return Promise.resolve({ ok: true, json: async () => emptyFilterOptions });
     }
-    return Promise.resolve(queue.shift() ?? { ok: true, json: async () => ({ items: [], total: 0, page: 1, per_page: 20, pages: 0 }) });
-  }) as jest.Mock;
+    if (url.includes("/api/jel-codes")) {
+      return Promise.resolve({ ok: true, json: async () => emptyJelCodes });
+    }
+    if (typeof publicationsResponse === "function") {
+      return publicationsResponse(url);
+    }
+    return Promise.resolve({ ok: true, json: async () => publicationsResponse });
+  });
 }
 
 beforeEach(() => {
   jest.resetAllMocks();
-  global.fetch = jest.fn().mockResolvedValue({ ok: true, json: async () => ({ items: [] }) });
+  global.fetch = jest.fn();
 });
 
 describe("NewsfeedContent", () => {
   it("renders publications grouped by discovery date", async () => {
-    mockFetch({ ok: true, json: async () => page1 });
+    mockFetch(page1);
 
     renderWithSWR(<NewsfeedContent />);
 
@@ -118,24 +130,22 @@ describe("NewsfeedContent", () => {
   });
 
   it("shows loading skeletons initially", () => {
-    global.fetch = jest.fn((url: string) => {
-      if (url.includes("/api/jel-codes")) {
-        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) });
-      }
-      return new Promise(() => {}); // never resolves — keeps loading
-    }) as jest.Mock;
+    (global.fetch as jest.Mock).mockReturnValue(new Promise(() => {}));
 
     renderWithSWR(<NewsfeedContent />);
     expect(screen.getByText(/Loading/i)).toBeInTheDocument();
   });
 
   it("shows error state on fetch failure", async () => {
-    global.fetch = jest.fn((url: string) => {
+    (global.fetch as jest.Mock).mockImplementation((url: string) => {
+      if (url.includes("/api/filter-options")) {
+        return Promise.resolve({ ok: true, json: async () => emptyFilterOptions });
+      }
       if (url.includes("/api/jel-codes")) {
-        return Promise.resolve({ ok: true, json: async () => ({ items: [] }) });
+        return Promise.resolve({ ok: true, json: async () => emptyJelCodes });
       }
       return Promise.reject(new Error("Network error"));
-    }) as jest.Mock;
+    });
 
     renderWithSWR(<NewsfeedContent />);
 
@@ -145,7 +155,7 @@ describe("NewsfeedContent", () => {
   });
 
   it("shows Next button when more pages exist", async () => {
-    mockFetch({ ok: true, json: async () => page1 });
+    mockFetch(page1);
 
     renderWithSWR(<NewsfeedContent />);
 
@@ -157,7 +167,7 @@ describe("NewsfeedContent", () => {
   });
 
   it("renders search input on newsfeed page", async () => {
-    mockFetch({ ok: true, json: async () => page1 });
+    mockFetch(page1);
 
     renderWithSWR(<NewsfeedContent />);
 
@@ -167,7 +177,7 @@ describe("NewsfeedContent", () => {
   });
 
   it("renders New Projects and Status Changes toggle buttons", async () => {
-    mockFetch({ ok: true, json: async () => page1 });
+    mockFetch(page1);
 
     renderWithSWR(<NewsfeedContent />);
 
@@ -178,7 +188,7 @@ describe("NewsfeedContent", () => {
   });
 
   it("defaults to New Projects tab as active", async () => {
-    mockFetch({ ok: true, json: async () => page1 });
+    mockFetch(page1);
 
     renderWithSWR(<NewsfeedContent />);
 
@@ -193,10 +203,7 @@ describe("NewsfeedContent", () => {
   });
 
   it("switches to Status Changes tab and resets filters", async () => {
-    mockFetch(
-      { ok: true, json: async () => page1 },
-      { ok: true, json: async () => page1 },
-    );
+    mockFetch(page1);
 
     renderWithSWR(<NewsfeedContent />);
 
@@ -218,10 +225,7 @@ describe("NewsfeedContent", () => {
     // Use pushState to set the URL — jsdom allows this without navigation.
     window.history.pushState({}, "", "?tab=status_change");
 
-    mockFetch(
-      { ok: true, json: async () => page1 },  // initial render (new_paper)
-      { ok: true, json: async () => page1 },  // after useEffect sets status_change
-    );
+    mockFetch(page1);
 
     renderWithSWR(<NewsfeedContent />);
 
@@ -236,10 +240,15 @@ describe("NewsfeedContent", () => {
   });
 
   it("navigates to next page when Next button is clicked", async () => {
-    mockFetch(
-      { ok: true, json: async () => page1 },
-      { ok: true, json: async () => page2 },
-    );
+    let callCount = 0;
+    mockFetch((url: string) => {
+      if (url.includes("/api/publications")) {
+        callCount++;
+        const data = callCount === 1 ? page1 : page2;
+        return Promise.resolve({ ok: true, json: async () => data });
+      }
+      return Promise.resolve({ ok: true, json: async () => ({}) });
+    });
 
     renderWithSWR(<NewsfeedContent />);
 

@@ -1,4 +1,5 @@
 from database import Database
+from encoding_guard import guard_text_fields
 from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 from openai import OpenAI
@@ -157,6 +158,17 @@ def validate_publication(pub: dict) -> bool:
     if title_lower.startswith('©') or title_lower.startswith('(c)'):
         return False
 
+    # Reject if any author has empty first name or initial-only last name
+    for author in authors:
+        if not author or len(author) < 2:
+            continue
+        first = author[0].strip() if author[0] else ""
+        last = author[-1].strip() if author[-1] else ""
+        if not first:
+            return False
+        if re.match(r'^[A-Za-z]\.?$', last):
+            return False
+
     # Reject GitHub as venue
     venue = (pub.get('venue') or '').lower()
     if 'github' in venue:
@@ -235,6 +247,13 @@ class Publication:
                 cursor = None
                 try:
                     title = clean_title(pub['title'].strip()) if pub['title'] else ''
+                    # Fix any mojibake before saving
+                    pub = guard_text_fields(
+                        dict(pub, title=title),
+                        ["title", "abstract", "venue"],
+                        context=f"papers (url={url})",
+                    )
+                    title = pub['title']
                     title_hash = Database.compute_title_hash(title)
 
                     cursor = conn.cursor(buffered=True)

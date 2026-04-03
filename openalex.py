@@ -151,6 +151,20 @@ def _parse_topics(work: dict) -> list[dict]:
     ]
 
 
+def _is_bad_coauthor_name(display_name: str) -> bool:
+    """Return True if a coauthor display_name is too incomplete to store."""
+    name = display_name.strip()
+    if not name:
+        return True
+    parts = name.split()
+    # Single-initial first part: "A.", "A", "J." etc.
+    if len(parts) >= 2:
+        first = parts[0]
+        if len(first.rstrip('.')) <= 1:
+            return True
+    return False
+
+
 def _parse_work(work: dict) -> dict:
     """Parse an OpenAlex work object into our enrichment dict."""
     doi = _strip_prefix(work.get("doi"), _DOI_PREFIX)
@@ -159,8 +173,12 @@ def _parse_work(work: dict) -> dict:
     coauthors = []
     for authorship in work.get("authorships", []):
         author = authorship.get("author", {})
+        display_name = author.get("display_name", "")
+        if _is_bad_coauthor_name(display_name):
+            logger.debug("Skipping coauthor with bad name: %r", display_name)
+            continue
         coauthors.append({
-            "display_name": author.get("display_name", ""),
+            "display_name": display_name,
             "openalex_author_id": _strip_prefix(author.get("id"), _OPENALEX_PREFIX),
         })
 
@@ -169,12 +187,16 @@ def _parse_work(work: dict) -> dict:
     if inverted_index:
         abstract = reconstruct_abstract(inverted_index)
 
+    pub_year = work.get("publication_year")
+    year = str(pub_year) if pub_year is not None else None
+
     return {
         "doi": doi,
         "openalex_id": openalex_id,
         "coauthors": coauthors,
         "abstract": abstract,
         "topics": _parse_topics(work),
+        "year": year,
     }
 
 
@@ -207,6 +229,7 @@ def enrich_publication(paper_id, title, author_name, existing_abstract=None, doi
         openalex_id=result["openalex_id"],
         coauthors=result["coauthors"],
         abstract=abstract,
+        year=result.get("year"),
     )
 
     # Backfill openalex_author_id on researchers from coauthor data

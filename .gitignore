@@ -13,7 +13,8 @@ __pycache__/
 # Project specific
 test.ipynb
 debug.py
-.env
+.env*
+!.env.example
 invalid_json_dumps/
 
 # Logs and databases
@@ -39,3 +40,5 @@ CLAUDE.md
 
 *.png
 *.pem
+
+RePEc/*

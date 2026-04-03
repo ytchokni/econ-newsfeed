@@ -28,6 +28,8 @@ db_config = {
     'user': os.environ['DB_USER'],
     'password': os.environ['DB_PASSWORD'],
     'database': _DB_NAME,
+    'charset': 'utf8mb4',
+    'collation': 'utf8mb4_unicode_ci',
 }
 
 # Optional SSL for managed cloud databases (Cloud SQL, RDS, PlanetScale)

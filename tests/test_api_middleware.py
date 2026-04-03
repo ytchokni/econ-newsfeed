@@ -1,8 +1,14 @@
 """Tests for API middleware: security headers and CORS."""
+from contextlib import contextmanager
 from unittest.mock import patch
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+@contextmanager
+def _noop_connection_scope():
+    yield None
 
 
 @pytest.fixture
@@ -15,6 +21,7 @@ def client():
         patch("database.Database.fetch_one", return_value=None),
         patch("scheduler.start_scheduler"),
         patch("scheduler.shutdown_scheduler"),
+        patch("api.connection_scope", _noop_connection_scope),
     ):
         from api import app
 

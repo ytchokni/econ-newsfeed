@@ -20,9 +20,9 @@ import pytest
 class TestExtractDataSeedDetection:
     """extract_data_from_htmls passes is_seed based on is_first_extraction."""
 
+    @patch("main.reconcile_title_renames")
     @patch("main.match_and_save_paper_links")
     @patch("main.HTMLFetcher.mark_extracted")
-    @patch("main.reconcile_title_renames")
     @patch("main.Publication.save_publications")
     @patch("main.Publication.extract_publications", return_value=[{"title": "Paper"}])
     @patch("main.HTMLFetcher.get_latest_text", return_value="<html>content</html>")
@@ -31,7 +31,7 @@ class TestExtractDataSeedDetection:
     @patch("main.Researcher.get_all_researcher_urls")
     def test_first_extraction_passes_is_seed_true(
         self, mock_urls, mock_needs, mock_first, mock_text,
-        mock_extract, mock_save, mock_reconcile, mock_mark, mock_links,
+        mock_extract, mock_save, mock_mark, mock_links, mock_reconcile,
     ):
         mock_urls.return_value = [
             {"id": 1, "researcher_id": 10, "url": "https://example.com", "page_type": "personal"}
@@ -45,9 +45,9 @@ class TestExtractDataSeedDetection:
         _, kwargs = mock_save.call_args
         assert kwargs.get("is_seed") is True
 
+    @patch("main.reconcile_title_renames")
     @patch("main.match_and_save_paper_links")
     @patch("main.HTMLFetcher.mark_extracted")
-    @patch("main.reconcile_title_renames")
     @patch("main.Publication.save_publications")
     @patch("main.Publication.extract_publications", return_value=[{"title": "Paper"}])
     @patch("main.HTMLFetcher.get_latest_text", return_value="<html>content</html>")
@@ -56,7 +56,7 @@ class TestExtractDataSeedDetection:
     @patch("main.Researcher.get_all_researcher_urls")
     def test_subsequent_extraction_passes_is_seed_false(
         self, mock_urls, mock_needs, mock_first, mock_text,
-        mock_extract, mock_save, mock_reconcile, mock_mark, mock_links,
+        mock_extract, mock_save, mock_mark, mock_links, mock_reconcile,
     ):
         mock_urls.return_value = [
             {"id": 1, "researcher_id": 10, "url": "https://example.com", "page_type": "personal"}
@@ -76,7 +76,6 @@ class TestProcessOneUrlSeedDetection:
 
     @patch("main.match_and_save_paper_links")
     @patch("main.HTMLFetcher.mark_extracted")
-    @patch("main.reconcile_title_renames")
     @patch("main.Publication.save_publications")
     @patch("main.Publication.extract_publications", return_value=[{"title": "Paper"}])
     @patch("main.HTMLFetcher.get_latest_text", return_value="<html>content</html>")
@@ -84,7 +83,7 @@ class TestProcessOneUrlSeedDetection:
     @patch("main.HTMLFetcher.needs_extraction", return_value=True)
     def test_first_extraction_passes_is_seed_true(
         self, mock_needs, mock_first, mock_text,
-        mock_extract, mock_save, mock_reconcile, mock_mark, mock_links,
+        mock_extract, mock_save, mock_mark, mock_links,
     ):
         from main import _process_one_url
         _process_one_url(1, 10, "https://example.com", "personal")
@@ -97,9 +96,9 @@ class TestProcessOneUrlSeedDetection:
 class TestBatchCheckSeedDetection:
     """batch_check passes is_seed based on is_first_extraction."""
 
+    @patch("main.reconcile_title_renames")
     @patch("main.HTMLFetcher.mark_extracted")
     @patch("main.match_and_save_paper_links")
-    @patch("main.reconcile_title_renames")
     @patch("main.Publication.save_publications")
     @patch("main.HTMLFetcher.is_first_extraction", return_value=True)
     @patch("main.Database.log_llm_usage")
@@ -108,7 +107,7 @@ class TestBatchCheckSeedDetection:
     @patch("main.Database.fetch_all")
     def test_batch_check_first_extraction_passes_is_seed_true(
         self, mock_fetch_all, mock_fetch_one, mock_exec, mock_log,
-        mock_first, mock_save, mock_reconcile, mock_links, mock_mark,
+        mock_first, mock_save, mock_links, mock_mark, mock_reconcile,
     ):
         """batch_check should pass is_seed=True for URLs never extracted before."""
         import json

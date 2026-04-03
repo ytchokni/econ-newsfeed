@@ -6,6 +6,7 @@ import re
 from datetime import datetime, timezone
 
 from database.connection import execute_query, fetch_all, get_connection
+from encoding_guard import fix_encoding
 
 
 def normalize_title(title: str | None) -> str:
@@ -42,23 +43,28 @@ def get_unchecked_draft_urls(limit: int = 100) -> list[dict]:
     )
 
 
-def update_openalex_data(paper_id, doi, openalex_id, coauthors, abstract=None):
-    """Store OpenAlex enrichment data for a paper.
+def update_openalex_data(paper_id, doi, openalex_id, coauthors, abstract=None, year=None):
+    """Store OpenAlex enrichment data for a paper."""
+    # Guard abstract against mojibake
+    if abstract:
+        abstract, _ = fix_encoding(abstract)
 
-    Updates doi and openalex_id on the papers row. Inserts co-authors into
-    openalex_coauthors. Optionally sets abstract (fallback only).
-    """
     with get_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute(
-                "UPDATE papers SET doi = %s, openalex_id = %s, abstract = COALESCE(%s, abstract) WHERE id = %s",
-                (doi, openalex_id, abstract, paper_id),
+                "UPDATE papers SET doi = %s, openalex_id = %s, "
+                "abstract = COALESCE(%s, abstract), "
+                "year = COALESCE(%s, year) "
+                "WHERE id = %s",
+                (doi, openalex_id, abstract, year, paper_id),
             )
-            # Replace coauthors (handles re-enrichment cleanly)
             cursor.execute(
                 "DELETE FROM openalex_coauthors WHERE paper_id = %s", (paper_id,)
             )
             if coauthors:
+                # Guard coauthor display names
+                for ca in coauthors:
+                    ca["display_name"], _ = fix_encoding(ca["display_name"])
                 cursor.executemany(
                     "INSERT IGNORE INTO openalex_coauthors (paper_id, display_name, openalex_author_id) "
                     "VALUES (%s, %s, %s)",
