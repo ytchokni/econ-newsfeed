@@ -82,9 +82,9 @@ def _disambiguate_researcher(first_name: str, last_name: str, candidates: list[d
         f'Respond with JSON only: {{"match_id": <id or null>}}'
     )
     try:
-        from openai import OpenAI
-        client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
-        model = os.environ.get('OPENAI_MODEL', 'gpt-4o-mini')
+        from openai_client import get_client, get_model
+        client = get_client()
+        model = get_model()
         response = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model=model,

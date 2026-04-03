@@ -106,8 +106,9 @@ def _make_openai_response(jel_codes: list[dict], refusal=None):
 
 class TestClassifyResearcher:
     @patch("jel_classifier.Database.log_llm_usage")
-    @patch("jel_classifier._openai_client")
-    def test_returns_codes(self, mock_client, mock_log):
+    @patch("jel_classifier.get_client")
+    def test_returns_codes(self, mock_get_client, mock_log):
+        mock_client = mock_get_client.return_value
         mock_client.beta.chat.completions.parse.return_value = _make_openai_response([
             {"code": "J", "reasoning": "labor"},
             {"code": "F", "reasoning": "international trade"},
@@ -117,8 +118,9 @@ class TestClassifyResearcher:
         mock_log.assert_called_once()
 
     @patch("jel_classifier.Database.log_llm_usage")
-    @patch("jel_classifier._openai_client")
-    def test_empty_on_refusal(self, mock_client, mock_log):
+    @patch("jel_classifier.get_client")
+    def test_empty_on_refusal(self, mock_get_client, mock_log):
+        mock_client = mock_get_client.return_value
         mock_client.beta.chat.completions.parse.return_value = _make_openai_response(
             [], refusal="Cannot classify"
         )
@@ -126,23 +128,25 @@ class TestClassifyResearcher:
         assert codes == []
 
     @patch("jel_classifier.Database.log_llm_usage")
-    @patch("jel_classifier._openai_client")
-    def test_empty_on_api_error(self, mock_client, mock_log):
+    @patch("jel_classifier.get_client")
+    def test_empty_on_api_error(self, mock_get_client, mock_log):
+        mock_client = mock_get_client.return_value
         mock_client.beta.chat.completions.parse.side_effect = Exception("API down")
         codes = classify_researcher(1, "Jane", "Doe", "I study economics.")
         assert codes == []
 
     @patch("jel_classifier.Database.log_llm_usage")
-    @patch("jel_classifier._openai_client")
-    def test_logs_llm_usage(self, mock_client, mock_log):
+    @patch("jel_classifier.get_client")
+    def test_logs_llm_usage(self, mock_get_client, mock_log):
+        mock_client = mock_get_client.return_value
         mock_client.beta.chat.completions.parse.return_value = _make_openai_response([
             {"code": "E", "reasoning": "macro"},
         ])
         classify_researcher(42, "John", "Smith", "Macro researcher.")
-        from jel_classifier import OPENAI_MODEL
+        from openai_client import get_model
         mock_log.assert_called_once_with(
             "jel_classification",
-            OPENAI_MODEL,
+            get_model(),
             mock_client.beta.chat.completions.parse.return_value.usage,
             researcher_id=42,
         )

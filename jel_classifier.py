@@ -4,13 +4,9 @@ Reads researcher descriptions and classifies them into standard
 JEL (Journal of Economic Literature) codes.
 """
 from database import Database
-from openai import OpenAI
+from openai_client import get_client, get_model
 from pydantic import BaseModel, field_validator
 import logging
-import os
-
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL")
-_openai_client = OpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
 
 # Standard top-level JEL categories for prompt context
 _JEL_CATEGORIES = """A - General Economics and Teaching
@@ -82,20 +78,21 @@ def classify_researcher(
     Returns a list of JEL code strings (e.g. ["J", "F"]).
     """
     prompt = build_classification_prompt(first_name, last_name, description)
+    model = get_model()
     logging.info(
         "Classifying %s %s (id=%d) into JEL codes using OpenAI (%s)",
-        first_name, last_name, researcher_id, OPENAI_MODEL,
+        first_name, last_name, researcher_id, model,
     )
 
     try:
-        chat_completion = _openai_client.beta.chat.completions.parse(
+        chat_completion = get_client().beta.chat.completions.parse(
             messages=[{"role": "user", "content": prompt}],
-            model=OPENAI_MODEL,
+            model=model,
             response_format=JelClassificationResult,
         )
         Database.log_llm_usage(
             "jel_classification",
-            OPENAI_MODEL,
+            model,
             chat_completion.usage,
             researcher_id=researcher_id,
         )
