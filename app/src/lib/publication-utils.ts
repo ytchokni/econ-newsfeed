@@ -9,8 +9,8 @@ export const statusPillConfig: Record<PublicationStatus, { label: string; classN
 };
 
 export function formatAuthor(author: { id: number; first_name: string; last_name: string }) {
-  const initial = author.first_name.charAt(0);
-  return { display: `${initial}. ${author.last_name}`, id: author.id };
+  const initial = author.first_name?.charAt(0);
+  return { display: initial ? `${initial}. ${author.last_name}` : author.last_name, id: author.id };
 }
 
 export function formatDate(iso: string): string {
