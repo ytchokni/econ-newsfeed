@@ -364,22 +364,8 @@ class Publication:
                                 )
                         logging.info(f"Duplicate publication (title_hash match), added source URL: {pub['title']}")
 
-                    # If LLM returned no authors, fall back to the page owner
+                    # Process LLM-extracted authors
                     authors = pub['authors']
-                    if not any(authors):
-                        cursor.execute(
-                            """SELECT r.first_name, r.last_name
-                               FROM researchers r
-                               JOIN researcher_urls ru ON ru.researcher_id = r.id
-                               WHERE ru.url = %s LIMIT 1""",
-                            (url,),
-                        )
-                        owner = cursor.fetchone()
-                        if owner:
-                            authors = [[owner[0], owner[1]]]
-                            logging.info(f"No authors extracted, using page owner: {owner[0]} {owner[1]}")
-
-                    # Process authors
                     for author_order, author in enumerate(authors, start=1):
                         if not author:
                             continue
@@ -398,13 +384,30 @@ class Publication:
                             author_id = Database.get_researcher_id(first_name, last_name, conn=conn)
                             _author_id_cache[cache_key] = author_id
 
-                        # INSERT IGNORE prevents duplicate authorship entries (uq_researcher_pub)
                         cursor.execute(
                             """
                             INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order)
                             VALUES (%s, %s, %s)
                             """,
                             (author_id, publication_id, author_order),
+                        )
+
+                    # Always ensure the page owner is an author (INSERT IGNORE = no-op if already present)
+                    cursor.execute(
+                        """SELECT r.id
+                           FROM researchers r
+                           JOIN researcher_urls ru ON ru.researcher_id = r.id
+                           WHERE ru.url = %s LIMIT 1""",
+                        (url,),
+                    )
+                    owner_row = cursor.fetchone()
+                    if owner_row:
+                        cursor.execute(
+                            """
+                            INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order)
+                            VALUES (%s, %s, %s)
+                            """,
+                            (owner_row[0], publication_id, 0),
                         )
 
                     conn.commit()
