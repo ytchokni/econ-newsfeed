@@ -29,12 +29,12 @@ def export_publication_extraction():
         with conn.cursor(dictionary=True) as cur:
             # Get URLs that have both html_content and papers — confirmed real publications
             cur.execute("""
-                SELECT DISTINCT hc.url_id, hc.text_content, u.url
+                SELECT DISTINCT hc.url_id, hc.content, ru.url
                 FROM html_content hc
-                JOIN urls u ON u.id = hc.url_id
-                JOIN papers p ON p.url_id = hc.url_id
-                WHERE hc.text_content IS NOT NULL
-                  AND LENGTH(hc.text_content) > 100
+                JOIN researcher_urls ru ON ru.id = hc.url_id
+                JOIN papers p ON p.source_url = ru.url
+                WHERE hc.content IS NOT NULL
+                  AND LENGTH(hc.content) > 100
                 ORDER BY RAND()
                 LIMIT 50
             """)
@@ -44,7 +44,7 @@ def export_publication_extraction():
 
     test_cases = []
     for row in rows:
-        text = row['text_content']
+        text = row['content']
         if len(text) > CONTENT_MAX_CHARS:
             text = text[:CONTENT_MAX_CHARS]
         test_cases.append({
@@ -70,11 +70,11 @@ def export_description_extraction():
     try:
         with conn.cursor(dictionary=True) as cur:
             cur.execute("""
-                SELECT DISTINCT hc.url_id, hc.text_content, u.url
+                SELECT DISTINCT hc.url_id, hc.content, ru.url
                 FROM html_content hc
-                JOIN urls u ON u.id = hc.url_id
-                WHERE hc.text_content IS NOT NULL
-                  AND LENGTH(hc.text_content) > 100
+                JOIN researcher_urls ru ON ru.id = hc.url_id
+                WHERE hc.content IS NOT NULL
+                  AND LENGTH(hc.content) > 100
                 ORDER BY RAND()
                 LIMIT 50
             """)
@@ -84,7 +84,7 @@ def export_description_extraction():
 
     test_cases = []
     for row in rows:
-        text = row['text_content']
+        text = row['content']
         if len(text) > CONTENT_MAX_CHARS:
             text = text[:CONTENT_MAX_CHARS]
         test_cases.append({
