@@ -116,3 +116,91 @@ export function useResearchersFiltered(filters?: ResearcherFilters) {
     return data.items;
   });
 }
+
+export interface AdminDashboardData {
+  health: {
+    last_scrape: {
+      started_at: string;
+      status: string;
+      urls_checked: number;
+      urls_changed: number;
+      pubs_extracted: number;
+      duration_seconds: number | null;
+    } | null;
+    next_scrape_at: string | null;
+    scrape_in_progress: boolean;
+    total_researcher_urls: number;
+    urls_by_page_type: Record<string, number>;
+  };
+  content: {
+    total_papers: number;
+    total_researchers: number;
+    papers_by_status: Record<string, number>;
+    papers_by_year: { year: string; count: number }[];
+    researchers_by_position: Record<string, number>;
+  };
+  quality: {
+    papers_with_abstract: number;
+    papers_with_doi: number;
+    papers_with_openalex: number;
+    papers_with_draft_url: number;
+    draft_url_valid: number;
+    researchers_with_description: number;
+    researchers_with_jel: number;
+    researchers_with_openalex_id: number;
+  };
+  costs: {
+    total_cost_usd: number;
+    total_tokens: number;
+    by_call_type: {
+      call_type: string;
+      cost: number;
+      tokens: number;
+      count: number;
+    }[];
+    by_model: { model: string; cost: number; tokens: number }[];
+    batch_vs_realtime: { batch_cost: number; realtime_cost: number };
+    last_30_days: { date: string; cost: number; tokens: number }[];
+  };
+  scrapes: {
+    recent: {
+      started_at: string;
+      status: string;
+      urls_checked: number;
+      urls_changed: number;
+      pubs_extracted: number;
+      tokens_used: number;
+      duration_seconds: number | null;
+    }[];
+    totals: { total_scrapes: number; total_pubs_extracted: number };
+  };
+  activity: {
+    events_last_7d: Record<string, number>;
+    events_last_30d: Record<string, number>;
+    recent_events: {
+      event_type: string;
+      paper_title: string;
+      created_at: string;
+      details: string | null;
+    }[];
+  };
+}
+
+async function fetchJsonWithAuth<T>(url: string): Promise<T> {
+  const res = await fetch(url);
+  if (res.status === 401) {
+    throw new Error("UNAUTHORIZED");
+  }
+  if (!res.ok) {
+    throw new Error(`API error: ${res.status} ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export function useAdminDashboard() {
+  return useSWR<AdminDashboardData>(
+    "/api/admin/dashboard",
+    fetchJsonWithAuth,
+    { refreshInterval: 60000 }
+  );
+}
