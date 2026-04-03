@@ -318,3 +318,35 @@ class TestFallbackToPageOwner:
         }])
 
         mock_get_researcher.assert_not_called()
+
+    @patch("publication.Database.get_researcher_id")
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_page_owner_added_alongside_coauthors(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """Page owner should be added as author even when LLM extracts other authors."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+        # Return different IDs for coauthor vs owner
+        mock_get_researcher.side_effect = [99, 7]  # 99=coauthor, 7=owner
+        # (0,) for baseline snapshot count, then page owner lookup
+        cursor.fetchone.side_effect = [(0,), ("Magne", "Mogstad")]
+
+        Publication.save_publications("http://mogstad.com/research", [{
+            "title": "Inequality in Current and Lifetime Income",
+            "authors": [["R.", "Aaberge"]],
+            "year": "2023",
+        }])
+
+        # Both the coauthor AND the page owner should be looked up
+        mock_get_researcher.assert_any_call("R.", "Aaberge", conn=conn)
+        mock_get_researcher.assert_any_call("Magne", "Mogstad", conn=conn)
+        assert mock_get_researcher.call_count == 2
+
+        # Two INSERT IGNORE INTO authorship calls
+        authorship_inserts = [
+            c for c in cursor.execute.call_args_list
+            if 'INSERT IGNORE INTO authorship' in str(c)
+        ]
+        assert len(authorship_inserts) == 2
