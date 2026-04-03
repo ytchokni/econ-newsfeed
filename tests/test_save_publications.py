@@ -9,7 +9,7 @@ def _mock_conn():
     """Create a mock DB connection that simulates INSERT IGNORE with new row."""
     mock_cursor = MagicMock()
     mock_cursor.lastrowid = 1  # Simulate new paper inserted
-    mock_cursor.fetchone.return_value = (0,)  # Default: no snapshot baseline
+    mock_cursor.fetchone.side_effect = [(0,), None]  # baseline snapshot count, then no page owner
     mock_conn = MagicMock()
     mock_conn.cursor.return_value = mock_cursor
     mock_conn.__enter__ = MagicMock(return_value=mock_conn)
@@ -70,11 +70,11 @@ class TestAuthorNormalization:
     def test_empty_author_list_falls_back_to_page_owner(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
-        """[[]] (empty inner list) -> fall back to page owner, don't crash."""
+        """[[]] (empty inner list) -> page owner added by ID, don't crash."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        # (0,) for baseline snapshot count (hoisted), then page owner lookup
-        cursor.fetchone.side_effect = [(0,), ("Jane", "Doe")]
+        # (0,) for baseline snapshot count, then (owner_id,) for page owner lookup
+        cursor.fetchone.side_effect = [(0,), (42,)]
 
         Publication.save_publications("http://example.com", [{
             "title": "Test Paper",
@@ -82,7 +82,14 @@ class TestAuthorNormalization:
             "year": "2024",
         }])
 
-        mock_get_researcher.assert_called_once_with("Jane", "Doe", conn=conn)
+        # Owner is inserted directly by ID, not via get_researcher_id name lookup
+        mock_get_researcher.assert_not_called()
+        authorship_inserts = [
+            c for c in cursor.execute.call_args_list
+            if 'INSERT IGNORE INTO authorship' in str(c)
+        ]
+        assert len(authorship_inserts) == 1
+        assert authorship_inserts[0][0][1][0] == 42  # owner_id
 
     @patch("publication.Database.get_researcher_id", return_value=42)
     @patch("publication.Database.get_connection")
@@ -179,6 +186,8 @@ class TestAuthorLookupCache:
         """Cache carries over between save_publications calls (same process, different URLs)."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
+        # Two save_publications calls = 2x (baseline + owner lookup)
+        cursor.fetchone.side_effect = [(0,), None, (0,), None]
 
         pub = [{"title": "Paper A", "authors": [["John", "Doe"]], "year": "2024"}]
 
@@ -259,8 +268,8 @@ class TestAbstractBackfill:
         assert len(update_calls) == 0, "Should not backfill when all fields exist"
 
 
-class TestFallbackToPageOwner:
-    """When LLM returns no authors, the page owner should be used as default author."""
+class TestPageOwnerAuthorship:
+    """The page owner should always be added as an author on papers from their page."""
 
     @patch("publication.Database.get_researcher_id", return_value=42)
     @patch("publication.Database.get_connection")
@@ -268,11 +277,11 @@ class TestFallbackToPageOwner:
     def test_uses_page_owner_when_no_authors(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
-        """Empty authors list should trigger lookup of the page owner."""
+        """Empty authors list should still add the page owner as author."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        # (0,) for baseline snapshot count (hoisted), then page owner lookup
-        cursor.fetchone.side_effect = [(0,), ("Stefanie", "Stantcheva")]
+        # (0,) for baseline snapshot count, then (owner_id,) for page owner lookup
+        cursor.fetchone.side_effect = [(0,), (55,)]
 
         Publication.save_publications("https://www.stantcheva.com/research/", [{
             "title": "Understanding of Trade",
@@ -280,17 +289,27 @@ class TestFallbackToPageOwner:
             "year": "2022",
         }])
 
-        mock_get_researcher.assert_called_once_with("Stefanie", "Stantcheva", conn=conn)
+        # No get_researcher_id call (no extracted authors), but owner inserted directly by ID
+        mock_get_researcher.assert_not_called()
+        authorship_inserts = [
+            c for c in cursor.execute.call_args_list
+            if 'INSERT IGNORE INTO authorship' in str(c)
+        ]
+        assert len(authorship_inserts) == 1
+        # Verify owner_id=55 was inserted
+        assert authorship_inserts[0][0][1][0] == 55
 
     @patch("publication.Database.get_researcher_id", return_value=42)
     @patch("publication.Database.get_connection")
     @patch("publication.Database.compute_title_hash", return_value="abc123")
-    def test_skips_fallback_when_authors_present(
+    def test_owner_added_alongside_extracted_authors(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
-        """Non-empty authors list should NOT trigger page owner lookup."""
+        """Page owner is added even when LLM extracts other authors."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
+        # (0,) baseline, then (owner_id,) for page owner lookup
+        cursor.fetchone.side_effect = [(0,), (55,)]
 
         Publication.save_publications("https://example.com", [{
             "title": "Test Paper",
@@ -298,7 +317,14 @@ class TestFallbackToPageOwner:
             "year": "2024",
         }])
 
+        # Extracted author looked up by name
         mock_get_researcher.assert_called_once_with("John", "Doe", conn=conn)
+        # Two authorship inserts: extracted author + owner
+        authorship_inserts = [
+            c for c in cursor.execute.call_args_list
+            if 'INSERT IGNORE INTO authorship' in str(c)
+        ]
+        assert len(authorship_inserts) == 2
 
     @patch("publication.Database.get_researcher_id", return_value=42)
     @patch("publication.Database.get_connection")
@@ -306,15 +332,53 @@ class TestFallbackToPageOwner:
     def test_no_crash_when_page_owner_not_found(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
-        """If page owner lookup returns None, no author is added (no crash)."""
+        """If page owner lookup returns None, only extracted authors are added."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        cursor.fetchone.return_value = None  # no owner found
+        # (0,) baseline, then None for page owner lookup
+        cursor.fetchone.side_effect = [(0,), None]
 
         Publication.save_publications("https://unknown.com", [{
             "title": "Orphan Paper",
-            "authors": [],
+            "authors": [["John", "Doe"]],
             "year": "2024",
         }])
 
-        mock_get_researcher.assert_not_called()
+        # Only the extracted author's insert, no owner insert
+        authorship_inserts = [
+            c for c in cursor.execute.call_args_list
+            if 'INSERT IGNORE INTO authorship' in str(c)
+        ]
+        assert len(authorship_inserts) == 1
+
+    @patch("publication.Database.get_researcher_id", return_value=99)
+    @patch("publication.Database.get_connection")
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    def test_page_owner_added_alongside_coauthors(
+        self, mock_hash, mock_get_conn, mock_get_researcher
+    ):
+        """Page owner should be added as author even when LLM extracts other authors."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+        # (0,) baseline, then (owner_id=7,) for page owner lookup
+        cursor.fetchone.side_effect = [(0,), (7,)]
+
+        Publication.save_publications("http://mogstad.com/research", [{
+            "title": "Inequality in Current and Lifetime Income",
+            "authors": [["R.", "Aaberge"]],
+            "year": "2023",
+        }])
+
+        # Coauthor looked up by name, owner looked up by URL
+        mock_get_researcher.assert_called_once_with("R.", "Aaberge", conn=conn)
+
+        # Two INSERT IGNORE INTO authorship calls: coauthor (order=1) + owner (order=0)
+        authorship_inserts = [
+            c for c in cursor.execute.call_args_list
+            if 'INSERT IGNORE INTO authorship' in str(c)
+        ]
+        assert len(authorship_inserts) == 2
+        # Owner inserted with researcher_id=7
+        owner_insert_args = authorship_inserts[1][0][1]
+        assert owner_insert_args[0] == 7  # owner researcher_id
+        assert owner_insert_args[2] == 0  # author_order=0

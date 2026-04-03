@@ -22,5 +22,6 @@
 !scripts/backfill_researcher_fields.py
 !scripts/backfill_affiliations.py
 !scripts/audit_zero_pub_researchers.py
+!scripts/backfill_page_owner_authorship.py
 !pyproject.toml
 !poetry.lock
