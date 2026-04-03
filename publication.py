@@ -312,9 +312,10 @@ class Publication:
                             (publication_id, url, datetime.now(timezone.utc)),
                         )
                         # Create new_paper feed event only when source URL has established baseline
+                        # AND the paper title was NOT in the previous HTML snapshot
                         pub_status = pub.get('status')
                         if not is_seed and pub_status and pub_status != 'published':
-                            if has_baseline:
+                            if has_baseline and not _title_in_previous_snapshot(title, url):
                                 cursor.execute(
                                     """
                                     INSERT INTO feed_events (paper_id, event_type, new_status, created_at)
@@ -322,9 +323,14 @@ class Publication:
                                     """,
                                     (publication_id, pub_status, datetime.now(timezone.utc)),
                                 )
-                            else:
+                            elif not has_baseline:
                                 logging.info(
                                     "Suppressed new_paper event for '%s': source URL lacks baseline snapshots",
+                                    pub['title'],
+                                )
+                            else:
+                                logging.info(
+                                    "Suppressed new_paper event for '%s': title found in previous HTML snapshot",
                                     pub['title'],
                                 )
                     else:
@@ -375,7 +381,7 @@ class Publication:
                         new_to_this_url = cursor.rowcount > 0
                         pub_status = pub.get('status')
                         if not is_seed and new_to_this_url and pub_status and pub_status != 'published':
-                            if has_baseline:
+                            if has_baseline and not _title_in_previous_snapshot(title, url):
                                 cursor.execute(
                                     "SELECT COUNT(*) FROM feed_events WHERE paper_id = %s AND event_type = 'new_paper'",
                                     (publication_id,),
@@ -388,9 +394,14 @@ class Publication:
                                         """,
                                         (publication_id, pub_status, datetime.now(timezone.utc)),
                                     )
-                            else:
+                            elif not has_baseline:
                                 logging.info(
                                     "Suppressed new_paper event for '%s': source URL lacks baseline snapshots",
+                                    pub['title'],
+                                )
+                            else:
+                                logging.info(
+                                    "Suppressed new_paper event for '%s': title found in previous HTML snapshot",
                                     pub['title'],
                                 )
                         logging.info(f"Duplicate publication (title_hash match), added source URL: {pub['title']}")
