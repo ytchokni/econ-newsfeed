@@ -1,0 +1,19 @@
+Extract all academic publications from the following researcher page content from {{url}}.
+
+For each publication, extract:
+- title: the full publication title
+- authors: a list of [first_name, last_name] pairs. Use full first names when available (e.g., "John" not "J."). If only an initial appears, use it as given.
+- year: publication year as a string, or null if unknown
+- venue: journal or conference name, or null if unknown
+- status: one of "published", "accepted", "revise_and_resubmit", "reject_and_resubmit", "working_paper", or null if unknown
+- draft_url: a URL to a PDF, SSRN, NBER, or working paper version, or null if not available
+- abstract: the paper abstract, or null if not shown on the page
+
+Return your response as a JSON object with a single key "publications" containing a list of objects. Each object must have these keys: title, authors, year, venue, status, draft_url, abstract.
+
+If no publications are found in the content, return: {"publications": []}
+
+Do not fabricate publications.
+
+Content:
+{{text_content}}

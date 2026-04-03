@@ -1,0 +1,37 @@
+Classify the following economics researcher into JEL (Journal of Economic Literature) codes based on their bio/description.
+
+Researcher: {{first_name}} {{last_name}}
+
+Bio/Description:
+{{description}}
+
+Assign one or more top-level JEL codes from this list:
+
+A - General Economics and Teaching
+B - History of Economic Thought, Methodology, and Heterodox Approaches
+C - Mathematical and Quantitative Methods
+D - Microeconomics
+E - Macroeconomics and Monetary Economics
+F - International Economics
+G - Financial Economics
+H - Public Economics
+I - Health, Education, and Welfare
+J - Labor and Demographic Economics
+K - Law and Economics
+L - Industrial Organization
+M - Business Administration and Business Economics; Marketing; Accounting; Personnel Economics
+N - Economic History
+O - Economic Development, Innovation, Technological Change, and Growth
+P - Economic Systems
+Q - Agricultural and Natural Resource Economics; Environmental and Ecological Economics
+R - Urban, Rural, Regional, Real Estate, and Transportation Economics
+Z - Other Special Topics
+
+Return your response as a JSON object with a single key "jel_codes" containing a list of objects, each with "code" (the letter) and "reasoning" (brief explanation).
+
+Rules:
+- Assign between 1 and 5 codes that best represent the researcher's primary fields.
+- Only assign codes where the bio provides clear evidence.
+- Provide brief reasoning for each code.
+- If the bio is too vague to classify, return: {"jel_codes": []}
+- Do NOT assign "Y - Miscellaneous Categories" unless truly nothing else fits.

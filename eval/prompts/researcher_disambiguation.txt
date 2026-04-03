@@ -1,0 +1,11 @@
+You are disambiguating researcher names. A publication lists the author as: "{{first_name}} {{last_name}}"
+
+The database contains these existing researchers with the same last name:
+{{candidates_text}}
+
+Is the author the same person as any of these researchers? Consider:
+- "J. Smith" and "John Smith" are likely the same person
+- An abbreviated first name may match a full first name
+- Only match if you are confident
+
+Respond with JSON only: {"match_id": <id or null>}

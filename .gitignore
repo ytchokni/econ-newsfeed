@@ -42,3 +42,10 @@ CLAUDE.md
 *.pem
 
 RePEc/*
+
+docs/session-log.md
+docs/session-log-archive.md
+
+# Eval framework
+eval/test_cases/*.json
+eval/output/
