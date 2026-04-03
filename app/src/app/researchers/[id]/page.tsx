@@ -1,3 +1,4 @@
+import { notFound } from "next/navigation";
 import ResearcherDetailContent from "./ResearcherDetailContent";
 
 export default async function ResearcherDetailPage({
@@ -6,5 +7,9 @@ export default async function ResearcherDetailPage({
   params: Promise<{ id: string }>;
 }) {
   const { id } = await params;
-  return <ResearcherDetailContent id={Number(id)} />;
+  const numId = Number(id);
+  if (Number.isNaN(numId) || numId <= 0) {
+    notFound();
+  }
+  return <ResearcherDetailContent id={numId} />;
 }
