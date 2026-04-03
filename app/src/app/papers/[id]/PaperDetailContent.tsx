@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { usePublication } from "@/lib/api";
 import { statusPillConfig, formatAuthor, formatDate } from "@/lib/publication-utils";
 import ErrorMessage from "@/components/ErrorMessage";
-import type { FeedEvent, PaperSnapshot, PublicationStatus } from "@/lib/types";
+import type { FeedEvent, PaperSnapshot, PublicationDetail, PublicationStatus } from "@/lib/types";
 
 const ONE_DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -92,9 +92,9 @@ function TimelineEntry({
   );
 }
 
-export default function PaperDetailContent({ id }: { id: number }) {
+export default function PaperDetailContent({ id, initialData }: { id: number; initialData?: PublicationDetail }) {
   const router = useRouter();
-  const { data: publication, error, isLoading } = usePublication(id);
+  const { data: publication, error, isLoading } = usePublication(id, initialData);
 
   const snapshots = useMemo(
     () => publication?.history

@@ -6,9 +6,10 @@ import PublicationCard from "@/components/PublicationCard";
 import PublicationCardSkeleton from "@/components/PublicationCardSkeleton";
 import ErrorMessage from "@/components/ErrorMessage";
 import EmptyState from "@/components/EmptyState";
+import type { ResearcherDetail } from "@/lib/types";
 
-export default function ResearcherDetailContent({ id }: { id: number }) {
-  const { data: researcher, error, isLoading } = useResearcher(id);
+export default function ResearcherDetailContent({ id, initialData }: { id: number; initialData?: ResearcherDetail }) {
+  const { data: researcher, error, isLoading } = useResearcher(id, initialData);
 
   if (isLoading) {
     return (
