@@ -7,12 +7,19 @@ export default function ResearcherCard({
   researcher: Researcher;
 }) {
   return (
-    <Link
-      href={`/researchers/${researcher.id}`}
-      className="block rounded-lg bg-[var(--bg-card)] shadow-card p-5 hover:shadow-card-hover hover:-translate-y-px transition-all duration-200"
-    >
+    <div className="relative block rounded-lg bg-[var(--bg-card)] shadow-card p-5 hover:shadow-card-hover hover:-translate-y-px transition-all duration-200">
+      {/* Stretched link covers the card for navigation */}
+      <Link
+        href={`/researchers/${researcher.id}`}
+        className="absolute inset-0 z-0"
+        aria-label={`${researcher.first_name} ${researcher.last_name}`}
+        tabIndex={-1}
+      />
+
       <h3 className="font-serif font-semibold text-[var(--text-primary)] text-lg">
-        {researcher.first_name} {researcher.last_name}
+        <Link href={`/researchers/${researcher.id}`} className="relative z-[1]">
+          {researcher.first_name} {researcher.last_name}
+        </Link>
       </h3>
       {(researcher.position || researcher.affiliation) && (
         <p className="mt-1 font-sans text-sm text-[var(--text-secondary)]">
@@ -37,18 +44,17 @@ export default function ResearcherCard({
         </div>
       )}
       {researcher.website_url && (
-        <p className="mt-2">
+        <p className="relative z-[1] mt-2">
           <a
             href={researcher.website_url}
             target="_blank"
             rel="noopener noreferrer"
-            onClick={(e) => e.stopPropagation()}
             className="font-sans text-sm text-[var(--link)] hover:underline"
           >
             Personal website &rarr;
           </a>
         </p>
       )}
-    </Link>
+    </div>
   );
 }
