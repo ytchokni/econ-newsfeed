@@ -17,8 +17,8 @@ _openai_client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
 
 CONTENT_MAX_CHARS = int(os.environ['CONTENT_MAX_CHARS'])
 
-# Module-level cache: persists for process lifetime (one batch-check run).
-# Under concurrent workers (parse-fast), CPython GIL makes dict ops atomic;
+# Module-level cache: persists for process lifetime (one scheduler run).
+# CPython GIL makes dict ops atomic;
 # worst case is two threads both resolving the same author (redundant, not incorrect).
 _author_id_cache: dict[tuple[str, str], int] = {}
 

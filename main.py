@@ -1,10 +1,6 @@
 import argparse
-import json
 import logging
 import os
-import tempfile
-from concurrent.futures import ThreadPoolExecutor, as_completed
-from datetime import datetime, timezone
 
 from database import Database
 from researcher import Researcher
@@ -40,81 +36,6 @@ def download_htmls() -> None:
         logging.error(f"Download failed: {e}")
         update_scrape_log(log_id, "failed", urls_checked, urls_changed, error_message=str(e))
 
-def extract_data_from_htmls() -> None:
-    """Extract publication data from downloaded HTML content."""
-    researcher_urls = Researcher.get_all_researcher_urls()
-    for row in researcher_urls:
-        id, researcher_id, url, page_type = row['id'], row['researcher_id'], row['url'], row['page_type']
-        if not HTMLFetcher.needs_extraction(id):
-            logging.info(f"Skipping extraction for URL ID: {id}, URL: {url} (content unchanged since last extraction)")
-            continue
-        logging.info(f"Extracting data from HTML for URL ID: {id}, URL: {url}, Page Type: {page_type}")
-        html_content = HTMLFetcher.get_latest_text(id)
-        if html_content:
-            extracted_publications = Publication.extract_publications(html_content, url)
-            if extracted_publications:
-                is_seed = HTMLFetcher.is_first_extraction(id)
-                Publication.save_publications(url, extracted_publications, is_seed=is_seed)
-                reconcile_title_renames(url, extracted_publications)
-                match_and_save_paper_links(id, extracted_publications)
-            else:
-                logging.warning(f"No publications extracted for URL ID: {id}, URL: {url}")
-            HTMLFetcher.mark_extracted(id)
-        else:
-            logging.error(f"No HTML content found for URL ID: {id}, URL: {url}")
-
-
-def _process_one_url(url_id: int, researcher_id: int, url: str, page_type: str) -> tuple[str, int, str | None]:
-    """Process a single URL: check if extraction needed, extract, save, mark."""
-    if not HTMLFetcher.needs_extraction(url_id):
-        logging.info(f"Skipping URL ID {url_id} (unchanged): {url}")
-        return url, 0, None
-    html_content = HTMLFetcher.get_latest_text(url_id)
-    if not html_content:
-        return url, 0, "no HTML content"
-    try:
-        pubs = Publication.extract_publications(html_content, url)
-        if pubs:
-            is_seed = HTMLFetcher.is_first_extraction(url_id)
-            Publication.save_publications(url, pubs, is_seed=is_seed)
-            reconcile_title_renames(url, pubs)
-            match_and_save_paper_links(url_id, pubs)
-        HTMLFetcher.mark_extracted(url_id)
-        return url, len(pubs), None
-    except Exception as e:
-        return url, 0, str(e)
-
-
-def extract_data_from_htmls_concurrent() -> None:
-    """Extract publication data concurrently using ThreadPoolExecutor."""
-    researcher_urls = Researcher.get_all_researcher_urls()
-    workers = int(os.environ.get('PARSE_WORKERS', '8'))
-    total = len(researcher_urls)
-    logging.info(f"Starting concurrent extraction: {total} URLs, {workers} workers")
-
-    success_count = 0
-    error_count = 0
-    total_pubs = 0
-
-    with ThreadPoolExecutor(max_workers=workers) as executor:
-        futures = {
-            executor.submit(_process_one_url, row['id'], row['researcher_id'], row['url'], row['page_type']): row['url']
-            for row in researcher_urls
-        }
-        for future in as_completed(futures):
-            url, num_pubs, error = future.result()
-            if error:
-                logging.error(f"Error processing {url}: {error}")
-                error_count += 1
-            else:
-                total_pubs += num_pubs
-                success_count += 1
-
-    logging.info(
-        f"Concurrent extraction done: {success_count} succeeded, {error_count} errors, "
-        f"{total_pubs} publications extracted"
-    )
-
 
 def classify_jel() -> None:
     """Classify all researchers with descriptions into JEL codes."""
@@ -141,207 +62,6 @@ def classify_jel() -> None:
             )
 
     logging.info("JEL classification done: %d/%d classified", classified, total)
-
-
-def batch_submit() -> None:
-    """Submit a batch job to the OpenAI Batch API for all URLs needing extraction."""
-    from openai import OpenAI
-    from publication import OPENAI_MODEL
-
-    client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
-
-    researcher_urls = Researcher.get_all_researcher_urls()
-    urls_to_process = [
-        row for row in researcher_urls
-        if HTMLFetcher.needs_extraction(row['id'])
-    ]
-
-    if not urls_to_process:
-        logging.info("Nothing to extract")
-        return
-
-    # Warn if pending batches exist
-    pending = Database.fetch_all(
-        """SELECT openai_batch_id FROM batch_jobs
-           WHERE status IN ('submitted','validating','in_progress','finalizing')"""
-    )
-    if pending:
-        ids = ", ".join(r['openai_batch_id'] for r in pending)
-        logging.warning("Warning: %d pending batch(es) already exist: %s", len(pending), ids)
-
-    # Build JSONL
-    lines = []
-    for row in urls_to_process:
-        url_id, researcher_id, url, page_type = row['id'], row['researcher_id'], row['url'], row['page_type']
-        text = HTMLFetcher.get_latest_text(url_id)
-        if not text:
-            continue
-        prompt = Publication.build_extraction_prompt(text, url)
-        request = {
-            "custom_id": f"url_{url_id}",
-            "method": "POST",
-            "url": "/v1/chat/completions",
-            "body": {
-                "model": OPENAI_MODEL,
-                "messages": [{"role": "user", "content": prompt}],
-            },
-        }
-        lines.append(json.dumps(request))
-
-    if not lines:
-        logging.info("No URLs with downloadable content to batch")
-        return
-
-    jsonl_content = "\n".join(lines).encode("utf-8")
-
-    with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as tmp:
-        tmp.write(jsonl_content)
-        tmp_path = tmp.name
-
-    try:
-        with open(tmp_path, "rb") as f:
-            uploaded = client.files.create(file=f, purpose="batch")
-
-        batch = client.batches.create(
-            input_file_id=uploaded.id,
-            endpoint="/v1/chat/completions",
-            completion_window="24h",
-        )
-
-        Database.execute_query(
-            """INSERT INTO batch_jobs
-               (openai_batch_id, input_file_id, status, url_count, created_at)
-               VALUES (%s, %s, 'submitted', %s, %s)""",
-            (batch.id, uploaded.id, len(lines), datetime.now(timezone.utc)),
-        )
-
-        logging.info("Batch submitted: %s (%d URLs)", batch.id, len(lines))
-    finally:
-        os.unlink(tmp_path)
-
-
-class _UsageDict:
-    """Thin wrapper so a dict from the Batch API response can be passed to log_llm_usage()."""
-    def __init__(self, d: dict) -> None:
-        self.prompt_tokens = d.get("prompt_tokens", 0)
-        self.completion_tokens = d.get("completion_tokens", 0)
-        self.total_tokens = d.get("total_tokens", self.prompt_tokens + self.completion_tokens)
-
-
-def batch_check() -> None:
-    """Check pending batch jobs and process completed results."""
-    from openai import OpenAI
-    from publication import PublicationExtraction, OPENAI_MODEL
-    from pydantic import ValidationError
-
-    client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
-
-    pending = Database.fetch_all(
-        """SELECT id, openai_batch_id FROM batch_jobs
-           WHERE status IN ('submitted','validating','in_progress','finalizing')"""
-    )
-
-    if not pending:
-        logging.info("No pending batches")
-        return
-
-    for row in pending:
-        db_id, openai_batch_id = row['id'], row['openai_batch_id']
-        batch = client.batches.retrieve(openai_batch_id)
-        status = batch.status
-
-        if status == "completed":
-            output_file_id = batch.output_file_id
-            content = client.files.content(output_file_id).text
-
-            total_prompt_tokens = 0
-            total_completion_tokens = 0
-            saved_pubs = 0
-            processed_urls = 0
-
-            for line in content.strip().splitlines():
-                result = json.loads(line)
-                custom_id = result.get("custom_id", "")
-                url_id = int(custom_id.replace("url_", "")) if custom_id.startswith("url_") else None
-                if url_id is None:
-                    continue
-
-                url_row = Database.fetch_one(
-                    "SELECT url FROM researcher_urls WHERE id = %s", (url_id,)
-                )
-                if not url_row:
-                    continue
-                url = url_row['url']
-
-                response_body = result.get("response", {}).get("body", {})
-                usage_dict = response_body.get("usage", {})
-                usage = _UsageDict(usage_dict)
-                total_prompt_tokens += usage.prompt_tokens
-                total_completion_tokens += usage.completion_tokens
-
-                Database.log_llm_usage(
-                    "publication_extraction", OPENAI_MODEL, usage,
-                    context_url=url, is_batch=True, batch_job_id=db_id,
-                )
-
-                choices = response_body.get("choices", [])
-                if not choices:
-                    continue
-                raw_response = choices[0].get("message", {}).get("content", "")
-                parsed = Publication.parse_openai_response(raw_response)
-                if not parsed:
-                    continue
-
-                validated = []
-                for item in parsed:
-                    try:
-                        pub = PublicationExtraction(**item)
-                        validated.append(pub.model_dump())
-                    except (ValidationError, TypeError) as e:
-                        logging.warning(f"Rejected malformed batch publication: {e}")
-
-                if validated:
-                    is_seed = HTMLFetcher.is_first_extraction(url_id)
-                    Publication.save_publications(url, validated, is_seed=is_seed)
-                    reconcile_title_renames(url, validated)
-                    match_and_save_paper_links(url_id, validated)
-                    saved_pubs += len(validated)
-                HTMLFetcher.mark_extracted(url_id)
-                processed_urls += 1
-
-            # Aggregate cost from llm_usage rows logged above
-            cost_row = Database.fetch_one(
-                """SELECT SUM(estimated_cost_usd) AS total_cost FROM llm_usage
-                   WHERE batch_job_id = %s""",
-                (db_id,),
-            )
-            batch_cost = cost_row['total_cost'] if cost_row else None
-
-            Database.execute_query(
-                """UPDATE batch_jobs
-                   SET status = 'completed', output_file_id = %s, completed_at = %s,
-                       prompt_tokens_total = %s, completion_tokens_total = %s,
-                       estimated_cost_usd = %s
-                   WHERE id = %s""",
-                (output_file_id, datetime.now(timezone.utc),
-                 total_prompt_tokens, total_completion_tokens, batch_cost, db_id),
-            )
-            logging.info(
-                "Batch %s completed: %d URLs processed, %d publications saved",
-                openai_batch_id, processed_urls, saved_pubs,
-            )
-
-        elif status in ("failed", "expired", "cancelled"):
-            error_msg = getattr(batch, 'errors', None)
-            Database.execute_query(
-                "UPDATE batch_jobs SET status = %s, error_message = %s WHERE id = %s",
-                (status, str(error_msg), db_id),
-            )
-            logging.warning("Batch %s %s: %s", openai_batch_id, status, error_msg)
-
-        else:
-            req_counts = getattr(batch, 'request_counts', None)
-            logging.info("Batch %s status: %s — %s", openai_batch_id, status, req_counts)
 
 
 
@@ -385,10 +105,6 @@ def main() -> None:
     import_parser.add_argument('file_path', help='Path to the CSV file to import')
 
     subparsers.add_parser('download', help='Download HTML content for all researcher URLs')
-    subparsers.add_parser('extract', help='Extract publication data from downloaded HTML')
-    subparsers.add_parser('extract-concurrent', help='Extract publications concurrently')
-    subparsers.add_parser('batch-submit', help='Submit a batch job to OpenAI Batch API')
-    subparsers.add_parser('batch-check', help='Check and process completed batch jobs')
     subparsers.add_parser('classify-jel', help='Classify researchers into JEL codes from bios')
     subparsers.add_parser('enrich', help='Enrich publications with OpenAlex metadata')
     subparsers.add_parser('enrich-jel', help='Enrich researcher JEL codes from paper topics via OpenAlex')
@@ -400,14 +116,6 @@ def main() -> None:
         import_data(args.file_path)
     elif args.command == 'download':
         download_htmls()
-    elif args.command == 'extract':
-        extract_data_from_htmls()
-    elif args.command == 'extract-concurrent':
-        extract_data_from_htmls_concurrent()
-    elif args.command == 'batch-submit':
-        batch_submit()
-    elif args.command == 'batch-check':
-        batch_check()
     elif args.command == 'classify-jel':
         classify_jel()
     elif args.command == 'enrich':
