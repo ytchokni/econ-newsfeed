@@ -25,7 +25,50 @@ from unittest.mock import MagicMock, call, patch
 
 import pytest
 
-from publication import Publication, PublicationExtraction, PublicationExtractionList, _title_similarity, reconcile_title_renames
+from publication import Publication, PublicationExtraction, PublicationExtractionList, _title_similarity, clean_title, reconcile_title_renames
+
+
+# ---------------------------------------------------------------------------
+# clean_title tests
+# ---------------------------------------------------------------------------
+
+class TestCleanTitle:
+    """Unit tests for clean_title() — strips metadata suffixes from paper titles."""
+
+    @pytest.mark.parametrize("raw,expected", [
+        # Dash-separated metadata
+        ("Monetary Policy Shocks: A New Hope -- Job Market Paper", "Monetary Policy Shocks: A New Hope"),
+        ("Trade and Welfare — Working Paper", "Trade and Welfare"),
+        ("Fiscal Rules – JMP", "Fiscal Rules"),
+        ("Some Result -- Draft", "Some Result"),
+        ("My Paper -- New!", "My Paper"),
+        ("Output Gaps -- Revised", "Output Gaps"),
+        ("A Model -- R & R", "A Model"),
+        ("Growth Theory -- Forthcoming", "Growth Theory"),
+        ("Labor Supply -- Submitted", "Labor Supply"),
+        ("Estimation -- Under Review", "Estimation"),
+        ("Framework -- Work in Progress", "Framework"),
+        ("Results -- Updated", "Results"),
+        ("Equilibrium -- Accepted", "Equilibrium"),
+        # Bracket-wrapped metadata
+        ("Trade Networks [JMP]", "Trade Networks"),
+        ("Fiscal Multipliers (Working Paper)", "Fiscal Multipliers"),
+        ("Growth Model [Draft]", "Growth Model"),
+        ("A Study (New)", "A Study"),
+        ("Welfare Effects [Revised]", "Welfare Effects"),
+        # False positives that must NOT be stripped
+        ("A New Deal for the World", "A New Deal for the World"),
+        ("The Draft Beer Market", "The Draft Beer Market"),
+        ("New Evidence on Trade", "New Evidence on Trade"),
+        ("Submitted Bids in Auctions", "Submitted Bids in Auctions"),
+        ("On Accepted Norms", "On Accepted Norms"),
+        # Edge cases
+        ("  Spaces  -- JMP  ", "Spaces"),
+        ("", ""),
+        ("No Metadata Here", "No Metadata Here"),
+    ])
+    def test_clean_title(self, raw, expected):
+        assert clean_title(raw) == expected
 
 
 # ---------------------------------------------------------------------------
