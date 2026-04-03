@@ -6,14 +6,14 @@ import Header from "@/components/Header";
 const sourceSerif = Source_Serif_4({
   subsets: ["latin"],
   weight: ["400", "600", "700"],
-  variable: "--font-serif",
+  variable: "--font-source-serif",
   display: "swap",
 });
 
 const dmSans = DM_Sans({
   subsets: ["latin"],
   weight: ["400", "500", "600", "700"],
-  variable: "--font-sans",
+  variable: "--font-dm-sans",
   display: "swap",
 });
 

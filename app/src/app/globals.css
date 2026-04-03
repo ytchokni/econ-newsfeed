@@ -1,6 +1,11 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+@theme {
+  --font-serif: var(--font-source-serif), Georgia, "Times New Roman", serif;
+  --font-sans: var(--font-dm-sans), system-ui, -apple-system, sans-serif;
+
+  --animate-dropdown-in: dropdown-in 0.15s ease-out forwards;
+}
 
 :root {
   --bg: #f6f3ee;
@@ -20,15 +25,15 @@
 body {
   color: var(--text-primary);
   background: var(--bg);
-  font-family: var(--font-serif), Georgia, "Times New Roman", serif;
+  font-family: var(--font-source-serif), Georgia, "Times New Roman", serif;
 }
 
 h1, h2, h3, h4, h5, h6 {
-  font-family: var(--font-serif), Georgia, "Times New Roman", serif;
+  font-family: var(--font-source-serif), Georgia, "Times New Roman", serif;
 }
 
 nav, button, select, input, label {
-  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+  font-family: var(--font-dm-sans), system-ui, -apple-system, sans-serif;
 }
 
 @layer utilities {
@@ -54,4 +59,9 @@ nav, button, select, input, label {
 @keyframes fade-in-up {
   0% { opacity: 0; transform: translateY(8px); }
   100% { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes dropdown-in {
+  0% { opacity: 0; transform: scale(0.95) translateY(-4px); }
+  100% { opacity: 1; transform: scale(1) translateY(0); }
 }
