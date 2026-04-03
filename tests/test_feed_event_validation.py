@@ -3,80 +3,86 @@ import unittest
 import zlib
 from unittest.mock import MagicMock, patch
 
-from publication import _title_in_previous_snapshot
+from publication import _title_in_previous_snapshot, _get_previous_snapshot_html
 
 
 class TestTitleInPreviousSnapshot(unittest.TestCase):
     """_title_in_previous_snapshot returns True if title appears in the prior HTML."""
 
-    @patch("publication.Database")
-    def test_title_found_in_previous_snapshot(self, mock_db):
+    def test_title_found_in_previous_snapshot(self):
         """Title present in previous HTML → returns True (suppress event)."""
-        html = "<h2>Insult Politics in the Age of Social Media</h2>"
-        compressed = zlib.compress(html.encode("utf-8"))
-        mock_db.fetch_one.return_value = {"raw_html_compressed": compressed}
-
-        result = _title_in_previous_snapshot("Insult Politics in the Age of Social Media", "https://example.com/")
+        html_lower = "<h2>insult politics in the age of social media</h2>"
+        result = _title_in_previous_snapshot("Insult Politics in the Age of Social Media", html_lower)
         assert result is True
 
-    @patch("publication.Database")
-    def test_title_not_found_in_previous_snapshot(self, mock_db):
+    def test_title_not_found_in_previous_snapshot(self):
         """Title absent from previous HTML → returns False (allow event)."""
-        html = "<h2>Some Other Paper Title</h2>"
-        compressed = zlib.compress(html.encode("utf-8"))
-        mock_db.fetch_one.return_value = {"raw_html_compressed": compressed}
-
-        result = _title_in_previous_snapshot("Brand New Paper Title", "https://example.com/")
+        html_lower = "<h2>some other paper title</h2>"
+        result = _title_in_previous_snapshot("Brand New Paper Title", html_lower)
         assert result is False
 
-    @patch("publication.Database")
-    def test_case_insensitive_match(self, mock_db):
-        """Match should be case-insensitive."""
-        html = "<h2>INSULT POLITICS IN THE AGE OF SOCIAL MEDIA</h2>"
-        compressed = zlib.compress(html.encode("utf-8"))
-        mock_db.fetch_one.return_value = {"raw_html_compressed": compressed}
-
-        result = _title_in_previous_snapshot("Insult Politics in the Age of Social Media", "https://example.com/")
+    def test_case_insensitive_match(self):
+        """Match should be case-insensitive (html is pre-lowered)."""
+        html_lower = "<h2>insult politics in the age of social media</h2>"
+        result = _title_in_previous_snapshot("Insult Politics in the Age of Social Media", html_lower)
         assert result is True
 
-    @patch("publication.Database")
-    def test_no_previous_snapshot(self, mock_db):
-        """No previous snapshot exists → returns False (allow event)."""
-        mock_db.fetch_one.return_value = None
-
-        result = _title_in_previous_snapshot("Any Title", "https://example.com/")
+    def test_no_previous_snapshot(self):
+        """No previous snapshot (None) → returns False (allow event)."""
+        result = _title_in_previous_snapshot("Any Title", None)
         assert result is False
 
-    @patch("publication.Database")
-    def test_partial_title_match_long_title(self, mock_db):
+    def test_partial_title_match_long_title(self):
         """For long titles, first 40 chars should match (handles suffix changes)."""
-        html = "<p>Monetary Policy Shocks and Their Macroeconomic Consequences — some extra text</p>"
-        compressed = zlib.compress(html.encode("utf-8"))
-        mock_db.fetch_one.return_value = {"raw_html_compressed": compressed}
-
+        html_lower = "<p>monetary policy shocks and their macroeconomic consequences — some extra text</p>"
         result = _title_in_previous_snapshot(
             "Monetary Policy Shocks and Their Macroeconomic Consequences — Job Market Paper",
-            "https://example.com/",
+            html_lower,
         )
         assert result is True
 
-    @patch("publication.Database")
-    def test_short_title_uses_full_match(self, mock_db):
+    def test_short_title_uses_full_match(self):
         """Titles ≤40 chars use full title for matching."""
-        html = "<p>Short Paper</p>"
-        compressed = zlib.compress(html.encode("utf-8"))
-        mock_db.fetch_one.return_value = {"raw_html_compressed": compressed}
-
-        result = _title_in_previous_snapshot("Short Paper", "https://example.com/")
+        html_lower = "<p>short paper</p>"
+        result = _title_in_previous_snapshot("Short Paper", html_lower)
         assert result is True
 
-    @patch("publication.Database")
-    def test_corrupt_compressed_data(self, mock_db):
-        """Corrupt zlib data → returns False (allow event, don't crash)."""
-        mock_db.fetch_one.return_value = {"raw_html_compressed": b"not-valid-zlib"}
 
-        result = _title_in_previous_snapshot("Any Title", "https://example.com/")
-        assert result is False
+class TestGetPreviousSnapshotHtml(unittest.TestCase):
+    """_get_previous_snapshot_html fetches and decompresses the previous snapshot."""
+
+    def _make_cursor(self, row):
+        """Create a mock cursor that returns the given row."""
+        cursor = MagicMock()
+        cursor.fetchone.return_value = row
+        return cursor
+
+    def test_returns_lowered_html(self):
+        """Returns decompressed, lowercased HTML text."""
+        html = "<h2>Some Title</h2>"
+        compressed = zlib.compress(html.encode("utf-8"))
+        cursor = self._make_cursor((compressed,))
+
+        result = _get_previous_snapshot_html(cursor, "https://example.com/")
+        assert result == "<h2>some title</h2>"
+
+    def test_returns_none_when_no_snapshot(self):
+        """No previous snapshot → returns None."""
+        cursor = self._make_cursor(None)
+        result = _get_previous_snapshot_html(cursor, "https://example.com/")
+        assert result is None
+
+    def test_returns_none_on_corrupt_data(self):
+        """Corrupt zlib data → returns None (don't crash)."""
+        cursor = self._make_cursor((b"not-valid-zlib",))
+        result = _get_previous_snapshot_html(cursor, "https://example.com/")
+        assert result is None
+
+    def test_returns_none_when_blob_is_none(self):
+        """Row exists but blob is None → returns None."""
+        cursor = self._make_cursor((None,))
+        result = _get_previous_snapshot_html(cursor, "https://example.com/")
+        assert result is None
 
 
 if __name__ == "__main__":

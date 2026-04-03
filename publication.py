@@ -221,35 +221,45 @@ def _url_has_baseline(cursor, url: str, min_snapshots: int = 2) -> bool:
     return (row[0] if row else 0) >= min_snapshots
 
 
-def _title_in_previous_snapshot(title: str, source_url: str) -> bool:
-    """Return True if the paper title appears in the previous HTML snapshot.
+def _get_previous_snapshot_html(cursor, url: str) -> str | None:
+    """Fetch and decompress the previous HTML snapshot for a URL.
 
-    Checks the second-most-recent html_snapshot for this URL. If the title
-    (or its first 40 characters for long titles) is found in the decompressed
-    HTML, the paper was already on the page and should not generate a
-    new_paper feed event.
+    Returns lowercased HTML text, or None if no previous snapshot exists.
+    Designed to be called once per URL (before the publication loop),
+    not once per publication.
     """
     import zlib
 
-    row = Database.fetch_one(
+    cursor.execute(
         """SELECT hs.raw_html_compressed
            FROM html_snapshots hs
            JOIN researcher_urls ru ON ru.id = hs.url_id
            WHERE ru.url = %s
            ORDER BY hs.snapshot_at DESC
            LIMIT 1 OFFSET 1""",
-        (source_url,),
+        (url,),
     )
-    if not row or not row["raw_html_compressed"]:
-        return False
+    row = cursor.fetchone()
+    if not row or not row[0]:
+        return None
 
     try:
-        html_text = zlib.decompress(row["raw_html_compressed"]).decode("utf-8", errors="replace").lower()
+        return zlib.decompress(row[0]).decode("utf-8", errors="replace").lower()
     except Exception:
-        return False
+        return None
 
+
+def _title_in_previous_snapshot(title: str, prev_html_lower: str | None) -> bool:
+    """Return True if the paper title appears in the previous HTML snapshot text.
+
+    If the title (or its first 40 characters for long titles) is found in
+    the pre-fetched HTML, the paper was already on the page and should not
+    generate a new_paper feed event.
+    """
+    if not prev_html_lower:
+        return False
     search_term = title[:40].lower() if len(title) > 40 else title.lower()
-    return search_term in html_text
+    return search_term in prev_html_lower
 
 
 class Publication:
@@ -269,9 +279,10 @@ class Publication:
     ) -> None:
         """Save extracted publications to the database, using title_hash for cross-researcher dedup."""
         with Database.get_connection() as conn:
-            # Resolve baseline once for the entire batch (same URL for all pubs)
+            # Resolve baseline + previous snapshot once for the entire batch (same URL)
             baseline_cursor = conn.cursor(buffered=True)
             has_baseline = _url_has_baseline(baseline_cursor, url)
+            prev_html_lower = _get_previous_snapshot_html(baseline_cursor, url)
             baseline_cursor.close()
 
             for pub in publications:
@@ -315,7 +326,7 @@ class Publication:
                         # AND the paper title was NOT in the previous HTML snapshot
                         pub_status = pub.get('status')
                         if not is_seed and pub_status and pub_status != 'published':
-                            if has_baseline and not _title_in_previous_snapshot(title, url):
+                            if has_baseline and not _title_in_previous_snapshot(title, prev_html_lower):
                                 cursor.execute(
                                     """
                                     INSERT INTO feed_events (paper_id, event_type, new_status, created_at)
@@ -381,7 +392,7 @@ class Publication:
                         new_to_this_url = cursor.rowcount > 0
                         pub_status = pub.get('status')
                         if not is_seed and new_to_this_url and pub_status and pub_status != 'published':
-                            if has_baseline and not _title_in_previous_snapshot(title, url):
+                            if has_baseline and not _title_in_previous_snapshot(title, prev_html_lower):
                                 cursor.execute(
                                     "SELECT COUNT(*) FROM feed_events WHERE paper_id = %s AND event_type = 'new_paper'",
                                     (publication_id,),
