@@ -1,0 +1,147 @@
+# Model Cost Optimization Eval
+# Usage:
+#   1. Export test cases:  poetry run python eval/export_test_cases.py
+#   2. Run eval:           npx promptfoo@latest eval
+#   3. View results:       npx promptfoo@latest view
+
+description: "LLM Model Cost Optimization — econ-newsfeed"
+
+# --- Providers ---
+# All models via OpenRouter using OPENROUTER_API_KEY env var.
+# Ground truth: Claude Sonnet 4.6
+# Judge: GPT-5.4-mini (configured in defaultTest assertions)
+
+providers:
+  # Ground truth
+  - id: openrouter:anthropic/claude-sonnet-4.6
+    label: "Sonnet 4.6 (ground truth)"
+
+  # Budget tier
+  - id: openrouter:anthropic/claude-haiku-4.5
+    label: "Haiku 4.5"
+  - id: openrouter:openai/gpt-5.4-nano
+    label: "GPT-5.4 Nano"
+  - id: openrouter:google/gemini-3-flash-preview
+    label: "Gemini 3 Flash"
+  - id: openrouter:google/gemini-3.1-flash-lite-preview
+    label: "Gemini 3.1 Flash Lite"
+
+  # Ultra-cheap tier
+  - id: openrouter:deepseek/deepseek-chat
+    label: "DeepSeek V3.2"
+  - id: openrouter:minimax/minimax-m2.7
+    label: "MiniMax M2.7"
+  - id: openrouter:xiaomi/mimo-v2-pro
+    label: "MiMo-V2-Pro"
+  - id: openrouter:qwen/qwen3.5-flash
+    label: "Qwen 3.5 Flash"
+  - id: openrouter:xiaomi/mimo-v2-flash
+    label: "MiMo-V2-Flash"
+
+  # Free tier
+  - id: openrouter:stepfun/step-3.5-flash
+    label: "Step 3.5 Flash (free)"
+  - id: openrouter:qwen/qwen3.6-plus
+    label: "Qwen 3.6 Plus (free)"
+
+# --- Prompts ---
+prompts:
+  - id: file://prompts/publication_extraction.txt
+    label: publication_extraction
+  - id: file://prompts/description_extraction.txt
+    label: description_extraction
+  - id: file://prompts/researcher_disambiguation.txt
+    label: researcher_disambiguation
+  - id: file://prompts/jel_classification.txt
+    label: jel_classification
+
+# --- Test Suites ---
+tests:
+  # === Publication Extraction ===
+  - description: "Publication Extraction"
+    vars: file://test_cases/publication_extraction.json
+    options:
+      prompt: publication_extraction
+    assert:
+      - type: llm-rubric
+        value: |
+          You are evaluating an LLM's ability to extract academic publications from a researcher's webpage.
+
+          The model was given webpage text and asked to extract publications as JSON with keys: title, authors, year, venue, status, draft_url, abstract.
+
+          Evaluate the output on these criteria:
+
+          1. FORMAT VALIDITY: Is the output valid JSON with a "publications" key containing a list of objects? Each object should have the required keys. Score 0 if not valid JSON, 1 if valid.
+
+          2. COMPLETENESS (0-1): Compare the number of publications found to what a thorough extraction would yield from this content. Did it find most papers? Did it populate fields (year, venue, status) when the information was available?
+
+          3. ACCURACY (0-1): Are the extracted values correct? Check titles for truncation or errors, author names for correctness, years and venues for accuracy, statuses for appropriate categorization.
+
+          Return a score from 0 to 1 where:
+          - 0.0 = completely wrong or invalid output
+          - 0.5 = partially correct (some papers found, some errors)
+          - 1.0 = excellent extraction matching ground truth quality
+        provider: openrouter:openai/gpt-5.4-mini
+
+  # === Description Extraction ===
+  - description: "Description Extraction"
+    vars: file://test_cases/description_extraction.json
+    options:
+      prompt: description_extraction
+    assert:
+      - type: llm-rubric
+        value: |
+          You are evaluating an LLM's ability to extract a professional description of a researcher from their homepage text.
+
+          The model was asked to produce a ~200 word description covering: who the person is, their research interests, and their position/affiliation. If no description was possible, it should return "null".
+
+          Evaluate on:
+          1. RELEVANCE (0-1): Does the description accurately capture the researcher's role, affiliation, and research interests from the source text?
+          2. CONCISENESS (0-1): Is it roughly 200 words or fewer? Does it avoid filler and irrelevant content?
+          3. CORRECTNESS: Does it avoid hallucinating information not in the source text?
+
+          Return a score from 0 to 1.
+        provider: openrouter:openai/gpt-5.4-mini
+
+  # === Researcher Disambiguation ===
+  - description: "Researcher Disambiguation"
+    vars: file://test_cases/researcher_disambiguation.json
+    options:
+      prompt: researcher_disambiguation
+    assert:
+      - type: is-json
+      - type: llm-rubric
+        value: |
+          You are evaluating an LLM's ability to disambiguate researcher names.
+
+          The model was given an author name and a list of candidate researchers with the same last name. It should return JSON: {"match_id": <id or null>}.
+
+          Evaluate on:
+          1. FORMAT: Is the output valid JSON with a "match_id" key? (0 or 1)
+          2. CORRECTNESS: Does the match_id make sense given the names? "J. Smith" should match "John Smith". Completely different first names should return null. (0 or 1)
+
+          Return a score from 0 to 1.
+        provider: openrouter:openai/gpt-5.4-mini
+
+  # === JEL Classification ===
+  - description: "JEL Classification"
+    vars: file://test_cases/jel_classification.json
+    options:
+      prompt: jel_classification
+    assert:
+      - type: llm-rubric
+        value: |
+          You are evaluating an LLM's ability to classify an economics researcher into JEL codes.
+
+          The model was given a researcher's bio and asked to return JSON: {"jel_codes": [{"code": "X", "reasoning": "..."}]}.
+
+          Evaluate on:
+          1. FORMAT VALIDITY: Is the output valid JSON with a "jel_codes" key? Are codes single uppercase letters (A-Z)? (0 or 1)
+          2. CODE RELEVANCE (0-1): Do the assigned JEL codes make sense given the researcher's described research areas? Are obviously relevant codes included? Are irrelevant codes excluded?
+          3. REASONING QUALITY (0-1): Does the reasoning clearly connect the bio content to each assigned code?
+
+          Return a score from 0 to 1.
+        provider: openrouter:openai/gpt-5.4-mini
+
+# Output directory for results
+outputPath: eval/output
