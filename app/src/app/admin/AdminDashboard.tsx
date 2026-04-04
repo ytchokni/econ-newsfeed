@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useCallback } from "react";
 import { useAdminDashboard } from "@/lib/api";
 import LoginForm from "./LoginForm";
 import HealthTab from "./tabs/HealthTab";
@@ -24,33 +24,30 @@ type TabId = (typeof TABS)[number]["id"];
 export default function AdminDashboard() {
   const [activeTab, setActiveTab] = useState<TabId>("health");
   const { data, error, isLoading, mutate } = useAdminDashboard();
-  const [authed, setAuthed] = useState<boolean | null>(null);
+  const [loggedOut, setLoggedOut] = useState(false);
 
-  // First load — check if we're authed
-  if (authed === null) {
-    if (isLoading) {
-      return (
-        <div className="min-h-screen bg-[#0f1117] flex items-center justify-center">
-          <p className="text-zinc-500 font-[family-name:var(--font-dm-sans)]">Loading…</p>
-        </div>
-      );
-    }
-    if (error?.message === "UNAUTHORIZED") {
-      return <LoginForm onSuccess={() => { setAuthed(true); mutate(); }} />;
-    }
-    if (data) {
-      // We're authed — fall through to dashboard
-      setAuthed(true);
-    }
+  const isUnauthorized = loggedOut || error?.message === "UNAUTHORIZED";
+
+  const handleLoginSuccess = useCallback(() => {
+    setLoggedOut(false);
+    mutate();
+  }, [mutate]);
+
+  if (isLoading && !data) {
+    return (
+      <div className="min-h-screen bg-[#0f1117] flex items-center justify-center">
+        <p className="text-zinc-500 font-[family-name:var(--font-dm-sans)]">Loading…</p>
+      </div>
+    );
   }
 
-  if (authed === false || error?.message === "UNAUTHORIZED") {
-    return <LoginForm onSuccess={() => { setAuthed(true); mutate(); }} />;
+  if (isUnauthorized) {
+    return <LoginForm onSuccess={handleLoginSuccess} />;
   }
 
   async function handleLogout() {
     await fetch("/api/admin/logout", { method: "POST" });
-    setAuthed(false);
+    setLoggedOut(true);
   }
 
   return (

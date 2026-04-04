@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createHmac } from "crypto";
+import { createHmac, timingSafeEqual } from "crypto";
 
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || "";
 const SCRAPE_API_KEY = process.env.SCRAPE_API_KEY || "";
@@ -22,7 +22,10 @@ function verifyToken(token: string): boolean {
   const expected = createHmac("sha256", ADMIN_PASSWORD)
     .update(timestampStr)
     .digest("hex");
-  return signature === expected;
+  const sigBuf = Buffer.from(signature, "utf-8");
+  const expBuf = Buffer.from(expected, "utf-8");
+  if (sigBuf.length !== expBuf.length) return false;
+  return timingSafeEqual(sigBuf, expBuf);
 }
 
 export async function GET(request: NextRequest) {
