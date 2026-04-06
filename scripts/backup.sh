@@ -36,6 +36,21 @@ docker exec "$DB_CONTAINER" mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" econ_news
 
 echo "Backup created: $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"
 
+# Upload to S3 (optional — requires S3_BACKUP_BUCKET env var and aws CLI)
+if [ -n "${S3_BACKUP_BUCKET:-}" ]; then
+    if command -v aws &>/dev/null; then
+        # Note: the S3 bucket should have a lifecycle rule for retention;
+        # the local 7-day cleanup below does not apply to S3 objects.
+        if aws s3 cp "$BACKUP_FILE" "s3://${S3_BACKUP_BUCKET}/econ-newsfeed/" --sse AES256 --quiet; then
+            echo "Uploaded to s3://${S3_BACKUP_BUCKET}/econ-newsfeed/"
+        else
+            echo "WARNING: S3 upload failed" >&2
+        fi
+    else
+        echo "WARNING: aws CLI not found, skipping S3 upload" >&2
+    fi
+fi
+
 # Delete backups older than retention period
 DELETED=$(find "$BACKUP_DIR" -name "econ_newsfeed_*.sql.gz" -mtime +$RETENTION_DAYS -delete -print | wc -l)
 if [ "$DELETED" -gt 0 ]; then
