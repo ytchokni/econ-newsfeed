@@ -32,17 +32,26 @@ class TestTitleInPreviousSnapshot(unittest.TestCase):
         result = _title_in_previous_snapshot("Any Title", None)
         assert result is False
 
-    def test_partial_title_match_long_title(self):
-        """For long titles, first 40 chars should match (handles suffix changes)."""
-        html_lower = "<p>monetary policy shocks and their macroeconomic consequences — some extra text</p>"
+    def test_full_title_match_required_for_long_title(self):
+        """Shared prefix alone should NOT suppress — full title must match."""
+        html_lower = "<p>monetary policy shocks and their macroeconomic consequences in europe</p>"
         result = _title_in_previous_snapshot(
-            "Monetary Policy Shocks and Their Macroeconomic Consequences — Job Market Paper",
+            "Monetary Policy Shocks and Their Macroeconomic Consequences in America",
+            html_lower,
+        )
+        assert result is False
+
+    def test_full_title_match_long_title_present(self):
+        """Full long title present in HTML → returns True."""
+        html_lower = "<p>monetary policy shocks and their macroeconomic consequences in europe</p>"
+        result = _title_in_previous_snapshot(
+            "Monetary Policy Shocks and Their Macroeconomic Consequences in Europe",
             html_lower,
         )
         assert result is True
 
-    def test_short_title_uses_full_match(self):
-        """Titles ≤40 chars use full title for matching."""
+    def test_short_title_full_match(self):
+        """Short titles use full title for matching."""
         html_lower = "<p>short paper</p>"
         result = _title_in_previous_snapshot("Short Paper", html_lower)
         assert result is True

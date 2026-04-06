@@ -227,6 +227,12 @@ def _get_previous_snapshot_html(cursor, url: str) -> str | None:
     Returns lowercased HTML text, or None if no previous snapshot exists.
     Designed to be called once per URL (before the publication loop),
     not once per publication.
+
+    The query uses OFFSET 1 to skip the most-recent snapshot (the one just
+    fetched in the current run) and return the second-most-recent *distinct*
+    HTML state.  This is a proxy for "what the page looked like when the LLM
+    last ran" — not an exact match, but sufficient because researcher pages
+    rarely revert to a prior state.
     """
     import zlib
 
@@ -252,14 +258,12 @@ def _get_previous_snapshot_html(cursor, url: str) -> str | None:
 def _title_in_previous_snapshot(title: str, prev_html_lower: str | None) -> bool:
     """Return True if the paper title appears in the previous HTML snapshot text.
 
-    If the title (or its first 40 characters for long titles) is found in
-    the pre-fetched HTML, the paper was already on the page and should not
-    generate a new_paper feed event.
+    If the full cleaned title is found in the pre-fetched HTML, the paper was
+    already on the page and should not generate a new_paper feed event.
     """
     if not prev_html_lower:
         return False
-    search_term = title[:40].lower() if len(title) > 40 else title.lower()
-    return search_term in prev_html_lower
+    return title.lower() in prev_html_lower
 
 
 class Publication:
