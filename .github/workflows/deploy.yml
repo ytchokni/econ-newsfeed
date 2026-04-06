@@ -8,13 +8,24 @@ on:
       - 'docs/**'
       - '*.md'
 
+# Prevent parallel deploys racing each other.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
 jobs:
   deploy:
     name: Deploy to Lightsail
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - name: Deploy via SSH
-        uses: appleboy/ssh-action@v1
+        # Pinned to appleboy/ssh-action v1.2.0 commit SHA.
+        # LIGHTSAIL_SSH_KEY should be a dedicated deploy keypair, not the
+        # default Lightsail key. Scope it to a non-root user with only the
+        # permissions needed to run deploy.sh.
+        uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17
         with:
           host: ${{ secrets.LIGHTSAIL_HOST }}
           username: ubuntu
