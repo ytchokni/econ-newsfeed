@@ -221,6 +221,51 @@ def _url_has_baseline(cursor, url: str, min_snapshots: int = 2) -> bool:
     return (row[0] if row else 0) >= min_snapshots
 
 
+def _get_previous_snapshot_html(cursor, url: str) -> str | None:
+    """Fetch and decompress the previous HTML snapshot for a URL.
+
+    Returns lowercased HTML text, or None if no previous snapshot exists.
+    Designed to be called once per URL (before the publication loop),
+    not once per publication.
+
+    The query uses OFFSET 1 to skip the most-recent snapshot (the one just
+    fetched in the current run) and return the second-most-recent *distinct*
+    HTML state.  This is a proxy for "what the page looked like when the LLM
+    last ran" — not an exact match, but sufficient because researcher pages
+    rarely revert to a prior state.
+    """
+    import zlib
+
+    cursor.execute(
+        """SELECT hs.raw_html_compressed
+           FROM html_snapshots hs
+           JOIN researcher_urls ru ON ru.id = hs.url_id
+           WHERE ru.url = %s
+           ORDER BY hs.snapshot_at DESC
+           LIMIT 1 OFFSET 1""",
+        (url,),
+    )
+    row = cursor.fetchone()
+    if not row or not row[0]:
+        return None
+
+    try:
+        return zlib.decompress(row[0]).decode("utf-8", errors="replace").lower()
+    except Exception:
+        return None
+
+
+def _title_in_previous_snapshot(title: str, prev_html_lower: str | None) -> bool:
+    """Return True if the paper title appears in the previous HTML snapshot text.
+
+    If the full cleaned title is found in the pre-fetched HTML, the paper was
+    already on the page and should not generate a new_paper feed event.
+    """
+    if not prev_html_lower:
+        return False
+    return title.lower() in prev_html_lower
+
+
 class Publication:
     def __init__(self, id: int, title: str, authors: list | None, year: str | None, venue: str | None, url: str | None) -> None:
         self.id = id
@@ -238,9 +283,10 @@ class Publication:
     ) -> None:
         """Save extracted publications to the database, using title_hash for cross-researcher dedup."""
         with Database.get_connection() as conn:
-            # Resolve baseline once for the entire batch (same URL for all pubs)
+            # Resolve baseline + previous snapshot once for the entire batch (same URL)
             baseline_cursor = conn.cursor(buffered=True)
             has_baseline = _url_has_baseline(baseline_cursor, url)
+            prev_html_lower = _get_previous_snapshot_html(baseline_cursor, url)
             baseline_cursor.close()
 
             for pub in publications:
@@ -281,9 +327,10 @@ class Publication:
                             (publication_id, url, datetime.now(timezone.utc)),
                         )
                         # Create new_paper feed event only when source URL has established baseline
+                        # AND the paper title was NOT in the previous HTML snapshot
                         pub_status = pub.get('status')
                         if not is_seed and pub_status and pub_status != 'published':
-                            if has_baseline:
+                            if has_baseline and not _title_in_previous_snapshot(title, prev_html_lower):
                                 cursor.execute(
                                     """
                                     INSERT INTO feed_events (paper_id, event_type, new_status, created_at)
@@ -291,9 +338,14 @@ class Publication:
                                     """,
                                     (publication_id, pub_status, datetime.now(timezone.utc)),
                                 )
-                            else:
+                            elif not has_baseline:
                                 logging.info(
                                     "Suppressed new_paper event for '%s': source URL lacks baseline snapshots",
+                                    pub['title'],
+                                )
+                            else:
+                                logging.info(
+                                    "Suppressed new_paper event for '%s': title found in previous HTML snapshot",
                                     pub['title'],
                                 )
                     else:
@@ -344,7 +396,7 @@ class Publication:
                         new_to_this_url = cursor.rowcount > 0
                         pub_status = pub.get('status')
                         if not is_seed and new_to_this_url and pub_status and pub_status != 'published':
-                            if has_baseline:
+                            if has_baseline and not _title_in_previous_snapshot(title, prev_html_lower):
                                 cursor.execute(
                                     "SELECT COUNT(*) FROM feed_events WHERE paper_id = %s AND event_type = 'new_paper'",
                                     (publication_id,),
@@ -357,9 +409,14 @@ class Publication:
                                         """,
                                         (publication_id, pub_status, datetime.now(timezone.utc)),
                                     )
-                            else:
+                            elif not has_baseline:
                                 logging.info(
                                     "Suppressed new_paper event for '%s': source URL lacks baseline snapshots",
+                                    pub['title'],
+                                )
+                            else:
+                                logging.info(
+                                    "Suppressed new_paper event for '%s': title found in previous HTML snapshot",
                                     pub['title'],
                                 )
                         logging.info(f"Duplicate publication (title_hash match), added source URL: {pub['title']}")

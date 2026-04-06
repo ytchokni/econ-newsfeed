@@ -256,10 +256,11 @@ class TestSavePublications:
         ctx_factory, conn = _make_connection_context(cursor)
         return cursor, conn, ctx_factory
 
+    @patch("publication._get_previous_snapshot_html", return_value=None)
     @patch("publication.Database.get_researcher_id", return_value=99)
     @patch("publication.Database.compute_title_hash", return_value="abc123")
     @patch("publication.Database.get_connection")
-    def test_happy_path_insert(self, mock_get_conn, mock_hash, mock_get_rid):
+    def test_happy_path_insert(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
         """New publication is inserted, paper_urls row added, authorship rows created."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=5)
         cursor.fetchone.side_effect = [(2,), None]  # baseline snapshot count, then no page owner
@@ -293,10 +294,11 @@ class TestSavePublications:
 
         conn.commit.assert_called_once()
 
+    @patch("publication._get_previous_snapshot_html", return_value=None)
     @patch("publication.Database.get_researcher_id", return_value=99)
     @patch("publication.Database.compute_title_hash", return_value="abc123")
     @patch("publication.Database.get_connection")
-    def test_dedup_lookup_existing(self, mock_get_conn, mock_hash, mock_get_rid):
+    def test_dedup_lookup_existing(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
         """When INSERT IGNORE hits a duplicate (lastrowid=0), existing paper is looked up."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
         # Side effects: (0) baseline snapshot count, (1) title_hash lookup, (2) backfill SELECT, (3) page owner lookup
@@ -322,10 +324,11 @@ class TestSavePublications:
         # Verify paper_id=42 is passed
         assert paper_url_calls[0][0][1][0] == 42
 
+    @patch("publication._get_previous_snapshot_html", return_value=None)
     @patch("publication.Database.get_researcher_id", return_value=99)
     @patch("publication.Database.compute_title_hash", return_value="abc123")
     @patch("publication.Database.get_connection")
-    def test_dedup_not_found_skips(self, mock_get_conn, mock_hash, mock_get_rid, caplog):
+    def test_dedup_not_found_skips(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html, caplog):
         """When INSERT IGNORE duplicate but SELECT returns nothing, log error and skip."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
         cursor.fetchone.return_value = None
@@ -344,10 +347,11 @@ class TestSavePublications:
         ]
         assert len(authorship_calls) == 0
 
+    @patch("publication._get_previous_snapshot_html", return_value=None)
     @patch("publication.Database.get_researcher_id", return_value=99)
     @patch("publication.Database.compute_title_hash", return_value="abc123")
     @patch("publication.Database.get_connection")
-    def test_feed_event_created_for_non_seed_non_published(self, mock_get_conn, mock_hash, mock_get_rid):
+    def test_feed_event_created_for_non_seed_non_published(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
         """Non-seed paper with status != 'published' creates a feed_event."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=10)
         cursor.fetchone.side_effect = [(2,)]  # snapshot count → baseline OK
@@ -447,10 +451,11 @@ class TestSavePublications:
         mock_get_rid.assert_any_call("Bob", "Chen", conn=conn)
         mock_get_rid.assert_any_call("Carol", "Li", conn=conn)
 
+    @patch("publication._get_previous_snapshot_html", return_value=None)
     @patch("publication.Database.get_researcher_id", return_value=99)
     @patch("publication.Database.compute_title_hash", return_value="abc123")
     @patch("publication.Database.get_connection")
-    def test_error_handling_rollback_and_log(self, mock_get_conn, mock_hash, mock_get_rid, caplog):
+    def test_error_handling_rollback_and_log(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html, caplog):
         """Exception during save triggers rollback and logs the publication title."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=5)
 
@@ -491,10 +496,11 @@ class TestSavePublications:
 
         assert any("2 publications processed" in r.message for r in caplog.records)
 
+    @patch("publication._get_previous_snapshot_html", return_value=None)
     @patch("publication.Database.get_researcher_id", return_value=99)
     @patch("publication.Database.compute_title_hash", return_value="abc123")
     @patch("publication.Database.get_connection")
-    def test_dedup_new_url_creates_feed_event(self, mock_get_conn, mock_hash, mock_get_rid):
+    def test_dedup_new_url_creates_feed_event(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
         """Dedup paper appearing on a NEW url (non-seed) should create a feed event."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
         # fetchone: (2,) baseline snapshot count (hoisted), (42,) paper lookup,
@@ -574,10 +580,11 @@ class TestSavePublications:
         ]
         assert len(feed_calls) == 0
 
+    @patch("publication._get_previous_snapshot_html", return_value=None)
     @patch("publication.Database.get_researcher_id", return_value=99)
     @patch("publication.Database.compute_title_hash", return_value="abc123")
     @patch("publication.Database.get_connection")
-    def test_no_feed_event_without_baseline_snapshots(self, mock_get_conn, mock_hash, mock_get_rid):
+    def test_no_feed_event_without_baseline_snapshots(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
         """Non-seed paper should NOT get feed event if source URL has < 2 snapshots."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=10)
         cursor.fetchone.side_effect = [(0,)]  # snapshot count returns 0
@@ -592,10 +599,11 @@ class TestSavePublications:
         ]
         assert len(feed_calls) == 0
 
+    @patch("publication._get_previous_snapshot_html", return_value=None)
     @patch("publication.Database.get_researcher_id", return_value=99)
     @patch("publication.Database.compute_title_hash", return_value="abc123")
     @patch("publication.Database.get_connection")
-    def test_feed_event_created_with_baseline_snapshots(self, mock_get_conn, mock_hash, mock_get_rid):
+    def test_feed_event_created_with_baseline_snapshots(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
         """Non-seed paper SHOULD get feed event if source URL has >= 2 snapshots."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=10)
         cursor.fetchone.side_effect = [(2,)]  # snapshot count returns 2
@@ -632,10 +640,60 @@ class TestSavePublications:
         ]
         assert len(feed_calls) == 0
 
+    @patch("publication._get_previous_snapshot_html", return_value="<p>trade and wages</p>")
     @patch("publication.Database.get_researcher_id", return_value=99)
     @patch("publication.Database.compute_title_hash", return_value="abc123")
     @patch("publication.Database.get_connection")
-    def test_dedup_new_url_existing_event_no_duplicate(self, mock_get_conn, mock_hash, mock_get_rid):
+    def test_no_feed_event_when_title_in_previous_snapshot(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
+        """Non-seed paper with baseline but title already in prior snapshot should NOT create feed event."""
+        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=10)
+        cursor.fetchone.side_effect = [(2,)]  # snapshot count → has_baseline = True
+        mock_get_conn.side_effect = lambda: ctx_factory()
+
+        pub = _make_pub_dict(status="accepted")
+        Publication.save_publications("https://example.com", [pub], is_seed=False)
+
+        feed_calls = [
+            c for c in cursor.execute.call_args_list
+            if "INSERT INTO feed_events" in c[0][0]
+        ]
+        assert len(feed_calls) == 0
+
+    @patch("publication._get_previous_snapshot_html", return_value="<p>trade and wages</p>")
+    @patch("publication.Database.get_researcher_id", return_value=99)
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("publication.Database.get_connection")
+    def test_dedup_no_feed_event_when_title_in_previous_snapshot(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
+        """Dedup paper on new URL with baseline but title already in prior snapshot should NOT create feed event."""
+        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
+        cursor.fetchone.side_effect = [
+            (2,),                # baseline snapshot count → has_baseline = True
+            (42,),               # title_hash lookup
+            (None, None, None),  # backfill check
+        ]
+        original_execute = cursor.execute
+        def _tracking_execute(*args, **kwargs):
+            original_execute(*args, **kwargs)
+            sql = args[0] if args else ""
+            if "INSERT IGNORE INTO paper_urls" in sql:
+                cursor.rowcount = 1  # new URL association
+        cursor.execute = MagicMock(side_effect=_tracking_execute)
+        mock_get_conn.side_effect = lambda: ctx_factory()
+
+        pub = _make_pub_dict(status="working_paper")
+        Publication.save_publications("https://newsite.com", [pub], is_seed=False)
+
+        feed_calls = [
+            c for c in cursor.execute.call_args_list
+            if "INSERT INTO feed_events" in c[0][0]
+        ]
+        assert len(feed_calls) == 0
+
+    @patch("publication._get_previous_snapshot_html", return_value=None)
+    @patch("publication.Database.get_researcher_id", return_value=99)
+    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("publication.Database.get_connection")
+    def test_dedup_new_url_existing_event_no_duplicate(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
         """Dedup paper on new URL that already has a feed event should NOT create duplicate."""
         cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
         # fetchone: (2,) baseline (hoisted), (42,) paper lookup, backfill check,

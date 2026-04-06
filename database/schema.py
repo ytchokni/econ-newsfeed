@@ -541,8 +541,10 @@ def create_tables() -> None:
                         if "Duplicate column name" not in str(e):
                             logging.warning("Migration: researchers.openalex_author_id: %s", e)
 
-                    # DB-level safety net: catches any code path that bypasses
-                    # the application-layer guard in publication._url_has_baseline()
+                    # DB-level safety net: checks snapshot count only (≥2 snapshots required).
+                    # Full validation (title-in-previous-snapshot) is in
+                    # publication._title_in_previous_snapshot() — MySQL triggers cannot
+                    # decompress zlib blobs, so this is a coarse guard only.
                     try:
                         cursor.execute("DROP TRIGGER IF EXISTS trg_feed_events_snapshot_guard")
                         cursor.execute("""

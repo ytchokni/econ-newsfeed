@@ -25,6 +25,13 @@ def clear_author_cache():
     _author_id_cache.clear()
 
 
+@pytest.fixture(autouse=True)
+def mock_previous_snapshot():
+    """Prevent _get_previous_snapshot_html from consuming mock cursor's fetchone calls."""
+    with patch("publication._get_previous_snapshot_html", return_value=None):
+        yield
+
+
 class TestAuthorNormalization:
     """Author lists with != 2 elements should not crash save_publications."""
 
