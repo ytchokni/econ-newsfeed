@@ -3,7 +3,7 @@ services:
     image: mysql:8.0.40
     command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
     restart: unless-stopped
-    mem_limit: 512m
+    mem_limit: 768m
     cpus: 1.0
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD is required}
@@ -26,7 +26,7 @@ services:
       context: .
       dockerfile: Dockerfile.api
     restart: unless-stopped
-    mem_limit: 512m
+    mem_limit: 384m
     cpus: 1.0
     environment:
       DB_HOST: db
