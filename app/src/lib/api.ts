@@ -75,8 +75,10 @@ export function useResearchers() {
   });
 }
 
-export function useResearcher(id: number) {
-  return useSWR<ResearcherDetail>(`/api/researchers/${id}`, fetchJson);
+export function useResearcher(id: number, fallbackData?: ResearcherDetail) {
+  return useSWR<ResearcherDetail>(`/api/researchers/${id}`, fetchJson, {
+    fallbackData,
+  });
 }
 
 export async function getFields(): Promise<ResearchField[]> {
@@ -97,10 +99,11 @@ export function useJelCodes() {
   });
 }
 
-export function usePublication(id: number) {
+export function usePublication(id: number, fallbackData?: PublicationDetail) {
   return useSWR<PublicationDetail>(
     `/api/publications/${id}?include_history=true`,
-    fetchJson
+    fetchJson,
+    { fallbackData }
   );
 }
 
