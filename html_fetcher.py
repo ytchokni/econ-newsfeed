@@ -577,12 +577,9 @@ class HTMLFetcher:
         Output is capped with max_tokens and truncated to 200 words application-side.
         Returns the description string, or None if nothing could be extracted.
         """
-        try:
-            from publication import _openai_client, OPENAI_MODEL
-        except ImportError:
-            logging.error("Could not import OpenAI client for description extraction")
-            return None
+        from openai_client import get_client, get_model
 
+        model = get_model()
         prompt = (
             f"From the following text from a researcher's homepage at {url}, "
             "extract a professional description (up to 200 words) describing who this person is, "
@@ -593,13 +590,13 @@ class HTMLFetcher:
         )
         try:
             from database import Database
-            response = _openai_client.chat.completions.create(
+            response = get_client().chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
-                model=OPENAI_MODEL,
+                model=model,
                 max_completion_tokens=1024,
             )
             Database.log_llm_usage(
-                "description_extraction", OPENAI_MODEL, response.usage,
+                "description_extraction", model, response.usage,
                 context_url=url, scrape_log_id=scrape_log_id,
             )
             desc = response.choices[0].message.content.strip()

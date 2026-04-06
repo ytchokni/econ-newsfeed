@@ -2,16 +2,13 @@ from database import Database
 from encoding_guard import guard_text_fields
 from datetime import datetime, timezone
 from bs4 import BeautifulSoup
-from openai import OpenAI
+from openai_client import get_client, get_model
 from pydantic import BaseModel, ValidationError, field_validator
 from typing import Literal, Optional
 import re
 import logging
 import os
 from urllib.parse import urlparse
-
-OPENAI_MODEL = os.environ.get('OPENAI_MODEL')
-_openai_client = OpenAI(api_key=os.environ.get('OPENAI_API_KEY'))
 
 CONTENT_MAX_CHARS = int(os.environ['CONTENT_MAX_CHARS'])
 
@@ -514,16 +511,17 @@ Content:
     def extract_publications(text_content: str, url: str, scrape_log_id: int | None = None) -> list[dict]:
         """Use OpenAI to extract publication details from text content."""
         prompt = Publication.build_extraction_prompt(text_content, url)
-        logging.info(f"Extracting publications from {url} using OpenAI ({OPENAI_MODEL})")
+        model = get_model()
+        logging.info(f"Extracting publications from {url} using OpenAI ({model})")
 
         try:
-            chat_completion = _openai_client.beta.chat.completions.parse(
+            chat_completion = get_client().beta.chat.completions.parse(
                 messages=[{"role": "user", "content": prompt}],
-                model=OPENAI_MODEL,
+                model=model,
                 response_format=PublicationExtractionList,
             )
             Database.log_llm_usage(
-                "publication_extraction", OPENAI_MODEL, chat_completion.usage,
+                "publication_extraction", model, chat_completion.usage,
                 context_url=url, scrape_log_id=scrape_log_id,
             )
 

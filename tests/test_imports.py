@@ -21,15 +21,11 @@ ROOT_MODULES = [
     "db_config",
     "html_fetcher",
     "main",
+    "openai_client",
     "publication",
     "researcher",
     "scheduler",
 ]
-
-# Modules that create or transitively trigger OpenAI() at import time
-# (publication.py and compare_models.py create clients at module scope;
-#  main.py imports publication at module scope, triggering it transitively)
-_OPENAI_CLIENT_MODULES = {"publication", "main"}
 
 # Modules that create MySQL connection pools at module scope
 _DB_POOL_MODULES = {"database", "html_fetcher", "researcher", "scheduler", "api", "main", "publication"}
@@ -39,10 +35,6 @@ _DB_POOL_MODULES = {"database", "html_fetcher", "researcher", "scheduler", "api"
 def test_module_imports_cleanly(module_name):
     """Importing {module_name} must not raise."""
     patches = []
-
-    # Mock OpenAI client for modules that instantiate at import time
-    if module_name in _OPENAI_CLIENT_MODULES:
-        patches.append(patch("openai.OpenAI", return_value=MagicMock()))
 
     # Mock MySQL pool for all modules (transitive imports hit database.py)
     patches.append(

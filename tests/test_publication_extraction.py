@@ -140,9 +140,10 @@ class TestExtractPublications:
             yield
 
     @patch("publication.Database.log_llm_usage")
-    @patch("publication._openai_client")
-    def test_happy_path(self, mock_client, mock_log_usage):
+    @patch("publication.get_client")
+    def test_happy_path(self, mock_get_client, mock_log_usage):
         """Valid structured response -> list of publication dicts."""
+        mock_client = mock_get_client.return_value
         pub = _make_pub_dict()
         mock_client.beta.chat.completions.parse.return_value = _make_openai_response([pub])
 
@@ -160,9 +161,10 @@ class TestExtractPublications:
         mock_client.beta.chat.completions.parse.assert_called_once()
 
     @patch("publication.Database.log_llm_usage")
-    @patch("publication._openai_client")
-    def test_multiple_publications(self, mock_client, mock_log_usage):
+    @patch("publication.get_client")
+    def test_multiple_publications(self, mock_get_client, mock_log_usage):
         """Multiple publications in a single response are all returned."""
+        mock_client = mock_get_client.return_value
         pubs = [
             _make_pub_dict(title="Paper A"),
             _make_pub_dict(title="Paper B"),
@@ -176,9 +178,10 @@ class TestExtractPublications:
         assert result[1]["title"] == "Paper B"
 
     @patch("publication.Database.log_llm_usage")
-    @patch("publication._openai_client")
-    def test_refusal_returns_empty(self, mock_client, mock_log_usage):
+    @patch("publication.get_client")
+    def test_refusal_returns_empty(self, mock_get_client, mock_log_usage):
         """Model refusal -> empty list, no crash."""
+        mock_client = mock_get_client.return_value
         response = _make_openai_response([_make_pub_dict()])
         response.choices[0].message.refusal = "I cannot process this content."
         mock_client.beta.chat.completions.parse.return_value = response
@@ -188,9 +191,10 @@ class TestExtractPublications:
         assert result == []
 
     @patch("publication.Database.log_llm_usage")
-    @patch("publication._openai_client")
-    def test_parsed_none_returns_empty(self, mock_client, mock_log_usage):
+    @patch("publication.get_client")
+    def test_parsed_none_returns_empty(self, mock_get_client, mock_log_usage):
         """Parsed result is None -> empty list."""
+        mock_client = mock_get_client.return_value
         response = _make_openai_response([_make_pub_dict()])
         response.choices[0].message.refusal = None
         response.choices[0].message.parsed = None
@@ -201,9 +205,10 @@ class TestExtractPublications:
         assert result == []
 
     @patch("publication.Database.log_llm_usage")
-    @patch("publication._openai_client")
-    def test_api_error_returns_empty_and_logs(self, mock_client, mock_log_usage, caplog):
+    @patch("publication.get_client")
+    def test_api_error_returns_empty_and_logs(self, mock_get_client, mock_log_usage, caplog):
         """OpenAI API exception -> empty list and error is logged."""
+        mock_client = mock_get_client.return_value
         mock_client.beta.chat.completions.parse.side_effect = RuntimeError("API down")
 
         with caplog.at_level(logging.ERROR):
@@ -213,9 +218,10 @@ class TestExtractPublications:
         assert any("API down" in record.message for record in caplog.records)
 
     @patch("publication.Database.log_llm_usage")
-    @patch("publication._openai_client")
-    def test_llm_usage_logged(self, mock_client, mock_log_usage):
+    @patch("publication.get_client")
+    def test_llm_usage_logged(self, mock_get_client, mock_log_usage):
         """Database.log_llm_usage is called with correct arguments on success."""
+        mock_client = mock_get_client.return_value
         pub = _make_pub_dict()
         response = _make_openai_response([pub])
         mock_client.beta.chat.completions.parse.return_value = response
@@ -231,9 +237,10 @@ class TestExtractPublications:
         assert kwargs.get("scrape_log_id") == 42
 
     @patch("publication.Database.log_llm_usage")
-    @patch("publication._openai_client")
-    def test_llm_usage_not_logged_on_api_error(self, mock_client, mock_log_usage):
+    @patch("publication.get_client")
+    def test_llm_usage_not_logged_on_api_error(self, mock_get_client, mock_log_usage):
         """If the API call itself throws, log_llm_usage should NOT be called."""
+        mock_client = mock_get_client.return_value
         mock_client.beta.chat.completions.parse.side_effect = RuntimeError("boom")
 
         Publication.extract_publications("text", "https://example.com")
