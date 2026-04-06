@@ -570,11 +570,6 @@ class HTMLFetcher:
         return False
 
     @staticmethod
-    def extract_bio(text_content: str, url: str, scrape_log_id=None) -> str | None:
-        """Legacy: extract a ≤2-sentence bio. Delegates to extract_description."""
-        return HTMLFetcher.extract_description(text_content, url, scrape_log_id=scrape_log_id)
-
-    @staticmethod
     def extract_description(text_content: str, url: str, scrape_log_id=None) -> str | None:
         """Extract a researcher description (up to 200 words) from plain text.
 
