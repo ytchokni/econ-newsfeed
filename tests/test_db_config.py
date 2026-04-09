@@ -23,7 +23,7 @@ def _reload_db_config(env_overrides: dict):
     # Start with a clean slate for the vars db_config checks
     clean_env = {k: v for k, v in os.environ.items()
                  if k not in ("DB_HOST", "DB_USER", "DB_PASSWORD", "DB_NAME",
-                              "DB_PORT", "DB_SSL_CA", "OPENAI_API_KEY")}
+                              "DB_PORT", "DB_SSL_CA", "PARASAIL_API_KEY")}
     clean_env.update(env_overrides)
 
     with patch.dict(os.environ, clean_env, clear=True):
@@ -41,7 +41,7 @@ _VALID_ENV = {
     "DB_USER": "testuser",
     "DB_PASSWORD": "testpass",
     "DB_NAME": "test_db",
-    "OPENAI_API_KEY": "sk-test-key",
+    "PARASAIL_API_KEY": "ps-test-key",
 }
 
 
@@ -49,7 +49,7 @@ class TestRequiredVars:
     """Missing required env vars must raise EnvironmentError."""
 
     @pytest.mark.parametrize("missing_var", [
-        "DB_HOST", "DB_USER", "DB_PASSWORD", "DB_NAME", "OPENAI_API_KEY",
+        "DB_HOST", "DB_USER", "DB_PASSWORD", "DB_NAME", "PARASAIL_API_KEY",
     ])
     def test_missing_required_var_raises(self, missing_var):
         env = {k: v for k, v in _VALID_ENV.items() if k != missing_var}

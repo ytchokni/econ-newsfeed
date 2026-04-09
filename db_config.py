@@ -4,7 +4,7 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-REQUIRED_ENV_VARS = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME', 'OPENAI_API_KEY']
+REQUIRED_ENV_VARS = ['DB_HOST', 'DB_USER', 'DB_PASSWORD', 'DB_NAME', 'PARASAIL_API_KEY']
 
 _missing = [var for var in REQUIRED_ENV_VARS if not os.environ.get(var)]
 if _missing:
