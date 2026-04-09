@@ -2,7 +2,7 @@ from database import Database
 from encoding_guard import guard_text_fields
 from datetime import datetime, timezone
 from bs4 import BeautifulSoup
-from openai_client import get_client, get_model
+from llm_client import get_client, get_model, extract_json
 from pydantic import BaseModel, ValidationError, field_validator
 from typing import Literal, Optional
 import re
@@ -509,43 +509,31 @@ Content:
 
     @staticmethod
     def extract_publications(text_content: str, url: str, scrape_log_id: int | None = None) -> list[dict]:
-        """Use OpenAI to extract publication details from text content."""
+        """Use the configured LLM to extract publication details from text content."""
         prompt = Publication.build_extraction_prompt(text_content, url)
         model = get_model()
-        logging.info(f"Extracting publications from {url} using OpenAI ({model})")
+        logging.info(f"Extracting publications from {url} using LLM ({model})")
 
-        try:
-            chat_completion = get_client().beta.chat.completions.parse(
-                messages=[{"role": "user", "content": prompt}],
-                model=model,
-                response_format=PublicationExtractionList,
-            )
+        result = extract_json(prompt, PublicationExtractionList)
+
+        if result.usage is not None:
             Database.log_llm_usage(
-                "publication_extraction", model, chat_completion.usage,
+                "publication_extraction", model, result.usage,
                 context_url=url, scrape_log_id=scrape_log_id,
             )
 
-            message = chat_completion.choices[0].message
-            if message.refusal:
-                logging.warning(f"Model refused extraction for {url}: {message.refusal}")
-                return []
-
-            result = message.parsed
-            if result is None:
-                logging.error(f"Failed to parse structured output for URL: {url}")
-                return []
-
-            validated = []
-            for pub in result.publications:
-                d = pub.model_dump()
-                if validate_publication(d):
-                    validated.append(d)
-                else:
-                    logging.info(f"Validation dropped: {d.get('title', '<no title>')}")
-            return validated
-        except Exception as e:
-            logging.error("Error in OpenAI API call for %s: %s: %s", url, type(e).__name__, e)
+        if result.parsed is None:
+            logging.warning(f"Publication extraction returned no parsed result for {url}")
             return []
+
+        validated = []
+        for pub in result.parsed.publications:
+            d = pub.model_dump()
+            if validate_publication(d):
+                validated.append(d)
+            else:
+                logging.info(f"Validation dropped: {d.get('title', '<no title>')}")
+        return validated
 
 
 

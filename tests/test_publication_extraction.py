@@ -12,8 +12,8 @@ os.environ.setdefault("DB_HOST", "localhost")
 os.environ.setdefault("DB_USER", "test")
 os.environ.setdefault("DB_PASSWORD", "test")
 os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
-os.environ.setdefault("OPENAI_API_KEY", "sk-test-key")
-os.environ.setdefault("OPENAI_MODEL", "gpt-4o-mini")
+os.environ.setdefault("PARASAIL_API_KEY", "ps-test-key")
+os.environ.setdefault("LLM_MODEL", "google/gemma-4-31b-it")
 os.environ.setdefault("CONTENT_MAX_CHARS", "20000")
 os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
 os.environ.setdefault("SCRAPE_API_KEY", "test-secret-key-for-ci-runs")
@@ -24,6 +24,7 @@ from contextlib import contextmanager
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+from openai import OpenAIError
 
 from publication import Publication, PublicationExtraction, PublicationExtractionList, _title_similarity, clean_title, reconcile_title_renames
 
@@ -90,14 +91,14 @@ def _make_pub_dict(**overrides):
     return base
 
 
-def _make_openai_response(publications: list[dict], refusal=None):
-    """Build a mock OpenAI chat completion that mimics structured output parsing."""
-    parsed_pubs = [PublicationExtraction(**p) for p in publications]
-    parsed_result = PublicationExtractionList(publications=parsed_pubs)
-
+def _make_llm_completion(publications: list[dict]):
+    """Build a mock OpenAI-compatible chat completion returning JSON content (Parasail/Gemma shape)."""
+    import json as _json
+    payload = {"publications": publications}
     message = MagicMock()
-    message.refusal = refusal
-    message.parsed = parsed_result
+    message.content = _json.dumps(payload)
+    # refusal/parsed are no longer used after migration, but leave as None for safety
+    message.refusal = None
 
     choice = MagicMock()
     choice.message = message
@@ -140,12 +141,12 @@ class TestExtractPublications:
             yield
 
     @patch("publication.Database.log_llm_usage")
-    @patch("publication.get_client")
+    @patch("llm_client.get_client")
     def test_happy_path(self, mock_get_client, mock_log_usage):
         """Valid structured response -> list of publication dicts."""
         mock_client = mock_get_client.return_value
         pub = _make_pub_dict()
-        mock_client.beta.chat.completions.parse.return_value = _make_openai_response([pub])
+        mock_client.chat.completions.create.return_value = _make_llm_completion([pub])
 
         result = Publication.extract_publications("some text", "https://example.com/page", scrape_log_id=7)
 
@@ -157,11 +158,11 @@ class TestExtractPublications:
         assert result[0]["status"] == "working_paper"
         assert result[0]["draft_url"] == "https://example.com/paper.pdf"
 
-        # Verify the OpenAI client was called with the correct model
-        mock_client.beta.chat.completions.parse.assert_called_once()
+        # Verify the LLM client was called with the correct model
+        mock_client.chat.completions.create.assert_called_once()
 
     @patch("publication.Database.log_llm_usage")
-    @patch("publication.get_client")
+    @patch("llm_client.get_client")
     def test_multiple_publications(self, mock_get_client, mock_log_usage):
         """Multiple publications in a single response are all returned."""
         mock_client = mock_get_client.return_value
@@ -169,7 +170,7 @@ class TestExtractPublications:
             _make_pub_dict(title="Paper A"),
             _make_pub_dict(title="Paper B"),
         ]
-        mock_client.beta.chat.completions.parse.return_value = _make_openai_response(pubs)
+        mock_client.chat.completions.create.return_value = _make_llm_completion(pubs)
 
         result = Publication.extract_publications("text", "https://example.com")
 
@@ -178,38 +179,30 @@ class TestExtractPublications:
         assert result[1]["title"] == "Paper B"
 
     @patch("publication.Database.log_llm_usage")
-    @patch("publication.get_client")
-    def test_refusal_returns_empty(self, mock_get_client, mock_log_usage):
-        """Model refusal -> empty list, no crash."""
+    @patch("llm_client.get_client")
+    def test_malformed_json_returns_empty(self, mock_get_client, mock_log_usage):
+        """Model returns text that fails JSON validation -> empty list after retry."""
         mock_client = mock_get_client.return_value
-        response = _make_openai_response([_make_pub_dict()])
-        response.choices[0].message.refusal = "I cannot process this content."
-        mock_client.beta.chat.completions.parse.return_value = response
+        bad = MagicMock()
+        bad.choices = [MagicMock()]
+        bad.choices[0].message = MagicMock()
+        bad.choices[0].message.content = "not json at all"
+        bad.usage = MagicMock()
+        bad.usage.prompt_tokens = 10
+        bad.usage.completion_tokens = 5
+        bad.usage.total_tokens = 15
+        mock_client.chat.completions.create.return_value = bad
 
         result = Publication.extract_publications("text", "https://example.com")
 
         assert result == []
 
     @patch("publication.Database.log_llm_usage")
-    @patch("publication.get_client")
-    def test_parsed_none_returns_empty(self, mock_get_client, mock_log_usage):
-        """Parsed result is None -> empty list."""
-        mock_client = mock_get_client.return_value
-        response = _make_openai_response([_make_pub_dict()])
-        response.choices[0].message.refusal = None
-        response.choices[0].message.parsed = None
-        mock_client.beta.chat.completions.parse.return_value = response
-
-        result = Publication.extract_publications("text", "https://example.com")
-
-        assert result == []
-
-    @patch("publication.Database.log_llm_usage")
-    @patch("publication.get_client")
+    @patch("llm_client.get_client")
     def test_api_error_returns_empty_and_logs(self, mock_get_client, mock_log_usage, caplog):
         """OpenAI API exception -> empty list and error is logged."""
         mock_client = mock_get_client.return_value
-        mock_client.beta.chat.completions.parse.side_effect = RuntimeError("API down")
+        mock_client.chat.completions.create.side_effect = OpenAIError("API down")
 
         with caplog.at_level(logging.ERROR):
             result = Publication.extract_publications("text", "https://example.com")
@@ -218,13 +211,13 @@ class TestExtractPublications:
         assert any("API down" in record.message for record in caplog.records)
 
     @patch("publication.Database.log_llm_usage")
-    @patch("publication.get_client")
+    @patch("llm_client.get_client")
     def test_llm_usage_logged(self, mock_get_client, mock_log_usage):
         """Database.log_llm_usage is called with correct arguments on success."""
         mock_client = mock_get_client.return_value
         pub = _make_pub_dict()
-        response = _make_openai_response([pub])
-        mock_client.beta.chat.completions.parse.return_value = response
+        response = _make_llm_completion([pub])
+        mock_client.chat.completions.create.return_value = response
 
         Publication.extract_publications("text", "https://example.com/page", scrape_log_id=42)
 
@@ -237,11 +230,11 @@ class TestExtractPublications:
         assert kwargs.get("scrape_log_id") == 42
 
     @patch("publication.Database.log_llm_usage")
-    @patch("publication.get_client")
+    @patch("llm_client.get_client")
     def test_llm_usage_not_logged_on_api_error(self, mock_get_client, mock_log_usage):
         """If the API call itself throws, log_llm_usage should NOT be called."""
         mock_client = mock_get_client.return_value
-        mock_client.beta.chat.completions.parse.side_effect = RuntimeError("boom")
+        mock_client.chat.completions.create.side_effect = OpenAIError("boom")
 
         Publication.extract_publications("text", "https://example.com")
 
