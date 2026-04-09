@@ -14,6 +14,7 @@ os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
 from unittest.mock import MagicMock, patch
 
 import pytest
+from openai import OpenAIError
 from pydantic import BaseModel
 
 
@@ -131,9 +132,56 @@ class TestExtractJson:
     def test_api_exception_returns_none_parsed_and_empty_usage(self, mock_get_client):
         import llm_client
         mock_client = mock_get_client.return_value
-        mock_client.chat.completions.create.side_effect = RuntimeError("API down")
+        mock_client.chat.completions.create.side_effect = OpenAIError("API down")
 
         result = llm_client.extract_json("prompt", _ItemList)
 
         assert result.parsed is None
         assert result.usage is None
+
+    @patch("llm_client.get_client")
+    def test_handles_none_content_gracefully(self, mock_get_client):
+        """SDK may return content=None; treat as empty string → retry path."""
+        import llm_client
+        mock_client = mock_get_client.return_value
+        none_completion = _mock_completion('{"items":[]}')
+        none_completion.choices[0].message.content = None
+        mock_client.chat.completions.create.side_effect = [
+            none_completion,
+            _mock_completion('{"items":[{"name":"a","count":1}]}'),
+        ]
+
+        result = llm_client.extract_json("prompt", _ItemList, retries=1)
+
+        assert result.parsed is not None
+        assert result.parsed.items[0].name == "a"
+
+    @patch("llm_client.get_client")
+    def test_retries_zero_means_single_attempt(self, mock_get_client):
+        """retries=0 → exactly one API call, no retry on failure."""
+        import llm_client
+        mock_client = mock_get_client.return_value
+        mock_client.chat.completions.create.return_value = _mock_completion("garbage")
+
+        result = llm_client.extract_json("prompt", _ItemList, retries=0)
+
+        assert result.parsed is None
+        assert mock_client.chat.completions.create.call_count == 1
+
+    @patch("llm_client.get_client")
+    def test_retry_prompt_contains_clarification(self, mock_get_client):
+        """Second attempt's prompt must include the schema-clarification text."""
+        import llm_client
+        mock_client = mock_get_client.return_value
+        mock_client.chat.completions.create.side_effect = [
+            _mock_completion("bad"),
+            _mock_completion('{"items":[]}'),
+        ]
+
+        llm_client.extract_json("original prompt text", _ItemList, retries=1)
+
+        first_call = mock_client.chat.completions.create.call_args_list[0]
+        second_call = mock_client.chat.completions.create.call_args_list[1]
+        assert first_call.kwargs["messages"][0]["content"] == "original prompt text"
+        assert "did not match the required schema" in second_call.kwargs["messages"][0]["content"]
+        assert "original prompt text" in second_call.kwargs["messages"][0]["content"]
