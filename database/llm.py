@@ -6,10 +6,10 @@ from datetime import datetime, timezone
 
 from database.connection import execute_query
 
-_LLM_PRICING = {  # (prompt, completion) cost per 1M tokens
-    "gpt-4o-mini": (0.15, 0.60),
-    "gpt-5.4-mini": (0.75, 4.50),
-    "gpt-5.4-nano": (0.20, 1.25),
+# (prompt, completion) cost per 1M tokens. Rates sourced from Parasail pricing
+# for Gemma 4 31B (as of 2026-04). Update when Parasail invoices disagree.
+_LLM_PRICING = {
+    "google/gemma-4-31b-it": (0.14, 0.40),
 }
 
 
@@ -24,7 +24,10 @@ def log_llm_usage(call_type: str, model: str, usage: object, context_url: str | 
         pricing = _LLM_PRICING.get(model)
         if pricing:
             prompt_rate, completion_rate = pricing
-            multiplier = 0.5 if is_batch else 1.0
+            # Parasail does not offer a batch discount — cost multiplier is 1.0
+            # regardless of is_batch. The is_batch flag still distinguishes
+            # sync vs batch calls in the llm_usage table for reporting.
+            multiplier = 1.0
             estimated_cost = multiplier * (
                 prompt_tokens * prompt_rate / 1_000_000
                 + completion_tokens * completion_rate / 1_000_000
