@@ -88,10 +88,10 @@ def _disambiguate_researcher(first_name: str, last_name: str, candidates: list[d
         response = client.chat.completions.create(
             messages=[{"role": "user", "content": prompt}],
             model=model,
-            max_tokens=256,
+            max_tokens=256,  # {"match_id": N} is ~10 tokens; 256 headroom covers any preamble leak
         )
         log_llm_usage("researcher_disambiguation", model, response.usage)
-        content = response.choices[0].message.content
+        content = response.choices[0].message.content or ""
         match = re.search(r'\{.*?\}', content, re.DOTALL)
         if match:
             data = json.loads(match.group(0))
