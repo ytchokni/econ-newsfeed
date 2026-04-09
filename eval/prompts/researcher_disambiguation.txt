@@ -1,3 +1,5 @@
+You MUST respond with ONLY a single valid JSON object. No prose, no explanation, no chain-of-thought, no markdown code fences. Begin your response with `{` and end with `}`. Any output that is not valid JSON parseable by a strict parser will be discarded.
+
 You are disambiguating researcher names. A publication lists the author as: "{{first_name}} {{last_name}}"
 
 The database contains these existing researchers with the same last name:

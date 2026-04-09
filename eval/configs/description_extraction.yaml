@@ -3,28 +3,40 @@ description: "Description Extraction — Model Cost Optimization"
 providers:
   - id: openrouter:anthropic/claude-sonnet-4.6
     label: "Sonnet 4.6 (ground truth)"
+    config:
+      max_tokens: 4000
+      inputCost: 0.000003
+      outputCost: 0.000015
   - id: openrouter:anthropic/claude-haiku-4.5
     label: "Haiku 4.5"
-  - id: openrouter:openai/gpt-5.4-nano
-    label: "GPT-5.4 Nano"
+    config:
+      max_tokens: 4000
+      inputCost: 0.000001
+      outputCost: 0.000005
   - id: openrouter:google/gemini-3-flash-preview
     label: "Gemini 3 Flash"
-  - id: openrouter:google/gemini-3.1-flash-lite-preview
-    label: "Gemini 3.1 Flash Lite"
+    config:
+      max_tokens: 4000
+      inputCost: 0.0000005
+      outputCost: 0.000003
   - id: openrouter:deepseek/deepseek-chat
     label: "DeepSeek V3.2"
-  - id: openrouter:minimax/minimax-m2.7
-    label: "MiniMax M2.7"
-  - id: openrouter:xiaomi/mimo-v2-pro
-    label: "MiMo-V2-Pro"
-  - id: openrouter:qwen/qwen3.5-flash
-    label: "Qwen 3.5 Flash"
-  - id: openrouter:xiaomi/mimo-v2-flash
-    label: "MiMo-V2-Flash"
-  - id: openrouter:stepfun/step-3.5-flash:free
-    label: "Step 3.5 Flash (free)"
-  - id: openrouter:qwen/qwen3.6-plus:free
-    label: "Qwen 3.6 Plus (free)"
+    config:
+      max_tokens: 4000
+      inputCost: 0.00000032
+      outputCost: 0.00000089
+  - id: openrouter:qwen/qwen3.6-plus
+    label: "Qwen 3.6 Plus"
+    config:
+      max_tokens: 8000
+      inputCost: 0.000000325
+      outputCost: 0.00000195
+  - id: openrouter:google/gemma-4-31b-it
+    label: "Gemma 4 31B"
+    config:
+      max_tokens: 4000
+      inputCost: 0.00000014
+      outputCost: 0.0000004
 
 prompts:
   - file://../prompts/description_extraction.txt

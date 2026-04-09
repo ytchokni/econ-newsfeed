@@ -1,3 +1,5 @@
+You MUST respond with ONLY a single valid JSON object. No prose, no explanation, no chain-of-thought, no markdown code fences. Begin your response with `{` and end with `}`. Any output that is not valid JSON parseable by a strict parser will be discarded.
+
 Classify the following economics researcher into JEL (Journal of Economic Literature) codes based on their bio/description.
 
 Researcher: {{first_name}} {{last_name}}
