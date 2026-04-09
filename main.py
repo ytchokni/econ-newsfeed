@@ -227,6 +227,7 @@ def batch_check() -> None:
                 raw_response = choices[0].get("message", {}).get("content", "")
                 if not raw_response:
                     continue
+                # Strip markdown fences if present (LLM sometimes wraps output despite schema guidance)
                 stripped = raw_response.strip()
                 if stripped.startswith("```"):
                     stripped = stripped.split("\n", 1)[1] if "\n" in stripped else stripped
@@ -238,7 +239,7 @@ def batch_check() -> None:
                 except json.JSONDecodeError as e:
                     logging.warning(f"Batch result not valid JSON for url_id={url_id}: {e}")
                     continue
-                # LLM may return a bare list or a dict with a 'publications' key
+                # Schema produces {"publications": [...]} — unwrap to the bare list
                 if isinstance(parsed, dict) and "publications" in parsed:
                     parsed = parsed["publications"]
                 if not isinstance(parsed, list):
