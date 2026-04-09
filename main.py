@@ -165,7 +165,7 @@ class _UsageDict:
 def batch_check() -> None:
     """Check pending batch jobs and process completed results."""
     from llm_client import get_client, get_model
-    from publication import PublicationExtraction
+    from publication import PublicationExtraction, validate_publication
     from pydantic import ValidationError
     import json
     from datetime import datetime, timezone
@@ -252,12 +252,13 @@ def batch_check() -> None:
                     try:
                         pub = PublicationExtraction(**item)
                         d = pub.model_dump()
-                        if validate_publication(d):
-                            validated.append(d)
-                        else:
-                            logging.info("Batch validation dropped: %s", d.get("title", "<no title>"))
                     except (ValidationError, TypeError) as e:
                         logging.warning(f"Rejected malformed batch publication: {e}")
+                        continue
+                    if validate_publication(d):
+                        validated.append(d)
+                    else:
+                        logging.info("Batch validation dropped: %s", d.get("title", "<no title>"))
 
                 if validated:
                     is_seed = HTMLFetcher.is_first_extraction(url_id)
