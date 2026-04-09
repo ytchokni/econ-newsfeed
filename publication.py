@@ -38,9 +38,17 @@ class PublicationExtraction(BaseModel):
     @field_validator('year', mode='before')
     @classmethod
     def coerce_year_to_str(cls, v: object) -> str | None:
-        if v is not None:
-            return str(v)
-        return v
+        if v is None:
+            return v
+        s = str(v).strip()
+        if not s:
+            return None
+        # Extract first 4-digit year if present (handles "2024a", "2023-24", "forthcoming 2024")
+        m = re.search(r'(19|20)\d{2}', s)
+        if m:
+            return m.group(0)
+        # Fall back to truncating to 4 chars to satisfy VARCHAR(4)
+        return s[:4]
 
     @field_validator('draft_url', mode='before')
     @classmethod

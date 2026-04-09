@@ -23,6 +23,7 @@ ftfy = "^6.3.1"
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
 httpx = "^0.28"
+matplotlib = "^3.10.8"
 
 [build-system]
 requires = ["poetry-core"]

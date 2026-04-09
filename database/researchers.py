@@ -138,7 +138,7 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
 
     def _fetch_one(query, params):
         if conn is not None:
-            c = conn.cursor(dictionary=True)
+            c = conn.cursor(dictionary=True, buffered=True)
             c.execute(query, params)
             row = c.fetchone()
             c.close()
@@ -147,7 +147,7 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
 
     def _fetch_all(query, params):
         if conn is not None:
-            c = conn.cursor(dictionary=True)
+            c = conn.cursor(dictionary=True, buffered=True)
             c.execute(query, params)
             rows = c.fetchall()
             c.close()
@@ -156,7 +156,7 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
 
     def _execute(query, params):
         if conn is not None:
-            c = conn.cursor()
+            c = conn.cursor(buffered=True)
             c.execute(query, params)
             conn.commit()
             lid = c.lastrowid

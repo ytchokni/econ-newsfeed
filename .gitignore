@@ -35,6 +35,7 @@ CLAUDE.md
 
 .superpowers/
 .playwright-cli/*
+.playwright-mcp/
 .full-review/*
 .full-review*/*
 
