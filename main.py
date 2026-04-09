@@ -65,11 +65,12 @@ def classify_jel() -> None:
 
 
 def batch_submit() -> None:
-    """Submit a batch job to the OpenAI Batch API for all URLs needing extraction."""
-    from openai_client import get_client, get_model
+    """Submit a batch job to the LLM provider's Batch API for all URLs needing extraction."""
+    from llm_client import get_client, get_model
     import json
     import tempfile
     from datetime import datetime, timezone
+    from publication import PublicationExtractionList
 
     client = get_client()
     model = get_model()
@@ -108,6 +109,15 @@ def batch_submit() -> None:
             "body": {
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": "PublicationExtractionList",
+                        "schema": PublicationExtractionList.model_json_schema(),
+                        "strict": False,
+                    },
+                },
+                "max_tokens": 8000,
             },
         }
         lines.append(json.dumps(request))
@@ -154,7 +164,7 @@ class _UsageDict:
 
 def batch_check() -> None:
     """Check pending batch jobs and process completed results."""
-    from openai_client import get_client, get_model
+    from llm_client import get_client, get_model
     from publication import PublicationExtraction
     from pydantic import ValidationError
     import json
