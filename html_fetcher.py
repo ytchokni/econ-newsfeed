@@ -573,11 +573,11 @@ class HTMLFetcher:
     def extract_description(text_content: str, url: str, scrape_log_id=None) -> str | None:
         """Extract a researcher description (up to 200 words) from plain text.
 
-        Uses a single LLM call on text content (not HTML) for minimal input tokens.
-        Output is capped with max_tokens and truncated to 200 words application-side.
-        Returns the description string, or None if nothing could be extracted.
+        Single LLM call on text content, output capped with max_tokens and
+        truncated to 200 words application-side. Returns the description
+        string, or None if nothing could be extracted.
         """
-        from openai_client import get_client, get_model
+        from llm_client import get_client, get_model
 
         model = get_model()
         prompt = (
@@ -593,13 +593,13 @@ class HTMLFetcher:
             response = get_client().chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model=model,
-                max_completion_tokens=1024,
+                max_tokens=1024,
             )
             Database.log_llm_usage(
                 "description_extraction", model, response.usage,
                 context_url=url, scrape_log_id=scrape_log_id,
             )
-            desc = response.choices[0].message.content.strip()
+            desc = (response.choices[0].message.content or "").strip()
             if desc.lower() in ("null", "none", ""):
                 return None
             words = desc.split()
