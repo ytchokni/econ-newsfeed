@@ -7,7 +7,7 @@ import re
 import sys
 from dotenv import dotenv_values
 
-REQUIRED_VARS = ["DB_HOST", "DB_USER", "DB_PASSWORD", "DB_NAME", "OPENAI_API_KEY", "SCRAPE_API_KEY"]
+REQUIRED_VARS = ["DB_HOST", "DB_USER", "DB_PASSWORD", "DB_NAME", "PARASAIL_API_KEY", "SCRAPE_API_KEY"]
 DB_NAME_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]{0,63}$")
 
 

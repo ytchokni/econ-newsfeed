@@ -12,8 +12,8 @@ jobs:
     runs-on: ubuntu-latest
     env:
       CONTENT_MAX_CHARS: "20000"
-      OPENAI_MODEL: "gpt-4o-mini"
-      OPENAI_API_KEY: "sk-test-not-real"
+      LLM_MODEL: "google/gemma-4-31b-it"
+      PARASAIL_API_KEY: "ps-test-not-real"
       SCRAPE_API_KEY: "test-secret-key-for-ci-runs"
       DB_HOST: "localhost"
       DB_USER: "test"
