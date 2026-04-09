@@ -20,6 +20,7 @@ ROOT_MODULES = [
     "database",
     "db_config",
     "html_fetcher",
+    "llm_client",
     "main",
     "publication",
     "researcher",
