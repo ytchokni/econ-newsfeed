@@ -37,7 +37,7 @@
 3. **No OpenAI refusals.** Gemma does not emit the `.message.refusal` field; treat as `None`. Drop refusal-checking branches during migration (keep the safety net of Pydantic validation returning empty lists on failure).
 4. **`max_completion_tokens` → `max_tokens`.** vLLM expects the legacy field name. The one caller ([html_fetcher.py:596](html_fetcher.py#L596)) must be updated.
 5. **`openai` Python package stays installed.** It's our HTTP client. Only `OPENAI_API_KEY`/`OPENAI_MODEL` env vars and the `openai_client.py` module go away.
-6. **Cost tracking.** Add `google/gemma-4-31b-it` to `_LLM_PRICING`. Rates from the eval config ([eval/configs/publication_extraction.yaml:46-53](eval/configs/publication_extraction.yaml#L46-L53)): `$0.14/M` prompt, `$0.40/M` completion. The plan treats these as placeholders — operators should confirm against Parasail invoices and update.
+6. **Cost tracking.** Add `google/gemma-4-31b-it` to `_LLM_PRICING` at `$0.14/M` prompt, `$0.40/M` completion. These are **placeholder rates** — no authoritative source is committed to this repo. Operators MUST confirm against Parasail's current published pricing or an actual invoice before shipping. The code comment in `database/llm.py` makes this placeholder nature explicit. If Parasail rates differ, update the tuple and the comment in a follow-up commit.
 
 ### Baseline check (prerequisite — not a code task)
 
@@ -540,10 +540,15 @@ _LLM_PRICING = {  # (prompt, completion) cost per 1M tokens
 with:
 
 ```python
-# (prompt, completion) cost per 1M tokens. Rates sourced from Parasail pricing
-# for Gemma 4 31B (as of 2026-04). Update when Parasail invoices disagree.
+# (prompt, completion) cost per 1M tokens. Gemma 4 31B rates are placeholders
+# pending Parasail invoice confirmation. OpenAI entries are retained here
+# until Task 11 (openai_client.py deletion) to avoid NULL cost rows during
+# the intermediate migration commits (Tasks 4-10).
 _LLM_PRICING = {
     "google/gemma-4-31b-it": (0.14, 0.40),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-5.4-mini": (0.75, 4.50),
+    "gpt-5.4-nano": (0.20, 1.25),
 }
 ```
 

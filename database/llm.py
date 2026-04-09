@@ -6,10 +6,15 @@ from datetime import datetime, timezone
 
 from database.connection import execute_query
 
-# (prompt, completion) cost per 1M tokens. Rates sourced from Parasail pricing
-# for Gemma 4 31B (as of 2026-04). Update when Parasail invoices disagree.
+# (prompt, completion) cost per 1M tokens. Gemma 4 31B rates are placeholders
+# pending Parasail invoice confirmation (see docs/superpowers/plans/2026-04-09-migrate-llm-to-parasail-gemma.md).
+# OpenAI entries are retained here until Task 11 (openai_client.py deletion) to avoid
+# NULL cost rows during the intermediate migration commits (Tasks 4-10).
 _LLM_PRICING = {
     "google/gemma-4-31b-it": (0.14, 0.40),
+    "gpt-4o-mini": (0.15, 0.60),
+    "gpt-5.4-mini": (0.75, 4.50),
+    "gpt-5.4-nano": (0.20, 1.25),
 }
 
 
