@@ -21,7 +21,6 @@ ROOT_MODULES = [
     "db_config",
     "html_fetcher",
     "main",
-    "openai_client",
     "publication",
     "researcher",
     "scheduler",
