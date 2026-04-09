@@ -7,8 +7,8 @@ import os
 
 # Set test environment variables before any app imports
 os.environ.setdefault("CONTENT_MAX_CHARS", "20000")
-os.environ.setdefault("OPENAI_MODEL", "gpt-4o-mini")
-os.environ.setdefault("OPENAI_API_KEY", "sk-test")
+os.environ.setdefault("LLM_MODEL", "google/gemma-4-31b-it")
+os.environ.setdefault("PARASAIL_API_KEY", "ps-test")
 os.environ.setdefault("SCRAPE_API_KEY", "test-secret-key-for-ci-runs")
 os.environ.setdefault("DB_HOST", "localhost")
 os.environ.setdefault("DB_USER", "test")

@@ -5,7 +5,7 @@ os.environ.setdefault("DB_HOST", "localhost")
 os.environ.setdefault("DB_USER", "test")
 os.environ.setdefault("DB_PASSWORD", "test")
 os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
-os.environ.setdefault("OPENAI_API_KEY", "sk-test")
+os.environ.setdefault("PARASAIL_API_KEY", "ps-test")
 
 from db_config import db_config
 

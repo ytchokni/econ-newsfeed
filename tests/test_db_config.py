@@ -15,7 +15,7 @@ import pytest
 def _reload_db_config(env_overrides: dict):
     """Re-import db_config with controlled env vars.
 
-    Clears all DB/OPENAI env vars, applies overrides, patches
+    Clears all DB/PARASAIL env vars, applies overrides, patches
     load_dotenv as a no-op at the source (dotenv.load_dotenv), removes
     any cached db_config module, then imports fresh so module-level
     validation code re-executes under the controlled environment.
