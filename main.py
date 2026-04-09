@@ -225,8 +225,24 @@ def batch_check() -> None:
                 if not choices:
                     continue
                 raw_response = choices[0].get("message", {}).get("content", "")
-                parsed = Publication.parse_openai_response(raw_response)
-                if not parsed:
+                if not raw_response:
+                    continue
+                # Strip markdown fences if present (Gemma sometimes wraps output despite schema guidance)
+                stripped = raw_response.strip()
+                if stripped.startswith("```"):
+                    stripped = stripped.split("\n", 1)[1] if "\n" in stripped else stripped
+                    if stripped.endswith("```"):
+                        stripped = stripped.rsplit("```", 1)[0]
+                    stripped = stripped.strip()
+                try:
+                    parsed = json.loads(stripped)
+                except json.JSONDecodeError as e:
+                    logging.warning(f"Batch result not valid JSON for url_id={url_id}: {e}")
+                    continue
+                # Schema produces {"publications": [...]} — unwrap to the bare list
+                if isinstance(parsed, dict) and "publications" in parsed:
+                    parsed = parsed["publications"]
+                if not isinstance(parsed, list):
                     continue
 
                 validated = []
