@@ -10,9 +10,9 @@ import json
 import logging
 import os
 from dataclasses import dataclass
-from typing import TypeVar
+from typing import Generic, TypeVar
 
-from openai import OpenAI
+from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, ValidationError
 
 _client: OpenAI | None = None
@@ -41,7 +41,7 @@ T = TypeVar("T", bound=BaseModel)
 
 
 @dataclass
-class StructuredResponse:
+class StructuredResponse(Generic[T]):
     """Result of a schema-guided LLM call.
 
     `parsed` is None when the model output failed validation after all
@@ -49,7 +49,7 @@ class StructuredResponse:
     object from the final successful API response (or None if the API
     call itself raised).
     """
-    parsed: BaseModel | None
+    parsed: T | None
     usage: object | None
 
 
@@ -60,7 +60,7 @@ def extract_json(
     max_tokens: int = 8000,
     retries: int = 1,
     temperature: float = 0.0,
-) -> StructuredResponse:
+) -> StructuredResponse[T]:
     """Call the LLM with JSON-schema-guided decoding and return a validated Pydantic instance.
 
     Uses `response_format={"type": "json_schema", ...}` so vLLM constrains
@@ -83,18 +83,24 @@ def extract_json(
 
     attempts = retries + 1
     last_usage: object | None = None
-    current_prompt = prompt
+    clarified_prompt = (
+        f"{prompt}\n\n"
+        f"Your previous response did not match the required schema. "
+        f"Return ONLY a JSON object matching the schema exactly. "
+        f"Do not include any prose, code fences, or commentary."
+    )
 
     for attempt in range(attempts):
+        message_content = prompt if attempt == 0 else clarified_prompt
         try:
             completion = client.chat.completions.create(
                 model=model,
-                messages=[{"role": "user", "content": current_prompt}],
+                messages=[{"role": "user", "content": message_content}],
                 response_format=response_format,
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
-        except Exception as e:
+        except OpenAIError as e:
             logging.error("LLM API call failed: %s: %s", type(e).__name__, e)
             return StructuredResponse(parsed=None, usage=None)
 
@@ -109,12 +115,5 @@ def extract_json(
                 "LLM JSON validation failed (attempt %d/%d): %s",
                 attempt + 1, attempts, e,
             )
-            if attempt + 1 < attempts:
-                current_prompt = (
-                    f"{prompt}\n\n"
-                    f"Your previous response did not match the required schema. "
-                    f"Return ONLY a JSON object matching the schema exactly. "
-                    f"Do not include any prose, code fences, or commentary."
-                )
 
     return StructuredResponse(parsed=None, usage=last_usage)
