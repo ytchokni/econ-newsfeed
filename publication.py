@@ -2,7 +2,7 @@ from database import Database
 from encoding_guard import guard_text_fields
 from datetime import datetime, timezone
 from bs4 import BeautifulSoup
-from llm_client import get_client, get_model, extract_json
+from llm_client import get_model, extract_json
 from pydantic import BaseModel, ValidationError, field_validator
 from typing import Literal, Optional
 import re
