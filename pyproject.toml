@@ -13,7 +13,7 @@ beautifulsoup4 = "^4.12"
 mysql-connector-python = "^9.1"
 openai = "^2.30"
 fastapi = "^0.135"
-uvicorn = {version = "^0.42", extras = ["standard"]}
+uvicorn = {version = "^0.44", extras = ["standard"]}
 gunicorn = "^25"
 apscheduler = "^3.10"
 pydantic = "^2.10"
