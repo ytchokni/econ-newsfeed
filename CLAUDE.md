@@ -80,7 +80,7 @@ Researcher URLs (DB) → HTMLFetcher (fetch + hash-based change detection)
 | `database/` | Package with facade class (`Database`) — submodules: `connection.py` (pool), `schema.py` (DDL/migrations), `researchers.py`, `papers.py`, `snapshots.py`, `llm.py`, `admin.py` |
 | `main.py` | CLI entry points for scraping pipeline stages |
 | `html_fetcher.py` | Web scraper — per-domain rate limiting, robots.txt compliance, content hashing for change detection |
-| `publication.py` | LLM extraction (Parasail/Gemma) — Pydantic structured outputs, title dedup via SHA-256 hash, Batch API support |
+| `publication.py` | LLM extraction (Parasail/Gemma) — Pydantic structured outputs, title dedup via SHA-256 hash |
 | `llm_client.py` | Parasail LLM client — OpenAI-compatible SDK, guided JSON via `response_format`, retry with reprompt |
 | `link_extractor.py` | Trusted-domain link extraction from HTML, DOI-based and anchor text matching to papers |
 | `doi_resolver.py` | DOI resolution from publisher URLs — regex extraction + Crossref PII-to-DOI lookup |
@@ -113,7 +113,7 @@ No ORM — direct parameterized SQL via `mysql-connector-python`. All code impor
 - `authorship` — researcher↔paper links with `author_order`
 - `researchers` — includes `openalex_author_id` for deterministic disambiguation (skips LLM)
 - `openalex_coauthors` — coauthor data from OpenAlex enrichment
-- `batch_jobs` / `llm_usage` — OpenAI cost tracking
+- `batch_jobs` / `llm_usage` — LLM cost tracking
 
 All foreign keys use `ON DELETE CASCADE`. Tables use `utf8mb4` charset.
 
