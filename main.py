@@ -4,7 +4,7 @@ import os
 
 from database import Database
 from researcher import Researcher
-from publication import Publication, reconcile_title_renames
+from publication import Publication, reconcile_title_renames, validate_publication
 from html_fetcher import HTMLFetcher
 from link_extractor import match_and_save_paper_links
 
@@ -240,7 +240,11 @@ def batch_check() -> None:
                         continue
                     try:
                         pub = PublicationExtraction(**item)
-                        validated.append(pub.model_dump())
+                        d = pub.model_dump()
+                        if validate_publication(d):
+                            validated.append(d)
+                        else:
+                            logging.info("Batch validation dropped: %s", d.get("title", "<no title>"))
                     except (ValidationError, TypeError) as e:
                         logging.warning(f"Rejected malformed batch publication: {e}")
 
