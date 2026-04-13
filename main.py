@@ -4,7 +4,7 @@ import os
 
 from database import Database
 from researcher import Researcher
-from publication import Publication, reconcile_title_renames, validate_publication
+from publication import Publication, reconcile_title_renames, validate_publication, append_snapshots_for_pubs
 from html_fetcher import HTMLFetcher
 from link_extractor import match_and_save_paper_links
 
@@ -254,23 +254,7 @@ def batch_check() -> None:
                     reconcile_title_renames(url, validated)
                     match_and_save_paper_links(url_id, validated)
 
-                    # Append paper snapshots (mirrors scheduler.py:218-236)
-                    for pub in validated:
-                        title_hash = Database.compute_title_hash(pub['title'])
-                        paper_row = Database.fetch_one(
-                            "SELECT id FROM papers WHERE title_hash = %s", (title_hash,)
-                        )
-                        if paper_row:
-                            Database.append_paper_snapshot(
-                                paper_id=paper_row['id'],
-                                status=pub.get('status'),
-                                venue=pub.get('venue'),
-                                abstract=pub.get('abstract'),
-                                draft_url=pub.get('draft_url'),
-                                year=pub.get('year'),
-                                source_url=url,
-                                title=pub.get('title'),
-                            )
+                    append_snapshots_for_pubs(validated, url)
 
                     saved_pubs += len(validated)
                 HTMLFetcher.mark_extracted(url_id)

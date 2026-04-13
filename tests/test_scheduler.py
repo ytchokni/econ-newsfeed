@@ -44,9 +44,8 @@ def _base_patches():
         "extract_pubs": patch("scheduler.Publication.extract_publications", return_value=[]),
         "save_pubs": patch("scheduler.Publication.save_publications"),
         "match_links": patch("scheduler.match_and_save_paper_links"),
-        "title_hash": patch("scheduler.Database.compute_title_hash", return_value="abc123"),
         "fetch_one": patch("scheduler.Database.fetch_one", return_value=None),
-        "paper_snap": patch("scheduler.Database.append_paper_snapshot"),
+        "paper_snap": patch("scheduler.append_snapshots_for_pubs"),
         "researcher_snap": patch("scheduler.Database.append_researcher_snapshot"),
         "reconcile_renames": patch("scheduler.reconcile_title_renames"),
     }
@@ -94,9 +93,6 @@ class TestRunScrapeJobHappyPath:
         patches["extract_pubs"] = patch(
             "scheduler.Publication.extract_publications", return_value=pubs
         )
-        patches["fetch_one"] = patch(
-            "scheduler.Database.fetch_one", return_value={"id": 99}
-        )
 
         mocks = {name: p.start() for name, p in patches.items()}
         try:
@@ -106,7 +102,7 @@ class TestRunScrapeJobHappyPath:
             mocks["save_pubs"].assert_called_once_with(
                 url_row["url"], pubs, is_seed=True,
             )
-            mocks["paper_snap"].assert_called_once()
+            mocks["paper_snap"].assert_called_once_with(pubs, url_row["url"])
             mocks["update_log"].assert_called_once_with(42, "completed", 1, 1, 1)
         finally:
             for p in patches.values():
@@ -429,8 +425,8 @@ class TestURLProcessing:
             for p in patches.values():
                 p.stop()
 
-    def test_paper_not_found_skips_snapshot(self):
-        """If paper lookup returns None, paper snapshot is skipped."""
+    def test_snapshots_called_with_pubs(self):
+        """append_snapshots_for_pubs is called with extracted publications."""
         url_row = _make_url_row()
         pubs = [{"title": "Ghost Paper", "status": "published"}]
         patches = _base_patches()
@@ -446,16 +442,11 @@ class TestURLProcessing:
         patches["extract_pubs"] = patch(
             "scheduler.Publication.extract_publications", return_value=pubs
         )
-        # Paper not found in DB
-        patches["fetch_one"] = patch(
-            "scheduler.Database.fetch_one", return_value=None
-        )
         mocks = {name: p.start() for name, p in patches.items()}
         try:
             run_scrape_job()
 
-            mocks["title_hash"].assert_called_once_with("Ghost Paper")
-            mocks["paper_snap"].assert_not_called()
+            mocks["paper_snap"].assert_called_once_with(pubs, url_row["url"])
         finally:
             for p in patches.values():
                 p.stop()

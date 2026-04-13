@@ -566,6 +566,39 @@ def _title_similarity(title_a: str | None, title_b: str | None) -> float:
     return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
 
 
+def append_snapshots_for_pubs(pubs: list[dict], source_url: str) -> None:
+    """Append paper snapshots for a batch of extracted publications.
+
+    Resolves title_hash → paper_id in a single query, then appends
+    a snapshot for each matched paper.
+    """
+    hash_to_pub = {}
+    for pub in pubs:
+        title = pub.get('title')
+        if title:
+            hash_to_pub[Database.compute_title_hash(title)] = pub
+    if not hash_to_pub:
+        return
+
+    placeholders = ",".join(["%s"] * len(hash_to_pub))
+    rows = Database.fetch_all(
+        f"SELECT id, title_hash FROM papers WHERE title_hash IN ({placeholders})",
+        list(hash_to_pub.keys()),
+    )
+    for row in rows:
+        pub = hash_to_pub[row['title_hash']]
+        Database.append_paper_snapshot(
+            paper_id=row['id'],
+            status=pub.get('status'),
+            venue=pub.get('venue'),
+            abstract=pub.get('abstract'),
+            draft_url=pub.get('draft_url'),
+            year=pub.get('year'),
+            source_url=source_url,
+            title=pub.get('title'),
+        )
+
+
 _SIMILARITY_THRESHOLD = 0.5
 
 

@@ -1,14 +1,4 @@
 """Tests for batch pipeline data integrity — validation and snapshots."""
-import os
-
-# Env vars must be set before any app imports
-os.environ.setdefault("DB_HOST", "localhost")
-os.environ.setdefault("DB_USER", "econ_app")
-os.environ.setdefault("DB_PASSWORD", "secret")
-os.environ.setdefault("DB_NAME", "econ_newsfeed")
-os.environ.setdefault("OPENAI_API_KEY", "test-key")
-os.environ.setdefault("SCRAPE_API_KEY", "test-key")
-
 import unittest
 
 from publication import validate_publication, PublicationExtraction

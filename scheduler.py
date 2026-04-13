@@ -12,7 +12,7 @@ from database import Database
 from db_config import db_config
 from researcher import Researcher
 from html_fetcher import HTMLFetcher
-from publication import Publication, reconcile_title_renames
+from publication import Publication, reconcile_title_renames, append_snapshots_for_pubs
 from link_extractor import match_and_save_paper_links
 
 logger = logging.getLogger(__name__)
@@ -216,22 +216,7 @@ def run_scrape_job() -> None:
 
                             # Append paper snapshots for versioning
                             t0 = time.time()
-                            for pub in pubs:
-                                title_hash = Database.compute_title_hash(pub['title'])
-                                paper_row = Database.fetch_one(
-                                    "SELECT id FROM papers WHERE title_hash = %s", (title_hash,)
-                                )
-                                if paper_row:
-                                    Database.append_paper_snapshot(
-                                        paper_id=paper_row['id'],
-                                        status=pub.get('status'),
-                                        venue=pub.get('venue'),
-                                        abstract=pub.get('abstract'),
-                                        draft_url=pub.get('draft_url'),
-                                        year=pub.get('year'),
-                                        source_url=url,
-                                        title=pub.get('title'),
-                                    )
+                            append_snapshots_for_pubs(pubs, url)
                             snapshot_ms = (time.time() - t0) * 1000
                             logger.info(f"  paper snapshots — {snapshot_ms:.0f}ms")
 
