@@ -253,6 +253,25 @@ def batch_check() -> None:
                     Publication.save_publications(url, validated, is_seed=is_seed)
                     reconcile_title_renames(url, validated)
                     match_and_save_paper_links(url_id, validated)
+
+                    # Append paper snapshots (mirrors scheduler.py:218-236)
+                    for pub in validated:
+                        title_hash = Database.compute_title_hash(pub['title'])
+                        paper_row = Database.fetch_one(
+                            "SELECT id FROM papers WHERE title_hash = %s", (title_hash,)
+                        )
+                        if paper_row:
+                            Database.append_paper_snapshot(
+                                paper_id=paper_row['id'],
+                                status=pub.get('status'),
+                                venue=pub.get('venue'),
+                                abstract=pub.get('abstract'),
+                                draft_url=pub.get('draft_url'),
+                                year=pub.get('year'),
+                                source_url=url,
+                                title=pub.get('title'),
+                            )
+
                     saved_pubs += len(validated)
                 HTMLFetcher.mark_extracted(url_id)
                 processed_urls += 1
