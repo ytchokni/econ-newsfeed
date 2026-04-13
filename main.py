@@ -355,6 +355,8 @@ def main() -> None:
     subparsers.add_parser('enrich', help='Enrich publications with OpenAlex metadata')
     subparsers.add_parser('enrich-jel', help='Enrich researcher JEL codes from paper topics via OpenAlex')
     subparsers.add_parser('discover-domains', help='Scan stored HTML for untrusted domains with paper-title links')
+    subparsers.add_parser('batch-submit', help='Submit batch LLM extraction for URLs with new content')
+    subparsers.add_parser('batch-check', help='Check pending batches and process completed results')
 
     args = parser.parse_args()
 
@@ -374,6 +376,10 @@ def main() -> None:
         enrich_jel_from_papers()
     elif args.command == 'discover-domains':
         discover_domains()
+    elif args.command == 'batch-submit':
+        batch_submit()
+    elif args.command == 'batch-check':
+        batch_check()
 
 if __name__ == "__main__":
     main()
