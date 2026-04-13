@@ -23,6 +23,8 @@ make reset-db             # Drop and recreate database from scratch
 # Scraping pipeline
 make scrape               # Full pipeline: fetch HTML → LLM extract → save → link match → enrich
 make fetch                # Stage 1: Download HTML from researcher URLs (hash-based change detection)
+make batch-submit         # Stage 2: Submit changed URLs to OpenAI Batch API for extraction
+make batch-check          # Stage 3: Process completed batch results → save papers, snapshots, links
 
 # Enrichment & classification
 make enrich               # Enrich papers via OpenAlex (DOI lookup first, title search fallback)
@@ -59,6 +61,13 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build  #
 5. **Enrichment phase** (after releasing scrape lock): Enrich unenriched papers via OpenAlex — DOI lookup first (from `paper_links`), title search fallback (published papers only)
 
 **`make fetch`** runs stage 1 only (download HTML). Extraction is handled exclusively by `make scrape` (scheduler), which uses diff-based extraction — the only path that correctly creates feed events.
+
+**Granular batch pipeline** (run stages independently):
+1. `make fetch` — Download HTML, detect changes via content hash. Safe to run anytime.
+2. `make batch-submit` — Submit URLs where `content_hash ≠ extracted_hash` to OpenAI Batch API. Requires fetch first.
+3. `make batch-check` — Poll pending batches, process results (save papers, snapshots, links, feed events). Idempotent for completed batches.
+
+Each stage is independently safe. Feed event integrity is protected by `_title_in_previous_snapshot()` and the `_url_has_baseline()` check regardless of which pipeline path is used.
 
 ## Architecture
 
