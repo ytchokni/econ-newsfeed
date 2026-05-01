@@ -25,7 +25,7 @@ jobs:
         # LIGHTSAIL_SSH_KEY should be a dedicated deploy keypair, not the
         # default Lightsail key. Scope it to a non-root user with only the
         # permissions needed to run deploy.sh.
-        uses: appleboy/ssh-action@7eaf76671a0d7eec5d98ee897acda4f968735a17
+        uses: appleboy/ssh-action@0ff4204d59e8e51228ff73bce53f80d53301dee2
         with:
           host: ${{ secrets.LIGHTSAIL_HOST }}
           username: ubuntu
