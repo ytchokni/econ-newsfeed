@@ -1,11 +1,11 @@
-"""Unit tests for llm_client — Parasail-backed OpenAI-compatible client."""
+"""Unit tests for llm_client — Google AI Studio-backed OpenAI-compatible client."""
 import os
 
 os.environ.setdefault("DB_HOST", "localhost")
 os.environ.setdefault("DB_USER", "test")
 os.environ.setdefault("DB_PASSWORD", "test")
 os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
-os.environ.setdefault("PARASAIL_API_KEY", "ps-test-key")
+os.environ.setdefault("GOOGLE_API_KEY", "test-google-key")
 os.environ.setdefault("SCRAPE_API_KEY", "test-secret-key-for-ci-runs")
 os.environ.setdefault("SCRAPE_INTERVAL_HOURS", "24")
 os.environ.setdefault("CONTENT_MAX_CHARS", "20000")
@@ -19,11 +19,11 @@ from pydantic import BaseModel
 
 
 class TestGetClient:
-    def test_returns_openai_client_pointed_at_parasail(self):
+    def test_returns_openai_client_pointed_at_google_ai_studio(self):
         import llm_client
         llm_client._client = None  # reset module cache
         client = llm_client.get_client()
-        assert str(client.base_url).rstrip("/") == "https://api.parasail.io/v1"
+        assert str(client.base_url).rstrip("/") == "https://generativelanguage.googleapis.com/v1beta/openai"
 
     def test_client_is_cached(self):
         import llm_client
@@ -34,10 +34,10 @@ class TestGetClient:
 
 
 class TestGetModel:
-    def test_default_model_is_gemma_4_31b(self, monkeypatch):
+    def test_default_model_is_gemini_flash(self, monkeypatch):
         monkeypatch.delenv("LLM_MODEL", raising=False)
         import llm_client
-        assert llm_client.get_model() == "google/gemma-4-31b-it"
+        assert llm_client.get_model() == "gemini-2.5-flash"
 
     def test_model_overridable_by_env(self, monkeypatch):
         monkeypatch.setenv("LLM_MODEL", "google/gemma-4-12b-it")
@@ -94,7 +94,7 @@ class TestExtractJson:
         assert kwargs["response_format"]["type"] == "json_schema"
         assert kwargs["response_format"]["json_schema"]["name"] == "_ItemList"
         assert "schema" in kwargs["response_format"]["json_schema"]
-        assert kwargs["model"] == "google/gemma-4-31b-it"
+        assert kwargs["model"] == "gemini-2.5-flash"
 
     @patch("llm_client.get_client")
     def test_malformed_json_retries_then_returns_none(self, mock_get_client):

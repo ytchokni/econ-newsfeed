@@ -7,8 +7,9 @@ import os
 
 # Set test environment variables before any app imports
 os.environ.setdefault("CONTENT_MAX_CHARS", "20000")
-os.environ.setdefault("LLM_MODEL", "google/gemma-4-31b-it")
-os.environ.setdefault("PARASAIL_API_KEY", "ps-test")
+os.environ.setdefault("LLM_MODEL", "gemini-2.5-flash")
+os.environ.setdefault("GOOGLE_API_KEY", "test-google-key")
+os.environ.setdefault("PARASAIL_API_KEY", "ps-test")  # kept for db_config.py until it is migrated
 os.environ.setdefault("SCRAPE_API_KEY", "test-secret-key-for-ci-runs")
 os.environ.setdefault("DB_HOST", "localhost")
 os.environ.setdefault("DB_USER", "test")

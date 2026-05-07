@@ -1,6 +1,6 @@
-"""Centralized Parasail LLM client — OpenAI-compatible, lazy-initialized.
+"""Centralized Google AI Studio LLM client — OpenAI-compatible, lazy-initialized.
 
-Importing this module does not require PARASAIL_API_KEY to be set;
+Importing this module does not require GOOGLE_API_KEY to be set;
 the key is read on first client access so test environments that stub
 the client can import without crashing.
 """
@@ -17,17 +17,17 @@ from pydantic import BaseModel, ValidationError
 
 _client: OpenAI | None = None
 
-PARASAIL_BASE_URL = "https://api.parasail.io/v1"
-DEFAULT_MODEL = "google/gemma-4-31b-it"
+GOOGLE_AI_STUDIO_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+DEFAULT_MODEL = "gemini-2.5-flash"
 
 
 def get_client() -> OpenAI:
-    """Return a shared OpenAI SDK instance pointed at Parasail."""
+    """Return a shared OpenAI SDK instance pointed at Google AI Studio."""
     global _client
     if _client is None:
         _client = OpenAI(
-            base_url=PARASAIL_BASE_URL,
-            api_key=os.environ.get("PARASAIL_API_KEY"),
+            base_url=GOOGLE_AI_STUDIO_BASE_URL,
+            api_key=os.environ.get("GOOGLE_API_KEY"),
         )
     return _client
 
