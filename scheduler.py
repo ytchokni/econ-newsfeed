@@ -112,23 +112,16 @@ _STALE_SCRAPE_HOURS = 24
 
 def _cleanup_stale_scrape_logs() -> None:
     """Mark scrape_log entries stuck in 'running' for >24h as 'failed'."""
-    stale = Database.fetch_all(
-        """SELECT id, started_at FROM scrape_log
+    affected = Database.execute_query(
+        """UPDATE scrape_log
+           SET finished_at = NOW(), status = 'failed',
+               error_message = 'Stale running entry — cleaned up on scheduler start'
            WHERE status = 'running'
              AND started_at < DATE_SUB(NOW(), INTERVAL %s HOUR)""",
         (_STALE_SCRAPE_HOURS,),
     )
-    if not stale:
-        return
-    logger.info("Cleaning up %d stale scrape_log entries", len(stale))
-    for row in stale:
-        Database.execute_query(
-            """UPDATE scrape_log
-               SET finished_at = NOW(), status = %s, error_message = %s
-               WHERE id = %s""",
-            ("failed", "Stale running entry — cleaned up on scheduler start", row['id']),
-        )
-        logger.info("Marked scrape_log id=%d (started %s) as failed", row['id'], row['started_at'])
+    if affected:
+        logger.info("Cleaned up %d stale scrape_log entries", affected)
 
 
 _DRAFT_VALIDATION_BUDGET_SECONDS = 300  # 5-minute time budget
@@ -216,10 +209,7 @@ def run_scrape_job() -> None:
                 if changed:
                     urls_changed += 1
                     changed_urls.append({
-                        'url_id': url_id,
-                        'researcher_id': researcher_id,
-                        'url': url,
-                        'page_type': page_type,
+                        **url_row,
                         'old_text': old_text,
                         'is_first_scrape': is_first_scrape,
                     })
@@ -237,12 +227,12 @@ def run_scrape_job() -> None:
         circuit_broken = False
 
         for idx, entry in enumerate(changed_urls):
-            url_id = entry['url_id']
+            url_id = entry['id']
             researcher_id = entry['researcher_id']
             url = entry['url']
             page_type = entry['page_type']
-            old_text = entry['old_text']
-            is_first_scrape = entry['is_first_scrape']
+            old_text = entry.pop('old_text')
+            is_first_scrape = entry.pop('is_first_scrape')
 
             if circuit_broken:
                 break
@@ -294,27 +284,34 @@ def run_scrape_job() -> None:
                             )
                             circuit_broken = True
 
-                if page_type == "HOME" and not circuit_broken:
-                    page_text = HTMLFetcher.get_latest_text(url_id)
-                    if page_text:
-                        t0 = time.time()
-                        description = HTMLFetcher.extract_description(page_text, url, scrape_log_id=log_id)
-                        desc_ms = (time.time() - t0) * 1000
-                        logger.info(f"  description extract — {desc_ms:.0f}ms (found={description is not None})")
-                        if description:
-                            r_row = Database.fetch_one(
-                                "SELECT position, affiliation FROM researchers WHERE id = %s",
-                                (researcher_id,),
-                            )
-                            position = r_row['position'] if r_row else None
-                            affiliation = r_row['affiliation'] if r_row else None
-                            Database.append_researcher_snapshot(
-                                researcher_id, position, affiliation, description, source_url=url
-                            )
+                if page_type == "HOME" and not circuit_broken and new_text:
+                    t0 = time.time()
+                    description = HTMLFetcher.extract_description(new_text, url, scrape_log_id=log_id)
+                    desc_ms = (time.time() - t0) * 1000
+                    logger.info(f"  description extract — {desc_ms:.0f}ms (found={description is not None})")
+                    if description:
+                        r_row = Database.fetch_one(
+                            "SELECT position, affiliation FROM researchers WHERE id = %s",
+                            (researcher_id,),
+                        )
+                        position = r_row['position'] if r_row else None
+                        affiliation = r_row['affiliation'] if r_row else None
+                        Database.append_researcher_snapshot(
+                            researcher_id, position, affiliation, description, source_url=url
+                        )
 
             except Exception as e:
                 logger.error("Error extracting URL %s (id=%s): %s", url, url_id, e)
                 extraction_errors += 1
+                consecutive_failures += 1
+                if consecutive_failures >= _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD:
+                    remaining = len(changed_urls) - idx - 1
+                    logger.warning(
+                        "Circuit breaker: %d consecutive extraction failures — "
+                        "stopping extraction. Remaining %d changed URLs will be extracted next run.",
+                        consecutive_failures, remaining,
+                    )
+                    circuit_broken = True
                 continue
 
         extract_phase_s = time.time() - extract_start

@@ -700,28 +700,22 @@ class TestExtractionCircuitBreaker:
 class TestStaleLogCleanup:
     """Verify stale running scrape_log entries get cleaned up."""
 
-    @patch("scheduler.Database.fetch_all")
     @patch("scheduler.Database.execute_query")
-    def test_marks_old_running_entries_as_failed(self, mock_exec, mock_fetch_all):
-        mock_fetch_all.return_value = [
-            {"id": 6, "started_at": "2026-03-19 22:26:31"},
-            {"id": 9, "started_at": "2026-03-23 15:13:20"},
-        ]
+    def test_marks_old_running_entries_as_failed(self, mock_exec):
+        mock_exec.return_value = 2
 
         _cleanup_stale_scrape_logs()
 
-        assert mock_exec.call_count == 2
-        for c in mock_exec.call_args_list:
-            query = c[0][0]
-            params = c[0][1]
-            assert "UPDATE scrape_log" in query
-            assert "failed" in params
+        mock_exec.assert_called_once()
+        query = mock_exec.call_args[0][0]
+        assert "UPDATE scrape_log" in query
+        assert "status = 'failed'" in query
+        assert "INTERVAL %s HOUR" in query
 
-    @patch("scheduler.Database.fetch_all")
     @patch("scheduler.Database.execute_query")
-    def test_skips_when_none_stale(self, mock_exec, mock_fetch_all):
-        mock_fetch_all.return_value = []
+    def test_skips_when_none_stale(self, mock_exec):
+        mock_exec.return_value = 0
 
         _cleanup_stale_scrape_logs()
 
-        mock_exec.assert_not_called()
+        mock_exec.assert_called_once()
