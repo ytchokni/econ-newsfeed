@@ -66,7 +66,7 @@ def classify_jel() -> None:
 
 def batch_submit() -> None:
     """Submit a batch job to the LLM provider's Batch API for all URLs needing extraction."""
-    from llm_client import get_client, get_model
+    from llm_client import get_client, get_model, build_json_schema_format
     import json
     import tempfile
     from datetime import datetime, timezone
@@ -109,14 +109,7 @@ def batch_submit() -> None:
             "body": {
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": {
-                        "name": "PublicationExtractionList",
-                        "schema": PublicationExtractionList.model_json_schema(),
-                        "strict": False,
-                    },
-                },
+                "response_format": build_json_schema_format(PublicationExtractionList),
                 "max_tokens": 8000,
             },
         }

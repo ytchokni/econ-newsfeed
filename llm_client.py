@@ -9,6 +9,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
@@ -16,6 +17,7 @@ from openai import OpenAI, OpenAIError
 from pydantic import BaseModel, ValidationError
 
 _client: OpenAI | None = None
+_client_lock = threading.Lock()
 
 GOOGLE_AI_STUDIO_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 DEFAULT_MODEL = "gemini-2.5-flash"
@@ -25,10 +27,12 @@ def get_client() -> OpenAI:
     """Return a shared OpenAI SDK instance pointed at Google AI Studio."""
     global _client
     if _client is None:
-        _client = OpenAI(
-            base_url=GOOGLE_AI_STUDIO_BASE_URL,
-            api_key=os.environ.get("GOOGLE_API_KEY"),
-        )
+        with _client_lock:
+            if _client is None:
+                _client = OpenAI(
+                    base_url=GOOGLE_AI_STUDIO_BASE_URL,
+                    api_key=os.environ.get("GOOGLE_API_KEY"),
+                )
     return _client
 
 
@@ -53,6 +57,18 @@ class StructuredResponse(Generic[T]):
     usage: object | None
 
 
+def build_json_schema_format(model_class: type[BaseModel]) -> dict:
+    """Build a response_format dict for JSON-schema-guided decoding."""
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": model_class.__name__,
+            "schema": model_class.model_json_schema(),
+            "strict": False,
+        },
+    }
+
+
 def extract_json(
     prompt: str,
     model_class: type[T],
@@ -63,34 +79,29 @@ def extract_json(
 ) -> StructuredResponse[T]:
     """Call the LLM with JSON-schema-guided decoding and return a validated Pydantic instance.
 
-    Uses `response_format={"type": "json_schema", ...}` so vLLM constrains
-    output at decode time. On Pydantic ValidationError or JSONDecodeError
-    we retry up to `retries` times with a clarification appended to the
-    prompt. Returns a StructuredResponse whose `parsed` is None on
-    unrecoverable failure (callers treat this like an empty extraction).
+    Uses `response_format={"type": "json_schema", ...}` so the provider
+    constrains output at decode time. On Pydantic ValidationError or
+    JSONDecodeError we retry up to `retries` times with a clarification
+    appended to the prompt. Returns a StructuredResponse whose `parsed`
+    is None on unrecoverable failure (callers treat this like an empty
+    extraction).
     """
     client = get_client()
     model = get_model()
-    schema = model_class.model_json_schema()
-    response_format = {
-        "type": "json_schema",
-        "json_schema": {
-            "name": model_class.__name__,
-            "schema": schema,
-            "strict": False,  # vLLM honors schema via guided_json; strict is an OpenAI-only flag
-        },
-    }
+    response_format = build_json_schema_format(model_class)
 
     attempts = retries + 1
     last_usage: object | None = None
-    clarified_prompt = (
-        f"{prompt}\n\n"
-        f"Your previous response did not match the required schema. "
-        f"Return ONLY a JSON object matching the schema exactly. "
-        f"Do not include any prose, code fences, or commentary."
-    )
 
+    clarified_prompt: str | None = None
     for attempt in range(attempts):
+        if attempt > 0 and clarified_prompt is None:
+            clarified_prompt = (
+                f"{prompt}\n\n"
+                f"Your previous response did not match the required schema. "
+                f"Return ONLY a JSON object matching the schema exactly. "
+                f"Do not include any prose, code fences, or commentary."
+            )
         message_content = prompt if attempt == 0 else clarified_prompt
         try:
             completion = client.chat.completions.create(
