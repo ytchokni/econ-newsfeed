@@ -80,7 +80,7 @@ def create_scrape_log() -> int:
     return Database.execute_query(query, (datetime.now(timezone.utc),))
 
 
-def update_scrape_log(log_id: int, status: str, urls_checked: int = 0, urls_changed: int = 0, pubs_extracted: int = 0, error_message: str | None = None) -> None:
+def update_scrape_log(log_id: int, status: str, urls_checked: int = 0, urls_changed: int = 0, pubs_extracted: int = 0, extraction_errors: int = 0, error_message: str | None = None) -> None:
     """Update an existing scrape_log entry with results."""
     # Aggregate token totals from llm_usage for this scrape run
     token_row = Database.fetch_one(
@@ -95,13 +95,14 @@ def update_scrape_log(log_id: int, status: str, urls_checked: int = 0, urls_chan
     query = """
         UPDATE scrape_log
         SET finished_at = %s, status = %s, urls_checked = %s,
-            urls_changed = %s, pubs_extracted = %s, error_message = %s,
+            urls_changed = %s, pubs_extracted = %s, extraction_errors = %s,
+            error_message = %s,
             prompt_tokens_total = %s, completion_tokens_total = %s
         WHERE id = %s
     """
     Database.execute_query(query, (
         datetime.now(timezone.utc), status, urls_checked,
-        urls_changed, pubs_extracted, error_message,
+        urls_changed, pubs_extracted, extraction_errors, error_message,
         prompt_tokens_total, completion_tokens_total, log_id
     ))
 

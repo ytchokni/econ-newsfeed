@@ -621,6 +621,18 @@ def create_tables() -> None:
                     except Exception as e:
                         if "Duplicate column name" not in str(e):
                             logging.warning("Migration: feed_events title columns: %s", e)
+
+                    # Add extraction_errors column to scrape_log
+                    try:
+                        cursor.execute("""
+                            ALTER TABLE scrape_log
+                            ADD COLUMN extraction_errors INT DEFAULT 0 AFTER pubs_extracted
+                        """)
+                        conn.commit()
+                        logging.info("Migration: added extraction_errors to scrape_log")
+                    except Exception as e:
+                        if "Duplicate column name" not in str(e):
+                            logging.warning("Migration: scrape_log.extraction_errors: %s", e)
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                     cursor.fetchone()
