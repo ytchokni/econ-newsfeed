@@ -107,6 +107,30 @@ def update_scrape_log(log_id: int, status: str, urls_checked: int = 0, urls_chan
     ))
 
 
+_STALE_SCRAPE_HOURS = 24
+
+
+def _cleanup_stale_scrape_logs() -> None:
+    """Mark scrape_log entries stuck in 'running' for >24h as 'failed'."""
+    stale = Database.fetch_all(
+        """SELECT id, started_at FROM scrape_log
+           WHERE status = 'running'
+             AND started_at < DATE_SUB(NOW(), INTERVAL %s HOUR)""",
+        (_STALE_SCRAPE_HOURS,),
+    )
+    if not stale:
+        return
+    logger.info("Cleaning up %d stale scrape_log entries", len(stale))
+    for row in stale:
+        Database.execute_query(
+            """UPDATE scrape_log
+               SET finished_at = NOW(), status = %s, error_message = %s
+               WHERE id = %s""",
+            ("failed", "Stale running entry — cleaned up on scheduler start", row['id']),
+        )
+        logger.info("Marked scrape_log id=%d (started %s) as failed", row['id'], row['started_at'])
+
+
 _DRAFT_VALIDATION_BUDGET_SECONDS = 300  # 5-minute time budget
 _DRAFT_VALIDATION_DELAY = 0.1  # 100ms between requests
 
@@ -367,6 +391,8 @@ def start_scheduler() -> None:
     except Exception as e:
         logger.warning("Could not acquire scheduler lock: %s — skipping scheduler", e)
         return
+
+    _cleanup_stale_scrape_logs()
 
     # Register signal handlers so cloud container SIGTERM completes the current job
     signal.signal(signal.SIGTERM, _handle_sigterm)

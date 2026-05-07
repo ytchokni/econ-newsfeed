@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 import scheduler
-from scheduler import run_scrape_job, create_scrape_log, update_scrape_log
+from scheduler import run_scrape_job, create_scrape_log, update_scrape_log, _cleanup_stale_scrape_logs
 
 
 # ---------------------------------------------------------------------------
@@ -691,3 +691,37 @@ class TestExtractionCircuitBreaker:
         finally:
             for p in patches.values():
                 p.stop()
+
+
+# ---------------------------------------------------------------------------
+# 9. Stale scrape_log cleanup
+# ---------------------------------------------------------------------------
+
+class TestStaleLogCleanup:
+    """Verify stale running scrape_log entries get cleaned up."""
+
+    @patch("scheduler.Database.fetch_all")
+    @patch("scheduler.Database.execute_query")
+    def test_marks_old_running_entries_as_failed(self, mock_exec, mock_fetch_all):
+        mock_fetch_all.return_value = [
+            {"id": 6, "started_at": "2026-03-19 22:26:31"},
+            {"id": 9, "started_at": "2026-03-23 15:13:20"},
+        ]
+
+        _cleanup_stale_scrape_logs()
+
+        assert mock_exec.call_count == 2
+        for c in mock_exec.call_args_list:
+            query = c[0][0]
+            params = c[0][1]
+            assert "UPDATE scrape_log" in query
+            assert "failed" in params
+
+    @patch("scheduler.Database.fetch_all")
+    @patch("scheduler.Database.execute_query")
+    def test_skips_when_none_stale(self, mock_exec, mock_fetch_all):
+        mock_fetch_all.return_value = []
+
+        _cleanup_stale_scrape_logs()
+
+        mock_exec.assert_not_called()
