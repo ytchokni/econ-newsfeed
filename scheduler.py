@@ -142,8 +142,15 @@ def _enrich_with_openalex() -> None:
         logger.error("OpenAlex enrichment failed: %s: %s", type(e).__name__, e)
 
 
+_EXTRACTION_CIRCUIT_BREAKER_THRESHOLD = 10
+
+
 def run_scrape_job() -> None:
-    """Orchestrates a full scraping cycle. Skips if another scrape is running."""
+    """Orchestrates a full scraping cycle: fetch all HTML first, then extract.
+
+    Fetch always completes. Extraction circuit-breaks after
+    _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD consecutive failures (e.g. quota exhausted).
+    """
     global _lock_conn
     lock_conn = _acquire_db_lock()
     if lock_conn is None:
@@ -151,7 +158,6 @@ def run_scrape_job() -> None:
         return
     _lock_conn = lock_conn
 
-    # Clear stale robots.txt cache from previous cycle
     HTMLFetcher._robots_cache.clear()
 
     log_id = None
@@ -161,8 +167,11 @@ def run_scrape_job() -> None:
         urls_checked = 0
         urls_changed = 0
         pubs_extracted = 0
+        extraction_errors = 0
 
+        # ── PHASE 1: Fetch all HTML ──────────────────────────────────
         scrape_start = time.time()
+        changed_urls = []
 
         for url_row in urls:
             url_id = url_row['id']
@@ -170,10 +179,8 @@ def run_scrape_job() -> None:
             url = url_row['url']
             page_type = url_row['page_type']
             urls_checked += 1
-            url_start = time.time()
 
             try:
-                # Get old text before fetch overwrites it (upsert)
                 old_text = HTMLFetcher.get_previous_text(url_id)
                 is_first_scrape = old_text is None
 
@@ -184,46 +191,86 @@ def run_scrape_job() -> None:
 
                 if changed:
                     urls_changed += 1
-                    new_text = HTMLFetcher.get_latest_text(url_id)
+                    changed_urls.append({
+                        'url_id': url_id,
+                        'researcher_id': researcher_id,
+                        'url': url,
+                        'page_type': page_type,
+                        'old_text': old_text,
+                        'is_first_scrape': is_first_scrape,
+                    })
 
-                    # Use diff if old content exists, otherwise full text
-                    extraction_text = HTMLFetcher.compute_diff(old_text, new_text) if old_text else new_text
+            except Exception as e:
+                logger.error("Error fetching URL %s (id=%s): %s", url, url_id, e)
+                continue
 
-                    if extraction_text:
+        fetch_phase_s = time.time() - scrape_start
+        logger.info(f"Fetch phase done: {fetch_phase_s:.1f}s — {urls_checked} checked, {urls_changed} changed")
+
+        # ── PHASE 2: Extract publications from changed URLs ──────────
+        extract_start = time.time()
+        consecutive_failures = 0
+        circuit_broken = False
+
+        for idx, entry in enumerate(changed_urls):
+            url_id = entry['url_id']
+            researcher_id = entry['researcher_id']
+            url = entry['url']
+            page_type = entry['page_type']
+            old_text = entry['old_text']
+            is_first_scrape = entry['is_first_scrape']
+
+            if circuit_broken:
+                break
+
+            try:
+                new_text = HTMLFetcher.get_latest_text(url_id)
+                extraction_text = HTMLFetcher.compute_diff(old_text, new_text) if old_text else new_text
+
+                if extraction_text:
+                    t0 = time.time()
+                    pubs = Publication.extract_publications(extraction_text, url, scrape_log_id=log_id)
+                    extract_ms = (time.time() - t0) * 1000
+                    logger.info(f"  LLM extract {url} — {extract_ms:.0f}ms, {len(pubs)} pubs")
+
+                    if pubs:
+                        consecutive_failures = 0
+
                         t0 = time.time()
-                        pubs = Publication.extract_publications(extraction_text, url, scrape_log_id=log_id)
-                        extract_ms = (time.time() - t0) * 1000
-                        logger.info(f"  LLM extract — {extract_ms:.0f}ms, {len(pubs)} pubs")
+                        Publication.save_publications(url, pubs, is_seed=is_first_scrape)
+                        save_ms = (time.time() - t0) * 1000
+                        logger.info(f"  save_publications — {save_ms:.0f}ms")
 
-                        if pubs:
-                            t0 = time.time()
-                            Publication.save_publications(url, pubs, is_seed=is_first_scrape)
-                            save_ms = (time.time() - t0) * 1000
-                            logger.info(f"  save_publications — {save_ms:.0f}ms")
+                        t0_recon = time.time()
+                        reconcile_title_renames(url, pubs)
+                        recon_ms = (time.time() - t0_recon) * 1000
+                        logger.info(f"  title reconciliation — {recon_ms:.0f}ms")
 
-                            # Reconcile title renames before snapshotting
-                            t0_recon = time.time()
-                            reconcile_title_renames(url, pubs)
-                            recon_ms = (time.time() - t0_recon) * 1000
-                            logger.info(f"  title reconciliation — {recon_ms:.0f}ms")
+                        pubs_extracted += len(pubs)
 
-                            pubs_extracted += len(pubs)
+                        t0 = time.time()
+                        match_and_save_paper_links(url_id, pubs)
+                        links_ms = (time.time() - t0) * 1000
+                        logger.info(f"  paper links — {links_ms:.0f}ms")
 
-                            # Extract and match trusted links
-                            t0 = time.time()
-                            match_and_save_paper_links(url_id, pubs)
-                            links_ms = (time.time() - t0) * 1000
-                            logger.info(f"  paper links — {links_ms:.0f}ms")
+                        t0 = time.time()
+                        append_snapshots_for_pubs(pubs, url)
+                        snapshot_ms = (time.time() - t0) * 1000
+                        logger.info(f"  paper snapshots — {snapshot_ms:.0f}ms")
+                    else:
+                        consecutive_failures += 1
+                        extraction_errors += 1
+                        if consecutive_failures >= _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD:
+                            remaining = len(changed_urls) - idx - 1
+                            logger.warning(
+                                "Circuit breaker: %d consecutive extraction failures — "
+                                "stopping extraction (likely LLM quota exhausted). "
+                                "Remaining %d changed URLs will be extracted next run.",
+                                consecutive_failures, remaining,
+                            )
+                            circuit_broken = True
 
-                            # Append paper snapshots for versioning
-                            t0 = time.time()
-                            append_snapshots_for_pubs(pubs, url)
-                            snapshot_ms = (time.time() - t0) * 1000
-                            logger.info(f"  paper snapshots — {snapshot_ms:.0f}ms")
-
-                # Extract description from HOME pages using append-only versioning
-                # Only re-extract when content actually changed to avoid unnecessary LLM calls
-                if page_type == "HOME" and changed:
+                if page_type == "HOME" and not circuit_broken:
                     page_text = HTMLFetcher.get_latest_text(url_id)
                     if page_text:
                         t0 = time.time()
@@ -241,25 +288,26 @@ def run_scrape_job() -> None:
                                 researcher_id, position, affiliation, description, source_url=url
                             )
 
-                url_ms = (time.time() - url_start) * 1000
-                logger.info(f"  total — {url_ms:.0f}ms")
-
             except Exception as e:
-                logger.error("Error processing URL %s (id=%s): %s", url, url_id, e)
+                logger.error("Error extracting URL %s (id=%s): %s", url, url_id, e)
+                extraction_errors += 1
                 continue
 
-        fetch_phase_s = time.time() - scrape_start
-        logger.info(f"Fetch phase done: {fetch_phase_s:.1f}s for {urls_checked} URLs")
+        extract_phase_s = time.time() - extract_start
+        logger.info(f"Extract phase done: {extract_phase_s:.1f}s — {pubs_extracted} pubs, {extraction_errors} errors")
 
-        # Validate draft URLs after extraction phase
         t0 = time.time()
         _validate_draft_urls()
         validate_s = time.time() - t0
         logger.info(f"Draft URL validation: {validate_s:.1f}s")
 
+        error_msg = None
+        if circuit_broken:
+            error_msg = f"Extraction circuit-breaker tripped after {_EXTRACTION_CIRCUIT_BREAKER_THRESHOLD} consecutive failures"
+
         total_s = time.time() - scrape_start
-        update_scrape_log(log_id, "completed", urls_checked, urls_changed, pubs_extracted)
-        logger.info(f"Scrape completed: {urls_checked} checked, {urls_changed} changed, {pubs_extracted} extracted — {total_s:.1f}s total")
+        update_scrape_log(log_id, "completed", urls_checked, urls_changed, pubs_extracted, extraction_errors, error_msg)
+        logger.info(f"Scrape completed: {urls_checked} checked, {urls_changed} changed, {pubs_extracted} extracted, {extraction_errors} errors — {total_s:.1f}s total")
 
     except Exception as e:
         logger.error("Scrape job failed: %s: %s", type(e).__name__, e)
@@ -269,13 +317,11 @@ def run_scrape_job() -> None:
         _release_db_lock(lock_conn)
         _lock_conn = None
 
-    # Enrich after releasing lock — doesn't need exclusivity and can be slow
     t0 = time.time()
     _enrich_with_openalex()
     enrich_s = time.time() - t0
     logger.info(f"OpenAlex enrichment: {enrich_s:.1f}s")
 
-    # Merge duplicate papers identified by shared DOI/OpenAlex ID
     t0 = time.time()
     try:
         from paper_merge import merge_duplicate_papers
