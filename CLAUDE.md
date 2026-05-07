@@ -53,12 +53,15 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build  #
 
 ### Pipeline Details
 
-**`make scrape`** runs the full scheduler job (`scheduler.run_scrape_job()`):
-1. **Fetch phase**: Download HTML for all researcher URLs, skip unchanged (content hash)
-2. **Extract phase**: LLM extracts publications from changed pages, saves to `papers`
-3. **Link matching**: Extract trusted-domain links from HTML, match to papers via DOI resolution (regex/Crossref) or anchor text, save to `paper_links`
-4. **Draft URL validation**: HEAD-request validation of `draft_url` fields
-5. **Enrichment phase** (after releasing scrape lock): Enrich unenriched papers via OpenAlex — DOI lookup first (from `paper_links`), title search fallback (published papers only)
+**`make scrape`** runs the full scheduler job (`scheduler.run_scrape_job()`). Fetch and extract run as **separate phases** — fetch always completes even if the LLM provider is down:
+1. **Fetch phase** (all URLs): Download HTML for all researcher URLs, skip unchanged (content hash). Collects list of changed URLs.
+2. **Extract phase** (changed URLs only): LLM extracts publications from changed pages, saves to `papers`. Includes link matching, title reconciliation, and paper snapshots.
+3. **Draft URL validation**: HEAD-request validation of `draft_url` fields
+4. **Enrichment phase** (after releasing scrape lock): Enrich unenriched papers via OpenAlex — DOI lookup first (from `paper_links`), title search fallback (published papers only)
+
+**Extraction circuit breaker:** If 10 consecutive URLs return empty extraction results (e.g. LLM quota exhausted), the extraction phase stops early. Fetched HTML is preserved — extraction will resume on the next run for URLs where `content_hash ≠ extracted_hash`. The `scrape_log.extraction_errors` column tracks how many URLs failed extraction per run.
+
+**Stale scrape_log cleanup:** On scheduler start, any `scrape_log` entries stuck in `'running'` for >24 hours are automatically marked as `'failed'`.
 
 **`make fetch`** runs stage 1 only (download HTML). Extraction is handled exclusively by `make scrape` (scheduler), which uses diff-based extraction — the only path that correctly creates feed events.
 

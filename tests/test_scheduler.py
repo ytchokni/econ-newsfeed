@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 import scheduler
-from scheduler import run_scrape_job, create_scrape_log, update_scrape_log
+from scheduler import run_scrape_job, create_scrape_log, update_scrape_log, _cleanup_stale_scrape_logs
 
 
 # ---------------------------------------------------------------------------
@@ -67,7 +67,7 @@ class TestRunScrapeJobHappyPath:
 
             mocks["acquire"].assert_called_once()
             mocks["create_log"].assert_called_once()
-            mocks["update_log"].assert_called_once_with(42, "completed", 0, 0, 0)
+            mocks["update_log"].assert_called_once_with(42, "completed", 0, 0, 0, 0, None)
             mocks["validate"].assert_called_once()
             mocks["release"].assert_called_once()
         finally:
@@ -103,7 +103,7 @@ class TestRunScrapeJobHappyPath:
                 url_row["url"], pubs, is_seed=True,
             )
             mocks["paper_snap"].assert_called_once_with(pubs, url_row["url"])
-            mocks["update_log"].assert_called_once_with(42, "completed", 1, 1, 1)
+            mocks["update_log"].assert_called_once_with(42, "completed", 1, 1, 1, 0, None)
         finally:
             for p in patches.values():
                 p.stop()
@@ -255,7 +255,7 @@ class TestURLProcessing:
             mocks["fetch"].assert_called_once()
             mocks["get_latest"].assert_not_called()
             mocks["extract_pubs"].assert_not_called()
-            mocks["update_log"].assert_called_once_with(42, "completed", 1, 0, 0)
+            mocks["update_log"].assert_called_once_with(42, "completed", 1, 0, 0, 0, None)
         finally:
             for p in patches.values():
                 p.stop()
@@ -342,7 +342,7 @@ class TestURLProcessing:
             # fetch should be called for url2 even though url1 failed
             assert mocks["fetch"].call_count == 1
             # Log should show completed (per-URL errors are caught)
-            mocks["update_log"].assert_called_once_with(42, "completed", 2, 0, 0)
+            mocks["update_log"].assert_called_once_with(42, "completed", 2, 0, 0, 0, None)
         finally:
             for p in patches.values():
                 p.stop()
@@ -499,3 +499,223 @@ class TestUpdateScrapeLog:
         # prompt_tokens_total=0, completion_tokens_total=0
         assert 0 in params
         assert "kaboom" in params
+
+    @patch("scheduler.Database.execute_query")
+    @patch("scheduler.Database.fetch_one", return_value={
+        "prompt_total": 0, "completion_total": 0,
+    })
+    def test_extraction_errors_parameter(self, mock_fetch, mock_exec):
+        """extraction_errors is written to the scrape_log query."""
+        update_scrape_log(42, "completed", extraction_errors=5)
+        params = mock_exec.call_args[0][1]
+        assert 5 in params
+
+
+# ---------------------------------------------------------------------------
+# 7. Phase separation — fetch before extract
+# ---------------------------------------------------------------------------
+
+class TestPhaseSeparation:
+    """Verify all URLs are fetched before any extraction begins."""
+
+    def test_fetch_runs_before_any_extraction(self):
+        """All fetch calls complete before any extract_publications call."""
+        url_rows = [
+            _make_url_row(url_id=1, url="http://a.com"),
+            _make_url_row(url_id=2, url="http://b.com"),
+        ]
+        patches = _base_patches()
+        patches["get_urls"] = patch(
+            "scheduler.Researcher.get_all_researcher_urls", return_value=url_rows,
+        )
+        patches["fetch"] = patch(
+            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True,
+        )
+        patches["get_latest"] = patch(
+            "scheduler.HTMLFetcher.get_latest_text", return_value="text",
+        )
+        patches["extract_pubs"] = patch(
+            "scheduler.Publication.extract_publications",
+            return_value=[{"title": "P", "status": "published"}],
+        )
+
+        call_order = []
+
+        mocks = {name: p.start() for name, p in patches.items()}
+        try:
+            orig_fetch = mocks["fetch"].side_effect
+            mocks["fetch"].side_effect = lambda *a, **kw: (call_order.append("fetch"), True)[1]
+            mocks["extract_pubs"].side_effect = lambda *a, **kw: (call_order.append("extract"), [{"title": "P"}])[1]
+
+            run_scrape_job()
+
+            fetch_indices = [i for i, c in enumerate(call_order) if c == "fetch"]
+            extract_indices = [i for i, c in enumerate(call_order) if c == "extract"]
+            assert len(fetch_indices) > 0
+            assert len(extract_indices) > 0
+            assert max(fetch_indices) < min(extract_indices)
+        finally:
+            for p in patches.values():
+                p.stop()
+
+    def test_all_urls_fetched_when_extraction_fails(self):
+        """All URLs are fetched even when extraction returns empty for all."""
+        url_rows = [
+            _make_url_row(url_id=i, url=f"http://r{i}.com")
+            for i in range(1, 6)
+        ]
+        patches = _base_patches()
+        patches["get_urls"] = patch(
+            "scheduler.Researcher.get_all_researcher_urls", return_value=url_rows,
+        )
+        patches["fetch"] = patch(
+            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True,
+        )
+        patches["get_latest"] = patch(
+            "scheduler.HTMLFetcher.get_latest_text", return_value="text",
+        )
+        mocks = {name: p.start() for name, p in patches.items()}
+        try:
+            run_scrape_job()
+            assert mocks["fetch"].call_count == 5
+        finally:
+            for p in patches.values():
+                p.stop()
+
+
+# ---------------------------------------------------------------------------
+# 8. Extraction circuit breaker
+# ---------------------------------------------------------------------------
+
+class TestExtractionCircuitBreaker:
+    """Verify circuit breaker stops extraction after consecutive failures."""
+
+    def test_stops_after_threshold_consecutive_failures(self):
+        url_rows = [
+            _make_url_row(url_id=i, url=f"http://r{i}.com")
+            for i in range(1, 21)
+        ]
+        patches = _base_patches()
+        patches["get_urls"] = patch(
+            "scheduler.Researcher.get_all_researcher_urls", return_value=url_rows,
+        )
+        patches["fetch"] = patch(
+            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True,
+        )
+        patches["get_latest"] = patch(
+            "scheduler.HTMLFetcher.get_latest_text", return_value="text",
+        )
+        # extract always returns empty (quota failure)
+        patches["extract_pubs"] = patch(
+            "scheduler.Publication.extract_publications", return_value=[],
+        )
+        mocks = {name: p.start() for name, p in patches.items()}
+        try:
+            from scheduler import _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD
+            run_scrape_job()
+
+            # All 20 fetched
+            assert mocks["fetch"].call_count == 20
+            # Extraction stops at threshold
+            assert mocks["extract_pubs"].call_count == _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD
+        finally:
+            for p in patches.values():
+                p.stop()
+
+    def test_resets_on_successful_extraction(self):
+        """A successful extraction resets the consecutive failure counter."""
+        url_rows = [
+            _make_url_row(url_id=i, url=f"http://r{i}.com")
+            for i in range(1, 21)
+        ]
+        patches = _base_patches()
+        patches["get_urls"] = patch(
+            "scheduler.Researcher.get_all_researcher_urls", return_value=url_rows,
+        )
+        patches["fetch"] = patch(
+            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True,
+        )
+        patches["get_latest"] = patch(
+            "scheduler.HTMLFetcher.get_latest_text", return_value="text",
+        )
+
+        # Fail 5 times, succeed on 6th, repeat — never hits 10 consecutive
+        call_count = [0]
+        def alternating(*a, **kw):
+            call_count[0] += 1
+            if call_count[0] % 6 == 0:
+                return [{"title": "Paper", "status": "published"}]
+            return []
+
+        patches["extract_pubs"] = patch(
+            "scheduler.Publication.extract_publications", side_effect=alternating,
+        )
+        mocks = {name: p.start() for name, p in patches.items()}
+        try:
+            run_scrape_job()
+            # All 20 extracted (no circuit break)
+            assert mocks["extract_pubs"].call_count == 20
+        finally:
+            for p in patches.values():
+                p.stop()
+
+    def test_records_error_message_when_tripped(self):
+        """Circuit breaker sets error_message on scrape_log."""
+        url_rows = [
+            _make_url_row(url_id=i, url=f"http://r{i}.com")
+            for i in range(1, 15)
+        ]
+        patches = _base_patches()
+        patches["get_urls"] = patch(
+            "scheduler.Researcher.get_all_researcher_urls", return_value=url_rows,
+        )
+        patches["fetch"] = patch(
+            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True,
+        )
+        patches["get_latest"] = patch(
+            "scheduler.HTMLFetcher.get_latest_text", return_value="text",
+        )
+        patches["extract_pubs"] = patch(
+            "scheduler.Publication.extract_publications", return_value=[],
+        )
+        mocks = {name: p.start() for name, p in patches.items()}
+        try:
+            from scheduler import _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD
+            run_scrape_job()
+
+            mocks["update_log"].assert_called_once()
+            args = mocks["update_log"].call_args[0]
+            assert args[1] == "completed"  # status still completed (fetch did finish)
+            assert args[5] == _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD  # extraction_errors
+            assert "circuit-breaker" in args[6].lower()  # error_message
+        finally:
+            for p in patches.values():
+                p.stop()
+
+
+# ---------------------------------------------------------------------------
+# 9. Stale scrape_log cleanup
+# ---------------------------------------------------------------------------
+
+class TestStaleLogCleanup:
+    """Verify stale running scrape_log entries get cleaned up."""
+
+    @patch("scheduler.Database.execute_query")
+    def test_marks_old_running_entries_as_failed(self, mock_exec):
+        mock_exec.return_value = 2
+
+        _cleanup_stale_scrape_logs()
+
+        mock_exec.assert_called_once()
+        query = mock_exec.call_args[0][0]
+        assert "UPDATE scrape_log" in query
+        assert "status = 'failed'" in query
+        assert "INTERVAL %s HOUR" in query
+
+    @patch("scheduler.Database.execute_query")
+    def test_skips_when_none_stale(self, mock_exec):
+        mock_exec.return_value = 0
+
+        _cleanup_stale_scrape_logs()
+
+        mock_exec.assert_called_once()
