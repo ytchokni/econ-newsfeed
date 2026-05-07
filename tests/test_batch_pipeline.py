@@ -1,7 +1,54 @@
 """Tests for batch pipeline data integrity — validation and snapshots."""
 import unittest
+import json as json_module
+from unittest.mock import patch, MagicMock, ANY
 
 from publication import validate_publication, PublicationExtraction
+
+
+class TestBatchSubmitFileUpload(unittest.TestCase):
+    """batch_submit must use genai SDK for file upload, OpenAI SDK for batch create."""
+
+    @patch("main.Database")
+    @patch("main.Researcher")
+    @patch("main.HTMLFetcher")
+    @patch("main.Publication")
+    def test_uses_genai_for_upload_and_openai_for_batch_create(
+        self, mock_pub, mock_fetcher, mock_researcher, mock_db,
+    ):
+        mock_researcher.get_all_researcher_urls.return_value = [
+            {"id": 1, "researcher_id": 10, "url": "http://example.com", "page_type": "RESEARCH"},
+        ]
+        mock_fetcher.needs_extraction.return_value = True
+        mock_fetcher.get_latest_text.return_value = "some text"
+        mock_pub.build_extraction_prompt.return_value = "extract this"
+        mock_db.fetch_all.return_value = []  # no pending batches
+
+        mock_genai = MagicMock()
+        mock_uploaded = MagicMock()
+        mock_uploaded.name = "files/abc123"
+        mock_genai.files.upload.return_value = mock_uploaded
+
+        mock_openai = MagicMock()
+        mock_batch = MagicMock()
+        mock_batch.id = "batch_xyz"
+        mock_openai.batches.create.return_value = mock_batch
+
+        with patch("llm_client.get_genai_client", return_value=mock_genai), \
+             patch("llm_client.get_client", return_value=mock_openai), \
+             patch("llm_client.get_model", return_value="gemini-2.5-flash"):
+            from main import batch_submit
+            batch_submit()
+
+        # genai SDK used for file upload
+        mock_genai.files.upload.assert_called_once()
+
+        # OpenAI SDK used for batch create
+        mock_openai.batches.create.assert_called_once_with(
+            input_file_id="files/abc123",
+            endpoint="/v1/chat/completions",
+            completion_window="24h",
+        )
 
 
 class TestBatchValidationGap(unittest.TestCase):

@@ -65,14 +65,16 @@ def classify_jel() -> None:
 
 
 def batch_submit() -> None:
-    """Submit a batch job to the LLM provider's Batch API for all URLs needing extraction."""
-    from llm_client import get_client, get_model, build_json_schema_format
+    """Submit a batch job to the Gemini Batch API for all URLs needing extraction."""
+    from llm_client import get_client, get_genai_client, get_model, build_json_schema_format
+    from google.genai import types
     import json
     import tempfile
     from datetime import datetime, timezone
     from publication import PublicationExtractionList
 
     client = get_client()
+    genai_client = get_genai_client()
     model = get_model()
 
     researcher_urls = Researcher.get_all_researcher_urls()
@@ -126,11 +128,13 @@ def batch_submit() -> None:
         tmp_path = tmp.name
 
     try:
-        with open(tmp_path, "rb") as f:
-            uploaded = client.files.create(file=f, purpose="batch")
+        uploaded = genai_client.files.upload(
+            file=tmp_path,
+            config=types.UploadFileConfig(display_name="batch-extract", mime_type="application/jsonl"),
+        )
 
         batch = client.batches.create(
-            input_file_id=uploaded.id,
+            input_file_id=uploaded.name,
             endpoint="/v1/chat/completions",
             completion_window="24h",
         )
@@ -139,7 +143,7 @@ def batch_submit() -> None:
             """INSERT INTO batch_jobs
                (openai_batch_id, input_file_id, status, url_count, created_at)
                VALUES (%s, %s, 'submitted', %s, %s)""",
-            (batch.id, uploaded.id, len(lines), datetime.now(timezone.utc)),
+            (batch.id, uploaded.name, len(lines), datetime.now(timezone.utc)),
         )
 
         logging.info("Batch submitted: %s (%d URLs)", batch.id, len(lines))
