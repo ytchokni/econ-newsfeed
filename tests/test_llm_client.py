@@ -1,5 +1,7 @@
 """Unit tests for llm_client — Google AI Studio-backed OpenAI-compatible client."""
 import os
+import unittest
+import unittest.mock
 
 os.environ.setdefault("DB_HOST", "localhost")
 os.environ.setdefault("DB_USER", "test")
@@ -185,3 +187,21 @@ class TestExtractJson:
         assert first_call.kwargs["messages"][0]["content"] == "original prompt text"
         assert "did not match the required schema" in second_call.kwargs["messages"][0]["content"]
         assert "original prompt text" in second_call.kwargs["messages"][0]["content"]
+
+
+class TestGetGenaiClient(unittest.TestCase):
+    def test_returns_genai_client(self):
+        import llm_client
+        llm_client._genai_client = None
+        with unittest.mock.patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key-123"}):
+            client = llm_client.get_genai_client()
+        from google import genai
+        self.assertIsInstance(client, genai.Client)
+
+    def test_client_is_cached(self):
+        import llm_client
+        llm_client._genai_client = None
+        with unittest.mock.patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key-123"}):
+            c1 = llm_client.get_genai_client()
+            c2 = llm_client.get_genai_client()
+        self.assertIs(c1, c2)
