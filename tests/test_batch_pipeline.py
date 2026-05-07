@@ -51,6 +51,76 @@ class TestBatchSubmitFileUpload(unittest.TestCase):
         )
 
 
+class TestBatchCheckFileDownload(unittest.TestCase):
+    """batch_check must use genai SDK for file download."""
+
+    @patch("main.match_and_save_paper_links")
+    @patch("main.append_snapshots_for_pubs")
+    @patch("main.reconcile_title_renames")
+    @patch("main.Publication")
+    @patch("main.HTMLFetcher")
+    @patch("main.Database")
+    def test_uses_genai_for_download(
+        self, mock_db, mock_fetcher, mock_pub, mock_reconcile, mock_snapshots, mock_links,
+    ):
+        # One pending batch
+        mock_db.fetch_all.return_value = [
+            {"id": 1, "openai_batch_id": "batch_abc"},
+        ]
+
+        # OpenAI SDK: batch is completed with an output file
+        mock_openai = MagicMock()
+        mock_batch_obj = MagicMock()
+        mock_batch_obj.status = "completed"
+        mock_batch_obj.output_file_id = "files/output123"
+        mock_openai.batches.retrieve.return_value = mock_batch_obj
+
+        # genai SDK: file download returns JSONL with one valid result
+        result_line = json_module.dumps({
+            "custom_id": "url_1",
+            "response": {
+                "body": {
+                    "usage": {"prompt_tokens": 100, "completion_tokens": 50},
+                    "choices": [{
+                        "message": {
+                            "content": json_module.dumps({
+                                "publications": [{
+                                    "title": "Monetary Policy and Exchange Rates",
+                                    "authors": [["John", "Smith"]],
+                                    "year": "2024",
+                                    "venue": "AER",
+                                    "status": "published",
+                                    "draft_url": None,
+                                    "abstract": "We study monetary policy.",
+                                }]
+                            })
+                        }
+                    }],
+                },
+            },
+        })
+        mock_genai = MagicMock()
+        mock_genai.files.download.return_value = result_line.encode("utf-8")
+
+        mock_db.fetch_one.side_effect = [
+            {"url": "http://example.com"},  # url lookup
+            {"total_cost": 0.001},          # cost aggregation
+        ]
+        mock_fetcher.is_first_extraction.return_value = False
+
+        with patch("llm_client.get_genai_client", return_value=mock_genai), \
+             patch("llm_client.get_client", return_value=mock_openai), \
+             patch("llm_client.get_model", return_value="gemini-2.5-flash"):
+            from main import batch_check
+            batch_check()
+
+        # genai SDK used for download
+        mock_genai.files.download.assert_called_once_with(file="files/output123")
+
+        # OpenAI SDK used for batch retrieve
+        mock_openai.batches.retrieve.assert_called_once_with("batch_abc")
+
+
 class TestBatchValidationGap(unittest.TestCase):
     """batch_check must run validate_publication() on each parsed result."""
 

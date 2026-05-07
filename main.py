@@ -161,13 +161,14 @@ class _UsageDict:
 
 def batch_check() -> None:
     """Check pending batch jobs and process completed results."""
-    from llm_client import get_client, get_model
+    from llm_client import get_client, get_genai_client, get_model
     from publication import PublicationExtraction, validate_publication
     from pydantic import ValidationError
     import json
     from datetime import datetime, timezone
 
     client = get_client()
+    genai_client = get_genai_client()
     model = get_model()
 
     pending = Database.fetch_all(
@@ -186,7 +187,8 @@ def batch_check() -> None:
 
         if status == "completed":
             output_file_id = batch.output_file_id
-            content = client.files.content(output_file_id).text
+            content_bytes = genai_client.files.download(file=output_file_id)
+            content = content_bytes.decode("utf-8") if isinstance(content_bytes, bytes) else content_bytes
 
             total_prompt_tokens = 0
             total_completion_tokens = 0
