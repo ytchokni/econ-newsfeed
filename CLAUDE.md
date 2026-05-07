@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Econ Newsfeed monitors economics researchers' personal websites, detects new/changed publications via LLM extraction (OpenAI), and displays them in a chronological newsfeed. Full-stack monorepo: Python backend (FastAPI) + Next.js frontend + MySQL.
+Econ Newsfeed monitors economics researchers' personal websites, detects new/changed publications via LLM extraction (Google AI Studio/Gemini), and displays them in a chronological newsfeed. Full-stack monorepo: Python backend (FastAPI) + Next.js frontend + MySQL.
 
 ## Commands
 
@@ -23,7 +23,7 @@ make reset-db             # Drop and recreate database from scratch
 # Scraping pipeline
 make scrape               # Full pipeline: fetch HTML → LLM extract → save → link match → enrich
 make fetch                # Stage 1: Download HTML from researcher URLs (hash-based change detection)
-make batch-submit         # Stage 2: Submit changed URLs to OpenAI Batch API for extraction
+make batch-submit         # Stage 2: Submit changed URLs to Gemini Batch API for extraction
 make batch-check          # Stage 3: Process completed batch results → save papers, snapshots, links
 
 # Enrichment & classification
@@ -67,7 +67,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build  #
 
 **Granular batch pipeline** (run stages independently):
 1. `make fetch` — Download HTML, detect changes via content hash. Safe to run anytime.
-2. `make batch-submit` — Submit URLs where `content_hash ≠ extracted_hash` to OpenAI Batch API. Requires fetch first.
+2. `make batch-submit` — Submit URLs where `content_hash ≠ extracted_hash` to Gemini Batch API. Requires fetch first.
 3. `make batch-check` — Poll pending batches, process results (save papers, snapshots, links, feed events). Idempotent for completed batches.
 
 Each stage is independently safe. Feed event integrity is protected by `_title_in_previous_snapshot()` and the `_url_has_baseline()` check regardless of which pipeline path is used.
@@ -78,7 +78,7 @@ Each stage is independently safe. Feed event integrity is protected by `_title_i
 
 ```
 Researcher URLs (DB) → HTMLFetcher (fetch + hash-based change detection)
-  → Publication extractor (OpenAI structured outputs) → Database (papers, feed_events)
+  → Publication extractor (Google AI Studio/Gemini structured outputs) → Database (papers, feed_events)
   → Link extractor (trusted-domain links → DOI resolution → paper_links)
   → OpenAlex enrichment (DOI lookup or title search → coauthors, abstracts)
   → FastAPI REST API → Next.js frontend (SWR)
@@ -92,7 +92,8 @@ Researcher URLs (DB) → HTMLFetcher (fetch + hash-based change detection)
 | `database/` | Package with facade class (`Database`) — submodules: `connection.py` (pool), `schema.py` (DDL/migrations), `researchers.py`, `papers.py`, `snapshots.py`, `llm.py`, `admin.py` |
 | `main.py` | CLI entry points for scraping pipeline stages |
 | `html_fetcher.py` | Web scraper — per-domain rate limiting, robots.txt compliance, content hashing for change detection |
-| `publication.py` | OpenAI extraction — Pydantic structured outputs, title dedup via SHA-256 hash, Batch API support |
+| `publication.py` | LLM extraction (Google AI Studio/Gemini) — Pydantic structured outputs, title dedup via SHA-256 hash |
+| `llm_client.py` | Google AI Studio LLM client — OpenAI-compatible SDK, guided JSON via `response_format`, retry with reprompt |
 | `link_extractor.py` | Trusted-domain link extraction from HTML, DOI-based and anchor text matching to papers |
 | `doi_resolver.py` | DOI resolution from publisher URLs — regex extraction + Crossref PII-to-DOI lookup |
 | `openalex.py` | OpenAlex API client — DOI lookup, title search, coauthor/abstract enrichment, researcher ID backfill |
@@ -124,7 +125,7 @@ No ORM — direct parameterized SQL via `mysql-connector-python`. All code impor
 - `authorship` — researcher↔paper links with `author_order`
 - `researchers` — includes `openalex_author_id` for deterministic disambiguation (skips LLM)
 - `openalex_coauthors` — coauthor data from OpenAlex enrichment
-- `batch_jobs` / `llm_usage` — OpenAI cost tracking
+- `batch_jobs` / `llm_usage` — LLM cost tracking
 
 All foreign keys use `ON DELETE CASCADE`. Tables use `utf8mb4` charset.
 
@@ -158,7 +159,7 @@ git pull origin main && docker compose -f docker-compose.yml -f docker-compose.p
 
 ## Configuration
 
-Required env vars: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `OPENAI_API_KEY`, `SCRAPE_API_KEY`. See `.env.example` for all options with defaults.
+Required env vars: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `GOOGLE_API_KEY`, `SCRAPE_API_KEY`. LLM model selection via `LLM_MODEL` (default: `gemini-2.5-flash`). See `.env.example` for all options with defaults.
 
 `ADMIN_PASSWORD` enables the `/admin` dashboard (must also be set in `app/.env.local` for local dev and as a Vercel env var for production). Auth uses HMAC-signed cookies with 7-day expiry.
 

@@ -19,11 +19,15 @@ apscheduler = "^3.10"
 pydantic = "^2.10"
 slowapi = "^0.1"
 ftfy = "^6.3.1"
+google-genai = "^1.75.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.0"
 httpx = "^0.28"
 matplotlib = "^3.10.8"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
 
 [build-system]
 requires = ["poetry-core"]

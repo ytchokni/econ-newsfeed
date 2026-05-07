@@ -1,10 +1,10 @@
-"""JEL code classification via OpenAI structured outputs.
+"""JEL code classification via LLM structured outputs.
 
 Reads researcher descriptions and classifies them into standard
 JEL (Journal of Economic Literature) codes.
 """
 from database import Database
-from openai_client import get_client, get_model
+from llm_client import extract_json, get_model
 from pydantic import BaseModel, field_validator
 import logging
 
@@ -42,7 +42,7 @@ class JelClassification(BaseModel):
 
 
 class JelClassificationResult(BaseModel):
-    """Wrapper for structured output — OpenAI requires a top-level object."""
+    """Wrapper for structured output — top-level JSON must be an object."""
     jel_codes: list[JelClassification]
 
 
@@ -73,55 +73,35 @@ def classify_researcher(
     last_name: str,
     description: str,
 ) -> list[str]:
-    """Use OpenAI to classify a researcher into JEL codes.
+    """Use the configured LLM to classify a researcher into JEL codes.
 
     Returns a list of JEL code strings (e.g. ["J", "F"]).
     """
     prompt = build_classification_prompt(first_name, last_name, description)
     model = get_model()
     logging.info(
-        "Classifying %s %s (id=%d) into JEL codes using OpenAI (%s)",
+        "Classifying %s %s (id=%d) into JEL codes using LLM (%s)",
         first_name, last_name, researcher_id, model,
     )
 
-    try:
-        chat_completion = get_client().beta.chat.completions.parse(
-            messages=[{"role": "user", "content": prompt}],
-            model=model,
-            response_format=JelClassificationResult,
-        )
+    result = extract_json(prompt, JelClassificationResult)
+
+    if result.usage is not None:
         Database.log_llm_usage(
-            "jel_classification",
-            model,
-            chat_completion.usage,
+            "jel_classification", model, result.usage,
             researcher_id=researcher_id,
         )
 
-        message = chat_completion.choices[0].message
-        if message.refusal:
-            logging.warning(
-                "Model refused JEL classification for %s %s: %s",
-                first_name, last_name, message.refusal,
-            )
-            return []
-
-        result = message.parsed
-        if result is None:
-            logging.error(
-                "Failed to parse JEL structured output for %s %s",
-                first_name, last_name,
-            )
-            return []
-
-        codes = [c.code for c in result.jel_codes]
-        logging.info(
-            "Classified %s %s → %s",
-            first_name, last_name, ", ".join(codes) or "(none)",
-        )
-        return codes
-    except Exception as e:
-        logging.error(
-            "Error in OpenAI JEL classification for %s %s: %s: %s",
-            first_name, last_name, type(e).__name__, e,
+    if result.parsed is None:
+        logging.warning(
+            "JEL classification returned no parsed result for %s %s",
+            first_name, last_name,
         )
         return []
+
+    codes = [c.code for c in result.parsed.jel_codes]
+    logging.info(
+        "Classified %s %s → %s",
+        first_name, last_name, ", ".join(codes) or "(none)",
+    )
+    return codes

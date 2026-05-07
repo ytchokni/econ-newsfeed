@@ -65,13 +65,16 @@ def classify_jel() -> None:
 
 
 def batch_submit() -> None:
-    """Submit a batch job to the OpenAI Batch API for all URLs needing extraction."""
-    from openai_client import get_client, get_model
+    """Submit a batch job to the Gemini Batch API for all URLs needing extraction."""
+    from llm_client import get_client, get_genai_client, get_model, build_json_schema_format
+    from google.genai import types
     import json
     import tempfile
     from datetime import datetime, timezone
+    from publication import PublicationExtractionList
 
     client = get_client()
+    genai_client = get_genai_client()
     model = get_model()
 
     researcher_urls = Researcher.get_all_researcher_urls()
@@ -108,6 +111,8 @@ def batch_submit() -> None:
             "body": {
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
+                "response_format": build_json_schema_format(PublicationExtractionList),
+                "max_tokens": 8000,
             },
         }
         lines.append(json.dumps(request))
@@ -123,11 +128,13 @@ def batch_submit() -> None:
         tmp_path = tmp.name
 
     try:
-        with open(tmp_path, "rb") as f:
-            uploaded = client.files.create(file=f, purpose="batch")
+        uploaded = genai_client.files.upload(
+            file=tmp_path,
+            config=types.UploadFileConfig(display_name="batch-extract", mime_type="application/jsonl"),
+        )
 
         batch = client.batches.create(
-            input_file_id=uploaded.id,
+            input_file_id=uploaded.name,
             endpoint="/v1/chat/completions",
             completion_window="24h",
         )
@@ -136,7 +143,7 @@ def batch_submit() -> None:
             """INSERT INTO batch_jobs
                (openai_batch_id, input_file_id, status, url_count, created_at)
                VALUES (%s, %s, 'submitted', %s, %s)""",
-            (batch.id, uploaded.id, len(lines), datetime.now(timezone.utc)),
+            (batch.id, uploaded.name, len(lines), datetime.now(timezone.utc)),
         )
 
         logging.info("Batch submitted: %s (%d URLs)", batch.id, len(lines))
@@ -154,13 +161,14 @@ class _UsageDict:
 
 def batch_check() -> None:
     """Check pending batch jobs and process completed results."""
-    from openai_client import get_client, get_model
-    from publication import PublicationExtraction
+    from llm_client import get_client, get_genai_client, get_model
+    from publication import PublicationExtraction, validate_publication
     from pydantic import ValidationError
     import json
     from datetime import datetime, timezone
 
     client = get_client()
+    genai_client = get_genai_client()
     model = get_model()
 
     pending = Database.fetch_all(
@@ -179,7 +187,8 @@ def batch_check() -> None:
 
         if status == "completed":
             output_file_id = batch.output_file_id
-            content = client.files.content(output_file_id).text
+            content_bytes = genai_client.files.download(file=output_file_id)
+            content = content_bytes.decode("utf-8") if isinstance(content_bytes, bytes) else content_bytes
 
             total_prompt_tokens = 0
             total_completion_tokens = 0
@@ -217,6 +226,7 @@ def batch_check() -> None:
                 raw_response = choices[0].get("message", {}).get("content", "")
                 if not raw_response:
                     continue
+                # Strip markdown fences if present (LLM sometimes wraps output despite schema guidance)
                 stripped = raw_response.strip()
                 if stripped.startswith("```"):
                     stripped = stripped.split("\n", 1)[1] if "\n" in stripped else stripped
@@ -228,7 +238,7 @@ def batch_check() -> None:
                 except json.JSONDecodeError as e:
                     logging.warning(f"Batch result not valid JSON for url_id={url_id}: {e}")
                     continue
-                # LLM may return a bare list or a dict with a 'publications' key
+                # Schema produces {"publications": [...]} — unwrap to the bare list
                 if isinstance(parsed, dict) and "publications" in parsed:
                     parsed = parsed["publications"]
                 if not isinstance(parsed, list):
@@ -241,12 +251,13 @@ def batch_check() -> None:
                     try:
                         pub = PublicationExtraction(**item)
                         d = pub.model_dump()
-                        if validate_publication(d):
-                            validated.append(d)
-                        else:
-                            logging.info("Batch validation dropped: %s", d.get("title", "<no title>"))
                     except (ValidationError, TypeError) as e:
                         logging.warning(f"Rejected malformed batch publication: {e}")
+                        continue
+                    if validate_publication(d):
+                        validated.append(d)
+                    else:
+                        logging.info("Batch validation dropped: %s", d.get("title", "<no title>"))
 
                 if validated:
                     is_seed = HTMLFetcher.is_first_extraction(url_id)

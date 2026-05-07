@@ -6,10 +6,10 @@ from datetime import datetime, timezone
 
 from database.connection import execute_query
 
-_LLM_PRICING = {  # (prompt, completion) cost per 1M tokens
-    "gpt-4o-mini": (0.15, 0.60),
-    "gpt-5.4-mini": (0.75, 4.50),
-    "gpt-5.4-nano": (0.20, 1.25),
+# (prompt, completion) cost per 1M tokens — Google AI Studio Gemini 2.5 Flash.
+# Source: https://ai.google.dev/gemini-api/docs/pricing (May 2026).
+_LLM_PRICING = {
+    "gemini-2.5-flash": (0.30, 2.50),
 }
 
 

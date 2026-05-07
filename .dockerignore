@@ -11,7 +11,7 @@
 !link_extractor.py
 !main.py
 !openalex.py
-!openai_client.py
+!llm_client.py
 !publication.py
 !researcher.py
 !encoding_guard.py
