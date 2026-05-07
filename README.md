@@ -2,13 +2,13 @@
 
 Full-stack application that monitors economics researchers' personal websites, detects new publications via LLM-powered extraction, and displays them in a chronological newsfeed.
 
-**Stack:** FastAPI backend, Next.js 14 frontend, MySQL 8, Parasail (Gemma 4 31B).
+**Stack:** FastAPI backend, Next.js 14 frontend, MySQL 8, Google AI Studio (Gemini 2.5 Flash).
 
 ## Quick Start (Docker Compose)
 
 ```bash
 cp .env.example .env
-# Edit .env — set PARASAIL_API_KEY, DB_PASSWORD, MYSQL_ROOT_PASSWORD, SCRAPE_API_KEY
+# Edit .env — set GOOGLE_API_KEY, DB_PASSWORD, MYSQL_ROOT_PASSWORD, SCRAPE_API_KEY
 docker compose up
 ```
 
@@ -41,8 +41,8 @@ Copy `.env.example` and fill in the required values. Key variables:
 
 | Variable | Description |
 |---|---|
-| `PARASAIL_API_KEY` | Parasail API key for LLM inference (required) |
-| `LLM_MODEL` | LLM model ID (default: `google/gemma-4-31b-it`) |
+| `GOOGLE_API_KEY` | Google AI Studio API key (required) |
+| `LLM_MODEL` | LLM model ID (default: `gemini-2.5-flash`) |
 | `DB_PASSWORD` | MySQL application user password (required) |
 | `MYSQL_ROOT_PASSWORD` | MySQL root password (Docker Compose only) |
 | `SCRAPE_API_KEY` | API key for the POST /api/scrape endpoint (must be 16+ characters) |

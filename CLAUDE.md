@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Econ Newsfeed monitors economics researchers' personal websites, detects new/changed publications via LLM extraction (Parasail/Gemma), and displays them in a chronological newsfeed. Full-stack monorepo: Python backend (FastAPI) + Next.js frontend + MySQL.
+Econ Newsfeed monitors economics researchers' personal websites, detects new/changed publications via LLM extraction (Google AI Studio/Gemini), and displays them in a chronological newsfeed. Full-stack monorepo: Python backend (FastAPI) + Next.js frontend + MySQL.
 
 ## Commands
 
@@ -75,7 +75,7 @@ Each stage is independently safe. Feed event integrity is protected by `_title_i
 
 ```
 Researcher URLs (DB) → HTMLFetcher (fetch + hash-based change detection)
-  → Publication extractor (Parasail/Gemma structured outputs) → Database (papers, feed_events)
+  → Publication extractor (Google AI Studio/Gemini structured outputs) → Database (papers, feed_events)
   → Link extractor (trusted-domain links → DOI resolution → paper_links)
   → OpenAlex enrichment (DOI lookup or title search → coauthors, abstracts)
   → FastAPI REST API → Next.js frontend (SWR)
@@ -89,8 +89,8 @@ Researcher URLs (DB) → HTMLFetcher (fetch + hash-based change detection)
 | `database/` | Package with facade class (`Database`) — submodules: `connection.py` (pool), `schema.py` (DDL/migrations), `researchers.py`, `papers.py`, `snapshots.py`, `llm.py`, `admin.py` |
 | `main.py` | CLI entry points for scraping pipeline stages |
 | `html_fetcher.py` | Web scraper — per-domain rate limiting, robots.txt compliance, content hashing for change detection |
-| `publication.py` | LLM extraction (Parasail/Gemma) — Pydantic structured outputs, title dedup via SHA-256 hash |
-| `llm_client.py` | Parasail LLM client — OpenAI-compatible SDK, guided JSON via `response_format`, retry with reprompt |
+| `publication.py` | LLM extraction (Google AI Studio/Gemini) — Pydantic structured outputs, title dedup via SHA-256 hash |
+| `llm_client.py` | Google AI Studio LLM client — OpenAI-compatible SDK, guided JSON via `response_format`, retry with reprompt |
 | `link_extractor.py` | Trusted-domain link extraction from HTML, DOI-based and anchor text matching to papers |
 | `doi_resolver.py` | DOI resolution from publisher URLs — regex extraction + Crossref PII-to-DOI lookup |
 | `openalex.py` | OpenAlex API client — DOI lookup, title search, coauthor/abstract enrichment, researcher ID backfill |
@@ -156,7 +156,7 @@ git pull origin main && docker compose -f docker-compose.yml -f docker-compose.p
 
 ## Configuration
 
-Required env vars: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `PARASAIL_API_KEY`, `SCRAPE_API_KEY`. LLM model selection via `LLM_MODEL` (default: `google/gemma-4-31b-it`). See `.env.example` for all options with defaults.
+Required env vars: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `GOOGLE_API_KEY`, `SCRAPE_API_KEY`. LLM model selection via `LLM_MODEL` (default: `gemini-2.5-flash`). See `.env.example` for all options with defaults.
 
 `ADMIN_PASSWORD` enables the `/admin` dashboard (must also be set in `app/.env.local` for local dev and as a Vercel env var for production). Auth uses HMAC-signed cookies with 7-day expiry.
 
