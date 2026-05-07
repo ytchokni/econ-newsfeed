@@ -83,7 +83,7 @@ class TestBuildClassificationPrompt:
 # ---- LLM extraction tests ----
 
 def _make_llm_completion(jel_codes: list[dict]):
-    """Build a mock OpenAI-compatible chat completion returning JSON content (Parasail/Gemma shape)."""
+    """Build a mock OpenAI-compatible chat completion returning JSON content."""
     import json as _json
     payload = {"jel_codes": jel_codes}
     message = MagicMock()

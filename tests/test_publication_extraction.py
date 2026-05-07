@@ -92,7 +92,7 @@ def _make_pub_dict(**overrides):
 
 
 def _make_llm_completion(publications: list[dict]):
-    """Build a mock OpenAI-compatible chat completion returning JSON content (Parasail/Gemma shape)."""
+    """Build a mock OpenAI-compatible chat completion returning JSON content."""
     import json as _json
     payload = {"publications": publications}
     message = MagicMock()
