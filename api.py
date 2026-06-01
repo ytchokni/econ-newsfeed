@@ -458,9 +458,10 @@ def list_publications(
         raise HTTPException(status_code=400, detail=f"Invalid preset value. Must be one of: {', '.join(sorted(valid_presets))}")
     if event_type and event_type not in VALID_EVENT_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid event_type value '{event_type}'. Must be one of: {', '.join(sorted(VALID_EVENT_TYPES))}")
+    since_dt = None
     if since:
         try:
-            datetime.fromisoformat(since.rstrip("Z"))
+            since_dt = datetime.fromisoformat(since.rstrip("Z"))
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid ?since= value; expected ISO8601 timestamp")
 
@@ -469,7 +470,7 @@ def list_publications(
         rows, total = Database.search_feed_events(
             year=year, researcher_id=researcher_id,
             status_list=status_list or None,
-            since=since, institution_list=institution_list or None,
+            since=since_dt, institution_list=institution_list or None,
             preset=preset, search=search, event_type=event_type,
             jel_code=jel_code, offset=offset, limit=per_page,
         )

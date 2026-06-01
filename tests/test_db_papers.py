@@ -286,16 +286,13 @@ class TestSearchFeedEvents:
         assert "published" in params
         assert "working_paper" in params
 
-    def test_since_filter_parses_iso_and_adds_condition(self):
-        (_, _), mock_fetch = self._call(since="2026-01-01T00:00:00Z")
+    def test_since_filter_adds_condition(self):
+        from datetime import datetime
+        since_dt = datetime(2026, 1, 1)
+        (_, _), mock_fetch = self._call(since=since_dt)
         sql, params = mock_fetch.call_args[0]
         assert "fe.created_at >= %s" in sql
-
-    def test_since_invalid_raises_value_error(self):
-        from database.papers import search_feed_events
-        with patch("database.papers.fetch_all", return_value=[]):
-            with pytest.raises(ValueError, match="Invalid since"):
-                search_feed_events(since="not-a-date")
+        assert since_dt in params
 
     def test_institution_single_uses_like(self):
         (_, _), mock_fetch = self._call(institution_list=["MIT"])

@@ -12,46 +12,12 @@ from database.llm import log_llm_usage
 from encoding_guard import fix_encoding
 
 
-# ---------------------------------------------------------------------------
-# Private helpers for search_researchers
-# ---------------------------------------------------------------------------
-
-def _escape_like(value: str) -> str:
-    """Escape LIKE-special characters so user input is matched literally."""
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-# MySQL FULLTEXT minimum token size (InnoDB default is 3).
-_FT_MIN_TOKEN_SIZE = int(os.environ.get("FT_MIN_TOKEN_SIZE", "3"))
-
-# Characters with special meaning in BOOLEAN MODE that must be stripped.
-_FT_BOOLEAN_OPERATORS = str.maketrans("", "", '+-~<>()@*"')
-
-
-def _escape_fulltext(value: str) -> str:
-    """Strip BOOLEAN MODE operators so user input is matched literally."""
-    return value.translate(_FT_BOOLEAN_OPERATORS)
-
-
-# Top-20 economics department keywords for preset filtering
-_TOP20_DEPT_KEYWORDS = [
-    "MIT", "Massachusetts Institute of Technology",
-    "Harvard", "Princeton", "Stanford",
-    "University of Chicago",
-    "UC Berkeley", "University of California, Berkeley",
-    "Columbia", "Yale", "Northwestern",
-    "University of Pennsylvania",
-    "New York University", "NYU",
-    "Duke",
-    "University of Michigan",
-    "University of Minnesota",
-    "Cornell",
-    "UCLA", "University of California, Los Angeles",
-    "UC San Diego", "University of California, San Diego",
-    "University of Wisconsin",
-    "Boston University",
-    "Carnegie Mellon",
-]
+from database.search_helpers import (
+    escape_like as _escape_like,
+    escape_fulltext as _escape_fulltext,
+    FT_MIN_TOKEN_SIZE as _FT_MIN_TOKEN_SIZE,
+    TOP20_DEPT_KEYWORDS as _TOP20_DEPT_KEYWORDS,
+)
 
 
 def _strip_initial(name: str) -> str | None:

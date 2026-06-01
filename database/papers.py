@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import hashlib
-import os
 import re
 from datetime import datetime, timezone
 
@@ -102,46 +101,12 @@ def get_unenriched_papers(limit=50):
     )
 
 
-# ---------------------------------------------------------------------------
-# Private helpers for search_feed_events
-# ---------------------------------------------------------------------------
-
-def _escape_like(value: str) -> str:
-    """Escape LIKE-special characters so user input is matched literally."""
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-# MySQL FULLTEXT minimum token size (InnoDB default is 3).
-_FT_MIN_TOKEN_SIZE = int(os.environ.get("FT_MIN_TOKEN_SIZE", "3"))
-
-# Characters with special meaning in BOOLEAN MODE that must be stripped.
-_FT_BOOLEAN_OPERATORS = str.maketrans("", "", '+-~<>()@*"')
-
-
-def _escape_fulltext(value: str) -> str:
-    """Strip BOOLEAN MODE operators so user input is matched literally."""
-    return value.translate(_FT_BOOLEAN_OPERATORS)
-
-
-# Top-20 economics department keywords for preset filtering
-_TOP20_DEPT_KEYWORDS = [
-    "MIT", "Massachusetts Institute of Technology",
-    "Harvard", "Princeton", "Stanford",
-    "University of Chicago",
-    "UC Berkeley", "University of California, Berkeley",
-    "Columbia", "Yale", "Northwestern",
-    "University of Pennsylvania",
-    "New York University", "NYU",
-    "Duke",
-    "University of Michigan",
-    "University of Minnesota",
-    "Cornell",
-    "UCLA", "University of California, Los Angeles",
-    "UC San Diego", "University of California, San Diego",
-    "University of Wisconsin",
-    "Boston University",
-    "Carnegie Mellon",
-]
+from database.search_helpers import (
+    escape_like as _escape_like,
+    escape_fulltext as _escape_fulltext,
+    FT_MIN_TOKEN_SIZE as _FT_MIN_TOKEN_SIZE,
+    TOP20_DEPT_KEYWORDS as _TOP20_DEPT_KEYWORDS,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -263,7 +228,7 @@ def search_feed_events(
     year=None,
     researcher_id=None,
     status_list=None,
-    since=None,
+    since: datetime | None = None,
     institution_list=None,
     preset=None,
     search=None,
@@ -280,7 +245,7 @@ def search_feed_events(
     - year: match p.year
     - researcher_id: EXISTS subquery on authorship
     - status_list: p.status IN (...)
-    - since: fe.created_at >= parsed ISO datetime
+    - since: fe.created_at >= datetime value
     - institution_list: affiliation LIKE match (ignored when preset is set)
     - preset: 'top20' matches top-20 economics departments
     - search: FULLTEXT for >= _FT_MIN_TOKEN_SIZE chars, LIKE fallback for shorter
@@ -310,12 +275,8 @@ def search_feed_events(
             params.extend(status_list)
 
     if since:
-        try:
-            since_dt = datetime.fromisoformat(since.rstrip("Z"))
-        except ValueError:
-            raise ValueError(f"Invalid since value: {since!r}; expected ISO8601 timestamp")
         conditions.append("fe.created_at >= %s")
-        params.append(since_dt)
+        params.append(since)
 
     if institution_list and not preset:
         if len(institution_list) == 1:
