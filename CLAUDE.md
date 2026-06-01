@@ -21,7 +21,7 @@ make seed                 # Create tables + run migrations (idempotent)
 make reset-db             # Drop and recreate database from scratch
 
 # Scraping pipeline
-make scrape               # Full pipeline: fetch HTML → LLM extract → save → link match → enrich
+make scrape               # Full pipeline: fetch HTML → LLM extract → save → link match
 make fetch                # Stage 1: Download HTML from researcher URLs (hash-based change detection)
 make batch-submit         # Stage 2: Submit changed URLs to Gemini Batch API for extraction
 make batch-check          # Stage 3: Process completed batch results → save papers, snapshots, links
@@ -57,7 +57,8 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build  #
 1. **Fetch phase** (all URLs): Download HTML for all researcher URLs, skip unchanged (content hash). Collects list of changed URLs.
 2. **Extract phase** (changed URLs only): LLM extracts publications from changed pages, saves to `papers`. Includes link matching, title reconciliation, and paper snapshots.
 3. **Draft URL validation**: HEAD-request validation of `draft_url` fields
-4. **Enrichment phase** (after releasing scrape lock): Enrich unenriched papers via OpenAlex — DOI lookup first (from `paper_links`), title search fallback (published papers only)
+
+**Enrichment worker:** When `ENRICHMENT_WORKER_ENABLED=true`, a background thread in the API process continuously enriches unenriched papers via OpenAlex. Polls every 5 minutes, processes batches of 50, respects the daily budget. Backs off to 10-minute sleep after 5 consecutive failures. In local dev (worker disabled), run `make enrich` manually after scraping.
 
 **Extraction circuit breaker:** If 10 consecutive URLs return empty extraction results (e.g. LLM quota exhausted), the extraction phase stops early. Fetched HTML is preserved — extraction will resume on the next run for URLs where `content_hash ≠ extracted_hash`. The `scrape_log.extraction_errors` column tracks how many URLs failed extraction per run.
 
