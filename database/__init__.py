@@ -45,6 +45,9 @@ from database.researchers import (
     get_urls_for_researchers,
     get_pub_counts_for_researchers,
     get_fields_for_researchers,
+    get_deactivated_urls,
+    get_at_risk_urls,
+    reactivate_url,
 )
 from database.papers import (
     normalize_title,
@@ -123,6 +126,9 @@ class Database:
     get_urls_for_researchers = staticmethod(get_urls_for_researchers)
     get_pub_counts_for_researchers = staticmethod(get_pub_counts_for_researchers)
     get_fields_for_researchers = staticmethod(get_fields_for_researchers)
+    get_deactivated_urls = staticmethod(get_deactivated_urls)
+    get_at_risk_urls = staticmethod(get_at_risk_urls)
+    reactivate_url = staticmethod(reactivate_url)
 
     # Papers
     normalize_title = staticmethod(normalize_title)
