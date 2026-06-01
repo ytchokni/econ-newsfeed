@@ -14,7 +14,6 @@ from researcher import Researcher
 from html_fetcher import HTMLFetcher
 from publication import Publication, reconcile_title_renames, append_snapshots_for_pubs
 from link_extractor import match_and_save_paper_links
-
 logger = logging.getLogger(__name__)
 
 _LOCK_NAME = 'econ_newsfeed_scrape'
@@ -69,6 +68,14 @@ def is_scrape_running() -> bool:
 
 SCRAPE_INTERVAL_HOURS = int(os.environ.get('SCRAPE_INTERVAL_HOURS', '24'))
 SCRAPE_ON_STARTUP = os.environ.get('SCRAPE_ON_STARTUP', 'false').lower() == 'true'
+ENRICHMENT_WORKER_ENABLED = os.environ.get('ENRICHMENT_WORKER_ENABLED', 'false').lower() == 'true'
+_ENRICHMENT_IDLE_SECONDS = 300  # 5 minutes
+_ENRICHMENT_BATCH_SIZE = 50
+_ENRICHMENT_BACKOFF_THRESHOLD = 5
+_ENRICHMENT_BACKOFF_SECONDS = 600  # 10 minutes
+
+_enrichment_thread = None
+_enrichment_stop_event = threading.Event()
 
 
 def create_scrape_log() -> int:
@@ -148,15 +155,6 @@ def _validate_draft_urls() -> None:
             time.sleep(_DRAFT_VALIDATION_DELAY)
         except Exception as e:
             logger.error(f"Error validating draft URL for paper {paper_id}: {e}")
-
-
-def _enrich_with_openalex() -> None:
-    """Enrich newly discovered publications with OpenAlex metadata."""
-    try:
-        from openalex import enrich_new_publications
-        enrich_new_publications()
-    except Exception as e:
-        logger.error("OpenAlex enrichment failed: %s: %s", type(e).__name__, e)
 
 
 _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD = 10
@@ -339,11 +337,6 @@ def run_scrape_job() -> None:
         _lock_conn = None
 
     t0 = time.time()
-    _enrich_with_openalex()
-    enrich_s = time.time() - t0
-    logger.info(f"OpenAlex enrichment: {enrich_s:.1f}s")
-
-    t0 = time.time()
     try:
         from paper_merge import merge_duplicate_papers
         merge_duplicate_papers()
@@ -358,6 +351,66 @@ def _handle_sigterm(signum: int, frame: object) -> None:
     Waits for any running scrape job to complete before exiting."""
     logger.info("Received signal %s, shutting down scheduler gracefully...", signum)
     shutdown_scheduler()
+
+
+def _enrichment_worker_loop() -> None:
+    """Continuously enrich unenriched papers until stop event is set."""
+    from openalex import enrich_new_publications
+
+    logger.info("Enrichment worker started")
+    consecutive_failures = 0
+    enriched = 0
+
+    while not _enrichment_stop_event.is_set():
+        try:
+            enriched = enrich_new_publications(limit=_ENRICHMENT_BATCH_SIZE)
+            consecutive_failures = 0
+            if enriched:
+                logger.info("Enrichment cycle: %d papers enriched", enriched)
+            else:
+                logger.info("Enrichment cycle: no papers to enrich, sleeping %ds", _ENRICHMENT_IDLE_SECONDS)
+        except Exception as e:
+            enriched = 0
+            consecutive_failures += 1
+            logger.error("Enrichment cycle failed (%d consecutive): %s: %s",
+                         consecutive_failures, type(e).__name__, e)
+
+        if consecutive_failures >= _ENRICHMENT_BACKOFF_THRESHOLD:
+            logger.warning("Enrichment backing off for %ds after %d consecutive failures",
+                           _ENRICHMENT_BACKOFF_SECONDS, consecutive_failures)
+            _enrichment_stop_event.wait(_ENRICHMENT_BACKOFF_SECONDS)
+        elif enriched == 0:
+            _enrichment_stop_event.wait(_ENRICHMENT_IDLE_SECONDS)
+
+    logger.info("Enrichment worker stopped")
+
+
+def start_enrichment_worker() -> None:
+    """Start the enrichment background worker thread."""
+    global _enrichment_thread
+    if _enrichment_thread is not None and _enrichment_thread.is_alive():
+        logger.warning("Enrichment worker already running")
+        return
+
+    _enrichment_stop_event.clear()
+    _enrichment_thread = threading.Thread(
+        target=_enrichment_worker_loop,
+        name="enrichment-worker",
+        daemon=True,
+    )
+    _enrichment_thread.start()
+    logger.info("Enrichment worker thread started")
+
+
+def stop_enrichment_worker() -> None:
+    """Stop the enrichment worker gracefully."""
+    global _enrichment_thread
+    if _enrichment_thread is None:
+        return
+    _enrichment_stop_event.set()
+    _enrichment_thread.join(timeout=30)
+    _enrichment_thread = None
+    logger.info("Enrichment worker thread stopped")
 
 
 def start_scheduler() -> None:
@@ -409,10 +462,14 @@ def start_scheduler() -> None:
         logger.info("SCRAPE_ON_STARTUP is true, triggering immediate scrape in background")
         threading.Thread(target=run_scrape_job, name="startup-scrape").start()
 
+    if ENRICHMENT_WORKER_ENABLED:
+        start_enrichment_worker()
+
 
 def shutdown_scheduler() -> None:
     """Shut down the scheduler gracefully, waiting for any running job to complete."""
     global _scheduler, _scheduler_lock_conn
+    stop_enrichment_worker()
     if _scheduler is not None:
         _scheduler.shutdown(wait=True)
         _scheduler = None
