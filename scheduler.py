@@ -87,6 +87,15 @@ def create_scrape_log() -> int:
     return Database.execute_query(query, (datetime.now(timezone.utc),))
 
 
+def _update_progress(log_id: int, **counters) -> None:
+    """Incrementally flush counter values to scrape_log so the dashboard updates live."""
+    sets = ", ".join(f"{col} = %s" for col in counters)
+    Database.execute_query(
+        f"UPDATE scrape_log SET {sets} WHERE id = %s",
+        (*counters.values(), log_id),
+    )
+
+
 def update_scrape_log(log_id: int, status: str, urls_checked: int = 0, urls_changed: int = 0, pubs_extracted: int = 0, extraction_errors: int = 0, error_message: str | None = None) -> None:
     """Update an existing scrape_log entry with results."""
     # Aggregate token totals from llm_usage for this scrape run
@@ -212,10 +221,14 @@ def run_scrape_job() -> None:
                         'is_first_scrape': is_first_scrape,
                     })
 
+                if urls_checked % 10 == 0:
+                    _update_progress(log_id, urls_checked=urls_checked, urls_changed=urls_changed)
+
             except Exception as e:
                 logger.error("Error fetching URL %s (id=%s): %s", url, url_id, e)
                 continue
 
+        _update_progress(log_id, urls_checked=urls_checked, urls_changed=urls_changed)
         fetch_phase_s = time.time() - scrape_start
         logger.info(f"Fetch phase done: {fetch_phase_s:.1f}s — {urls_checked} checked, {urls_changed} changed")
 
@@ -281,6 +294,8 @@ def run_scrape_job() -> None:
                                 consecutive_failures, remaining,
                             )
                             circuit_broken = True
+
+                _update_progress(log_id, pubs_extracted=pubs_extracted, extraction_errors=extraction_errors)
 
                 if page_type == "HOME" and not circuit_broken and new_text:
                     t0 = time.time()

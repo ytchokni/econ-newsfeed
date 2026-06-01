@@ -38,6 +38,7 @@ def _base_patches():
         "release": patch("scheduler._release_db_lock"),
         "create_log": patch("scheduler.create_scrape_log", return_value=42),
         "update_log": patch("scheduler.update_scrape_log"),
+        "update_progress": patch("scheduler._update_progress"),
         "get_urls": patch("scheduler.Researcher.get_all_researcher_urls", return_value=[]),
         "validate": patch("scheduler._validate_draft_urls"),
         "get_prev": patch("scheduler.HTMLFetcher.get_previous_text", return_value=None),
