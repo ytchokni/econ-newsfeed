@@ -54,6 +54,7 @@ from database.snapshots import (
     _compute_paper_content_hash,
     append_paper_snapshot,
     get_paper_snapshots,
+    PaperSnapshotResult,
 )
 from database.llm import log_llm_usage
 from database.jel import (

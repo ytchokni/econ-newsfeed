@@ -3,9 +3,23 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from database.connection import get_connection, fetch_all
+
+
+@dataclass
+class PaperSnapshotResult:
+    changed: bool
+    old_status: str | None = None
+    new_status: str | None = None
+
+    @property
+    def status_changed(self) -> bool:
+        return (self.old_status is not None
+                and self.new_status is not None
+                and self.old_status != self.new_status)
 
 
 # ── Researcher snapshots ──
@@ -75,17 +89,15 @@ def _compute_paper_content_hash(status: str | None, venue: str | None, abstract:
 
 def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
                           abstract: str | None, draft_url: str | None, year: str | None,
-                          source_url: str | None = None, title: str | None = None) -> bool:
+                          source_url: str | None = None, title: str | None = None) -> PaperSnapshotResult:
     """Append a paper snapshot if metadata changed. Updates denormalized papers table.
-    Creates a feed_event if status changed.
-    Hash check and insert run in a single transaction to prevent race conditions.
-    Returns True if a new snapshot was inserted, False if no change."""
+    Returns PaperSnapshotResult with status change info for explicit event emission.
+    Hash check and insert run in a single transaction to prevent race conditions."""
     content_hash = _compute_paper_content_hash(status, venue, abstract, draft_url, year, title=title)
     now = datetime.now(timezone.utc)
 
     with get_connection() as conn:
         with conn.cursor(dictionary=True) as cursor:
-            # Check if content has changed
             cursor.execute(
                 "SELECT content_hash, status FROM paper_snapshots "
                 "WHERE paper_id = %s ORDER BY scraped_at DESC LIMIT 1",
@@ -93,7 +105,7 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
             )
             prev = cursor.fetchone()
             if prev and prev['content_hash'] == content_hash:
-                return False
+                return PaperSnapshotResult(changed=False)
 
             old_status = prev['status'] if prev else None
 
@@ -112,20 +124,9 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
                 (status, venue, abstract, draft_url, year, paper_id),
             )
 
-            # Create status_change feed event if status actually changed
-            if (old_status != status
-                    and old_status is not None
-                    and status is not None):
-                cursor.execute(
-                    """INSERT INTO feed_events
-                       (paper_id, event_type, old_status, new_status, created_at)
-                       VALUES (%s, 'status_change', %s, %s, %s)""",
-                    (paper_id, old_status, status, now),
-                )
-
             conn.commit()
     logging.info(f"Paper snapshot appended for id={paper_id}")
-    return True
+    return PaperSnapshotResult(changed=True, old_status=old_status, new_status=status)
 
 
 def get_paper_snapshots(paper_id: int, limit: int = 20) -> list[dict]:
