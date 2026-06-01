@@ -8,6 +8,7 @@ import time
 import socket
 import zlib
 import requests
+import charset_normalizer
 import hashlib
 import logging
 from contextlib import contextmanager, nullcontext
@@ -338,18 +339,35 @@ class HTMLFetcher:
                 port = parsed.port or (443 if parsed.scheme == "https" else 80)
                 cmd.extend(["--resolve", f"{parsed.hostname}:{port}:{resolved_ip}"])
             cmd.extend(["--", url])
+            # Capture bytes (no text=True): a non-UTF-8 or binary body (e.g. a PDF)
+            # would otherwise make subprocess's strict decoder raise UnicodeDecodeError,
+            # which is not an OSError and would abort the whole fetch run. We decode
+            # the bytes ourselves below, mirroring the requests path's charset detection.
             result = subprocess.run(
                 cmd,
-                capture_output=True, text=True, timeout=timeout + 5,
+                capture_output=True, timeout=timeout + 5,
             )
             if result.returncode != 0:
-                logging.error("curl failed for %s (exit %d): %s", url, result.returncode, result.stderr.strip())
+                stderr = result.stderr.decode("utf-8", errors="replace").strip()
+                logging.error("curl failed for %s (exit %d): %s", url, result.returncode, stderr)
                 return None
             logging.info("Successfully fetched %s via curl fallback", url)
-            return result.stdout
+            return HTMLFetcher._decode_bytes(result.stdout)
         except (subprocess.TimeoutExpired, OSError) as e:
             logging.error("curl fallback error for %s: %s", url, e)
             return None
+
+    @staticmethod
+    def _decode_bytes(raw: bytes) -> str:
+        """Decode fetched bytes to text, detecting the charset the way requests'
+        apparent_encoding does, with a UTF-8/replace fallback so non-UTF-8 or
+        binary bodies never raise UnicodeDecodeError."""
+        if not raw:
+            return ""
+        match = charset_normalizer.from_bytes(raw).best()
+        if match is not None:
+            return str(match)
+        return raw.decode("utf-8", errors="replace")
 
     @staticmethod
     def extract_text_content(html_content: str) -> str:

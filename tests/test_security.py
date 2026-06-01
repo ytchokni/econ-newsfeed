@@ -541,7 +541,7 @@ class TestCurlOptionInjection:
         from html_fetcher import HTMLFetcher
 
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="<html></html>", stderr="")
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"<html></html>", stderr=b"")
             HTMLFetcher._fetch_with_curl("https://example.com/page")
 
         cmd = mock_run.call_args[0][0]
@@ -563,11 +563,47 @@ class TestCurlOptionInjection:
         from html_fetcher import HTMLFetcher
 
         with patch("subprocess.run") as mock_run:
-            mock_run.return_value = MagicMock(returncode=0, stdout="<html></html>", stderr="")
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"<html></html>", stderr=b"")
             HTMLFetcher._fetch_with_curl("https://example.com/page")
 
         cmd = mock_run.call_args[0][0]
         assert "-L" not in cmd, f"curl should not follow redirects, found -L in: {cmd}"
+
+
+class TestCurlBinaryDecoding:
+    """curl fallback must not crash on non-UTF-8/binary responses (e.g. PDFs).
+
+    Regression: a researcher_urls row pointed at a PDF; the curl fallback ran
+    subprocess.run(..., text=True), which strict-UTF-8-decoded the binary body
+    and raised UnicodeDecodeError (a ValueError, not caught by the OSError
+    handler), aborting the entire fetch run.
+    """
+
+    def test_curl_captures_bytes_not_text(self):
+        """subprocess.run must NOT use text=True; we decode the bytes ourselves
+        so a non-UTF-8 body cannot crash inside subprocess's strict decoder."""
+        from html_fetcher import HTMLFetcher
+
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=b"<html></html>", stderr=b"")
+            HTMLFetcher._fetch_with_curl("https://example.com/page")
+
+        assert mock_run.call_args.kwargs.get("text") is not True, (
+            "curl subprocess must capture bytes, not text=True"
+        )
+
+    def test_curl_decodes_non_utf8_without_crashing(self):
+        """A binary/Latin-1 body (invalid UTF-8) must decode to a str, not raise."""
+        from html_fetcher import HTMLFetcher
+
+        # 0xe2 standing alone is the exact invalid continuation byte from the
+        # production crash (a PDF body served to the curl fallback).
+        raw = b"%PDF-1.4 \xe2\xa9 caf\xe9 r\xe9sum\xe9"
+        with patch("subprocess.run") as mock_run:
+            mock_run.return_value = MagicMock(returncode=0, stdout=raw, stderr=b"")
+            result = HTMLFetcher._fetch_with_curl("https://example.com/file.pdf")
+
+        assert isinstance(result, str), f"expected decoded str, got {type(result)}"
 
 
 # ---------------------------------------------------------------------------
