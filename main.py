@@ -64,14 +64,13 @@ def classify_jel() -> None:
     logging.info("JEL classification done: %d/%d classified", classified, total)
 
 
-def batch_submit() -> None:
-    """Submit a batch job to the Gemini Batch API for all URLs needing extraction."""
-    from llm_client import get_client, get_genai_client, get_model, build_json_schema_format
+def batch_submit(limit: int | None = None) -> None:
+    """Submit a batch job to the Gemini Batch API for URLs needing extraction."""
+    from llm_client import get_client, get_genai_client, get_model
     from google.genai import types
     import json
     import tempfile
     from datetime import datetime, timezone
-    from publication import PublicationExtractionList
 
     client = get_client()
     genai_client = get_genai_client()
@@ -86,6 +85,11 @@ def batch_submit() -> None:
     if not urls_to_process:
         logging.info("Nothing to extract")
         return
+
+    if limit:
+        total_needing = len(urls_to_process)
+        urls_to_process = urls_to_process[:limit]
+        logging.info("Limiting batch to %d URLs (of %d needing extraction)", limit, total_needing)
 
     # Warn if pending batches exist
     pending = Database.fetch_all(
@@ -111,7 +115,7 @@ def batch_submit() -> None:
             "body": {
                 "model": model,
                 "messages": [{"role": "user", "content": prompt}],
-                "response_format": build_json_schema_format(PublicationExtractionList),
+                "response_format": {"type": "json_object"},
                 "max_tokens": 8000,
             },
         }
@@ -180,9 +184,17 @@ def batch_check() -> None:
         logging.info("No pending batches")
         return
 
+    batch_index = {b.id: b for b in client.batches.list(limit=100)}
+
     for row in pending:
         db_id, openai_batch_id = row['id'], row['openai_batch_id']
-        batch = client.batches.retrieve(openai_batch_id)
+        batch = batch_index.get(openai_batch_id)
+        if not batch:
+            logging.warning("Batch %s not found in API — may have expired", openai_batch_id)
+            Database.execute_query(
+                "UPDATE batch_jobs SET status = 'expired' WHERE id = %s", (db_id,)
+            )
+            continue
         status = batch.status
 
         if status == "completed":
@@ -350,7 +362,8 @@ def main() -> None:
     subparsers.add_parser('enrich', help='Enrich publications with OpenAlex metadata')
     subparsers.add_parser('enrich-jel', help='Enrich researcher JEL codes from paper topics via OpenAlex')
     subparsers.add_parser('discover-domains', help='Scan stored HTML for untrusted domains with paper-title links')
-    subparsers.add_parser('batch-submit', help='Submit batch LLM extraction for URLs with new content')
+    batch_submit_parser = subparsers.add_parser('batch-submit', help='Submit batch LLM extraction for URLs with new content')
+    batch_submit_parser.add_argument('--limit', type=int, default=None, help='Max URLs to include in the batch')
     subparsers.add_parser('batch-check', help='Check pending batches and process completed results')
 
     args = parser.parse_args()
@@ -372,7 +385,7 @@ def main() -> None:
     elif args.command == 'discover-domains':
         discover_domains()
     elif args.command == 'batch-submit':
-        batch_submit()
+        batch_submit(limit=args.limit)
     elif args.command == 'batch-check':
         batch_check()
 

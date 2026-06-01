@@ -23,7 +23,7 @@ _genai_client = None
 _genai_client_lock = threading.Lock()
 
 GOOGLE_AI_STUDIO_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "gemma-4-31b-it"
 
 
 def get_client() -> OpenAI:
@@ -71,13 +71,38 @@ class StructuredResponse(Generic[T]):
     usage: object | None
 
 
+_SCHEMA_METADATA_KEYS = {"$defs", "title", "description", "default"}
+
+
+def _inline_refs(schema: dict) -> dict:
+    """Resolve $ref and strip metadata keys that Gemini Batch API rejects."""
+    defs = schema.pop("$defs", {})
+
+    def resolve(node, inside_properties=False):
+        if isinstance(node, dict):
+            if "$ref" in node:
+                ref_name = node["$ref"].rsplit("/", 1)[-1]
+                return resolve(dict(defs[ref_name]))
+            result = {}
+            for k, v in node.items():
+                if not inside_properties and k in _SCHEMA_METADATA_KEYS:
+                    continue
+                result[k] = resolve(v, inside_properties=(k == "properties"))
+            return result
+        if isinstance(node, list):
+            return [resolve(item) for item in node]
+        return node
+
+    return resolve(schema)
+
+
 def build_json_schema_format(model_class: type[BaseModel]) -> dict:
     """Build a response_format dict for JSON-schema-guided decoding."""
     return {
         "type": "json_schema",
         "json_schema": {
             "name": model_class.__name__,
-            "schema": model_class.model_json_schema(),
+            "schema": _inline_refs(model_class.model_json_schema()),
             "strict": False,
         },
     }

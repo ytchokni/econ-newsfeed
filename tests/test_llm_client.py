@@ -36,10 +36,10 @@ class TestGetClient:
 
 
 class TestGetModel:
-    def test_default_model_is_gemini_flash(self, monkeypatch):
+    def test_default_model_is_gemma(self, monkeypatch):
         monkeypatch.delenv("LLM_MODEL", raising=False)
         import llm_client
-        assert llm_client.get_model() == "gemini-2.5-flash"
+        assert llm_client.get_model() == "gemma-4-31b-it"
 
     def test_model_overridable_by_env(self, monkeypatch):
         monkeypatch.setenv("LLM_MODEL", "google/gemma-4-12b-it")
@@ -96,7 +96,7 @@ class TestExtractJson:
         assert kwargs["response_format"]["type"] == "json_schema"
         assert kwargs["response_format"]["json_schema"]["name"] == "_ItemList"
         assert "schema" in kwargs["response_format"]["json_schema"]
-        assert kwargs["model"] == "gemini-2.5-flash"
+        assert kwargs["model"] == "gemma-4-31b-it"
 
     @patch("llm_client.get_client")
     def test_malformed_json_retries_then_returns_none(self, mock_get_client):
