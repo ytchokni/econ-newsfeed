@@ -21,6 +21,7 @@ Submodules:
 
 from database.connection import (
     get_connection,
+    connection_scope,
     execute_query,
     fetch_all,
     fetch_one,
@@ -38,6 +39,12 @@ from database.researchers import (
     add_researcher_url,
     import_data_from_file,
     merge_researchers,
+    search_researchers,
+    get_researcher_detail,
+    get_researcher_papers,
+    get_urls_for_researchers,
+    get_pub_counts_for_researchers,
+    get_fields_for_researchers,
 )
 from database.papers import (
     normalize_title,
@@ -46,6 +53,12 @@ from database.papers import (
     get_unchecked_draft_urls,
     update_openalex_data,
     get_unenriched_papers,
+    search_feed_events,
+    get_paper_detail,
+    get_paper_history,
+    get_authors_for_papers,
+    get_coauthors_for_papers,
+    get_links_for_papers,
 )
 from database.snapshots import (
     _compute_researcher_content_hash,
@@ -85,6 +98,7 @@ class Database:
 
     # Connection
     get_connection = staticmethod(get_connection)
+    connection_scope = staticmethod(connection_scope)
     execute_query = staticmethod(execute_query)
     fetch_all = staticmethod(fetch_all)
     fetch_one = staticmethod(fetch_one)
@@ -102,6 +116,12 @@ class Database:
     add_researcher_url = staticmethod(add_researcher_url)
     import_data_from_file = staticmethod(import_data_from_file)
     merge_researchers = staticmethod(merge_researchers)
+    search_researchers = staticmethod(search_researchers)
+    get_researcher_detail = staticmethod(get_researcher_detail)
+    get_researcher_papers = staticmethod(get_researcher_papers)
+    get_urls_for_researchers = staticmethod(get_urls_for_researchers)
+    get_pub_counts_for_researchers = staticmethod(get_pub_counts_for_researchers)
+    get_fields_for_researchers = staticmethod(get_fields_for_researchers)
 
     # Papers
     normalize_title = staticmethod(normalize_title)
@@ -110,6 +130,12 @@ class Database:
     get_unchecked_draft_urls = staticmethod(get_unchecked_draft_urls)
     update_openalex_data = staticmethod(update_openalex_data)
     get_unenriched_papers = staticmethod(get_unenriched_papers)
+    search_feed_events = staticmethod(search_feed_events)
+    get_paper_detail = staticmethod(get_paper_detail)
+    get_paper_history = staticmethod(get_paper_history)
+    get_authors_for_papers = staticmethod(get_authors_for_papers)
+    get_coauthors_for_papers = staticmethod(get_coauthors_for_papers)
+    get_links_for_papers = staticmethod(get_links_for_papers)
 
     # Snapshots
     _compute_researcher_content_hash = staticmethod(_compute_researcher_content_hash)
