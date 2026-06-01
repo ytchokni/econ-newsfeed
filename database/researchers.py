@@ -369,9 +369,9 @@ def record_url_fetch_failure(url_id: int, error_type: str) -> None:
 
 
 def record_url_fetch_success(url_id: int) -> None:
-    """Reset the failure counter on a successful fetch."""
+    """Reset the failure counter on a successful fetch (no-op if already zero)."""
     execute_query(
-        "UPDATE researcher_urls SET consecutive_failures = 0 WHERE id = %s",
+        "UPDATE researcher_urls SET consecutive_failures = 0 WHERE id = %s AND consecutive_failures > 0",
         (url_id,),
     )
 

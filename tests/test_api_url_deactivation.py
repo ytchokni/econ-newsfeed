@@ -1,15 +1,4 @@
 import os
-os.environ.setdefault("CONTENT_MAX_CHARS", "20000")
-os.environ.setdefault("LLM_MODEL", "gemma-4-31b-it")
-os.environ.setdefault("GOOGLE_API_KEY", "test-google-key")
-os.environ.setdefault("SCRAPE_API_KEY", "test-secret-key-for-ci-runs")
-os.environ.setdefault("DB_HOST", "localhost")
-os.environ.setdefault("DB_USER", "test")
-os.environ.setdefault("DB_PASSWORD", "test")
-os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
-os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
-os.environ.setdefault("SCRAPE_INTERVAL_HOURS", "24")
-
 from unittest.mock import patch
 import pytest
 from httpx import AsyncClient, ASGITransport
