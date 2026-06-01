@@ -83,8 +83,13 @@ _TABLE_DEFINITIONS = {
             researcher_id INT NOT NULL,
             page_type VARCHAR(255) NOT NULL,
             url VARCHAR(2048) NOT NULL,
+            is_active BOOLEAN NOT NULL DEFAULT TRUE,
+            consecutive_failures INT NOT NULL DEFAULT 0,
+            deactivated_at DATETIME DEFAULT NULL,
+            deactivation_reason VARCHAR(255) DEFAULT NULL,
             UNIQUE KEY uq_researcher_url (researcher_id, url(500)),
-            FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
+            FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
+            INDEX idx_is_active (is_active)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     "papers": """
@@ -633,6 +638,28 @@ def create_tables() -> None:
                     except Exception as e:
                         if "Duplicate column name" not in str(e):
                             logging.warning("Migration: scrape_log.extraction_errors: %s", e)
+
+                    # Add URL deactivation / failure-tracking columns to researcher_urls
+                    _url_deactivation_columns = [
+                        ("researcher_urls", "is_active", "BOOLEAN NOT NULL DEFAULT TRUE"),
+                        ("researcher_urls", "consecutive_failures", "INT NOT NULL DEFAULT 0"),
+                        ("researcher_urls", "deactivated_at", "DATETIME DEFAULT NULL"),
+                        ("researcher_urls", "deactivation_reason", "VARCHAR(255) DEFAULT NULL"),
+                    ]
+                    for table, col, definition in _url_deactivation_columns:
+                        try:
+                            cursor.execute(f"ALTER TABLE {table} ADD COLUMN {col} {definition}")
+                            conn.commit()
+                        except Exception as e:
+                            if getattr(e, 'errno', None) != 1060:
+                                logging.warning("Migration warning for %s.%s: %s", table, col, e)
+
+                    try:
+                        cursor.execute("ALTER TABLE researcher_urls ADD INDEX idx_is_active (is_active)")
+                        conn.commit()
+                    except Exception as e:
+                        if getattr(e, 'errno', None) != 1061:
+                            logging.warning("Migration: researcher_urls.idx_is_active: %s", e)
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                     cursor.fetchone()

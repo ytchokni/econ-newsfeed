@@ -335,6 +335,85 @@ def add_researcher_url(researcher_id: int, page_type: str, url: str) -> None:
     )
 
 
+_URL_DEACTIVATION_THRESHOLD = 3
+
+
+def record_url_fetch_failure(url_id: int, error_type: str) -> None:
+    """Record a fetch failure for a URL. Deactivates immediately for response_too_large,
+    or after _URL_DEACTIVATION_THRESHOLD consecutive failures for other errors."""
+    if error_type == "response_too_large":
+        execute_query(
+            """UPDATE researcher_urls
+               SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = %s
+               WHERE id = %s""",
+            (error_type, url_id),
+        )
+        logging.warning("Deactivated URL %d: %s", url_id, error_type)
+        return
+
+    execute_query(
+        "UPDATE researcher_urls SET consecutive_failures = consecutive_failures + 1 WHERE id = %s",
+        (url_id,),
+    )
+    row = fetch_one(
+        "SELECT consecutive_failures FROM researcher_urls WHERE id = %s", (url_id,),
+    )
+    if row and row["consecutive_failures"] >= _URL_DEACTIVATION_THRESHOLD:
+        execute_query(
+            """UPDATE researcher_urls
+               SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = %s
+               WHERE id = %s""",
+            ("consecutive_failures", url_id),
+        )
+        logging.warning("Deactivated URL %d after %d consecutive failures", url_id, row["consecutive_failures"])
+
+
+def record_url_fetch_success(url_id: int) -> None:
+    """Reset the failure counter on a successful fetch."""
+    execute_query(
+        "UPDATE researcher_urls SET consecutive_failures = 0 WHERE id = %s",
+        (url_id,),
+    )
+
+
+def get_deactivated_urls() -> list[dict]:
+    """Return all deactivated URLs with researcher info."""
+    return fetch_all(
+        """SELECT ru.id, ru.url, ru.page_type, ru.deactivation_reason, ru.deactivated_at,
+                  ru.consecutive_failures,
+                  CONCAT(r.first_name, ' ', r.last_name) AS researcher_name,
+                  r.id AS researcher_id
+           FROM researcher_urls ru
+           JOIN researchers r ON r.id = ru.researcher_id
+           WHERE ru.is_active = FALSE
+           ORDER BY ru.deactivated_at DESC"""
+    )
+
+
+def get_at_risk_urls() -> list[dict]:
+    """Return active URLs with 2+ consecutive failures (about to be deactivated)."""
+    return fetch_all(
+        """SELECT ru.id, ru.url, ru.page_type, ru.consecutive_failures,
+                  CONCAT(r.first_name, ' ', r.last_name) AS researcher_name,
+                  r.id AS researcher_id
+           FROM researcher_urls ru
+           JOIN researchers r ON r.id = ru.researcher_id
+           WHERE ru.is_active = TRUE AND ru.consecutive_failures >= 2
+           ORDER BY ru.consecutive_failures DESC"""
+    )
+
+
+def reactivate_url(url_id: int) -> None:
+    """Re-activate a deactivated URL and reset all failure tracking."""
+    execute_query(
+        """UPDATE researcher_urls
+           SET is_active = TRUE, consecutive_failures = 0,
+               deactivated_at = NULL, deactivation_reason = NULL
+           WHERE id = %s""",
+        (url_id,),
+    )
+
+
 def import_data_from_file(file_path: str) -> None:
     """Import data from a CSV or TXT file into the database."""
     try:
