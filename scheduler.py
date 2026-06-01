@@ -150,15 +150,6 @@ def _validate_draft_urls() -> None:
             logger.error(f"Error validating draft URL for paper {paper_id}: {e}")
 
 
-def _enrich_with_openalex() -> None:
-    """Enrich newly discovered publications with OpenAlex metadata."""
-    try:
-        from openalex import enrich_new_publications
-        enrich_new_publications()
-    except Exception as e:
-        logger.error("OpenAlex enrichment failed: %s: %s", type(e).__name__, e)
-
-
 _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD = 10
 
 
@@ -337,11 +328,6 @@ def run_scrape_job() -> None:
     finally:
         _release_db_lock(lock_conn)
         _lock_conn = None
-
-    t0 = time.time()
-    _enrich_with_openalex()
-    enrich_s = time.time() - t0
-    logger.info(f"OpenAlex enrichment: {enrich_s:.1f}s")
 
     t0 = time.time()
     try:

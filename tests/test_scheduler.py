@@ -74,6 +74,18 @@ class TestRunScrapeJobHappyPath:
             for p in patches.values():
                 p.stop()
 
+    def test_scrape_does_not_call_enrichment(self):
+        """run_scrape_job no longer triggers OpenAlex enrichment."""
+        patches = _base_patches()
+        mocks = {name: p.start() for name, p in patches.items()}
+        try:
+            with patch("openalex.enrich_new_publications") as mock_enrich:
+                run_scrape_job()
+                mock_enrich.assert_not_called()
+        finally:
+            for p in patches.values():
+                p.stop()
+
     def test_happy_path_with_changed_url(self):
         """One URL changes, publications extracted and saved, log reflects counts."""
         url_row = _make_url_row()
