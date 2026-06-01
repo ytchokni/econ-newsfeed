@@ -70,10 +70,13 @@ class TestScrapeApiKeyValidation:
 
             with patch.object(api_mod, "_SCRAPE_API_KEY", "a-valid-key-that-is-long-enough"):
                 with TestClient(api_mod.app) as c:
-                    # App started successfully — verify it responds
+                    # App started successfully -- verify it responds
                     with (
-                        patch("api.Database.fetch_all", return_value=[]),
                         patch("api.connection_scope", _noop_connection_scope),
+                        patch("api.Database.search_feed_events", return_value=([], 0)),
+                        patch("api.Database.get_authors_for_papers", return_value={}),
+                        patch("api.Database.get_coauthors_for_papers", return_value={}),
+                        patch("api.Database.get_links_for_papers", return_value={}),
                     ):
                         resp = c.get("/api/publications")
                     assert resp.status_code == 200

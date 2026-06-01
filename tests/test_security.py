@@ -29,6 +29,11 @@ def client():
         patch("scheduler.start_scheduler"),
         patch("scheduler.shutdown_scheduler"),
         patch("api.connection_scope", _noop_connection_scope),
+        patch("api.Database.search_feed_events", return_value=([], 0)),
+        patch("api.Database.get_authors_for_papers", return_value={}),
+        patch("api.Database.get_coauthors_for_papers", return_value={}),
+        patch("api.Database.get_links_for_papers", return_value={}),
+        patch("api.Database.get_paper_detail", return_value=None),
     ):
         from api import app
 
@@ -54,8 +59,7 @@ class TestSQLInjectionQueryParams:
     def test_year_sql_injection_returns_safe_response(self, client):
         """year= accepts only a 4-char string; SQL payload should not crash the API."""
         for payload in self.SQL_PAYLOADS:
-            with patch("api.Database.fetch_all", return_value=[]):
-                resp = client.get(f"/api/publications?year={payload}")
+            resp = client.get(f"/api/publications?year={payload}")
             # Must not be a 500 (unhandled exception)
             assert resp.status_code in (200, 400, 422), (
                 f"Unexpected status {resp.status_code} for payload: {payload!r}"
@@ -162,8 +166,7 @@ class TestOversizedInputs:
     def test_oversized_year_param(self, client):
         """A very long year string should not crash the API."""
         payload = "A" * 10_000
-        with patch("api.Database.fetch_all", return_value=[]):
-            resp = client.get(f"/api/publications?year={payload}")
+        resp = client.get(f"/api/publications?year={payload}")
         assert resp.status_code != 500
 
     def test_oversized_page_param(self, client):
@@ -224,10 +227,9 @@ class TestNoStackTraceLeakage:
         with (
             patch("database.Database.create_tables"),
             patch("database.Database.get_connection", return_value=None),
-            patch("database.Database.fetch_all", return_value=[]),
-            patch("database.Database.fetch_one", side_effect=RuntimeError("DB connection failed: password=s3cr3t")),
             patch("scheduler.start_scheduler"),
             patch("scheduler.shutdown_scheduler"),
+            patch("api.Database.get_paper_detail", side_effect=RuntimeError("DB connection failed: password=s3cr3t")),
         ):
             from api import app
 
@@ -247,11 +249,10 @@ class TestNoStackTraceLeakage:
         with (
             patch("database.Database.create_tables"),
             patch("database.Database.get_connection", return_value=None),
-            patch("database.Database.fetch_all", side_effect=Exception("internal detail")),
-            patch("database.Database.fetch_one", return_value=None),
             patch("scheduler.start_scheduler"),
             patch("scheduler.shutdown_scheduler"),
             patch("api.connection_scope", _noop_connection_scope),
+            patch("api.Database.search_researchers", side_effect=Exception("internal detail")),
         ):
             from api import app
 

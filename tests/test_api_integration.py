@@ -1,4 +1,4 @@
-"""Integration tests — full request cycle across all endpoints and OpenAPI verification."""
+"""Integration tests -- full request cycle across all endpoints and OpenAPI verification."""
 from contextlib import contextmanager
 from datetime import datetime
 from unittest.mock import patch, MagicMock, call
@@ -111,8 +111,6 @@ class TestOpenAPIResponseModels:
 # Task 5.3: Full request cycle integration test
 # ---------------------------------------------------------------------------
 
-# Feed events row shape: fe.id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
-#   p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url, p.abstract, p.draft_url_status
 SAMPLE_PUB = {
     "event_id": 100, "event_type": "new_paper", "old_status": None, "new_status": "working_paper",
     "old_title": None, "new_title": None,
@@ -122,18 +120,18 @@ SAMPLE_PUB = {
     "status": "working_paper", "draft_url": None, "abstract": None, "draft_url_status": None,
     "doi": None, "total_count": 1,
 }
-SAMPLE_AUTHORS = [{"publication_id": 1, "researcher_id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]
+SAMPLE_AUTHORS_MAP = {1: [{"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]}
 SAMPLE_AUTHORS_SINGLE = [{"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]
-# Single publication detail (10-column papers row, used by GET /api/publications/{id})
+# Single publication detail (used by GET /api/publications/{id})
 SAMPLE_PUB_DETAIL = {
     "id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
     "source_url": "https://example.com/p", "discovered_at": datetime(2026, 3, 15, 14, 30),
     "status": "working_paper", "draft_url": None, "abstract": None, "draft_url_status": None,
 }
 SAMPLE_RESEARCHER = {"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "FU Berlin", "description": None, "total_count": 1}
-SAMPLE_URLS_BATCH = [{"researcher_id": 10, "id": 1, "page_type": "PUB", "url": "https://example.com/pubs"}]
-SAMPLE_URLS_SINGLE = [{"id": 1, "page_type": "PUB", "url": "https://example.com/pubs"}]
-SAMPLE_FIELDS: list = []
+SAMPLE_URLS_MAP = {10: [{"id": 1, "page_type": "PUB", "url": "https://example.com/pubs"}]}
+SAMPLE_PUB_COUNTS_MAP = {10: 5}
+SAMPLE_FIELDS_MAP: dict = {}
 SAMPLE_SCRAPE = {"id": 1, "status": "completed", "started_at": datetime(2026, 3, 16, 10, 0), "finished_at": datetime(2026, 3, 16, 10, 5), "urls_checked": 10, "urls_changed": 2, "pubs_extracted": 3}
 
 
@@ -142,40 +140,51 @@ class TestFullCycle:
 
     def test_full_api_cycle(self, client):
         # 1. List publications
-        with patch("api.Database.fetch_all") as mock_all:
-            mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS, [], []]  # pubs, authors, coauthors, links
+        with (
+            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUB], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             resp = client.get("/api/publications")
         assert resp.status_code == 200
         assert len(resp.json()["items"]) == 1
 
-        # 2. Get single publication (uses old 10-column papers row shape)
+        # 2. Get single publication
         with (
-            patch("api.Database.fetch_one", return_value=SAMPLE_PUB_DETAIL),
-            patch("api.Database.fetch_all") as mock_all,
+            patch("api.Database.get_paper_detail", return_value=SAMPLE_PUB_DETAIL),
+            patch("api.Database.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
+            patch("api.Database.get_coauthors_for_papers", return_value={1: []}),
+            patch("api.Database.get_links_for_papers", return_value={1: []}),
         ):
-            mock_all.side_effect = [SAMPLE_AUTHORS_SINGLE, [], []]  # authors, coauthors, links
             resp = client.get("/api/publications/1")
         assert resp.status_code == 200
         assert resp.json()["title"] == "Trade and Wages"
 
         # 3. List researchers
         with (
-            patch("api.Database.fetch_all") as mock_all,
+            patch("api.Database.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
+            patch("api.Database.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
+            patch("api.Database.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
+            patch("api.Database.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
-            mock_all.side_effect = [[SAMPLE_RESEARCHER], SAMPLE_URLS_BATCH, [{"researcher_id": 10, "cnt": 5}], SAMPLE_FIELDS]
             resp = client.get("/api/researchers")
         assert resp.status_code == 200
         assert len(resp.json()["items"]) == 1
 
         # 4. Get single researcher
         with (
-            patch("api.Database.fetch_one") as mock_one,
-            patch("api.Database.fetch_all") as mock_all,
+            patch("api.Database.get_researcher_detail", return_value=SAMPLE_RESEARCHER),
+            patch("api.Database.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
+            patch("api.Database.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
+            patch("api.Database.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
             patch("api.Database.get_jel_codes_for_researcher", return_value=[]),
+            patch("api.Database.get_researcher_papers", return_value=[SAMPLE_PUB_DETAIL]),
+            patch("api.Database.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
         ):
-            mock_one.side_effect = [SAMPLE_RESEARCHER, {"cnt": 5}]
-            mock_all.side_effect = [SAMPLE_URLS_SINGLE, SAMPLE_FIELDS, [SAMPLE_PUB_DETAIL], SAMPLE_AUTHORS, [], []]  # urls, fields, pubs, authors, coauthors, links
             resp = client.get("/api/researchers/10")
         assert resp.status_code == 200
         assert resp.json()["first_name"] == "Max Friedrich"
@@ -226,7 +235,7 @@ class TestLifespan:
 
 
 # ---------------------------------------------------------------------------
-# Smoke tests — would have caught "page stuck on loading"
+# Smoke tests -- would have caught "page stuck on loading"
 # ---------------------------------------------------------------------------
 
 # Sample data for smoke tests (publication batch format)
@@ -239,20 +248,20 @@ _SMOKE_PUB = {
     "status": "working_paper", "draft_url": None, "abstract": None, "draft_url_status": None,
     "doi": None, "total_count": 1,
 }
-_SMOKE_BATCH_AUTHORS = [{"publication_id": 1, "researcher_id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]
+_SMOKE_AUTHORS_MAP = {1: [{"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]}
 
 # Sample data for researchers (batch format)
 _SMOKE_RESEARCHER = {"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "FU Berlin", "description": "Economist.", "total_count": 1}
-_SMOKE_BATCH_URLS = [{"researcher_id": 10, "id": 1, "page_type": "homepage", "url": "https://example.com"}]
-_SMOKE_BATCH_PUB_COUNTS = [{"researcher_id": 10, "cnt": 5}]
-_SMOKE_BATCH_FIELDS = [{"researcher_id": 10, "id": 1, "name": "Labour Economics", "slug": "labour-economics"}]
+_SMOKE_URLS_MAP = {10: [{"id": 1, "page_type": "homepage", "url": "https://example.com"}]}
+_SMOKE_PUB_COUNTS_MAP = {10: 5}
+_SMOKE_FIELDS_MAP = {10: [{"id": 1, "name": "Labour Economics", "slug": "labour-economics"}]}
 
 
 class TestPublicationsSmoke:
     """High-level smoke tests that verify endpoints actually return data.
 
     These catch startup/configuration failures that leave the page stuck
-    on "Loading..." — the full middleware stack runs, only the DB is mocked.
+    on "Loading..." -- the full middleware stack runs, only the DB is mocked.
     """
 
     @pytest.fixture
@@ -270,9 +279,13 @@ class TestPublicationsSmoke:
 
     @pytest.mark.timeout(5)
     def test_publications_endpoint_responds_with_data(self, client):
-        """GET /api/publications must return 200 with the expected shape — not hang."""
-        with patch("api.Database.fetch_all") as mock_all:
-            mock_all.side_effect = [[_SMOKE_PUB], _SMOKE_BATCH_AUTHORS, [], []]  # pubs, authors, coauthors, links
+        """GET /api/publications must return 200 with the expected shape -- not hang."""
+        with (
+            patch("api.Database.search_feed_events", return_value=([_SMOKE_PUB], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_SMOKE_AUTHORS_MAP),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             resp = client.get("/api/publications")
 
         assert resp.status_code == 200
@@ -291,17 +304,14 @@ class TestPublicationsSmoke:
 
     @pytest.mark.timeout(5)
     def test_researchers_endpoint_responds_with_data(self, client):
-        """GET /api/researchers must return 200 with the expected shape — not hang."""
+        """GET /api/researchers must return 200 with the expected shape -- not hang."""
         with (
-            patch("api.Database.fetch_all") as mock_all,
+            patch("api.Database.search_researchers", return_value=([_SMOKE_RESEARCHER], 1)),
+            patch("api.Database.get_urls_for_researchers", return_value=_SMOKE_URLS_MAP),
+            patch("api.Database.get_pub_counts_for_researchers", return_value=_SMOKE_PUB_COUNTS_MAP),
+            patch("api.Database.get_fields_for_researchers", return_value=_SMOKE_FIELDS_MAP),
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
-            mock_all.side_effect = [
-                [_SMOKE_RESEARCHER],
-                _SMOKE_BATCH_URLS,
-                _SMOKE_BATCH_PUB_COUNTS,
-                _SMOKE_BATCH_FIELDS,
-            ]
             resp = client.get("/api/researchers")
 
         assert resp.status_code == 200
@@ -320,7 +330,7 @@ class TestPublicationsSmoke:
 
     @pytest.mark.timeout(5)
     def test_app_starts_without_crashing(self, client):
-        """The app lifespan must complete — catches env var and DB migration failures."""
+        """The app lifespan must complete -- catches env var and DB migration failures."""
         # If we got here, the TestClient started the app successfully.
         # Verify the healthiest endpoint responds.
         resp = client.get("/openapi.json")
