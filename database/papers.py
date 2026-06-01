@@ -2,10 +2,11 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 from datetime import datetime, timezone
 
-from database.connection import execute_query, fetch_all, get_connection
+from database.connection import execute_query, fetch_all, fetch_one, get_connection
 from encoding_guard import fix_encoding
 
 
@@ -99,3 +100,289 @@ def get_unenriched_papers(limit=50):
         """,
         (limit,),
     )
+
+
+# ---------------------------------------------------------------------------
+# Private helpers for search_feed_events
+# ---------------------------------------------------------------------------
+
+def _escape_like(value: str) -> str:
+    """Escape LIKE-special characters so user input is matched literally."""
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+# MySQL FULLTEXT minimum token size (InnoDB default is 3).
+_FT_MIN_TOKEN_SIZE = int(os.environ.get("FT_MIN_TOKEN_SIZE", "3"))
+
+# Characters with special meaning in BOOLEAN MODE that must be stripped.
+_FT_BOOLEAN_OPERATORS = str.maketrans("", "", '+-~<>()@*"')
+
+
+def _escape_fulltext(value: str) -> str:
+    """Strip BOOLEAN MODE operators so user input is matched literally."""
+    return value.translate(_FT_BOOLEAN_OPERATORS)
+
+
+# Top-20 economics department keywords for preset filtering
+_TOP20_DEPT_KEYWORDS = [
+    "MIT", "Massachusetts Institute of Technology",
+    "Harvard", "Princeton", "Stanford",
+    "University of Chicago",
+    "UC Berkeley", "University of California, Berkeley",
+    "Columbia", "Yale", "Northwestern",
+    "University of Pennsylvania",
+    "New York University", "NYU",
+    "Duke",
+    "University of Michigan",
+    "University of Minnesota",
+    "Cornell",
+    "UCLA", "University of California, Los Angeles",
+    "UC San Diego", "University of California, San Diego",
+    "University of Wisconsin",
+    "Boston University",
+    "Carnegie Mellon",
+]
+
+
+# ---------------------------------------------------------------------------
+# Batch-fetch helpers
+# ---------------------------------------------------------------------------
+
+def get_authors_for_papers(paper_ids: list[int]) -> dict[int, list[dict]]:
+    """Batch-fetch authors for multiple papers via authorship+researchers JOIN.
+
+    Returns {paper_id: [{id, first_name, last_name}, ...]}.
+    Empty input returns {}.
+    """
+    if not paper_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(paper_ids))
+    rows = fetch_all(
+        f"""
+        SELECT a.publication_id, r.id AS researcher_id, r.first_name, r.last_name
+        FROM authorship a
+        JOIN researchers r ON r.id = a.researcher_id
+        WHERE a.publication_id IN ({placeholders})
+        ORDER BY a.publication_id, a.author_order
+        """,
+        tuple(paper_ids),
+    )
+    result: dict[int, list[dict]] = {pid: [] for pid in paper_ids}
+    for row in rows:
+        result[row['publication_id']].append({
+            "id": row['researcher_id'],
+            "first_name": row['first_name'],
+            "last_name": row['last_name'],
+        })
+    return result
+
+
+def get_coauthors_for_papers(paper_ids: list[int]) -> dict[int, list[dict]]:
+    """Batch-fetch OpenAlex coauthors from openalex_coauthors.
+
+    Returns {paper_id: [{display_name, openalex_author_id}, ...]}.
+    Empty input returns {}.
+    """
+    if not paper_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(paper_ids))
+    rows = fetch_all(
+        f"""
+        SELECT paper_id, display_name, openalex_author_id
+        FROM openalex_coauthors
+        WHERE paper_id IN ({placeholders})
+        ORDER BY paper_id, id
+        """,
+        tuple(paper_ids),
+    )
+    result: dict[int, list[dict]] = {pid: [] for pid in paper_ids}
+    for row in rows:
+        result[row['paper_id']].append({
+            "display_name": row['display_name'],
+            "openalex_author_id": row['openalex_author_id'],
+        })
+    return result
+
+
+def get_links_for_papers(paper_ids: list[int]) -> dict[int, list[dict]]:
+    """Batch-fetch paper links from paper_links.
+
+    Returns {paper_id: [{url, link_type}, ...]}.
+    Empty input returns {}.
+    """
+    if not paper_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(paper_ids))
+    rows = fetch_all(
+        f"SELECT paper_id, url, link_type FROM paper_links WHERE paper_id IN ({placeholders})",
+        tuple(paper_ids),
+    )
+    result: dict[int, list[dict]] = {pid: [] for pid in paper_ids}
+    for row in rows:
+        result[row['paper_id']].append({"url": row['url'], "link_type": row['link_type']})
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Single-paper queries
+# ---------------------------------------------------------------------------
+
+def get_paper_detail(paper_id: int) -> dict | None:
+    """Fetch a single paper by ID.
+
+    Returns dict with columns: id, title, year, venue, source_url, discovered_at,
+    status, draft_url, abstract, draft_url_status, doi, is_seed, title_hash, openalex_id.
+    Returns None if not found.
+    """
+    return fetch_one(
+        "SELECT id, title, year, venue, source_url, discovered_at, status, draft_url, "
+        "abstract, draft_url_status, doi, is_seed, title_hash, openalex_id "
+        "FROM papers WHERE id = %s",
+        (paper_id,),
+    )
+
+
+def get_paper_history(paper_id: int) -> list[dict]:
+    """Fetch feed events for a paper ordered by created_at DESC.
+
+    Returns list of dicts with keys: id, event_type, old_status, new_status, created_at.
+    """
+    return fetch_all(
+        "SELECT id, event_type, old_status, new_status, created_at "
+        "FROM feed_events WHERE paper_id = %s ORDER BY created_at DESC",
+        (paper_id,),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Feed event search
+# ---------------------------------------------------------------------------
+
+def search_feed_events(
+    *,
+    year=None,
+    researcher_id=None,
+    status_list=None,
+    since=None,
+    institution_list=None,
+    preset=None,
+    search=None,
+    event_type=None,
+    jel_code=None,
+    offset: int = 0,
+    limit: int = 20,
+) -> tuple[list[dict], int]:
+    """Search feed_events with dynamic filters.
+
+    Returns (rows, total_count). All filter params are optional.
+
+    Filters:
+    - year: match p.year
+    - researcher_id: EXISTS subquery on authorship
+    - status_list: p.status IN (...)
+    - since: fe.created_at >= parsed ISO datetime
+    - institution_list: affiliation LIKE match (ignored when preset is set)
+    - preset: 'top20' matches top-20 economics departments
+    - search: FULLTEXT for >= _FT_MIN_TOKEN_SIZE chars, LIKE fallback for shorter
+    - event_type: fe.event_type = ...
+    - jel_code: comma-split, EXISTS on researcher_jel_codes
+    """
+    conditions: list[str] = []
+    params: list = []
+
+    if year:
+        conditions.append("p.year = %s")
+        params.append(year)
+
+    if researcher_id:
+        conditions.append(
+            "EXISTS (SELECT 1 FROM authorship WHERE publication_id = p.id AND researcher_id = %s)"
+        )
+        params.append(researcher_id)
+
+    if status_list:
+        if len(status_list) == 1:
+            conditions.append("p.status = %s")
+            params.append(status_list[0])
+        else:
+            placeholders = ",".join(["%s"] * len(status_list))
+            conditions.append(f"p.status IN ({placeholders})")
+            params.extend(status_list)
+
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since.rstrip("Z"))
+        except ValueError:
+            raise ValueError(f"Invalid since value: {since!r}; expected ISO8601 timestamp")
+        conditions.append("fe.created_at >= %s")
+        params.append(since_dt)
+
+    if institution_list and not preset:
+        if len(institution_list) == 1:
+            conditions.append(
+                "EXISTS (SELECT 1 FROM authorship a "
+                "JOIN researchers r ON r.id = a.researcher_id "
+                "WHERE a.publication_id = p.id AND r.affiliation LIKE %s)"
+            )
+            params.append(f"%{_escape_like(institution_list[0])}%")
+        else:
+            inst_likes = " OR ".join(["r.affiliation LIKE %s"] * len(institution_list))
+            conditions.append(
+                f"EXISTS (SELECT 1 FROM authorship a "
+                f"JOIN researchers r ON r.id = a.researcher_id "
+                f"WHERE a.publication_id = p.id AND ({inst_likes}))"
+            )
+            params.extend(f"%{_escape_like(i)}%" for i in institution_list)
+
+    if preset == "top20":
+        dept_likes = " OR ".join(["r.affiliation LIKE %s"] * len(_TOP20_DEPT_KEYWORDS))
+        conditions.append(
+            f"EXISTS (SELECT 1 FROM authorship a "
+            f"JOIN researchers r ON r.id = a.researcher_id "
+            f"WHERE a.publication_id = p.id AND ({dept_likes}))"
+        )
+        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP20_DEPT_KEYWORDS)
+
+    search_term = search.strip() if search else ""
+    if search_term:
+        if len(search_term) >= _FT_MIN_TOKEN_SIZE:
+            conditions.append("MATCH(p.title, p.abstract) AGAINST (%s IN BOOLEAN MODE)")
+            params.append(_escape_fulltext(search_term))
+        else:
+            escaped = f"%{_escape_like(search_term)}%"
+            conditions.append("(p.title LIKE %s ESCAPE '\\\\' OR p.abstract LIKE %s ESCAPE '\\\\')")
+            params.extend([escaped, escaped])
+
+    if event_type:
+        conditions.append("fe.event_type = %s")
+        params.append(event_type)
+
+    jel_list = [j.strip().upper() for j in jel_code.split(",") if j.strip()] if jel_code else []
+    if jel_list:
+        placeholders = ",".join(["%s"] * len(jel_list))
+        conditions.append(
+            f"EXISTS (SELECT 1 FROM authorship a "
+            f"JOIN researcher_jel_codes rjc ON rjc.researcher_id = a.researcher_id "
+            f"WHERE a.publication_id = p.id AND rjc.jel_code IN ({placeholders}))"
+        )
+        params.extend(jel_list)
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    rows = fetch_all(
+        f"""
+        SELECT fe.id AS event_id, fe.event_type, fe.old_status, fe.new_status,
+               fe.old_title, fe.new_title, fe.created_at,
+               p.id AS paper_id, p.title, p.year, p.venue, p.source_url, p.discovered_at,
+               p.status, p.draft_url, p.abstract, p.draft_url_status, p.doi,
+               COUNT(*) OVER() AS total_count
+        FROM feed_events fe
+        JOIN papers p ON p.id = fe.paper_id
+        {where}
+        ORDER BY fe.created_at DESC
+        LIMIT %s OFFSET %s
+        """,
+        (*params, limit, offset),
+    )
+    total = rows[0]['total_count'] if rows else 0
+    return rows, total
