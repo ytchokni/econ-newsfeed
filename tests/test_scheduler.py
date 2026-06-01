@@ -869,3 +869,76 @@ class TestStartStopEnrichmentWorker:
         import scheduler
         scheduler._enrichment_thread = None
         stop_enrichment_worker()  # should not raise
+
+
+class TestSchedulerStartsEnrichmentWorker:
+    """Enrichment worker starts/stops with the scheduler when enabled."""
+
+    def test_starts_enrichment_worker_when_enabled(self):
+        """start_scheduler starts the enrichment worker if ENRICHMENT_WORKER_ENABLED=true."""
+        import scheduler
+
+        with patch("scheduler.mysql.connector.connect") as mock_connect, \
+             patch("scheduler._cleanup_stale_scrape_logs"), \
+             patch("scheduler.BackgroundScheduler") as mock_bg, \
+             patch("scheduler.start_enrichment_worker") as mock_start_worker, \
+             patch("scheduler.signal.signal"), \
+             patch.object(scheduler, 'ENRICHMENT_WORKER_ENABLED', True), \
+             patch.object(scheduler, '_scheduler', None), \
+             patch.object(scheduler, '_scheduler_lock_conn', None):
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.fetchone.return_value = (1,)
+            mock_conn.cursor.return_value = mock_cursor
+            mock_connect.return_value = mock_conn
+
+            from scheduler import start_scheduler
+            start_scheduler()
+
+            mock_start_worker.assert_called_once()
+
+            # Cleanup
+            scheduler._scheduler = None
+            scheduler._scheduler_lock_conn = None
+
+    def test_skips_enrichment_worker_when_disabled(self):
+        """start_scheduler does NOT start enrichment worker if ENRICHMENT_WORKER_ENABLED=false."""
+        import scheduler
+
+        with patch("scheduler.mysql.connector.connect") as mock_connect, \
+             patch("scheduler._cleanup_stale_scrape_logs"), \
+             patch("scheduler.BackgroundScheduler") as mock_bg, \
+             patch("scheduler.start_enrichment_worker") as mock_start_worker, \
+             patch("scheduler.signal.signal"), \
+             patch.object(scheduler, 'ENRICHMENT_WORKER_ENABLED', False), \
+             patch.object(scheduler, '_scheduler', None), \
+             patch.object(scheduler, '_scheduler_lock_conn', None):
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.fetchone.return_value = (1,)
+            mock_conn.cursor.return_value = mock_cursor
+            mock_connect.return_value = mock_conn
+
+            from scheduler import start_scheduler
+            start_scheduler()
+
+            mock_start_worker.assert_not_called()
+
+            # Cleanup
+            scheduler._scheduler = None
+            scheduler._scheduler_lock_conn = None
+
+    def test_shutdown_stops_enrichment_worker(self):
+        """shutdown_scheduler also stops the enrichment worker."""
+        import scheduler
+
+        with patch("scheduler.stop_enrichment_worker") as mock_stop_worker:
+            scheduler._scheduler = MagicMock()
+            scheduler._scheduler_lock_conn = MagicMock()
+
+            from scheduler import shutdown_scheduler
+            shutdown_scheduler()
+
+            mock_stop_worker.assert_called_once()

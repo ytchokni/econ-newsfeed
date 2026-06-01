@@ -460,10 +460,14 @@ def start_scheduler() -> None:
         logger.info("SCRAPE_ON_STARTUP is true, triggering immediate scrape in background")
         threading.Thread(target=run_scrape_job, name="startup-scrape").start()
 
+    if ENRICHMENT_WORKER_ENABLED:
+        start_enrichment_worker()
+
 
 def shutdown_scheduler() -> None:
     """Shut down the scheduler gracefully, waiting for any running job to complete."""
     global _scheduler, _scheduler_lock_conn
+    stop_enrichment_worker()
     if _scheduler is not None:
         _scheduler.shutdown(wait=True)
         _scheduler = None
