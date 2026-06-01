@@ -19,6 +19,7 @@
 !jel_classifier.py
 !jel_enrichment.py
 !paper_merge.py
+!paper_saver.py
 !topic_jel_map.py
 !scheduler.py
 !scripts/backfill_researcher_fields.py
