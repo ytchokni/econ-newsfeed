@@ -444,7 +444,8 @@ class TestDNSRebindingPrevention:
         with patch.object(HTMLFetcher, "_was_fetched_recently", return_value=False), \
              patch.object(HTMLFetcher, "validate_url_with_pin", return_value=(True, "93.184.216.34")), \
              patch.object(HTMLFetcher, "is_allowed_by_robots", return_value=True), \
-             patch.object(HTMLFetcher, "fetch_html", return_value=None) as mock_fetch:
+             patch.object(HTMLFetcher, "fetch_html", return_value=None) as mock_fetch, \
+             patch("html_fetcher.record_url_fetch_failure"):
             HTMLFetcher.fetch_and_save_if_changed(1, "https://example.com/page", 1)
 
         mock_fetch.assert_called_once()
