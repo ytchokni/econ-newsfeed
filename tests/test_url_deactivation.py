@@ -14,6 +14,8 @@ os.environ.setdefault("SCRAPE_INTERVAL_HOURS", "24")
 
 from unittest.mock import patch, call
 
+from html_fetcher import HTMLFetcher, ResponseTooLarge
+
 from database.researchers import (
     _URL_DEACTIVATION_THRESHOLD,
     record_url_fetch_failure,
@@ -140,3 +142,48 @@ class TestReactivateUrl:
         assert "deactivated_at = NULL" in sql
         assert "deactivation_reason = NULL" in sql
         assert mock_exec.call_args[0][1] == (42,)
+
+
+class TestFetchFailureTracking:
+    """Test that fetch_and_save_if_changed records success/failure."""
+
+    @patch("html_fetcher.HTMLFetcher._was_fetched_recently", return_value=False)
+    @patch("html_fetcher.HTMLFetcher.validate_url_with_pin", return_value=(True, "1.2.3.4"))
+    @patch("html_fetcher.HTMLFetcher.is_allowed_by_robots", return_value=True)
+    @patch("html_fetcher.HTMLFetcher.fetch_html", return_value=None)
+    @patch("html_fetcher.record_url_fetch_failure")
+    def test_failed_fetch_records_failure(self, mock_record, mock_fetch, mock_robots, mock_validate, mock_recent):
+        HTMLFetcher.fetch_and_save_if_changed(1, "https://dead.example.com", 10)
+        mock_record.assert_called_once_with(1, "fetch_failed")
+
+    @patch("html_fetcher.HTMLFetcher._was_fetched_recently", return_value=False)
+    @patch("html_fetcher.HTMLFetcher.validate_url_with_pin", return_value=(False, None))
+    @patch("html_fetcher.record_url_fetch_failure")
+    def test_ssrf_failure_records_failure(self, mock_record, mock_validate, mock_recent):
+        HTMLFetcher.fetch_and_save_if_changed(1, "https://evil.example.com", 10)
+        mock_record.assert_called_once_with(1, "ssrf_blocked")
+
+    @patch("html_fetcher.HTMLFetcher._was_fetched_recently", return_value=False)
+    @patch("html_fetcher.HTMLFetcher.validate_url_with_pin", return_value=(True, "1.2.3.4"))
+    @patch("html_fetcher.HTMLFetcher.is_allowed_by_robots", return_value=True)
+    @patch("html_fetcher.HTMLFetcher.fetch_html", side_effect=ResponseTooLarge("2MB"))
+    @patch("html_fetcher.record_url_fetch_failure")
+    def test_response_too_large_records_failure(self, mock_record, mock_fetch, mock_robots, mock_validate, mock_recent):
+        HTMLFetcher.fetch_and_save_if_changed(1, "https://huge.example.com", 10)
+        mock_record.assert_called_once_with(1, "response_too_large")
+
+    @patch("html_fetcher.HTMLFetcher._was_fetched_recently", return_value=False)
+    @patch("html_fetcher.HTMLFetcher.validate_url_with_pin", return_value=(True, "1.2.3.4"))
+    @patch("html_fetcher.HTMLFetcher.is_allowed_by_robots", return_value=True)
+    @patch("html_fetcher.HTMLFetcher.fetch_html", return_value="<html>content</html>")
+    @patch("html_fetcher.HTMLFetcher.extract_text_content", return_value="content")
+    @patch("html_fetcher.HTMLFetcher.normalize_text", return_value="content")
+    @patch("html_fetcher.HTMLFetcher.hash_text_content", return_value="abc123")
+    @patch("html_fetcher.HTMLFetcher.has_text_changed", return_value=True)
+    @patch("html_fetcher.HTMLFetcher.save_text")
+    @patch("html_fetcher.record_url_fetch_success")
+    def test_successful_fetch_records_success(self, mock_record, mock_save, mock_changed,
+                                               mock_hash, mock_norm, mock_extract,
+                                               mock_fetch, mock_robots, mock_validate, mock_recent):
+        HTMLFetcher.fetch_and_save_if_changed(1, "https://good.example.com", 10)
+        mock_record.assert_called_once_with(1)
