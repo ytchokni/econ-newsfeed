@@ -759,7 +759,7 @@ class TestEnrichmentWorkerLoop:
                 scheduler._enrichment_stop_event.set()
             return 5
 
-        with patch("scheduler.enrich_new_publications", side_effect=enrich_then_stop) as mock_enrich, \
+        with patch("openalex.enrich_new_publications", side_effect=enrich_then_stop) as mock_enrich, \
              patch("scheduler._ENRICHMENT_IDLE_SECONDS", 0), \
              patch("scheduler._ENRICHMENT_BACKOFF_SECONDS", 0):
             _enrichment_worker_loop()
@@ -776,7 +776,7 @@ class TestEnrichmentWorkerLoop:
                 scheduler._enrichment_stop_event.set()
             return 0
 
-        with patch("scheduler.enrich_new_publications", side_effect=enrich_then_stop), \
+        with patch("openalex.enrich_new_publications", side_effect=enrich_then_stop), \
              patch("scheduler._ENRICHMENT_IDLE_SECONDS", 0), \
              patch("scheduler._ENRICHMENT_BACKOFF_SECONDS", 0):
             _enrichment_worker_loop()
@@ -792,7 +792,7 @@ class TestEnrichmentWorkerLoop:
                 return 0
             raise RuntimeError("OpenAlex down")
 
-        with patch("scheduler.enrich_new_publications", side_effect=fail_then_stop) as mock_enrich, \
+        with patch("openalex.enrich_new_publications", side_effect=fail_then_stop) as mock_enrich, \
              patch("scheduler._ENRICHMENT_BACKOFF_THRESHOLD", 3), \
              patch("scheduler._ENRICHMENT_IDLE_SECONDS", 0), \
              patch("scheduler._ENRICHMENT_BACKOFF_SECONDS", 0):
@@ -815,7 +815,7 @@ class TestEnrichmentWorkerLoop:
             scheduler._enrichment_stop_event.set()
             return 0
 
-        with patch("scheduler.enrich_new_publications", side_effect=fail_succeed_stop), \
+        with patch("openalex.enrich_new_publications", side_effect=fail_succeed_stop), \
              patch("scheduler._ENRICHMENT_IDLE_SECONDS", 0), \
              patch("scheduler._ENRICHMENT_BACKOFF_SECONDS", 0):
             _enrichment_worker_loop()
@@ -823,6 +823,11 @@ class TestEnrichmentWorkerLoop:
 
 class TestStartStopEnrichmentWorker:
     """Tests for starting and stopping the enrichment worker thread."""
+
+    def teardown_method(self):
+        import scheduler
+        scheduler._enrichment_thread = None
+        scheduler._enrichment_stop_event.clear()
 
     def test_start_creates_daemon_thread(self):
         """start_enrichment_worker creates a daemon thread."""
@@ -836,27 +841,19 @@ class TestStartStopEnrichmentWorker:
             assert mock_thread_cls.call_args[1]["daemon"] is True
             mock_thread.start.assert_called_once()
 
-            import scheduler
-            scheduler._enrichment_thread = None
-            scheduler._enrichment_stop_event.clear()
-
     def test_start_is_idempotent(self):
         """Calling start twice doesn't create a second thread."""
         import scheduler
         scheduler._enrichment_thread = MagicMock(is_alive=MagicMock(return_value=True))
-        try:
-            with patch("scheduler.threading.Thread") as mock_thread_cls:
-                start_enrichment_worker()
-                mock_thread_cls.assert_not_called()
-        finally:
-            scheduler._enrichment_thread = None
+        with patch("scheduler.threading.Thread") as mock_thread_cls:
+            start_enrichment_worker()
+            mock_thread_cls.assert_not_called()
 
     def test_stop_sets_event_and_joins(self):
         """stop_enrichment_worker signals the thread and waits for it."""
         import scheduler
         mock_thread = MagicMock()
         scheduler._enrichment_thread = mock_thread
-        scheduler._enrichment_stop_event.clear()
 
         stop_enrichment_worker()
 
@@ -873,6 +870,11 @@ class TestStartStopEnrichmentWorker:
 
 class TestSchedulerStartsEnrichmentWorker:
     """Enrichment worker starts/stops with the scheduler when enabled."""
+
+    def teardown_method(self):
+        import scheduler
+        scheduler._scheduler = None
+        scheduler._scheduler_lock_conn = None
 
     def test_starts_enrichment_worker_when_enabled(self):
         """start_scheduler starts the enrichment worker if ENRICHMENT_WORKER_ENABLED=true."""
@@ -898,10 +900,6 @@ class TestSchedulerStartsEnrichmentWorker:
 
             mock_start_worker.assert_called_once()
 
-            # Cleanup
-            scheduler._scheduler = None
-            scheduler._scheduler_lock_conn = None
-
     def test_skips_enrichment_worker_when_disabled(self):
         """start_scheduler does NOT start enrichment worker if ENRICHMENT_WORKER_ENABLED=false."""
         import scheduler
@@ -925,10 +923,6 @@ class TestSchedulerStartsEnrichmentWorker:
             start_scheduler()
 
             mock_start_worker.assert_not_called()
-
-            # Cleanup
-            scheduler._scheduler = None
-            scheduler._scheduler_lock_conn = None
 
     def test_shutdown_stops_enrichment_worker(self):
         """shutdown_scheduler also stops the enrichment worker."""

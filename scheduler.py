@@ -14,8 +14,6 @@ from researcher import Researcher
 from html_fetcher import HTMLFetcher
 from publication import Publication, reconcile_title_renames, append_snapshots_for_pubs
 from link_extractor import match_and_save_paper_links
-from openalex import enrich_new_publications
-
 logger = logging.getLogger(__name__)
 
 _LOCK_NAME = 'econ_newsfeed_scrape'
@@ -357,8 +355,11 @@ def _handle_sigterm(signum: int, frame: object) -> None:
 
 def _enrichment_worker_loop() -> None:
     """Continuously enrich unenriched papers until stop event is set."""
+    from openalex import enrich_new_publications
+
     logger.info("Enrichment worker started")
     consecutive_failures = 0
+    enriched = 0
 
     while not _enrichment_stop_event.is_set():
         try:
@@ -369,6 +370,7 @@ def _enrichment_worker_loop() -> None:
             else:
                 logger.info("Enrichment cycle: no papers to enrich, sleeping %ds", _ENRICHMENT_IDLE_SECONDS)
         except Exception as e:
+            enriched = 0
             consecutive_failures += 1
             logger.error("Enrichment cycle failed (%d consecutive): %s: %s",
                          consecutive_failures, type(e).__name__, e)
@@ -377,7 +379,7 @@ def _enrichment_worker_loop() -> None:
             logger.warning("Enrichment backing off for %ds after %d consecutive failures",
                            _ENRICHMENT_BACKOFF_SECONDS, consecutive_failures)
             _enrichment_stop_event.wait(_ENRICHMENT_BACKOFF_SECONDS)
-        else:
+        elif enriched == 0:
             _enrichment_stop_event.wait(_ENRICHMENT_IDLE_SECONDS)
 
     logger.info("Enrichment worker stopped")
