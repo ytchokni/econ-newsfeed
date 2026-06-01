@@ -15,6 +15,7 @@
 !publication.py
 !researcher.py
 !encoding_guard.py
+!feed_events.py
 !jel_classifier.py
 !jel_enrichment.py
 !paper_merge.py
