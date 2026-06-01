@@ -20,13 +20,13 @@ os.environ.setdefault("SCRAPE_API_KEY", "test-secret-key-for-ci-runs")
 os.environ.setdefault("SCRAPE_INTERVAL_HOURS", "24")
 
 import logging
-from contextlib import contextmanager
 from unittest.mock import MagicMock, call, patch
 
 import pytest
 from openai import OpenAIError
 
-from publication import Publication, PublicationExtraction, PublicationExtractionList, _title_similarity, clean_title, reconcile_title_renames
+from publication import Publication, PublicationExtraction, PublicationExtractionList, clean_title, reconcile_title_renames
+from paper_saver import _title_similarity
 
 
 # ---------------------------------------------------------------------------
@@ -113,17 +113,6 @@ def _make_llm_completion(publications: list[dict]):
     completion.usage = usage
     return completion
 
-
-def _make_connection_context(cursor):
-    """Return a context-manager mock that yields a connection whose .cursor() returns *cursor*."""
-    conn = MagicMock()
-    conn.cursor.return_value = cursor
-
-    @contextmanager
-    def _ctx():
-        yield conn
-
-    return _ctx, conn
 
 
 # ---------------------------------------------------------------------------
@@ -246,477 +235,46 @@ class TestExtractPublications:
 # ---------------------------------------------------------------------------
 
 class TestSavePublications:
-    """Tests for Publication.save_publications()."""
+    """Tests for Publication.save_publications() — now a thin wrapper over PaperSaver + FeedEventEmitter."""
 
-    def _setup_cursor(self, lastrowid=1):
-        """Create a mock cursor and wired-up connection context."""
-        cursor = MagicMock()
-        cursor.lastrowid = lastrowid
-        cursor.fetchone.side_effect = [(0,), None]  # baseline snapshot count, then no page owner
-        ctx_factory, conn = _make_connection_context(cursor)
-        return cursor, conn, ctx_factory
-
-    @patch("publication._get_previous_snapshot_html", return_value=None)
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_happy_path_insert(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
-        """New publication is inserted, paper_urls row added, authorship rows created."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=5)
-        cursor.fetchone.side_effect = [(2,), None]  # baseline snapshot count, then no page owner
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
+    @patch("feed_events.FeedEventEmitter.emit_new_paper_events", return_value=0)
+    @patch("paper_saver.PaperSaver.save_publications")
+    def test_delegates_to_paper_saver_and_emitter(self, mock_saver, mock_emitter):
+        """Publication.save_publications delegates to PaperSaver then FeedEventEmitter."""
+        from paper_saver import SaveResult
+        mock_saver.return_value = [SaveResult(1, "Paper", True, True, "working_paper")]
         pub = _make_pub_dict()
+
         Publication.save_publications("https://example.com", [pub])
 
-        # Baseline check is the first execute (hoisted before the loop)
-        baseline_sql = cursor.execute.call_args_list[0][0][0]
-        assert "html_snapshots" in baseline_sql
+        mock_saver.assert_called_once_with("https://example.com", [pub], is_seed=False)
+        mock_emitter.assert_called_once()
+        args = mock_emitter.call_args
+        assert args[0][0][0].paper_id == 1
+        assert args[1]["is_seed"] is False
 
-        # INSERT IGNORE INTO papers
-        insert_sql = cursor.execute.call_args_list[1][0][0]
-        assert "INSERT IGNORE INTO papers" in insert_sql
-
-        # paper_urls INSERT
-        paper_url_sql = cursor.execute.call_args_list[2][0][0]
-        assert "INSERT IGNORE INTO paper_urls" in paper_url_sql
-
-        # feed_event INSERT (status=working_paper, is_seed=False, baseline OK)
-        feed_sql = cursor.execute.call_args_list[3][0][0]
-        assert "INSERT INTO feed_events" in feed_sql
-
-        # Two authors -> two authorship INSERTs
-        authorship_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT IGNORE INTO authorship" in c[0][0]
-        ]
-        assert len(authorship_calls) == 2
-
-        conn.commit.assert_called_once()
-
-    @patch("publication._get_previous_snapshot_html", return_value=None)
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_dedup_lookup_existing(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
-        """When INSERT IGNORE hits a duplicate (lastrowid=0), existing paper is looked up."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
-        # Side effects: (0) baseline snapshot count, (1) title_hash lookup, (2) backfill SELECT, (3) page owner lookup
-        cursor.fetchone.side_effect = [(0,), (42,), (None, None, None), None]
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
+    @patch("feed_events.FeedEventEmitter.emit_new_paper_events", return_value=0)
+    @patch("paper_saver.PaperSaver.save_publications")
+    def test_seed_flag_passed_through(self, mock_saver, mock_emitter):
+        """is_seed=True is forwarded to both PaperSaver and FeedEventEmitter."""
+        mock_saver.return_value = []
         pub = _make_pub_dict()
-        Publication.save_publications("https://example.com", [pub])
 
-        # Should execute SELECT id FROM papers WHERE title_hash = %s
-        select_calls = [
-            c for c in cursor.execute.call_args_list
-            if "SELECT id FROM papers WHERE title_hash" in c[0][0]
-        ]
-        assert len(select_calls) == 1
-
-        # Should still insert paper_urls for the existing paper
-        paper_url_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT IGNORE INTO paper_urls" in c[0][0]
-        ]
-        assert len(paper_url_calls) == 1
-        # Verify paper_id=42 is passed
-        assert paper_url_calls[0][0][1][0] == 42
-
-    @patch("publication._get_previous_snapshot_html", return_value=None)
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_dedup_not_found_skips(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html, caplog):
-        """When INSERT IGNORE duplicate but SELECT returns nothing, log error and skip."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
-        cursor.fetchone.return_value = None
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
-        pub = _make_pub_dict()
-        with caplog.at_level(logging.ERROR):
-            Publication.save_publications("https://example.com", [pub])
-
-        assert any("Could not find publication" in r.message for r in caplog.records)
-
-        # No authorship inserts should have happened since we continued
-        authorship_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT IGNORE INTO authorship" in c[0][0]
-        ]
-        assert len(authorship_calls) == 0
-
-    @patch("publication._get_previous_snapshot_html", return_value=None)
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_feed_event_created_for_non_seed_non_published(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
-        """Non-seed paper with status != 'published' creates a feed_event."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=10)
-        cursor.fetchone.side_effect = [(2,)]  # snapshot count → baseline OK
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
-        pub = _make_pub_dict(status="accepted")
-        Publication.save_publications("https://example.com", [pub], is_seed=False)
-
-        feed_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT INTO feed_events" in c[0][0]
-        ]
-        assert len(feed_calls) == 1
-        # new_status param should be 'accepted'
-        params = feed_calls[0][0][1]
-        assert params[1] == "accepted"
-
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_seed_papers_no_feed_event(self, mock_get_conn, mock_hash, mock_get_rid):
-        """is_seed=True should NOT create feed_events."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=10)
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
-        pub = _make_pub_dict(status="working_paper")
         Publication.save_publications("https://example.com", [pub], is_seed=True)
 
-        feed_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT INTO feed_events" in c[0][0]
-        ]
-        assert len(feed_calls) == 0
+        mock_saver.assert_called_once_with("https://example.com", [pub], is_seed=True)
+        mock_emitter.assert_called_once_with([], "https://example.com", is_seed=True)
 
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_published_papers_no_feed_event(self, mock_get_conn, mock_hash, mock_get_rid):
-        """status='published' should NOT create feed_events even for non-seed."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=10)
-        mock_get_conn.side_effect = lambda: ctx_factory()
+    @patch("feed_events.FeedEventEmitter.emit_new_paper_events", return_value=0)
+    @patch("paper_saver.PaperSaver.save_publications")
+    def test_empty_publications_delegates(self, mock_saver, mock_emitter):
+        """Empty publication list still delegates correctly."""
+        mock_saver.return_value = []
 
-        pub = _make_pub_dict(status="published")
-        Publication.save_publications("https://example.com", [pub], is_seed=False)
+        Publication.save_publications("https://example.com", [])
 
-        feed_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT INTO feed_events" in c[0][0]
-        ]
-        assert len(feed_calls) == 0
-
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_null_status_no_feed_event(self, mock_get_conn, mock_hash, mock_get_rid):
-        """status=None should NOT create feed_events (guard on `pub_status` being truthy)."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=10)
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
-        pub = _make_pub_dict(status=None)
-        Publication.save_publications("https://example.com", [pub], is_seed=False)
-
-        feed_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT INTO feed_events" in c[0][0]
-        ]
-        assert len(feed_calls) == 0
-
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_author_processing(self, mock_get_conn, mock_hash, mock_get_rid):
-        """Each author generates an authorship INSERT with correct author_order."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=5)
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
-        pub = _make_pub_dict(authors=[["Alice", "Wu"], ["Bob", "Chen"], ["Carol", "Li"]])
-        Publication.save_publications("https://example.com", [pub])
-
-        authorship_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT IGNORE INTO authorship" in c[0][0]
-        ]
-        assert len(authorship_calls) == 3
-
-        # Verify author_order: 1, 2, 3
-        orders = [c[0][1][2] for c in authorship_calls]
-        assert orders == [1, 2, 3]
-
-        # All should use researcher_id=99
-        researcher_ids = [c[0][1][0] for c in authorship_calls]
-        assert researcher_ids == [99, 99, 99]
-
-        # get_researcher_id should be called for each author
-        assert mock_get_rid.call_count == 3
-        mock_get_rid.assert_any_call("Alice", "Wu", conn=conn)
-        mock_get_rid.assert_any_call("Bob", "Chen", conn=conn)
-        mock_get_rid.assert_any_call("Carol", "Li", conn=conn)
-
-    @patch("publication._get_previous_snapshot_html", return_value=None)
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_error_handling_rollback_and_log(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html, caplog):
-        """Exception during save triggers rollback and logs the publication title."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=5)
-
-        # Make cursor.execute raise on the second call (paper_urls INSERT)
-        call_count = 0
-        original_execute = cursor.execute
-
-        def _exploding_execute(*args, **kwargs):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 2:
-                raise RuntimeError("disk full")
-
-        cursor.execute.side_effect = _exploding_execute
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
-        pub = _make_pub_dict(title="My Important Paper")
-        with caplog.at_level(logging.ERROR):
-            Publication.save_publications("https://example.com", [pub])
-
-        # Should log the publication title, not just the class name
-        error_records = [r for r in caplog.records if r.levelno >= logging.ERROR]
-        assert any("My Important Paper" in r.message for r in error_records)
-        conn.rollback.assert_called_once()
-
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_multiple_publications_processed(self, mock_get_conn, mock_hash, mock_get_rid, caplog):
-        """Multiple pubs each get their own connection context and are committed."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=5)
-        # Need a fresh context each call
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
-        pubs = [_make_pub_dict(title="Paper A"), _make_pub_dict(title="Paper B")]
-        with caplog.at_level(logging.INFO):
-            Publication.save_publications("https://example.com", pubs)
-
-        assert any("2 publications processed" in r.message for r in caplog.records)
-
-    @patch("publication._get_previous_snapshot_html", return_value=None)
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_dedup_new_url_creates_feed_event(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
-        """Dedup paper appearing on a NEW url (non-seed) should create a feed event."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
-        # fetchone: (2,) baseline snapshot count (hoisted), (42,) paper lookup,
-        # backfill check, (0,) feed_events COUNT
-        cursor.fetchone.side_effect = [
-            (2,),                # baseline snapshot count → has_baseline = True
-            (42,),               # title_hash lookup
-            (None, None, None),  # backfill check
-            (0,),                # COUNT(*) from feed_events
-        ]
-        # Track execute calls to set rowcount dynamically
-        original_execute = cursor.execute
-        def _tracking_execute(*args, **kwargs):
-            original_execute(*args, **kwargs)
-            sql = args[0] if args else ""
-            if "INSERT IGNORE INTO paper_urls" in sql:
-                cursor.rowcount = 1  # new URL association
-            elif "SELECT" in sql:
-                cursor.rowcount = 1  # SELECT always returns rows
-        cursor.execute = MagicMock(side_effect=_tracking_execute)
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
-        pub = _make_pub_dict(status="working_paper")
-        Publication.save_publications("https://newsite.com", [pub], is_seed=False)
-
-        feed_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT INTO feed_events" in c[0][0]
-        ]
-        assert len(feed_calls) == 1
-        params = feed_calls[0][0][1]
-        assert params[0] == 42  # paper_id
-        assert params[1] == "working_paper"  # new_status
-
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_dedup_same_url_no_feed_event(self, mock_get_conn, mock_hash, mock_get_rid):
-        """Dedup paper on the SAME url (already known) should NOT create a feed event."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
-        cursor.fetchone.return_value = (42,)
-        # Track execute calls to set rowcount=0 for paper_urls (duplicate)
-        original_execute = cursor.execute
-        def _tracking_execute(*args, **kwargs):
-            original_execute(*args, **kwargs)
-            sql = args[0] if args else ""
-            if "INSERT IGNORE INTO paper_urls" in sql:
-                cursor.rowcount = 0  # already known URL
-        cursor.execute = MagicMock(side_effect=_tracking_execute)
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
-        pub = _make_pub_dict(status="working_paper")
-        Publication.save_publications("https://example.com", [pub], is_seed=False)
-
-        feed_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT INTO feed_events" in c[0][0]
-        ]
-        assert len(feed_calls) == 0
-
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_dedup_new_url_seed_no_feed_event(self, mock_get_conn, mock_hash, mock_get_rid):
-        """Dedup paper on new URL but is_seed=True should NOT create feed event."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
-        cursor.fetchone.return_value = (42,)
-        cursor.rowcount = 1  # new URL, but seed → should still skip
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
-        pub = _make_pub_dict(status="working_paper")
-        Publication.save_publications("https://newsite.com", [pub], is_seed=True)
-
-        feed_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT INTO feed_events" in c[0][0]
-        ]
-        assert len(feed_calls) == 0
-
-    @patch("publication._get_previous_snapshot_html", return_value=None)
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_no_feed_event_without_baseline_snapshots(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
-        """Non-seed paper should NOT get feed event if source URL has < 2 snapshots."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=10)
-        cursor.fetchone.side_effect = [(0,)]  # snapshot count returns 0
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
-        pub = _make_pub_dict(status="accepted")
-        Publication.save_publications("https://example.com", [pub], is_seed=False)
-
-        feed_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT INTO feed_events" in c[0][0]
-        ]
-        assert len(feed_calls) == 0
-
-    @patch("publication._get_previous_snapshot_html", return_value=None)
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_feed_event_created_with_baseline_snapshots(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
-        """Non-seed paper SHOULD get feed event if source URL has >= 2 snapshots."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=10)
-        cursor.fetchone.side_effect = [(2,)]  # snapshot count returns 2
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
-        pub = _make_pub_dict(status="accepted")
-        Publication.save_publications("https://example.com", [pub], is_seed=False)
-
-        feed_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT INTO feed_events" in c[0][0]
-        ]
-        assert len(feed_calls) == 1
-        params = feed_calls[0][0][1]
-        assert params[1] == "accepted"
-
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_dedup_no_feed_event_without_baseline_snapshots(self, mock_get_conn, mock_hash, mock_get_rid):
-        """Dedup paper on new URL should NOT get feed event if < 2 snapshots."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
-        # fetchone: (1,) baseline snapshot count (hoisted), (42,) title lookup, backfill check
-        cursor.fetchone.side_effect = [(1,), (42,), (None, None, None)]
-        cursor.rowcount = 1  # new URL association
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
-        pub = _make_pub_dict(status="working_paper")
-        Publication.save_publications("https://newsite.com", [pub], is_seed=False)
-
-        feed_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT INTO feed_events" in c[0][0]
-        ]
-        assert len(feed_calls) == 0
-
-    @patch("publication._get_previous_snapshot_html", return_value="<p>trade and wages</p>")
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_no_feed_event_when_title_in_previous_snapshot(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
-        """Non-seed paper with baseline but title already in prior snapshot should NOT create feed event."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=10)
-        cursor.fetchone.side_effect = [(2,)]  # snapshot count → has_baseline = True
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
-        pub = _make_pub_dict(status="accepted")
-        Publication.save_publications("https://example.com", [pub], is_seed=False)
-
-        feed_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT INTO feed_events" in c[0][0]
-        ]
-        assert len(feed_calls) == 0
-
-    @patch("publication._get_previous_snapshot_html", return_value="<p>trade and wages</p>")
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_dedup_no_feed_event_when_title_in_previous_snapshot(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
-        """Dedup paper on new URL with baseline but title already in prior snapshot should NOT create feed event."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
-        cursor.fetchone.side_effect = [
-            (2,),                # baseline snapshot count → has_baseline = True
-            (42,),               # title_hash lookup
-            (None, None, None),  # backfill check
-        ]
-        original_execute = cursor.execute
-        def _tracking_execute(*args, **kwargs):
-            original_execute(*args, **kwargs)
-            sql = args[0] if args else ""
-            if "INSERT IGNORE INTO paper_urls" in sql:
-                cursor.rowcount = 1  # new URL association
-        cursor.execute = MagicMock(side_effect=_tracking_execute)
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
-        pub = _make_pub_dict(status="working_paper")
-        Publication.save_publications("https://newsite.com", [pub], is_seed=False)
-
-        feed_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT INTO feed_events" in c[0][0]
-        ]
-        assert len(feed_calls) == 0
-
-    @patch("publication._get_previous_snapshot_html", return_value=None)
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
-    @patch("publication.Database.get_connection")
-    def test_dedup_new_url_existing_event_no_duplicate(self, mock_get_conn, mock_hash, mock_get_rid, mock_prev_html):
-        """Dedup paper on new URL that already has a feed event should NOT create duplicate."""
-        cursor, conn, ctx_factory = self._setup_cursor(lastrowid=0)
-        # fetchone: (2,) baseline (hoisted), (42,) paper lookup, backfill check,
-        # (1,) COUNT(*) showing event already exists
-        cursor.fetchone.side_effect = [(2,), (42,), (None, None, None), (1,)]
-        # Track execute to set rowcount=1 for paper_urls INSERT
-        original_execute = cursor.execute
-        def _tracking_execute(*args, **kwargs):
-            original_execute(*args, **kwargs)
-            sql = args[0] if args else ""
-            if "INSERT IGNORE INTO paper_urls" in sql:
-                cursor.rowcount = 1
-        cursor.execute = MagicMock(side_effect=_tracking_execute)
-        mock_get_conn.side_effect = lambda: ctx_factory()
-
-        pub = _make_pub_dict(status="working_paper")
-        Publication.save_publications("https://newsite.com", [pub], is_seed=False)
-
-        feed_calls = [
-            c for c in cursor.execute.call_args_list
-            if "INSERT INTO feed_events" in c[0][0]
-        ]
-        assert len(feed_calls) == 0
+        mock_saver.assert_called_once_with("https://example.com", [], is_seed=False)
+        mock_emitter.assert_called_once_with([], "https://example.com", is_seed=False)
 
 
 # ---------------------------------------------------------------------------
@@ -907,115 +465,46 @@ class TestTitleSimilarity:
 # ---------------------------------------------------------------------------
 
 class TestReconcileTitleRenames:
-    """Tests for reconcile_title_renames() post-extraction reconciliation."""
+    """Tests for reconcile_title_renames() — now a thin wrapper over PaperSaver + FeedEventEmitter."""
 
-    @patch("publication.Database.append_paper_snapshot")
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.fetch_all")
-    def test_detects_rename(self, mock_fetch_all, mock_get_conn, mock_snapshot):
-        """A disappeared title + appeared title with high overlap -> rename."""
-        mock_fetch_all.return_value = [
-            {"id": 10, "title": "Policies, Prejudice, and the Wage Gap", "title_hash": "old_hash"},
-        ]
-        mock_cursor = MagicMock()
-        mock_conn = MagicMock()
-        mock_conn.cursor.return_value = mock_cursor
-        mock_cursor.fetchone.return_value = None  # No duplicate paper found
-
-        @contextmanager
-        def _ctx():
-            yield mock_conn
-        mock_get_conn.side_effect = lambda: _ctx()
-
-        extracted = [
-            _make_pub_dict(title="Market Structures, Prejudice, and the Wage Gap"),
+    @patch("feed_events.FeedEventEmitter.emit_title_change")
+    @patch("paper_saver.PaperSaver.reconcile_title_renames")
+    def test_detects_rename_and_emits_event(self, mock_reconcile, mock_emit):
+        """Wrapper calls PaperSaver.reconcile_title_renames and emits title_change events."""
+        from paper_saver import TitleRename
+        mock_reconcile.return_value = [
+            TitleRename(paper_id=10, old_title="Old Title", new_title="New Title", similarity=0.8),
         ]
 
+        extracted = [_make_pub_dict(title="New Title")]
         reconcile_title_renames("https://example.com", extracted)
 
-        # Should UPDATE the paper title and title_hash
-        update_calls = [
-            c for c in mock_cursor.execute.call_args_list
-            if "UPDATE papers SET title" in str(c)
-        ]
-        assert len(update_calls) == 1
+        mock_reconcile.assert_called_once_with("https://example.com", extracted)
+        mock_emit.assert_called_once_with(10, "Old Title", "New Title")
 
-        # Should INSERT a title_change feed event
-        feed_calls = [
-            c for c in mock_cursor.execute.call_args_list
-            if "title_change" in str(c)
-        ]
-        assert len(feed_calls) == 1
+    @patch("feed_events.FeedEventEmitter.emit_title_change")
+    @patch("paper_saver.PaperSaver.reconcile_title_renames")
+    def test_no_renames_no_events(self, mock_reconcile, mock_emit):
+        """When PaperSaver finds no renames, no events are emitted."""
+        mock_reconcile.return_value = []
 
-    @patch("publication.Database.append_paper_snapshot")
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.fetch_all")
-    def test_no_rename_when_low_similarity(self, mock_fetch_all, mock_get_conn, mock_snapshot):
-        """Titles with < 0.5 Jaccard similarity are NOT treated as renames."""
-        mock_fetch_all.return_value = [
-            {"id": 10, "title": "International Trade Theory", "title_hash": "old_hash"},
-        ]
-        mock_cursor = MagicMock()
-        mock_conn = MagicMock()
-        mock_conn.cursor.return_value = mock_cursor
+        reconcile_title_renames("https://example.com", [_make_pub_dict()])
 
-        @contextmanager
-        def _ctx():
-            yield mock_conn
-        mock_get_conn.side_effect = lambda: _ctx()
+        mock_reconcile.assert_called_once()
+        mock_emit.assert_not_called()
 
-        extracted = [_make_pub_dict(title="Domestic Labor Markets and Employment")]
-
-        reconcile_title_renames("https://example.com", extracted)
-
-        # Should NOT update any paper -- low similarity returns early before get_connection
-        update_calls = [
-            c for c in mock_cursor.execute.call_args_list
-            if "UPDATE papers SET title" in str(c)
-        ]
-        assert len(update_calls) == 0
-
-    @patch("publication.Database.append_paper_snapshot")
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.fetch_all")
-    def test_no_op_when_all_titles_match(self, mock_fetch_all, mock_get_conn, mock_snapshot):
-        """When all extracted titles match DB titles, no reconciliation needed."""
-        mock_fetch_all.return_value = [
-            {"id": 10, "title": "Trade and Wages", "title_hash": "hash1"},
+    @patch("feed_events.FeedEventEmitter.emit_title_change")
+    @patch("paper_saver.PaperSaver.reconcile_title_renames")
+    def test_multiple_renames_emit_multiple_events(self, mock_reconcile, mock_emit):
+        """Each rename from PaperSaver generates its own title_change event."""
+        from paper_saver import TitleRename
+        mock_reconcile.return_value = [
+            TitleRename(paper_id=10, old_title="Old A", new_title="New A", similarity=0.7),
+            TitleRename(paper_id=20, old_title="Old B", new_title="New B", similarity=0.6),
         ]
 
-        extracted = [_make_pub_dict(title="Trade and Wages")]
+        reconcile_title_renames("https://example.com", [])
 
-        reconcile_title_renames("https://example.com", extracted)
-
-        # get_connection should NOT be called since appeared/disappeared are empty
-        mock_get_conn.assert_not_called()
-
-    @patch("publication.Database.append_paper_snapshot")
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.fetch_all")
-    def test_cleans_up_duplicate_paper(self, mock_fetch_all, mock_get_conn, mock_snapshot):
-        """If save_publications already inserted a duplicate, it should be deleted."""
-        mock_fetch_all.return_value = [
-            {"id": 10, "title": "Policies and the Wage Gap", "title_hash": "old_hash"},
-        ]
-        mock_cursor = MagicMock()
-        mock_conn = MagicMock()
-        mock_conn.cursor.return_value = mock_cursor
-        mock_cursor.fetchone.return_value = (99,)  # Duplicate paper exists
-
-        @contextmanager
-        def _ctx():
-            yield mock_conn
-        mock_get_conn.side_effect = lambda: _ctx()
-
-        extracted = [_make_pub_dict(title="Market Structures and the Wage Gap")]
-
-        reconcile_title_renames("https://example.com", extracted)
-
-        # Should DELETE the duplicate paper
-        delete_calls = [
-            c for c in mock_cursor.execute.call_args_list
-            if "DELETE FROM papers" in str(c)
-        ]
-        assert len(delete_calls) == 1
+        assert mock_emit.call_count == 2
+        mock_emit.assert_any_call(10, "Old A", "New A")
+        mock_emit.assert_any_call(20, "Old B", "New B")

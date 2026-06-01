@@ -1,9 +1,7 @@
 from database import Database
-from encoding_guard import guard_text_fields
-from datetime import datetime, timezone
 from bs4 import BeautifulSoup
 from llm_client import get_model, extract_json
-from pydantic import BaseModel, ValidationError, field_validator
+from pydantic import BaseModel, field_validator
 from typing import Literal, Optional
 import re
 import logging
@@ -11,11 +9,6 @@ import os
 from urllib.parse import urlparse
 
 CONTENT_MAX_CHARS = int(os.environ['CONTENT_MAX_CHARS'])
-
-# Module-level cache: persists for process lifetime (one scheduler run).
-# CPython GIL makes dict ops atomic;
-# worst case is two threads both resolving the same author (redundant, not incorrect).
-_author_id_cache: dict[tuple[str, str], int] = {}
 
 VALID_STATUSES = frozenset({
     'published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper',
@@ -210,65 +203,6 @@ def validate_publication(pub: dict) -> bool:
     return True
 
 
-def _url_has_baseline(cursor, url: str, min_snapshots: int = 2) -> bool:
-    """Return True if the URL has accumulated at least min_snapshots archived HTML states.
-
-    Guards against emitting new_paper events on first-ever extractions of a URL,
-    where all papers would appear 'new' even though they may be years old."""
-    cursor.execute(
-        """SELECT COUNT(*) FROM html_snapshots
-           WHERE url_id = (SELECT id FROM researcher_urls WHERE url = %s LIMIT 1)""",
-        (url,),
-    )
-    row = cursor.fetchone()
-    return (row[0] if row else 0) >= min_snapshots
-
-
-def _get_previous_snapshot_html(cursor, url: str) -> str | None:
-    """Fetch and decompress the previous HTML snapshot for a URL.
-
-    Returns lowercased HTML text, or None if no previous snapshot exists.
-    Designed to be called once per URL (before the publication loop),
-    not once per publication.
-
-    The query uses OFFSET 1 to skip the most-recent snapshot (the one just
-    fetched in the current run) and return the second-most-recent *distinct*
-    HTML state.  This is a proxy for "what the page looked like when the LLM
-    last ran" — not an exact match, but sufficient because researcher pages
-    rarely revert to a prior state.
-    """
-    import zlib
-
-    cursor.execute(
-        """SELECT hs.raw_html_compressed
-           FROM html_snapshots hs
-           JOIN researcher_urls ru ON ru.id = hs.url_id
-           WHERE ru.url = %s
-           ORDER BY hs.snapshot_at DESC
-           LIMIT 1 OFFSET 1""",
-        (url,),
-    )
-    row = cursor.fetchone()
-    if not row or not row[0]:
-        return None
-
-    try:
-        return zlib.decompress(row[0]).decode("utf-8", errors="replace").lower()
-    except Exception:
-        return None
-
-
-def _title_in_previous_snapshot(title: str, prev_html_lower: str | None) -> bool:
-    """Return True if the paper title appears in the previous HTML snapshot text.
-
-    If the full cleaned title is found in the pre-fetched HTML, the paper was
-    already on the page and should not generate a new_paper feed event.
-    """
-    if not prev_html_lower:
-        return False
-    return title.lower() in prev_html_lower
-
-
 class Publication:
     @staticmethod
     def save_publications(
@@ -276,206 +210,11 @@ class Publication:
         publications: list[dict],
         is_seed: bool = False,
     ) -> None:
-        """Save extracted publications to the database, using title_hash for cross-researcher dedup."""
-        with Database.get_connection() as conn:
-            # Resolve baseline + previous snapshot once for the entire batch (same URL)
-            baseline_cursor = conn.cursor(buffered=True)
-            has_baseline = _url_has_baseline(baseline_cursor, url)
-            prev_html_lower = _get_previous_snapshot_html(baseline_cursor, url)
-            baseline_cursor.close()
-
-            for pub in publications:
-                cursor = None
-                try:
-                    title = clean_title(pub['title'].strip()) if pub['title'] else ''
-                    # Fix any mojibake before saving
-                    pub = guard_text_fields(
-                        dict(pub, title=title),
-                        ["title", "abstract", "venue"],
-                        context=f"papers (url={url})",
-                    )
-                    title = pub['title']
-                    title_hash = Database.compute_title_hash(title)
-
-                    cursor = conn.cursor(buffered=True)
-
-                    # INSERT IGNORE leverages uq_title_hash index for cross-researcher dedup.
-                    # is_seed is set on INSERT but NOT updated on duplicate (preserves original).
-                    cursor.execute(
-                        """
-                        INSERT IGNORE INTO papers (source_url, title, title_hash, year, venue, abstract, discovered_at, status, draft_url, is_seed)
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
-                        """,
-                        (url, title, title_hash, pub.get('year'), pub.get('venue'),
-                         pub.get('abstract'), datetime.now(timezone.utc), pub.get('status'),
-                         pub.get('draft_url'), is_seed),
-                    )
-
-                    if cursor.lastrowid:
-                        publication_id = cursor.lastrowid
-                        # Add source URL to paper_urls
-                        cursor.execute(
-                            """
-                            INSERT IGNORE INTO paper_urls (paper_id, url, discovered_at)
-                            VALUES (%s, %s, %s)
-                            """,
-                            (publication_id, url, datetime.now(timezone.utc)),
-                        )
-                        # Create new_paper feed event only when source URL has established baseline
-                        # AND the paper title was NOT in the previous HTML snapshot
-                        pub_status = pub.get('status')
-                        if not is_seed and pub_status and pub_status != 'published':
-                            if has_baseline and not _title_in_previous_snapshot(title, prev_html_lower):
-                                cursor.execute(
-                                    """
-                                    INSERT INTO feed_events (paper_id, event_type, new_status, created_at)
-                                    VALUES (%s, 'new_paper', %s, %s)
-                                    """,
-                                    (publication_id, pub_status, datetime.now(timezone.utc)),
-                                )
-                            elif not has_baseline:
-                                logging.info(
-                                    "Suppressed new_paper event for '%s': source URL lacks baseline snapshots",
-                                    pub['title'],
-                                )
-                            else:
-                                logging.info(
-                                    "Suppressed new_paper event for '%s': title found in previous HTML snapshot",
-                                    pub['title'],
-                                )
-                    else:
-                        # Duplicate found via title_hash — fetch existing id
-                        cursor.execute(
-                            "SELECT id FROM papers WHERE title_hash = %s",
-                            (title_hash,),
-                        )
-                        row = cursor.fetchone()
-                        if not row:
-                            logging.error(f"Could not find publication after INSERT IGNORE: {pub['title']}")
-                            continue
-                        publication_id = row[0]
-                        # Backfill NULL fields from new extraction
-                        cursor.execute(
-                            "SELECT abstract, year, venue FROM papers WHERE id = %s",
-                            (publication_id,),
-                        )
-                        existing = cursor.fetchone()
-                        if existing:
-                            existing_abstract, existing_year, existing_venue = existing
-                            new_abstract = pub.get('abstract')
-                            new_year = pub.get('year')
-                            new_venue = pub.get('venue')
-                            needs_backfill = (
-                                (not existing_abstract and new_abstract)
-                                or (not existing_year and new_year)
-                                or (not existing_venue and new_venue)
-                            )
-                            if needs_backfill:
-                                cursor.execute(
-                                    """UPDATE papers SET
-                                        abstract = COALESCE(abstract, %s),
-                                        year = COALESCE(year, %s),
-                                        venue = COALESCE(venue, %s)
-                                    WHERE id = %s""",
-                                    (new_abstract, new_year, new_venue, publication_id),
-                                )
-                                logging.info(f"Backfilled metadata for duplicate: {pub['title']}")
-                        # Add the new source URL to paper_urls for cross-researcher tracking
-                        cursor.execute(
-                            """
-                            INSERT IGNORE INTO paper_urls (paper_id, url, discovered_at)
-                            VALUES (%s, %s, %s)
-                            """,
-                            (publication_id, url, datetime.now(timezone.utc)),
-                        )
-                        new_to_this_url = cursor.rowcount > 0
-                        pub_status = pub.get('status')
-                        if not is_seed and new_to_this_url and pub_status and pub_status != 'published':
-                            if has_baseline and not _title_in_previous_snapshot(title, prev_html_lower):
-                                cursor.execute(
-                                    "SELECT COUNT(*) FROM feed_events WHERE paper_id = %s AND event_type = 'new_paper'",
-                                    (publication_id,),
-                                )
-                                if cursor.fetchone()[0] == 0:
-                                    cursor.execute(
-                                        """
-                                        INSERT INTO feed_events (paper_id, event_type, new_status, created_at)
-                                        VALUES (%s, 'new_paper', %s, %s)
-                                        """,
-                                        (publication_id, pub_status, datetime.now(timezone.utc)),
-                                    )
-                            elif not has_baseline:
-                                logging.info(
-                                    "Suppressed new_paper event for '%s': source URL lacks baseline snapshots",
-                                    pub['title'],
-                                )
-                            else:
-                                logging.info(
-                                    "Suppressed new_paper event for '%s': title found in previous HTML snapshot",
-                                    pub['title'],
-                                )
-                        logging.info(f"Duplicate publication (title_hash match), added source URL: {pub['title']}")
-
-                    # Process LLM-extracted authors
-                    authors = pub['authors']
-                    for author_order, author in enumerate(authors, start=1):
-                        if not author:
-                            continue
-                        if len(author) == 1:
-                            first_name, last_name = "", author[0]
-                        elif len(author) == 2:
-                            first_name, last_name = author
-                        else:
-                            # e.g. ["Jose", "Luis", "Garcia"] -> "Jose Luis", "Garcia"
-                            first_name = " ".join(author[:-1])
-                            last_name = author[-1]
-                        cache_key = (first_name, last_name)
-                        if cache_key in _author_id_cache:
-                            author_id = _author_id_cache[cache_key]
-                        else:
-                            author_id = Database.get_researcher_id(first_name, last_name, conn=conn)
-                            _author_id_cache[cache_key] = author_id
-
-                        cursor.execute(
-                            """
-                            INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order)
-                            VALUES (%s, %s, %s)
-                            """,
-                            (author_id, publication_id, author_order),
-                        )
-
-                    # Always ensure the page owner is an author (INSERT IGNORE = no-op if already present)
-                    cursor.execute(
-                        """SELECT r.id
-                           FROM researchers r
-                           JOIN researcher_urls ru ON ru.researcher_id = r.id
-                           WHERE ru.url = %s LIMIT 1""",
-                        (url,),
-                    )
-                    owner_row = cursor.fetchone()
-                    if owner_row:
-                        cursor.execute(
-                            """
-                            INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order)
-                            VALUES (%s, %s, %s)
-                            """,
-                            (owner_row[0], publication_id, 0),
-                        )
-
-                    conn.commit()
-                    logging.info(f"Publication saved successfully: {pub['title']}")
-
-                except Exception as e:
-                    logging.error(
-                        "Error saving publication '%s': %s: %s",
-                        pub.get('title', '<unknown>'), type(e).__name__, e,
-                    )
-                    conn.rollback()
-                finally:
-                    if cursor:
-                        cursor.close()
-
-        logging.info(f"{len(publications)} publications processed for {url}")
+        """Save extracted publications. Delegates to PaperSaver + FeedEventEmitter."""
+        from paper_saver import PaperSaver
+        from feed_events import FeedEventEmitter
+        results = PaperSaver.save_publications(url, publications, is_seed=is_seed)
+        FeedEventEmitter.emit_new_paper_events(results, url, is_seed=is_seed)
 
     @staticmethod
     def extract_relevant_html(html_content: str) -> str:
@@ -545,21 +284,15 @@ Content:
 
 
 
-def _title_similarity(title_a: str | None, title_b: str | None) -> float:
-    """Jaccard similarity on normalized word tokens. Used to detect title renames."""
-    tokens_a = set(Database.normalize_title(title_a).split())
-    tokens_b = set(Database.normalize_title(title_b).split())
-    if not tokens_a or not tokens_b:
-        return 0.0
-    return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
-
-
 def append_snapshots_for_pubs(pubs: list[dict], source_url: str) -> None:
     """Append paper snapshots for a batch of extracted publications.
 
     Resolves title_hash → paper_id in a single query, then appends
-    a snapshot for each matched paper.
+    a snapshot for each matched paper. Emits status_change events
+    via FeedEventEmitter when status changes are detected.
     """
+    from feed_events import FeedEventEmitter
+
     hash_to_pub = {}
     for pub in pubs:
         title = pub.get('title')
@@ -575,7 +308,7 @@ def append_snapshots_for_pubs(pubs: list[dict], source_url: str) -> None:
     )
     for row in rows:
         pub = hash_to_pub[row['title_hash']]
-        Database.append_paper_snapshot(
+        result = Database.append_paper_snapshot(
             paper_id=row['id'],
             status=pub.get('status'),
             venue=pub.get('venue'),
@@ -585,136 +318,14 @@ def append_snapshots_for_pubs(pubs: list[dict], source_url: str) -> None:
             source_url=source_url,
             title=pub.get('title'),
         )
-
-
-_SIMILARITY_THRESHOLD = 0.5
+        if result.status_changed:
+            FeedEventEmitter.emit_status_change(row['id'], result.old_status, result.new_status)
 
 
 def reconcile_title_renames(source_url: str, extracted_pubs: list[dict]) -> None:
-    """Detect title renames by comparing extracted papers against DB papers for the same URL.
-
-    For each disappeared+appeared title pair with Jaccard similarity >= 0.5:
-    - Update the existing paper's title and title_hash
-    - Record the old title in a paper_snapshot
-    - Delete any duplicate paper row that save_publications may have created
-    - Create a title_change feed_event
-    """
-    existing = Database.fetch_all(
-        "SELECT id, title, title_hash FROM papers WHERE source_url = %s",
-        (source_url,),
-    )
-    if not existing:
-        return
-
-    existing_normalized = {
-        Database.normalize_title(p['title']): p for p in existing
-    }
-    extracted_normalized = {
-        Database.normalize_title(pub['title']): pub for pub in extracted_pubs if pub.get('title')
-    }
-
-    disappeared = set(existing_normalized.keys()) - set(extracted_normalized.keys())
-    appeared = set(extracted_normalized.keys()) - set(existing_normalized.keys())
-
-    if not disappeared or not appeared:
-        return
-
-    # Greedy best-match: pair each appeared title with its best disappeared match
-    matched_disappeared = set()
-    renames = []
-
-    for app_norm in appeared:
-        best_sim = 0.0
-        best_dis = None
-        for dis_norm in disappeared:
-            if dis_norm in matched_disappeared:
-                continue
-            sim = _title_similarity(
-                existing_normalized[dis_norm]['title'],
-                extracted_normalized[app_norm]['title'],
-            )
-            if sim > best_sim:
-                best_sim = sim
-                best_dis = dis_norm
-
-        if best_dis is not None and best_sim >= _SIMILARITY_THRESHOLD:
-            matched_disappeared.add(best_dis)
-            renames.append((
-                existing_normalized[best_dis],  # old paper row
-                extracted_normalized[app_norm],  # new pub dict
-                best_sim,
-            ))
-
-    if not renames:
-        return
-
-    with Database.get_connection() as conn:
-        cursor = conn.cursor(buffered=True)
-        try:
-            for old_paper, new_pub, sim in renames:
-                old_id = old_paper['id']
-                old_title = old_paper['title']
-                new_title = new_pub['title'].strip()
-                new_hash = Database.compute_title_hash(new_title)
-
-                # Record old title in paper_snapshot
-                Database.append_paper_snapshot(
-                    paper_id=old_id,
-                    status=new_pub.get('status'),
-                    venue=new_pub.get('venue'),
-                    abstract=new_pub.get('abstract'),
-                    draft_url=new_pub.get('draft_url'),
-                    year=new_pub.get('year'),
-                    source_url=source_url,
-                    title=old_title,
-                )
-
-                # Update the paper in place
-                cursor.execute(
-                    "UPDATE papers SET title = %s, title_hash = %s WHERE id = %s",
-                    (new_title, new_hash, old_id),
-                )
-
-                # Delete duplicate paper row if save_publications inserted one
-                cursor.execute(
-                    "SELECT id FROM papers WHERE title_hash = %s AND id != %s",
-                    (new_hash, old_id),
-                )
-                dup = cursor.fetchone()
-                if dup:
-                    dup_id = dup[0]
-                    # Transfer paper_urls from duplicate to original
-                    cursor.execute(
-                        "UPDATE IGNORE paper_urls SET paper_id = %s WHERE paper_id = %s",
-                        (old_id, dup_id),
-                    )
-                    # Delete false feed events for the duplicate
-                    cursor.execute(
-                        "DELETE FROM feed_events WHERE paper_id = %s",
-                        (dup_id,),
-                    )
-                    # Delete the duplicate paper (CASCADE deletes authorship, etc.)
-                    cursor.execute(
-                        "DELETE FROM papers WHERE id = %s",
-                        (dup_id,),
-                    )
-
-                # Create title_change feed event
-                cursor.execute(
-                    """INSERT INTO feed_events
-                       (paper_id, event_type, old_title, new_title, created_at)
-                       VALUES (%s, 'title_change', %s, %s, %s)""",
-                    (old_id, old_title, new_title, datetime.now(timezone.utc)),
-                )
-
-                logging.info(
-                    "Title rename detected (sim=%.2f): '%s' → '%s' (paper_id=%d)",
-                    sim, old_title[:50], new_title[:50], old_id,
-                )
-
-            conn.commit()
-        except Exception as e:
-            conn.rollback()
-            logging.error("Error reconciling title renames for %s: %s", source_url, e)
-        finally:
-            cursor.close()
+    """Detect title renames. Delegates to PaperSaver + FeedEventEmitter."""
+    from paper_saver import PaperSaver
+    from feed_events import FeedEventEmitter
+    renames = PaperSaver.reconcile_title_renames(source_url, extracted_pubs)
+    for r in renames:
+        FeedEventEmitter.emit_title_change(r.paper_id, r.old_title, r.new_title)

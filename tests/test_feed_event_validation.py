@@ -3,7 +3,7 @@ import unittest
 import zlib
 from unittest.mock import MagicMock, patch
 
-from publication import _title_in_previous_snapshot, _get_previous_snapshot_html
+from feed_events import _title_in_previous_snapshot, _get_previous_snapshot_html
 
 
 class TestTitleInPreviousSnapshot(unittest.TestCase):

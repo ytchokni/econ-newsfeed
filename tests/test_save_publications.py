@@ -1,15 +1,15 @@
 # tests/test_save_publications.py
-"""Tests for Publication.save_publications edge cases."""
+"""Tests for PaperSaver.save_publications edge cases."""
 import pytest
 from unittest.mock import patch, MagicMock, call
-from publication import Publication, _author_id_cache
+from paper_saver import PaperSaver, _author_id_cache
 
 
 def _mock_conn():
     """Create a mock DB connection that simulates INSERT IGNORE with new row."""
     mock_cursor = MagicMock()
     mock_cursor.lastrowid = 1  # Simulate new paper inserted
-    mock_cursor.fetchone.side_effect = [(0,), None]  # baseline snapshot count, then no page owner
+    mock_cursor.fetchone.return_value = None  # no page owner
     mock_conn = MagicMock()
     mock_conn.cursor.return_value = mock_cursor
     mock_conn.__enter__ = MagicMock(return_value=mock_conn)
@@ -25,19 +25,12 @@ def clear_author_cache():
     _author_id_cache.clear()
 
 
-@pytest.fixture(autouse=True)
-def mock_previous_snapshot():
-    """Prevent _get_previous_snapshot_html from consuming mock cursor's fetchone calls."""
-    with patch("publication._get_previous_snapshot_html", return_value=None):
-        yield
-
-
 class TestAuthorNormalization:
     """Author lists with != 2 elements should not crash save_publications."""
 
-    @patch("publication.Database.get_researcher_id", return_value=42)
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.Database.get_researcher_id", return_value=42)
+    @patch("paper_saver.Database.get_connection")
+    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
     def test_three_element_author_joins_first_names(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -45,7 +38,7 @@ class TestAuthorNormalization:
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
 
-        Publication.save_publications("http://example.com", [{
+        PaperSaver.save_publications("http://example.com", [{
             "title": "Test Paper",
             "authors": [["Jose", "Luis", "Garcia"]],
             "year": "2024",
@@ -53,9 +46,9 @@ class TestAuthorNormalization:
 
         mock_get_researcher.assert_called_once_with("Jose Luis", "Garcia", conn=conn)
 
-    @patch("publication.Database.get_researcher_id", return_value=42)
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.Database.get_researcher_id", return_value=42)
+    @patch("paper_saver.Database.get_connection")
+    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
     def test_single_element_author_uses_empty_first_name(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -63,7 +56,7 @@ class TestAuthorNormalization:
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
 
-        Publication.save_publications("http://example.com", [{
+        PaperSaver.save_publications("http://example.com", [{
             "title": "Test Paper",
             "authors": [["Garcia"]],
             "year": "2024",
@@ -71,19 +64,19 @@ class TestAuthorNormalization:
 
         mock_get_researcher.assert_called_once_with("", "Garcia", conn=conn)
 
-    @patch("publication.Database.get_researcher_id", return_value=42)
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.Database.get_researcher_id", return_value=42)
+    @patch("paper_saver.Database.get_connection")
+    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
     def test_empty_author_list_falls_back_to_page_owner(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
         """[[]] (empty inner list) -> page owner added by ID, don't crash."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        # (0,) for baseline snapshot count, then (owner_id,) for page owner lookup
-        cursor.fetchone.side_effect = [(0,), (42,)]
+        # (owner_id,) for page owner lookup
+        cursor.fetchone.return_value = (42,)
 
-        Publication.save_publications("http://example.com", [{
+        PaperSaver.save_publications("http://example.com", [{
             "title": "Test Paper",
             "authors": [[]],
             "year": "2024",
@@ -98,9 +91,9 @@ class TestAuthorNormalization:
         assert len(authorship_inserts) == 1
         assert authorship_inserts[0][0][1][0] == 42  # owner_id
 
-    @patch("publication.Database.get_researcher_id", return_value=42)
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.Database.get_researcher_id", return_value=42)
+    @patch("paper_saver.Database.get_connection")
+    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
     def test_normal_two_element_author_unchanged(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -108,7 +101,7 @@ class TestAuthorNormalization:
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
 
-        Publication.save_publications("http://example.com", [{
+        PaperSaver.save_publications("http://example.com", [{
             "title": "Test Paper",
             "authors": [["John", "Doe"]],
             "year": "2024",
@@ -120,9 +113,9 @@ class TestAuthorNormalization:
 class TestCursorCleanup:
     """Cursor must be closed even when an exception occurs mid-save."""
 
-    @patch("publication.Database.get_researcher_id", side_effect=RuntimeError("db error"))
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.Database.get_researcher_id", side_effect=RuntimeError("db error"))
+    @patch("paper_saver.Database.get_connection")
+    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
     def test_cursor_closed_on_author_error(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -131,7 +124,7 @@ class TestCursorCleanup:
         mock_get_conn.return_value = conn
 
         # Should not raise — error is caught and logged
-        Publication.save_publications("http://example.com", [{
+        PaperSaver.save_publications("http://example.com", [{
             "title": "Paper A",
             "authors": [["John", "Doe"]],
             "year": "2024",
@@ -139,9 +132,9 @@ class TestCursorCleanup:
 
         cursor.close.assert_called()
 
-    @patch("publication.Database.get_researcher_id", return_value=42)
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.Database.get_researcher_id", return_value=42)
+    @patch("paper_saver.Database.get_connection")
+    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
     def test_second_pub_succeeds_after_first_pub_fails(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -152,7 +145,7 @@ class TestCursorCleanup:
         # First call raises, second succeeds
         mock_get_researcher.side_effect = [RuntimeError("fail"), 42]
 
-        Publication.save_publications("http://example.com", [
+        PaperSaver.save_publications("http://example.com", [
             {"title": "Paper A", "authors": [["Bad", "Author"]], "year": "2024"},
             {"title": "Paper B", "authors": [["Good", "Author"]], "year": "2024"},
         ])
@@ -164,9 +157,9 @@ class TestCursorCleanup:
 class TestAuthorLookupCache:
     """get_researcher_id should be called once per unique author, not per occurrence."""
 
-    @patch("publication.Database.get_researcher_id", return_value=42)
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.Database.get_researcher_id", return_value=42)
+    @patch("paper_saver.Database.get_connection")
+    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
     def test_same_author_across_pubs_looked_up_once(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -179,27 +172,25 @@ class TestAuthorLookupCache:
             for i in range(3)
         ]
 
-        Publication.save_publications("http://example.com", pubs)
+        PaperSaver.save_publications("http://example.com", pubs)
 
         # 2 unique authors x 1 call each = 2 calls total (not 6)
         assert mock_get_researcher.call_count == 2
 
-    @patch("publication.Database.get_researcher_id", return_value=42)
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.Database.get_researcher_id", return_value=42)
+    @patch("paper_saver.Database.get_connection")
+    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
     def test_cache_persists_across_save_publications_calls(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
         """Cache carries over between save_publications calls (same process, different URLs)."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        # Two save_publications calls = 2x (baseline + owner lookup)
-        cursor.fetchone.side_effect = [(0,), None, (0,), None]
 
         pub = [{"title": "Paper A", "authors": [["John", "Doe"]], "year": "2024"}]
 
-        Publication.save_publications("http://url1.com", pub)
-        Publication.save_publications("http://url2.com", pub)
+        PaperSaver.save_publications("http://url1.com", pub)
+        PaperSaver.save_publications("http://url2.com", pub)
 
         # John Doe looked up once across both calls
         assert mock_get_researcher.call_count == 1
@@ -208,9 +199,9 @@ class TestAuthorLookupCache:
 class TestAbstractBackfill:
     """When a duplicate paper is found, backfill NULL abstract/year/venue from new extraction."""
 
-    @patch("publication.Database.get_researcher_id", return_value=42)
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.Database.get_researcher_id", return_value=42)
+    @patch("paper_saver.Database.get_connection")
+    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
     def test_backfills_abstract_when_existing_is_null(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -221,14 +212,15 @@ class TestAbstractBackfill:
         cursor.lastrowid = 0
         # fetchone for title_hash lookup → returns paper id=10
         # fetchone for existing paper fields → abstract is NULL
+        # fetchone for page owner → None
         cursor.fetchone.side_effect = [
-            (0,),                # baseline snapshot count (hoisted before loop)
             (10,),               # SELECT id FROM papers WHERE title_hash = ...
             (None, None, None),  # SELECT abstract, year, venue FROM papers WHERE id = ...
+            None,                # page owner lookup
         ]
         cursor.rowcount = 1  # new_to_this_url = True for paper_urls INSERT
 
-        Publication.save_publications("http://new-source.com", [{
+        PaperSaver.save_publications("http://new-source.com", [{
             "title": "Test Paper",
             "authors": [["John", "Doe"]],
             "year": "2024",
@@ -243,9 +235,9 @@ class TestAbstractBackfill:
         ]
         assert len(update_calls) == 1, f"Expected 1 backfill UPDATE, got {len(update_calls)}"
 
-    @patch("publication.Database.get_researcher_id", return_value=42)
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.Database.get_researcher_id", return_value=42)
+    @patch("paper_saver.Database.get_connection")
+    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
     def test_skips_backfill_when_existing_has_all_fields(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -254,13 +246,13 @@ class TestAbstractBackfill:
         mock_get_conn.return_value = conn
         cursor.lastrowid = 0
         cursor.fetchone.side_effect = [
-            (0,),                                  # baseline snapshot count (hoisted)
             (10,),                                 # title_hash lookup
             ("Existing abstract", "2023", "QJE"),  # all fields populated
+            None,                                  # page owner lookup
         ]
         cursor.rowcount = 1
 
-        Publication.save_publications("http://new-source.com", [{
+        PaperSaver.save_publications("http://new-source.com", [{
             "title": "Test Paper",
             "authors": [["John", "Doe"]],
             "abstract": "New abstract",
@@ -278,19 +270,19 @@ class TestAbstractBackfill:
 class TestPageOwnerAuthorship:
     """The page owner should always be added as an author on papers from their page."""
 
-    @patch("publication.Database.get_researcher_id", return_value=42)
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.Database.get_researcher_id", return_value=42)
+    @patch("paper_saver.Database.get_connection")
+    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
     def test_uses_page_owner_when_no_authors(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
         """Empty authors list should still add the page owner as author."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        # (0,) for baseline snapshot count, then (owner_id,) for page owner lookup
-        cursor.fetchone.side_effect = [(0,), (55,)]
+        # (owner_id,) for page owner lookup
+        cursor.fetchone.return_value = (55,)
 
-        Publication.save_publications("https://www.stantcheva.com/research/", [{
+        PaperSaver.save_publications("https://www.stantcheva.com/research/", [{
             "title": "Understanding of Trade",
             "authors": [],
             "year": "2022",
@@ -306,19 +298,19 @@ class TestPageOwnerAuthorship:
         # Verify owner_id=55 was inserted
         assert authorship_inserts[0][0][1][0] == 55
 
-    @patch("publication.Database.get_researcher_id", return_value=42)
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.Database.get_researcher_id", return_value=42)
+    @patch("paper_saver.Database.get_connection")
+    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
     def test_owner_added_alongside_extracted_authors(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
         """Page owner is added even when LLM extracts other authors."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        # (0,) baseline, then (owner_id,) for page owner lookup
-        cursor.fetchone.side_effect = [(0,), (55,)]
+        # (owner_id,) for page owner lookup
+        cursor.fetchone.return_value = (55,)
 
-        Publication.save_publications("https://example.com", [{
+        PaperSaver.save_publications("https://example.com", [{
             "title": "Test Paper",
             "authors": [["John", "Doe"]],
             "year": "2024",
@@ -333,19 +325,19 @@ class TestPageOwnerAuthorship:
         ]
         assert len(authorship_inserts) == 2
 
-    @patch("publication.Database.get_researcher_id", return_value=42)
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.Database.get_researcher_id", return_value=42)
+    @patch("paper_saver.Database.get_connection")
+    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
     def test_no_crash_when_page_owner_not_found(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
         """If page owner lookup returns None, only extracted authors are added."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        # (0,) baseline, then None for page owner lookup
-        cursor.fetchone.side_effect = [(0,), None]
+        # None for page owner lookup
+        cursor.fetchone.return_value = None
 
-        Publication.save_publications("https://unknown.com", [{
+        PaperSaver.save_publications("https://unknown.com", [{
             "title": "Orphan Paper",
             "authors": [["John", "Doe"]],
             "year": "2024",
@@ -358,19 +350,19 @@ class TestPageOwnerAuthorship:
         ]
         assert len(authorship_inserts) == 1
 
-    @patch("publication.Database.get_researcher_id", return_value=99)
-    @patch("publication.Database.get_connection")
-    @patch("publication.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.Database.get_researcher_id", return_value=99)
+    @patch("paper_saver.Database.get_connection")
+    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
     def test_page_owner_added_alongside_coauthors(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
         """Page owner should be added as author even when LLM extracts other authors."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        # (0,) baseline, then (owner_id=7,) for page owner lookup
-        cursor.fetchone.side_effect = [(0,), (7,)]
+        # (owner_id=7,) for page owner lookup
+        cursor.fetchone.return_value = (7,)
 
-        Publication.save_publications("http://mogstad.com/research", [{
+        PaperSaver.save_publications("http://mogstad.com/research", [{
             "title": "Inequality in Current and Lifetime Income",
             "authors": [["R.", "Aaberge"]],
             "year": "2023",
