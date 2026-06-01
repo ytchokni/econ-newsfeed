@@ -1,5 +1,5 @@
 import { useState } from "react";
-import type { AdminDashboardData, DeactivatedUrl, AtRiskUrl } from "@/lib/api";
+import type { AdminDashboardData } from "@/lib/api";
 import { useDeactivatedUrls, useAtRiskUrls, reactivateUrl } from "@/lib/api";
 
 interface Props {
