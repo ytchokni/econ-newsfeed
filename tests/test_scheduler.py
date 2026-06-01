@@ -9,7 +9,11 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 import scheduler
-from scheduler import run_scrape_job, create_scrape_log, update_scrape_log, _cleanup_stale_scrape_logs
+from scheduler import (
+    run_scrape_job, create_scrape_log, update_scrape_log,
+    _cleanup_stale_scrape_logs,
+    _enrichment_worker_loop, start_enrichment_worker, stop_enrichment_worker,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -731,3 +735,137 @@ class TestStaleLogCleanup:
         _cleanup_stale_scrape_logs()
 
         mock_exec.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 10. Enrichment worker
+# ---------------------------------------------------------------------------
+
+class TestEnrichmentWorkerLoop:
+    """Tests for the continuous enrichment background worker."""
+
+    def setup_method(self):
+        """Clear the stop event before each test."""
+        import scheduler
+        scheduler._enrichment_stop_event.clear()
+
+    def test_enriches_and_sleeps_when_papers_found(self):
+        """Worker calls enrich_new_publications, then sleeps IDLE interval."""
+        call_count = [0]
+        def enrich_then_stop(limit):
+            call_count[0] += 1
+            if call_count[0] >= 2:
+                import scheduler
+                scheduler._enrichment_stop_event.set()
+            return 5
+
+        with patch("scheduler.enrich_new_publications", side_effect=enrich_then_stop) as mock_enrich, \
+             patch("scheduler._ENRICHMENT_IDLE_SECONDS", 0), \
+             patch("scheduler._ENRICHMENT_BACKOFF_SECONDS", 0):
+            _enrichment_worker_loop()
+
+        assert mock_enrich.call_count == 2
+
+    def test_sleeps_idle_interval_when_no_papers(self):
+        """Worker sleeps the idle interval when no papers to enrich."""
+        call_count = [0]
+        def enrich_then_stop(limit):
+            call_count[0] += 1
+            if call_count[0] >= 1:
+                import scheduler
+                scheduler._enrichment_stop_event.set()
+            return 0
+
+        with patch("scheduler.enrich_new_publications", side_effect=enrich_then_stop), \
+             patch("scheduler._ENRICHMENT_IDLE_SECONDS", 0), \
+             patch("scheduler._ENRICHMENT_BACKOFF_SECONDS", 0):
+            _enrichment_worker_loop()
+
+    def test_backs_off_on_consecutive_errors(self):
+        """Worker extends sleep after consecutive failures."""
+        call_count = [0]
+        def fail_then_stop(limit):
+            call_count[0] += 1
+            if call_count[0] >= 6:
+                import scheduler
+                scheduler._enrichment_stop_event.set()
+                return 0
+            raise RuntimeError("OpenAlex down")
+
+        with patch("scheduler.enrich_new_publications", side_effect=fail_then_stop) as mock_enrich, \
+             patch("scheduler._ENRICHMENT_BACKOFF_THRESHOLD", 3), \
+             patch("scheduler._ENRICHMENT_IDLE_SECONDS", 0), \
+             patch("scheduler._ENRICHMENT_BACKOFF_SECONDS", 0):
+            _enrichment_worker_loop()
+
+        assert mock_enrich.call_count == 6
+
+    def test_resets_backoff_on_success(self):
+        """Consecutive failure count resets after a successful enrichment."""
+        call_count = [0]
+        def fail_succeed_stop(limit):
+            call_count[0] += 1
+            if call_count[0] <= 2:
+                raise RuntimeError("transient error")
+            if call_count[0] == 3:
+                return 5
+            if call_count[0] <= 5:
+                raise RuntimeError("transient error again")
+            import scheduler
+            scheduler._enrichment_stop_event.set()
+            return 0
+
+        with patch("scheduler.enrich_new_publications", side_effect=fail_succeed_stop), \
+             patch("scheduler._ENRICHMENT_IDLE_SECONDS", 0), \
+             patch("scheduler._ENRICHMENT_BACKOFF_SECONDS", 0):
+            _enrichment_worker_loop()
+
+
+class TestStartStopEnrichmentWorker:
+    """Tests for starting and stopping the enrichment worker thread."""
+
+    def test_start_creates_daemon_thread(self):
+        """start_enrichment_worker creates a daemon thread."""
+        with patch("scheduler.threading.Thread") as mock_thread_cls:
+            mock_thread = MagicMock()
+            mock_thread_cls.return_value = mock_thread
+
+            start_enrichment_worker()
+
+            mock_thread_cls.assert_called_once()
+            assert mock_thread_cls.call_args[1]["daemon"] is True
+            mock_thread.start.assert_called_once()
+
+            import scheduler
+            scheduler._enrichment_thread = None
+            scheduler._enrichment_stop_event.clear()
+
+    def test_start_is_idempotent(self):
+        """Calling start twice doesn't create a second thread."""
+        import scheduler
+        scheduler._enrichment_thread = MagicMock(is_alive=MagicMock(return_value=True))
+        try:
+            with patch("scheduler.threading.Thread") as mock_thread_cls:
+                start_enrichment_worker()
+                mock_thread_cls.assert_not_called()
+        finally:
+            scheduler._enrichment_thread = None
+
+    def test_stop_sets_event_and_joins(self):
+        """stop_enrichment_worker signals the thread and waits for it."""
+        import scheduler
+        mock_thread = MagicMock()
+        scheduler._enrichment_thread = mock_thread
+        scheduler._enrichment_stop_event.clear()
+
+        stop_enrichment_worker()
+
+        assert scheduler._enrichment_stop_event.is_set()
+        mock_thread.join.assert_called_once_with(timeout=30)
+        assert scheduler._enrichment_thread is None
+
+    def test_stop_when_not_running_is_noop(self):
+        """stop_enrichment_worker does nothing if no thread is running."""
+        import scheduler
+        scheduler._enrichment_thread = None
+        stop_enrichment_worker()  # should not raise

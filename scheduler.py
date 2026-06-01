@@ -14,6 +14,7 @@ from researcher import Researcher
 from html_fetcher import HTMLFetcher
 from publication import Publication, reconcile_title_renames, append_snapshots_for_pubs
 from link_extractor import match_and_save_paper_links
+from openalex import enrich_new_publications
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +70,14 @@ def is_scrape_running() -> bool:
 
 SCRAPE_INTERVAL_HOURS = int(os.environ.get('SCRAPE_INTERVAL_HOURS', '24'))
 SCRAPE_ON_STARTUP = os.environ.get('SCRAPE_ON_STARTUP', 'false').lower() == 'true'
+ENRICHMENT_WORKER_ENABLED = os.environ.get('ENRICHMENT_WORKER_ENABLED', 'false').lower() == 'true'
+_ENRICHMENT_IDLE_SECONDS = 300  # 5 minutes
+_ENRICHMENT_BATCH_SIZE = 50
+_ENRICHMENT_BACKOFF_THRESHOLD = 5
+_ENRICHMENT_BACKOFF_SECONDS = 600  # 10 minutes
+
+_enrichment_thread = None
+_enrichment_stop_event = threading.Event()
 
 
 def create_scrape_log() -> int:
@@ -344,6 +353,62 @@ def _handle_sigterm(signum: int, frame: object) -> None:
     Waits for any running scrape job to complete before exiting."""
     logger.info("Received signal %s, shutting down scheduler gracefully...", signum)
     shutdown_scheduler()
+
+
+def _enrichment_worker_loop() -> None:
+    """Continuously enrich unenriched papers until stop event is set."""
+    logger.info("Enrichment worker started")
+    consecutive_failures = 0
+
+    while not _enrichment_stop_event.is_set():
+        try:
+            enriched = enrich_new_publications(limit=_ENRICHMENT_BATCH_SIZE)
+            consecutive_failures = 0
+            if enriched:
+                logger.info("Enrichment cycle: %d papers enriched", enriched)
+            else:
+                logger.info("Enrichment cycle: no papers to enrich, sleeping %ds", _ENRICHMENT_IDLE_SECONDS)
+        except Exception as e:
+            consecutive_failures += 1
+            logger.error("Enrichment cycle failed (%d consecutive): %s: %s",
+                         consecutive_failures, type(e).__name__, e)
+
+        if consecutive_failures >= _ENRICHMENT_BACKOFF_THRESHOLD:
+            logger.warning("Enrichment backing off for %ds after %d consecutive failures",
+                           _ENRICHMENT_BACKOFF_SECONDS, consecutive_failures)
+            _enrichment_stop_event.wait(_ENRICHMENT_BACKOFF_SECONDS)
+        else:
+            _enrichment_stop_event.wait(_ENRICHMENT_IDLE_SECONDS)
+
+    logger.info("Enrichment worker stopped")
+
+
+def start_enrichment_worker() -> None:
+    """Start the enrichment background worker thread."""
+    global _enrichment_thread
+    if _enrichment_thread is not None and _enrichment_thread.is_alive():
+        logger.warning("Enrichment worker already running")
+        return
+
+    _enrichment_stop_event.clear()
+    _enrichment_thread = threading.Thread(
+        target=_enrichment_worker_loop,
+        name="enrichment-worker",
+        daemon=True,
+    )
+    _enrichment_thread.start()
+    logger.info("Enrichment worker thread started")
+
+
+def stop_enrichment_worker() -> None:
+    """Stop the enrichment worker gracefully."""
+    global _enrichment_thread
+    if _enrichment_thread is None:
+        return
+    _enrichment_stop_event.set()
+    _enrichment_thread.join(timeout=30)
+    _enrichment_thread = None
+    logger.info("Enrichment worker thread stopped")
 
 
 def start_scheduler() -> None:
