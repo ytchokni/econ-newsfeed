@@ -2,6 +2,8 @@
 import asyncio
 import hmac
 import logging
+
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 import math
 import os
 import threading
