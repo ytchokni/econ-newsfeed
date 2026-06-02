@@ -318,6 +318,78 @@ def batch_check() -> None:
             logging.info("Batch %s status: %s — %s", openai_batch_id, status, req_counts)
 
 
+def extract_only(limit: int | None = None) -> None:
+    """Run LLM extraction for URLs with pending content changes (skips fetching)."""
+    from scheduler import create_scrape_log, update_scrape_log, _update_progress
+
+    researcher_urls = Researcher.get_all_researcher_urls()
+    pending = [row for row in researcher_urls if HTMLFetcher.needs_extraction(row['id'])]
+
+    if not pending:
+        logging.info("No URLs need extraction")
+        return
+
+    if limit:
+        logging.info("Extracting %d of %d pending URLs", limit, len(pending))
+        pending = pending[:limit]
+    else:
+        logging.info("Extracting %d pending URLs", len(pending))
+
+    log_id = create_scrape_log()
+    pubs_extracted = 0
+    extraction_errors = 0
+    consecutive_failures = 0
+
+    try:
+        for idx, row in enumerate(pending):
+            url_id = row['id']
+            url = row['url']
+            researcher_id = row['researcher_id']
+
+            try:
+                new_text = HTMLFetcher.get_latest_text(url_id)
+                if not new_text:
+                    continue
+
+                is_seed = HTMLFetcher.is_first_extraction(url_id)
+
+                pubs = Publication.extract_publications(new_text, url, scrape_log_id=log_id)
+                logging.info("[%d/%d] extract %s — %d pubs", idx + 1, len(pending), url, len(pubs))
+
+                if pubs:
+                    consecutive_failures = 0
+                    Publication.save_publications(url, pubs, is_seed=is_seed)
+                    reconcile_title_renames(url, pubs)
+                    pubs_extracted += len(pubs)
+                    match_and_save_paper_links(url_id, pubs)
+                    append_snapshots_for_pubs(pubs, url)
+                else:
+                    consecutive_failures += 1
+                    extraction_errors += 1
+                    if consecutive_failures >= 10:
+                        logging.warning("Circuit breaker: 10 consecutive empty extractions")
+                        break
+
+                HTMLFetcher.mark_extracted(url_id)
+                _update_progress(log_id, pubs_extracted=pubs_extracted, extraction_errors=extraction_errors)
+
+            except Exception as e:
+                logging.error("Error extracting %s: %s", url, e)
+                extraction_errors += 1
+                consecutive_failures += 1
+                if consecutive_failures >= 10:
+                    logging.warning("Circuit breaker: 10 consecutive failures")
+                    break
+
+        update_scrape_log(log_id, "completed", urls_checked=0, urls_changed=len(pending),
+                          pubs_extracted=pubs_extracted, extraction_errors=extraction_errors)
+        logging.info("Extraction done: %d pubs from %d URLs (%d errors)",
+                     pubs_extracted, len(pending), extraction_errors)
+    except Exception as e:
+        logging.error("Extraction failed: %s", e)
+        update_scrape_log(log_id, "failed", error_message=str(e))
+
+
 def discover_domains() -> None:
     """Scan all stored raw HTML to find untrusted domains that may host paper links."""
     from collections import Counter
@@ -362,6 +434,8 @@ def main() -> None:
     subparsers.add_parser('enrich', help='Enrich publications with OpenAlex metadata')
     subparsers.add_parser('enrich-jel', help='Enrich researcher JEL codes from paper topics via OpenAlex')
     subparsers.add_parser('discover-domains', help='Scan stored HTML for untrusted domains with paper-title links')
+    extract_parser = subparsers.add_parser('extract', help='Run LLM extraction for URLs with pending changes (no fetching)')
+    extract_parser.add_argument('--limit', type=int, default=None, help='Max URLs to extract')
     batch_submit_parser = subparsers.add_parser('batch-submit', help='Submit batch LLM extraction for URLs with new content')
     batch_submit_parser.add_argument('--limit', type=int, default=None, help='Max URLs to include in the batch')
     subparsers.add_parser('batch-check', help='Check pending batches and process completed results')
@@ -382,6 +456,8 @@ def main() -> None:
         Database.create_tables()
         from jel_enrichment import enrich_jel_from_papers
         enrich_jel_from_papers()
+    elif args.command == 'extract':
+        extract_only(limit=args.limit)
     elif args.command == 'discover-domains':
         discover_domains()
     elif args.command == 'batch-submit':
