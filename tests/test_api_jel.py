@@ -53,17 +53,19 @@ SAMPLE_JEL_FOR_R1 = [
 
 
 class TestResearcherDetailIncludesJel:
-    @patch("database.Database.fetch_all")
-    @patch("database.Database.fetch_one")
-    def test_researcher_detail_has_jel_codes(self, mock_one, mock_all, client):
+    def test_researcher_detail_has_jel_codes(self, client):
         """Researcher detail endpoint should include a jel_codes array."""
-        mock_one.return_value = SAMPLE_RESEARCHER
-        mock_all.return_value = []
-
-        with patch("api._get_urls_for_researcher", return_value=[]), \
-             patch("api._get_pub_count_for_researcher", return_value=0), \
-             patch("api._get_fields_for_researcher", return_value=[]), \
-             patch("api.Database.get_jel_codes_for_researcher", return_value=SAMPLE_JEL_FOR_R1):
+        with (
+            patch("api.Database.get_researcher_detail", return_value=SAMPLE_RESEARCHER),
+            patch("api.Database.get_urls_for_researchers", return_value={1: []}),
+            patch("api.Database.get_pub_counts_for_researchers", return_value={1: 0}),
+            patch("api.Database.get_fields_for_researchers", return_value={1: []}),
+            patch("api.Database.get_jel_codes_for_researcher", return_value=SAMPLE_JEL_FOR_R1),
+            patch("api.Database.get_researcher_papers", return_value=[]),
+            patch("api.Database.get_authors_for_papers", return_value={}),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             resp = client.get("/api/researchers/1")
 
         assert resp.status_code == 200

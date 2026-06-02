@@ -20,8 +20,7 @@ from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from database import Database
-from database.connection import connection_scope
+from database import Database, connection_scope
 from publication import VALID_STATUSES
 import scheduler
 from scheduler import (
@@ -335,22 +334,6 @@ async def generic_exception_handler(request: Request, exc: Exception):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _escape_like(value: str) -> str:
-    """Escape LIKE-special characters so user input is matched literally."""
-    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-
-
-# MySQL FULLTEXT minimum token size (InnoDB default is 3).
-_FT_MIN_TOKEN_SIZE = int(os.environ.get("FT_MIN_TOKEN_SIZE", "3"))
-
-# Characters with special meaning in BOOLEAN MODE that must be stripped.
-_FT_BOOLEAN_OPERATORS = str.maketrans("", "", '+-~<>()@*"')
-
-
-def _escape_fulltext(value: str) -> str:
-    """Strip BOOLEAN MODE operators so user input is matched literally."""
-    return value.translate(_FT_BOOLEAN_OPERATORS)
-
 
 def _iso_z(dt: datetime | str | None) -> str | None:
     """Format a datetime as ISO 8601 with trailing Z, or None."""
@@ -360,86 +343,6 @@ def _iso_z(dt: datetime | str | None) -> str | None:
         return dt if dt.endswith("Z") else dt + "Z"
     return dt.isoformat() + "Z"
 
-
-def _get_authors_for_publication(publication_id: int) -> list[dict]:
-    """Fetch authors for a single publication via the authorship table."""
-    rows = Database.fetch_all(
-        """
-        SELECT r.id, r.first_name, r.last_name
-        FROM authorship a
-        JOIN researchers r ON r.id = a.researcher_id
-        WHERE a.publication_id = %s
-        ORDER BY a.author_order
-        """,
-        (publication_id,),
-    )
-    return [{"id": r['id'], "first_name": r['first_name'], "last_name": r['last_name']} for r in rows]
-
-
-def _get_authors_for_publications(pub_ids: list[int]) -> dict[int, list[dict]]:
-    """Batch-fetch authors for multiple publications. Returns {pub_id: [author, ...]}."""
-    if not pub_ids:
-        return {}
-    placeholders = ",".join(["%s"] * len(pub_ids))
-    rows = Database.fetch_all(
-        f"""
-        SELECT a.publication_id, r.id AS researcher_id, r.first_name, r.last_name
-        FROM authorship a
-        JOIN researchers r ON r.id = a.researcher_id
-        WHERE a.publication_id IN ({placeholders})
-        ORDER BY a.publication_id, a.author_order
-        """,
-        tuple(pub_ids),
-    )
-    result: dict[int, list[dict]] = {pid: [] for pid in pub_ids}
-    for row in rows:
-        result[row['publication_id']].append({"id": row['researcher_id'], "first_name": row['first_name'], "last_name": row['last_name']})
-    return result
-
-
-def _get_coauthors_for_publications(pub_ids: list[int]) -> dict[int, list[dict]]:
-    """Batch-fetch OpenAlex co-authors for multiple publications."""
-    if not pub_ids:
-        return {}
-    placeholders = ",".join(["%s"] * len(pub_ids))
-    rows = Database.fetch_all(
-        f"""
-        SELECT paper_id, display_name, openalex_author_id
-        FROM openalex_coauthors
-        WHERE paper_id IN ({placeholders})
-        ORDER BY paper_id, id
-        """,
-        tuple(pub_ids),
-    )
-    result: dict[int, list[dict]] = {pid: [] for pid in pub_ids}
-    for row in rows:
-        result[row['paper_id']].append({
-            "display_name": row['display_name'],
-            "openalex_author_id": row['openalex_author_id'],
-        })
-    return result
-
-
-def _get_links_for_publication(paper_id: int) -> list[dict]:
-    rows = Database.fetch_all(
-        "SELECT url, link_type FROM paper_links WHERE paper_id = %s", (paper_id,),
-    )
-    return [{"url": r['url'], "link_type": r['link_type']} for r in rows]
-
-
-def _get_links_for_publications(pub_ids: list[int]) -> dict[int, list[dict]]:
-    """Batch-fetch links for multiple publications."""
-    if not pub_ids:
-        return {}
-    placeholders = ",".join(["%s"] * len(pub_ids))
-    rows = Database.fetch_all(
-        f"SELECT paper_id, url, link_type FROM paper_links WHERE paper_id IN ({placeholders})",
-        tuple(pub_ids),
-    )
-    result: dict[int, list[dict]] = {pid: [] for pid in pub_ids}
-    for row in rows:
-        result[row['paper_id']].append({"url": row['url'], "link_type": row['link_type']})
-    return result
 
 
 def _format_publication(row: dict, authors: list[dict], coauthors: list[dict] | None = None, links: list[dict] | None = None) -> dict:
@@ -557,108 +460,28 @@ def list_publications(
         raise HTTPException(status_code=400, detail=f"Invalid preset value. Must be one of: {', '.join(sorted(valid_presets))}")
     if event_type and event_type not in VALID_EVENT_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid event_type value '{event_type}'. Must be one of: {', '.join(sorted(VALID_EVENT_TYPES))}")
-
-    # Build WHERE clause
-    conditions = []
-    params: list = []
-    if year:
-        conditions.append("p.year = %s")
-        params.append(year)
-    if researcher_id:
-        conditions.append("EXISTS (SELECT 1 FROM authorship WHERE publication_id = p.id AND researcher_id = %s)")
-        params.append(researcher_id)
-    if status_list:
-        if len(status_list) == 1:
-            conditions.append("p.status = %s")
-            params.append(status_list[0])
-        else:
-            placeholders = ",".join(["%s"] * len(status_list))
-            conditions.append(f"p.status IN ({placeholders})")
-            params.extend(status_list)
+    since_dt = None
     if since:
         try:
             since_dt = datetime.fromisoformat(since.rstrip("Z"))
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid ?since= value; expected ISO8601 timestamp")
-        # Filter on event time, not paper discovery time
-        conditions.append("fe.created_at >= %s")
-        params.append(since_dt)
-    if institution_list and not preset:
-        if len(institution_list) == 1:
-            conditions.append(
-                "EXISTS (SELECT 1 FROM authorship a "
-                "JOIN researchers r ON r.id = a.researcher_id "
-                "WHERE a.publication_id = p.id AND r.affiliation LIKE %s)"
-            )
-            params.append(f"%{_escape_like(institution_list[0])}%")
-        else:
-            inst_likes = " OR ".join(["r.affiliation LIKE %s"] * len(institution_list))
-            conditions.append(
-                f"EXISTS (SELECT 1 FROM authorship a "
-                f"JOIN researchers r ON r.id = a.researcher_id "
-                f"WHERE a.publication_id = p.id AND ({inst_likes}))"
-            )
-            params.extend(f"%{_escape_like(i)}%" for i in institution_list)
-    if preset == "top20":
-        dept_likes = " OR ".join(["r.affiliation LIKE %s"] * len(_TOP20_DEPT_KEYWORDS))
-        conditions.append(
-            f"EXISTS (SELECT 1 FROM authorship a "
-            f"JOIN researchers r ON r.id = a.researcher_id "
-            f"WHERE a.publication_id = p.id AND ({dept_likes}))"
-        )
-        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP20_DEPT_KEYWORDS)
-    search_term = search.strip() if search else ""
-    if search_term:
-        # Use FULLTEXT index for terms long enough; fall back to LIKE for
-        # short terms that MySQL's ft parser would silently ignore.
-        if len(search_term) >= _FT_MIN_TOKEN_SIZE:
-            conditions.append("MATCH(p.title, p.abstract) AGAINST (%s IN BOOLEAN MODE)")
-            params.append(_escape_fulltext(search_term))
-        else:
-            escaped = f"%{_escape_like(search_term)}%"
-            conditions.append("(p.title LIKE %s ESCAPE '\\\\' OR p.abstract LIKE %s ESCAPE '\\\\')")
-            params.extend([escaped, escaped])
-    if event_type:
-        conditions.append("fe.event_type = %s")
-        params.append(event_type)
-    jel_list = [j.strip().upper() for j in jel_code.split(",") if j.strip()] if jel_code else []
-    if jel_list:
-        placeholders = ",".join(["%s"] * len(jel_list))
-        conditions.append(
-            f"EXISTS (SELECT 1 FROM authorship a "
-            f"JOIN researcher_jel_codes rjc ON rjc.researcher_id = a.researcher_id "
-            f"WHERE a.publication_id = p.id AND rjc.jel_code IN ({placeholders}))"
-        )
-        params.extend(jel_list)
 
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-
-    # Combined paginated results with total count via window function,
-    # using a single DB connection for all queries in this endpoint
     offset = (page - 1) * per_page
     with connection_scope():
-        rows = Database.fetch_all(
-            f"""
-            SELECT fe.id AS event_id, fe.event_type, fe.old_status, fe.new_status,
-                   fe.old_title, fe.new_title, fe.created_at,
-                   p.id AS paper_id, p.title, p.year, p.venue, p.source_url, p.discovered_at,
-                   p.status, p.draft_url, p.abstract, p.draft_url_status, p.doi,
-                   COUNT(*) OVER() AS total_count
-            FROM feed_events fe
-            JOIN papers p ON p.id = fe.paper_id
-            {where}
-            ORDER BY fe.created_at DESC
-            LIMIT %s OFFSET %s
-            """,
-            (*params, per_page, offset),
+        rows, total = Database.search_feed_events(
+            year=year, researcher_id=researcher_id,
+            status_list=status_list or None,
+            since=since_dt, institution_list=institution_list or None,
+            preset=preset, search=search, event_type=event_type,
+            jel_code=jel_code, offset=offset, limit=per_page,
         )
-        total = rows[0]['total_count'] if rows else 0
         pages = math.ceil(total / per_page) if total else 0
 
         pub_ids = [row['paper_id'] for row in rows]
-        authors_by_pub = _get_authors_for_publications(pub_ids)
-        coauthors_by_pub = _get_coauthors_for_publications(pub_ids)
-        links_by_pub = _get_links_for_publications(pub_ids)
+        authors_by_pub = Database.get_authors_for_papers(pub_ids)
+        coauthors_by_pub = Database.get_coauthors_for_papers(pub_ids)
+        links_by_pub = Database.get_links_for_papers(pub_ids)
     items = [
         _format_feed_event(row, authors_by_pub.get(row['paper_id'], []),
                            coauthors_by_pub.get(row['paper_id'], []),
@@ -683,17 +506,18 @@ def get_publication(
     publication_id: int,
     include_history: bool = Query(False),
 ):
-    row = Database.fetch_one(
-        "SELECT id, title, year, venue, source_url, discovered_at, status, draft_url, abstract, draft_url_status, doi, is_seed, title_hash, openalex_id FROM papers WHERE id = %s",
-        (publication_id,),
-    )
+    row = Database.get_paper_detail(publication_id)
     if not row:
         raise HTTPException(status_code=404, detail="Publication not found")
 
-    authors = _get_authors_for_publication(publication_id)
-    coauthors_map = _get_coauthors_for_publications([publication_id])
-    links = _get_links_for_publication(publication_id)
-    result = _format_publication(row, authors, coauthors_map.get(publication_id, []), links)
+    authors_map = Database.get_authors_for_papers([publication_id])
+    coauthors_map = Database.get_coauthors_for_papers([publication_id])
+    links_map = Database.get_links_for_papers([publication_id])
+    result = _format_publication(
+        row, authors_map.get(publication_id, []),
+        coauthors_map.get(publication_id, []),
+        links_map.get(publication_id, []),
+    )
 
     if include_history:
         snapshots = Database.get_paper_snapshots(publication_id)
@@ -711,10 +535,7 @@ def get_publication(
             for s in snapshots
         ]
 
-        feed_events = Database.fetch_all(
-            "SELECT id, event_type, old_status, new_status, created_at FROM feed_events WHERE paper_id = %s ORDER BY created_at DESC",
-            (publication_id,),
-        )
+        feed_events = Database.get_paper_history(publication_id)
         result["feed_events"] = [
             {
                 "id": fe['id'],
@@ -737,13 +558,6 @@ def get_publication(
 # Researcher helpers
 # ---------------------------------------------------------------------------
 
-def _get_urls_for_researcher(researcher_id: int) -> list[dict]:
-    rows = Database.fetch_all(
-        "SELECT id, page_type, url FROM researcher_urls WHERE researcher_id = %s",
-        (researcher_id,),
-    )
-    return [{"id": r['id'], "page_type": r['page_type'], "url": r['url']} for r in rows]
-
 
 def _get_website_url(urls: list[dict]) -> str | None:
     """Return the homepage URL from a researcher's URL list, or None."""
@@ -753,97 +567,6 @@ def _get_website_url(urls: list[dict]) -> str | None:
     # Fallback: return first URL if no homepage found
     return urls[0]["url"] if urls else None
 
-
-def _get_pub_count_for_researcher(researcher_id: int) -> int:
-    row = Database.fetch_one(
-        "SELECT COUNT(*) AS cnt FROM authorship WHERE researcher_id = %s",
-        (researcher_id,),
-    )
-    return row['cnt'] if row else 0
-
-
-def _get_fields_for_researcher(researcher_id: int) -> list[dict]:
-    rows = Database.fetch_all(
-        """
-        SELECT rf.id, rf.name, rf.slug
-        FROM researcher_fields rf_link
-        JOIN research_fields rf ON rf.id = rf_link.field_id
-        WHERE rf_link.researcher_id = %s
-        ORDER BY rf.name
-        """,
-        (researcher_id,),
-    )
-    return [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in rows]
-
-
-def _get_urls_for_researchers(researcher_ids: list[int]) -> dict[int, list[dict]]:
-    """Batch-fetch URLs for multiple researchers. Returns {researcher_id: [url, ...]}."""
-    if not researcher_ids:
-        return {}
-    placeholders = ",".join(["%s"] * len(researcher_ids))
-    rows = Database.fetch_all(
-        f"SELECT researcher_id, id, page_type, url FROM researcher_urls WHERE researcher_id IN ({placeholders})",
-        tuple(researcher_ids),
-    )
-    result: dict[int, list[dict]] = {rid: [] for rid in researcher_ids}
-    for row in rows:
-        result[row['researcher_id']].append({"id": row['id'], "page_type": row['page_type'], "url": row['url']})
-    return result
-
-
-def _get_pub_counts_for_researchers(researcher_ids: list[int]) -> dict[int, int]:
-    """Batch-fetch publication counts for multiple researchers. Returns {researcher_id: count}."""
-    if not researcher_ids:
-        return {}
-    placeholders = ",".join(["%s"] * len(researcher_ids))
-    rows = Database.fetch_all(
-        f"SELECT researcher_id, COUNT(*) AS cnt FROM authorship WHERE researcher_id IN ({placeholders}) GROUP BY researcher_id",
-        tuple(researcher_ids),
-    )
-    result: dict[int, int] = {rid: 0 for rid in researcher_ids}
-    for row in rows:
-        result[row['researcher_id']] = row['cnt']
-    return result
-
-
-def _get_fields_for_researchers(researcher_ids: list[int]) -> dict[int, list[dict]]:
-    """Batch-fetch fields for multiple researchers. Returns {researcher_id: [field, ...]}."""
-    if not researcher_ids:
-        return {}
-    placeholders = ",".join(["%s"] * len(researcher_ids))
-    rows = Database.fetch_all(
-        f"""SELECT rf_link.researcher_id, rf.id, rf.name, rf.slug
-            FROM researcher_fields rf_link
-            JOIN research_fields rf ON rf.id = rf_link.field_id
-            WHERE rf_link.researcher_id IN ({placeholders})
-            ORDER BY rf.name""",
-        tuple(researcher_ids),
-    )
-    result: dict[int, list[dict]] = {rid: [] for rid in researcher_ids}
-    for row in rows:
-        result[row['researcher_id']].append({"id": row['id'], "name": row['name'], "slug": row['slug']})
-    return result
-
-
-# Top-20 economics department keywords for preset filtering
-_TOP20_DEPT_KEYWORDS = [
-    "MIT", "Massachusetts Institute of Technology",
-    "Harvard", "Princeton", "Stanford",
-    "University of Chicago",
-    "UC Berkeley", "University of California, Berkeley",
-    "Columbia", "Yale", "Northwestern",
-    "University of Pennsylvania",
-    "New York University", "NYU",
-    "Duke",
-    "University of Michigan",
-    "University of Minnesota",
-    "Cornell",
-    "UCLA", "University of California, Los Angeles",
-    "UC San Diego", "University of California, San Diego",
-    "University of Wisconsin",
-    "Boston University",
-    "Carnegie Mellon",
-]
 
 
 # ---------------------------------------------------------------------------
@@ -911,91 +634,19 @@ def list_researchers(
     preset: str | None = Query(None),
     search: str | None = Query(None, max_length=200),
 ):
-    conditions = []
-    params: list = []
-
-    # Only show validated researchers (have OpenAlex ID or a monitored website)
-    conditions.append(
-        "(r.openalex_author_id IS NOT NULL OR EXISTS "
-        "(SELECT 1 FROM researcher_urls ru WHERE ru.researcher_id = r.id))"
-    )
-
-    # Hide abbreviated/initial-only names (e.g. first: "R.", last: "A.")
-    conditions.append(
-        "r.first_name IS NOT NULL AND CHAR_LENGTH(r.first_name) > 2 "
-        "AND r.first_name NOT REGEXP '^[A-Z]\\\\.$' "
-        "AND r.last_name IS NOT NULL AND CHAR_LENGTH(r.last_name) > 2 "
-        "AND r.last_name NOT REGEXP '^[A-Z]\\\\.$'"
-    )
-
-    if institution:
-        conditions.append("r.affiliation LIKE %s")
-        params.append(f"%{_escape_like(institution)}%")
-    if position:
-        conditions.append("r.position LIKE %s")
-        params.append(f"%{_escape_like(position)}%")
-    if preset == "top20":
-        dept_conditions = " OR ".join(["r.affiliation LIKE %s"] * len(_TOP20_DEPT_KEYWORDS))
-        conditions.append(f"({dept_conditions})")
-        params.extend(f"%{kw}%" for kw in _TOP20_DEPT_KEYWORDS)
-    if field:
-        field_slugs = [f.strip() for f in field.split(",") if f.strip()]
-        if len(field_slugs) == 1:
-            conditions.append(
-                "EXISTS (SELECT 1 FROM researcher_fields rf "
-                "JOIN research_fields f ON f.id = rf.field_id "
-                "WHERE rf.researcher_id = r.id AND f.slug = %s)"
-            )
-            params.append(field_slugs[0])
-        else:
-            placeholders = ",".join(["%s"] * len(field_slugs))
-            conditions.append(
-                f"EXISTS (SELECT 1 FROM researcher_fields rf "
-                f"JOIN research_fields f ON f.id = rf.field_id "
-                f"WHERE rf.researcher_id = r.id AND f.slug IN ({placeholders}))"
-            )
-            params.extend(field_slugs)
-
-    search_term = search.strip() if search else ""
-    if search_term:
-        if len(search_term) >= _FT_MIN_TOKEN_SIZE:
-            conditions.append(
-                "(MATCH(r.first_name, r.last_name) AGAINST (%s IN BOOLEAN MODE)"
-                " OR CONCAT(r.first_name, ' ', r.last_name) LIKE %s ESCAPE '\\\\')"
-            )
-            params.append(_escape_fulltext(search_term))
-            params.append(f"%{_escape_like(search_term)}%")
-        else:
-            escaped = f"%{_escape_like(search_term)}%"
-            conditions.append(
-                "(r.first_name LIKE %s ESCAPE '\\\\'"
-                " OR r.last_name LIKE %s ESCAPE '\\\\'"
-                " OR CONCAT(r.first_name, ' ', r.last_name) LIKE %s ESCAPE '\\\\')"
-            )
-            params.extend([escaped, escaped, escaped])
-
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
-
     offset = (page - 1) * per_page
     with connection_scope():
-        rows = Database.fetch_all(
-            f"""
-            SELECT r.id, r.first_name, r.last_name, r.position, r.affiliation, r.description,
-                   COUNT(*) OVER() AS total_count
-            FROM researchers r
-            {where}
-            ORDER BY r.last_name, r.first_name
-            LIMIT %s OFFSET %s
-            """,
-            (*params, per_page, offset),
+        rows, total = Database.search_researchers(
+            search=search, institution=institution, field_slug=field,
+            position=position, preset=preset,
+            offset=offset, limit=per_page,
         )
-        total = rows[0]['total_count'] if rows else 0
         pages = math.ceil(total / per_page) if total else 0
 
         researcher_ids = [r['id'] for r in rows]
-        urls_by_researcher = _get_urls_for_researchers(researcher_ids)
-        pub_counts = _get_pub_counts_for_researchers(researcher_ids)
-        fields_by_researcher = _get_fields_for_researchers(researcher_ids)
+        urls_by_researcher = Database.get_urls_for_researchers(researcher_ids)
+        pub_counts = Database.get_pub_counts_for_researchers(researcher_ids)
+        fields_by_researcher = Database.get_fields_for_researchers(researcher_ids)
         jel_map = Database.get_jel_codes_for_researchers(researcher_ids)
     items = [
         {
@@ -1030,34 +681,24 @@ def get_researcher(
     researcher_id: int,
     include_history: bool = Query(False),
 ):
-    row = Database.fetch_one(
-        "SELECT id, first_name, last_name, position, affiliation, description FROM researchers WHERE id = %s",
-        (researcher_id,),
-    )
+    row = Database.get_researcher_detail(researcher_id)
     if not row:
         raise HTTPException(status_code=404, detail="Researcher not found")
 
-    urls = _get_urls_for_researcher(researcher_id)
-    pub_count = _get_pub_count_for_researcher(researcher_id)
-    fields = _get_fields_for_researcher(researcher_id)
+    urls_map = Database.get_urls_for_researchers([researcher_id])
+    urls = urls_map.get(researcher_id, [])
+    pub_counts = Database.get_pub_counts_for_researchers([researcher_id])
+    pub_count = pub_counts.get(researcher_id, 0)
+    fields_map = Database.get_fields_for_researchers([researcher_id])
+    fields = fields_map.get(researcher_id, [])
     jel_codes = Database.get_jel_codes_for_researcher(researcher_id)
 
     # Fetch this researcher's publications
-    pub_rows = Database.fetch_all(
-        """
-        SELECT p.id, p.title, p.year, p.venue, p.source_url, p.discovered_at, p.status, p.draft_url,
-               p.abstract, p.draft_url_status, p.doi
-        FROM papers p
-        JOIN authorship a ON a.publication_id = p.id
-        WHERE a.researcher_id = %s
-        ORDER BY p.discovered_at DESC
-        """,
-        (researcher_id,),
-    )
+    pub_rows = Database.get_researcher_papers(researcher_id)
     pub_ids = [pr['id'] for pr in pub_rows]
-    authors_by_pub = _get_authors_for_publications(pub_ids)
-    coauthors_by_pub = _get_coauthors_for_publications(pub_ids)
-    links_by_pub = _get_links_for_publications(pub_ids)
+    authors_by_pub = Database.get_authors_for_papers(pub_ids)
+    coauthors_by_pub = Database.get_coauthors_for_papers(pub_ids)
+    links_by_pub = Database.get_links_for_papers(pub_ids)
     publications = [
         _format_publication(pr, authors_by_pub.get(pr['id'], []),
                            coauthors_by_pub.get(pr['id'], []),

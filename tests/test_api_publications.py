@@ -27,8 +27,8 @@ def client():
             yield c
 
 
-# Sample data that mimics Database.fetch_all / fetch_one return shapes (dicts)
-# Feed events row shape (15 keys): event_id, event_type, old_status, new_status, created_at,
+# Sample data that mimics Database.search_feed_events return shapes (dicts)
+# Feed events row shape: event_id, event_type, old_status, new_status, created_at,
 #   paper_id, title, year, venue, url, discovered_at, status, draft_url, abstract, draft_url_status
 SAMPLE_PUBLICATIONS = [
     {"event_id": 100, "event_type": "new_paper", "old_status": None, "new_status": "working_paper",
@@ -64,7 +64,7 @@ SAMPLE_PUB_DETAIL = {
 }
 
 SAMPLE_AUTHORS_PUB1 = [
-    # {id, first_name, last_name} — used for single-pub endpoint
+    # {id, first_name, last_name} -- used for single-pub endpoint
     {"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"},
     {"id": 11, "first_name": "Jane", "last_name": "Doe"},
 ]
@@ -73,21 +73,22 @@ SAMPLE_AUTHORS_PUB2 = [
     {"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"},
 ]
 
-# Batch author format: {publication_id, researcher_id, first_name, last_name}
-BATCH_AUTHORS_PUBS_1_2_3 = [
-    {"publication_id": 1, "researcher_id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"},
-    {"publication_id": 1, "researcher_id": 11, "first_name": "Jane", "last_name": "Doe"},
-    {"publication_id": 2, "researcher_id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"},
-]
+# Authors maps returned by Database.get_authors_for_papers
+AUTHORS_MAP_PUBS_1_2_3 = {
+    1: [{"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"},
+        {"id": 11, "first_name": "Jane", "last_name": "Doe"}],
+    2: [{"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}],
+    3: [],
+}
 
-BATCH_AUTHORS_PUB1 = [
-    {"publication_id": 1, "researcher_id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"},
-    {"publication_id": 1, "researcher_id": 11, "first_name": "Jane", "last_name": "Doe"},
-]
+AUTHORS_MAP_PUB1 = {
+    1: [{"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"},
+        {"id": 11, "first_name": "Jane", "last_name": "Doe"}],
+}
 
-BATCH_AUTHORS_PUB2 = [
-    {"publication_id": 2, "researcher_id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"},
-]
+AUTHORS_MAP_PUB2 = {
+    2: [{"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}],
+}
 
 
 # ---------------------------------------------------------------------------
@@ -99,14 +100,12 @@ class TestListPublications:
 
     def test_default_pagination(self, client):
         """Default page=1, per_page=20."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            # First call: publications; second: batch authors; third: coauthors; fourth: links
-            mock_fetch.side_effect = [
-                SAMPLE_PUBLICATIONS,
-                BATCH_AUTHORS_PUBS_1_2_3,
-                [],  # coauthors
-                [],  # links
-            ]
+        with (
+            patch("api.Database.search_feed_events", return_value=(SAMPLE_PUBLICATIONS, 3)),
+            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUBS_1_2_3),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications")
 
         assert response.status_code == 200
@@ -119,13 +118,12 @@ class TestListPublications:
 
     def test_custom_pagination(self, client):
         """Custom page and per_page values."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [
-                [{**SAMPLE_PUBLICATIONS[1], "total_count": 3}],
-                BATCH_AUTHORS_PUB2,
-                [],  # coauthors
-                [],  # links
-            ]
+        with (
+            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[1]], 3)),
+            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUB2),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?page=2&per_page=1")
 
         assert response.status_code == 200
@@ -141,13 +139,12 @@ class TestListPublications:
 
     def test_year_filter(self, client):
         """Filter publications by year."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [
-                [{**SAMPLE_PUBLICATIONS[0], "total_count": 1}],
-                BATCH_AUTHORS_PUB1,
-                [],  # coauthors
-                [],  # links
-            ]
+        with (
+            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?year=2024")
 
         assert response.status_code == 200
@@ -156,13 +153,12 @@ class TestListPublications:
 
     def test_researcher_id_filter(self, client):
         """Filter publications by researcher_id."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [
-                [{**SAMPLE_PUBLICATIONS[0], "total_count": 1}],
-                BATCH_AUTHORS_PUB1,
-                [],  # coauthors
-                [],  # links
-            ]
+        with (
+            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?researcher_id=10")
 
         assert response.status_code == 200
@@ -173,13 +169,12 @@ class TestListPublications:
 
     def test_since_filter(self, client):
         """?since= filters publications discovered after the given timestamp."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [
-                [{**SAMPLE_PUBLICATIONS[0], "total_count": 1}],
-                BATCH_AUTHORS_PUB1,
-                [],  # coauthors
-                [],  # links
-            ]
+        with (
+            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?since=2026-03-15T00:00:00Z")
 
         assert response.status_code == 200
@@ -193,13 +188,12 @@ class TestListPublications:
 
     def test_publication_item_shape(self, client):
         """Each item must have id, title, authors, year, venue, source_url, discovered_at."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [
-                [{**SAMPLE_PUBLICATIONS[0], "total_count": 1}],
-                BATCH_AUTHORS_PUB1,
-                [],  # coauthors
-                [],  # links
-            ]
+        with (
+            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications")
 
         item = response.json()["items"][0]
@@ -219,20 +213,18 @@ class TestListPublications:
 
     def test_event_type_filter_new_paper(self, client):
         """?event_type=new_paper returns only new_paper events."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [
-                [{**row, "total_count": 2} for row in SAMPLE_PUBLICATIONS[:2]],
-                BATCH_AUTHORS_PUBS_1_2_3,
-                [],  # coauthors
-                [],  # links
-            ]
+        with (
+            patch("api.Database.search_feed_events", return_value=(SAMPLE_PUBLICATIONS[:2], 2)) as mock_search,
+            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUBS_1_2_3),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?event_type=new_paper")
 
         assert response.status_code == 200
-        # Verify the SQL received the event_type condition
-        call_args = mock_fetch.call_args_list[0]
-        sql = call_args[0][0]
-        assert "fe.event_type = %s" in sql
+        # Verify the event_type was passed to search_feed_events
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["event_type"] == "new_paper"
 
     def test_event_type_filter_status_change(self, client):
         """?event_type=status_change returns only status_change events."""
@@ -242,37 +234,32 @@ class TestListPublications:
             "event_type": "status_change",
             "old_status": "working_paper",
             "new_status": "accepted",
-            "total_count": 1,
         }
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [
-                [status_change_pub],
-                BATCH_AUTHORS_PUB1,
-                [],  # coauthors
-                [],  # links
-            ]
+        with (
+            patch("api.Database.search_feed_events", return_value=([status_change_pub], 1)) as mock_search,
+            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?event_type=status_change")
 
         assert response.status_code == 200
-        call_args = mock_fetch.call_args_list[0]
-        sql = call_args[0][0]
-        assert "fe.event_type = %s" in sql
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["event_type"] == "status_change"
 
     def test_event_type_omitted_returns_both(self, client):
         """Omitting event_type returns all events (backward compatible)."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [
-                SAMPLE_PUBLICATIONS,
-                BATCH_AUTHORS_PUBS_1_2_3,
-                [],  # coauthors
-                [],  # links
-            ]
+        with (
+            patch("api.Database.search_feed_events", return_value=(SAMPLE_PUBLICATIONS, 3)) as mock_search,
+            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUBS_1_2_3),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications")
 
         assert response.status_code == 200
-        call_args = mock_fetch.call_args_list[0]
-        sql = call_args[0][0]
-        assert "fe.event_type = %s" not in sql
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["event_type"] is None
 
     def test_event_type_invalid_returns_400(self, client):
         """Invalid event_type value returns 400."""
@@ -290,10 +277,11 @@ class TestGetPublication:
     def test_found_with_authors(self, client):
         """Returns publication with nested authors."""
         with (
-            patch("api.Database.fetch_one", return_value=SAMPLE_PUB_DETAIL),
-            patch("api.Database.fetch_all") as mock_fetch,
+            patch("api.Database.get_paper_detail", return_value=SAMPLE_PUB_DETAIL),
+            patch("api.Database.get_authors_for_papers", return_value={1: SAMPLE_AUTHORS_PUB1}),
+            patch("api.Database.get_coauthors_for_papers", return_value={1: []}),
+            patch("api.Database.get_links_for_papers", return_value={1: []}),
         ):
-            mock_fetch.side_effect = [SAMPLE_AUTHORS_PUB1, [], []]  # authors, coauthors, links
             response = client.get("/api/publications/1")
 
         assert response.status_code == 200
@@ -304,7 +292,7 @@ class TestGetPublication:
 
     def test_not_found_returns_404(self, client):
         """Non-existent publication returns 404 with error envelope."""
-        with patch("api.Database.fetch_one", return_value=None):
+        with patch("api.Database.get_paper_detail", return_value=None):
             response = client.get("/api/publications/999999")
 
         assert response.status_code == 404
@@ -322,19 +310,20 @@ class TestPublicationOpenAlexFields:
     def test_feed_includes_doi_and_coauthors(self, client):
         """GET /api/publications returns doi and coauthors."""
         sample_pubs = [
-            {**SAMPLE_PUBLICATIONS[0], "doi": "10.1257/aer.20181234", "total_count": 1},
+            {**SAMPLE_PUBLICATIONS[0], "doi": "10.1257/aer.20181234"},
         ]
-        coauthors_data = [
-            {"paper_id": 1, "display_name": "Max Steinhardt", "openalex_author_id": "A111"},
-            {"paper_id": 1, "display_name": "Jane Doe", "openalex_author_id": "A222"},
-        ]
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [
-                sample_pubs,
-                BATCH_AUTHORS_PUB1,
-                coauthors_data,
-                [],  # links
-            ]
+        coauthors_map = {
+            1: [
+                {"display_name": "Max Steinhardt", "openalex_author_id": "A111"},
+                {"display_name": "Jane Doe", "openalex_author_id": "A222"},
+            ],
+        }
+        with (
+            patch("api.Database.search_feed_events", return_value=(sample_pubs, 1)),
+            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
+            patch("api.Database.get_coauthors_for_papers", return_value=coauthors_map),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications")
 
         assert response.status_code == 200
@@ -346,18 +335,15 @@ class TestPublicationOpenAlexFields:
     def test_single_publication_includes_doi(self, client):
         """GET /api/publications/{id} returns doi and coauthors."""
         pub_with_doi = {**SAMPLE_PUB_DETAIL, "doi": "10.1257/aer.20181234"}
-        coauthors_data = [
-            {"paper_id": 1, "display_name": "Max Steinhardt", "openalex_author_id": "A111"},
-        ]
+        coauthors_map = {
+            1: [{"display_name": "Max Steinhardt", "openalex_author_id": "A111"}],
+        }
         with (
-            patch("api.Database.fetch_one", return_value=pub_with_doi),
-            patch("api.Database.fetch_all") as mock_fetch,
+            patch("api.Database.get_paper_detail", return_value=pub_with_doi),
+            patch("api.Database.get_authors_for_papers", return_value={1: SAMPLE_AUTHORS_PUB1}),
+            patch("api.Database.get_coauthors_for_papers", return_value=coauthors_map),
+            patch("api.Database.get_links_for_papers", return_value={1: []}),
         ):
-            mock_fetch.side_effect = [
-                SAMPLE_AUTHORS_PUB1,
-                coauthors_data,
-                [],  # links
-            ]
             response = client.get("/api/publications/1")
 
         assert response.status_code == 200
@@ -367,7 +353,7 @@ class TestPublicationOpenAlexFields:
 
 
 # ---------------------------------------------------------------------------
-# Task 1: GET /api/publications/{id}?include_history=true — feed_events + extra fields
+# Task 1: GET /api/publications/{id}?include_history=true -- feed_events + extra fields
 # ---------------------------------------------------------------------------
 
 SAMPLE_FEED_EVENTS = [
@@ -395,16 +381,13 @@ class TestGetPublicationHistory:
         pub_detail = {**SAMPLE_PUB_DETAIL, "is_seed": False,
                       "title_hash": "abc123", "openalex_id": "W12345"}
         with (
-            patch("api.Database.fetch_one", return_value=pub_detail),
-            patch("api.Database.fetch_all") as mock_fetch,
+            patch("api.Database.get_paper_detail", return_value=pub_detail),
+            patch("api.Database.get_authors_for_papers", return_value={1: SAMPLE_AUTHORS_PUB1}),
+            patch("api.Database.get_coauthors_for_papers", return_value={1: []}),
+            patch("api.Database.get_links_for_papers", return_value={1: []}),
             patch("api.Database.get_paper_snapshots", return_value=SAMPLE_SNAPSHOTS),
+            patch("api.Database.get_paper_history", return_value=SAMPLE_FEED_EVENTS),
         ):
-            mock_fetch.side_effect = [
-                SAMPLE_AUTHORS_PUB1,  # authors
-                [],  # coauthors
-                [],  # links
-                SAMPLE_FEED_EVENTS,  # feed_events
-            ]
             response = client.get("/api/publications/1?include_history=true")
 
         assert response.status_code == 200
@@ -422,16 +405,13 @@ class TestGetPublicationHistory:
         pub_detail = {**SAMPLE_PUB_DETAIL, "is_seed": False,
                       "title_hash": "abc123", "openalex_id": "W12345"}
         with (
-            patch("api.Database.fetch_one", return_value=pub_detail),
-            patch("api.Database.fetch_all") as mock_fetch,
+            patch("api.Database.get_paper_detail", return_value=pub_detail),
+            patch("api.Database.get_authors_for_papers", return_value={1: SAMPLE_AUTHORS_PUB1}),
+            patch("api.Database.get_coauthors_for_papers", return_value={1: []}),
+            patch("api.Database.get_links_for_papers", return_value={1: []}),
             patch("api.Database.get_paper_snapshots", return_value=[]),
+            patch("api.Database.get_paper_history", return_value=[]),
         ):
-            mock_fetch.side_effect = [
-                SAMPLE_AUTHORS_PUB1,
-                [],  # coauthors
-                [],  # links
-                [],  # feed_events
-            ]
             response = client.get("/api/publications/1?include_history=true")
 
         assert response.status_code == 200
@@ -443,10 +423,11 @@ class TestGetPublicationHistory:
     def test_no_history_without_flag(self, client):
         """feed_events and history are not included without include_history=true."""
         with (
-            patch("api.Database.fetch_one", return_value=SAMPLE_PUB_DETAIL),
-            patch("api.Database.fetch_all") as mock_fetch,
+            patch("api.Database.get_paper_detail", return_value=SAMPLE_PUB_DETAIL),
+            patch("api.Database.get_authors_for_papers", return_value={1: SAMPLE_AUTHORS_PUB1}),
+            patch("api.Database.get_coauthors_for_papers", return_value={1: []}),
+            patch("api.Database.get_links_for_papers", return_value={1: []}),
         ):
-            mock_fetch.side_effect = [SAMPLE_AUTHORS_PUB1, [], []]
             response = client.get("/api/publications/1")
 
         assert response.status_code == 200

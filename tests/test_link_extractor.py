@@ -132,22 +132,21 @@ class TestDiscoverUntrustedDomains:
 
 
 class TestApiPaperLinks:
-    @patch("api.Database.fetch_all")
-    @patch("api.Database.fetch_one")
-    def test_publication_detail_includes_links(self, mock_fetch_one, mock_fetch_all, client):
-        mock_fetch_one.return_value = {
+    def test_publication_detail_includes_links(self, client):
+        pub_detail = {
             "id": 1, "title": "Test", "year": "2024", "venue": "AER",
             "source_url": "https://x.com", "discovered_at": "2024-01-01T00:00:00",
             "status": "working_paper", "draft_url": None,
             "draft_url_status": "unchecked", "abstract": None,
             "doi": None,
         }
-        mock_fetch_all.side_effect = [
-            [{"id": 1, "first_name": "J", "last_name": "S"}],  # authors
-            [],  # coauthors
-            [{"url": "https://ssrn.com/1", "link_type": "ssrn"}],  # links
-        ]
-        resp = client.get("/api/publications/1")
+        with (
+            patch("api.Database.get_paper_detail", return_value=pub_detail),
+            patch("api.Database.get_authors_for_papers", return_value={1: [{"id": 1, "first_name": "J", "last_name": "S"}]}),
+            patch("api.Database.get_coauthors_for_papers", return_value={1: []}),
+            patch("api.Database.get_links_for_papers", return_value={1: [{"url": "https://ssrn.com/1", "link_type": "ssrn"}]}),
+        ):
+            resp = client.get("/api/publications/1")
         assert resp.status_code == 200
         assert "links" in resp.json()
         assert resp.json()["links"][0]["link_type"] == "ssrn"

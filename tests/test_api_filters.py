@@ -41,11 +41,6 @@ def client():
 
 # ---------------------------------------------------------------------------
 # Sample data
-#
-# Row shape (15 columns) matches the feed_events JOIN in list_publications:
-#   fe.id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
-#   p.id, p.title, p.year, p.venue, p.url, p.timestamp,
-#   p.status, p.draft_url, p.abstract, p.draft_url_status
 # ---------------------------------------------------------------------------
 
 _PUB_WITH_ABSTRACT = {
@@ -114,25 +109,11 @@ _PUB_MIT = {
     "total_count": 1,
 }
 
-# Batch author rows: {publication_id, researcher_id, first_name, last_name}
-_AUTHORS_PUB1 = [{"publication_id": 1, "researcher_id": 10, "first_name": "Jane", "last_name": "Doe"}]
-_AUTHORS_PUB2 = [{"publication_id": 2, "researcher_id": 11, "first_name": "John", "last_name": "Smith"}]
-_AUTHORS_PUB3 = [{"publication_id": 3, "researcher_id": 12, "first_name": "Alice", "last_name": "Brown"}]
-_NO_AUTHORS = []
+# Author maps
+_AUTHORS_MAP_PUB1 = {1: [{"id": 10, "first_name": "Jane", "last_name": "Doe"}]}
+_AUTHORS_MAP_PUB2 = {2: [{"id": 11, "first_name": "John", "last_name": "Smith"}]}
+_AUTHORS_MAP_PUB3 = {3: [{"id": 12, "first_name": "Alice", "last_name": "Brown"}]}
 
-
-# ---------------------------------------------------------------------------
-# Helper — mock a successful single-publication list response
-# ---------------------------------------------------------------------------
-
-def _mock_single_pub(mock_fetch, pub_row, author_rows):
-    """Configure mock_fetch for a four-call sequence: pubs + batch-authors + coauthors + batch-links."""
-    mock_fetch.side_effect = [
-        [pub_row],
-        author_rows,
-        [],  # coauthors
-        [],  # links
-    ]
 
 
 # ---------------------------------------------------------------------------
@@ -144,46 +125,69 @@ class TestStatusFilter:
 
     def test_working_paper_status_returns_200(self, client):
         """'working_paper' is a valid v2 status; must not return 400."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            _mock_single_pub(mock_fetch, _PUB_WITH_ABSTRACT, _AUTHORS_PUB1)
+        with (
+            patch("api.Database.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?status=working_paper")
 
         assert response.status_code == 200
 
     def test_working_paper_status_included_in_items(self, client):
         """Items filtered by working_paper should carry status='working_paper'."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            _mock_single_pub(mock_fetch, _PUB_WITH_ABSTRACT, _AUTHORS_PUB1)
+        with (
+            patch("api.Database.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?status=working_paper")
 
         item = response.json()["items"][0]
         assert item["status"] == "working_paper"
 
     def test_published_status_still_accepted(self, client):
-        with patch("api.Database.fetch_all") as mock_fetch:
-            _mock_single_pub(mock_fetch, _PUB_NO_ABSTRACT, _AUTHORS_PUB2)
+        with (
+            patch("api.Database.search_feed_events", return_value=([_PUB_NO_ABSTRACT], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB2),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?status=published")
 
         assert response.status_code == 200
 
     def test_accepted_status_accepted(self, client):
-        with patch("api.Database.fetch_all") as mock_fetch:
-            _mock_single_pub(mock_fetch, _PUB_MIT, _AUTHORS_PUB3)
+        with (
+            patch("api.Database.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?status=accepted")
 
         assert response.status_code == 200
 
     def test_revise_and_resubmit_status_accepted(self, client):
-        with patch("api.Database.fetch_all") as mock_fetch:
-            # Zero results: first call returns empty pub list; subsequent calls (batch authors, coauthors) never reached
-            mock_fetch.side_effect = [[], [], [], []]
+        with (
+            patch("api.Database.search_feed_events", return_value=([], 0)),
+            patch("api.Database.get_authors_for_papers", return_value={}),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?status=revise_and_resubmit")
 
         assert response.status_code == 200
 
     def test_reject_and_resubmit_status_accepted(self, client):
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [[], [], [], []]
+        with (
+            patch("api.Database.search_feed_events", return_value=([], 0)),
+            patch("api.Database.get_authors_for_papers", return_value={}),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?status=reject_and_resubmit")
 
         assert response.status_code == 200
@@ -213,22 +217,34 @@ class TestInstitutionFilter:
     """?institution= builds a subquery against authors' affiliations."""
 
     def test_institution_filter_returns_200(self, client):
-        with patch("api.Database.fetch_all") as mock_fetch:
-            _mock_single_pub(mock_fetch, _PUB_MIT, _AUTHORS_PUB3)
+        with (
+            patch("api.Database.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?institution=MIT")
 
         assert response.status_code == 200
 
     def test_institution_filter_returns_items(self, client):
-        with patch("api.Database.fetch_all") as mock_fetch:
-            _mock_single_pub(mock_fetch, _PUB_MIT, _AUTHORS_PUB3)
+        with (
+            patch("api.Database.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?institution=MIT")
 
         assert len(response.json()["items"]) == 1
 
     def test_institution_filter_no_results_returns_empty_list(self, client):
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [[], [], [], []]
+        with (
+            patch("api.Database.search_feed_events", return_value=([], 0)),
+            patch("api.Database.get_authors_for_papers", return_value={}),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?institution=Nonexistent+University")
 
         assert response.status_code == 200
@@ -236,24 +252,36 @@ class TestInstitutionFilter:
 
     def test_institution_filter_combined_with_year(self, client):
         """institution and year can be combined; must return 200."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            _mock_single_pub(mock_fetch, _PUB_MIT, _AUTHORS_PUB3)
+        with (
+            patch("api.Database.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?institution=MIT&year=2024")
 
         assert response.status_code == 200
 
     def test_institution_filter_escapes_percent(self, client):
         """A literal % in the institution name must not break the LIKE query."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [[], [], [], []]
+        with (
+            patch("api.Database.search_feed_events", return_value=([], 0)),
+            patch("api.Database.get_authors_for_papers", return_value={}),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?institution=100%25MIT")
 
         assert response.status_code == 200
 
     def test_institution_filter_combined_with_status(self, client):
         """institution and status can be combined."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            _mock_single_pub(mock_fetch, _PUB_MIT, _AUTHORS_PUB3)
+        with (
+            patch("api.Database.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?institution=MIT&status=accepted")
 
         assert response.status_code == 200
@@ -267,15 +295,23 @@ class TestPresetTop20Filter:
     """?preset=top20 filters publications whose authors belong to top-20 departments."""
 
     def test_preset_top20_returns_200(self, client):
-        with patch("api.Database.fetch_all") as mock_fetch:
-            _mock_single_pub(mock_fetch, _PUB_MIT, _AUTHORS_PUB3)
+        with (
+            patch("api.Database.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?preset=top20")
 
         assert response.status_code == 200
 
     def test_preset_top20_returns_items(self, client):
-        with patch("api.Database.fetch_all") as mock_fetch:
-            _mock_single_pub(mock_fetch, _PUB_MIT, _AUTHORS_PUB3)
+        with (
+            patch("api.Database.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?preset=top20")
 
         body = response.json()
@@ -283,8 +319,12 @@ class TestPresetTop20Filter:
         assert body["total"] == 1
 
     def test_preset_top20_no_results_returns_empty(self, client):
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [[], [], [], []]
+        with (
+            patch("api.Database.search_feed_events", return_value=([], 0)),
+            patch("api.Database.get_authors_for_papers", return_value={}),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?preset=top20")
 
         assert response.status_code == 200
@@ -292,8 +332,12 @@ class TestPresetTop20Filter:
 
     def test_preset_top20_combined_with_year(self, client):
         """preset=top20 and year can be used together."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            _mock_single_pub(mock_fetch, _PUB_MIT, _AUTHORS_PUB3)
+        with (
+            patch("api.Database.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?preset=top20&year=2024")
 
         assert response.status_code == 200
@@ -309,15 +353,19 @@ class TestPresetTop20Filter:
 
 
 # ---------------------------------------------------------------------------
-# Response shape — abstract and draft_url_status fields
+# Response shape -- abstract and draft_url_status fields
 # ---------------------------------------------------------------------------
 
 class TestResponseShape:
     """Items must include abstract and draft_url_status from the v2 schema."""
 
     def test_item_includes_abstract_field(self, client):
-        with patch("api.Database.fetch_all") as mock_fetch:
-            _mock_single_pub(mock_fetch, _PUB_WITH_ABSTRACT, _AUTHORS_PUB1)
+        with (
+            patch("api.Database.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications")
 
         item = response.json()["items"][0]
@@ -325,8 +373,12 @@ class TestResponseShape:
         assert item["abstract"] == "This paper examines trade and wages."
 
     def test_item_includes_draft_url_status_field(self, client):
-        with patch("api.Database.fetch_all") as mock_fetch:
-            _mock_single_pub(mock_fetch, _PUB_WITH_ABSTRACT, _AUTHORS_PUB1)
+        with (
+            patch("api.Database.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications")
 
         item = response.json()["items"][0]
@@ -335,8 +387,12 @@ class TestResponseShape:
 
     def test_draft_available_true_when_status_is_valid(self, client):
         """draft_available must be True only when draft_url_status == 'valid'."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            _mock_single_pub(mock_fetch, _PUB_WITH_ABSTRACT, _AUTHORS_PUB1)
+        with (
+            patch("api.Database.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications")
 
         item = response.json()["items"][0]
@@ -344,16 +400,24 @@ class TestResponseShape:
 
     def test_draft_available_false_when_status_is_unchecked(self, client):
         """draft_available must be False when draft_url_status is not 'valid'."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            _mock_single_pub(mock_fetch, _PUB_NO_ABSTRACT, _AUTHORS_PUB2)
+        with (
+            patch("api.Database.search_feed_events", return_value=([_PUB_NO_ABSTRACT], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB2),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications")
 
         item = response.json()["items"][0]
         assert item["draft_available"] is False
 
     def test_abstract_is_none_when_not_present(self, client):
-        with patch("api.Database.fetch_all") as mock_fetch:
-            _mock_single_pub(mock_fetch, _PUB_NO_ABSTRACT, _AUTHORS_PUB2)
+        with (
+            patch("api.Database.search_feed_events", return_value=([_PUB_NO_ABSTRACT], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB2),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications")
 
         item = response.json()["items"][0]

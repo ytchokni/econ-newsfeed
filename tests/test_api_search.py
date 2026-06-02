@@ -14,9 +14,7 @@ SAMPLE_PUB = {
     "total_count": 1,
 }
 
-BATCH_AUTHORS = [
-    {"publication_id": 1, "researcher_id": 10, "first_name": "Max", "last_name": "Steinhardt"},
-]
+AUTHORS_MAP = {1: [{"id": 10, "first_name": "Max", "last_name": "Steinhardt"}]}
 
 
 class TestPublicationSearch:
@@ -24,36 +22,52 @@ class TestPublicationSearch:
 
     def test_search_returns_200(self, client):
         """Basic search query returns 200."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [[SAMPLE_PUB], BATCH_AUTHORS, [], []]
+        with (
+            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUB], 1)) as mock_search,
+            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?search=Trade")
 
         assert response.status_code == 200
         body = response.json()
         assert len(body["items"]) == 1
 
-    def test_search_passes_like_to_sql(self, client):
-        """Search param generates a search clause in the SQL query."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [[], []]
+    def test_search_passes_search_to_db(self, client):
+        """Search param is passed to search_feed_events."""
+        with (
+            patch("api.Database.search_feed_events", return_value=([], 0)) as mock_search,
+            patch("api.Database.get_authors_for_papers", return_value={}),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             client.get("/api/publications?search=monetary+policy")
 
-        # Verify the SQL contains the search clause (FULLTEXT or LIKE)
-        fetch_sql = mock_fetch.call_args_list[0][0][0]
-        assert "MATCH" in fetch_sql or "p.title LIKE" in fetch_sql or "p.abstract LIKE" in fetch_sql
+        # Verify the search param was passed to the database function
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["search"] == "monetary policy"
 
     def test_search_escapes_special_chars(self, client):
         """Special LIKE chars (%, _) are escaped."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [[], []]
+        with (
+            patch("api.Database.search_feed_events", return_value=([], 0)),
+            patch("api.Database.get_authors_for_papers", return_value={}),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?search=100%25_increase")
 
         assert response.status_code == 200
 
     def test_search_combined_with_year_filter(self, client):
         """Search works alongside existing filters."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [[SAMPLE_PUB], BATCH_AUTHORS, [], []]
+        with (
+            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUB], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             response = client.get("/api/publications?search=Trade&year=2024")
 
         assert response.status_code == 200
@@ -62,12 +76,17 @@ class TestPublicationSearch:
 
     def test_empty_search_ignored(self, client):
         """Whitespace-only or empty search is treated as no filter."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [[SAMPLE_PUB], BATCH_AUTHORS, [], []]
+        with (
+            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUB], 1)) as mock_search,
+            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             client.get("/api/publications?search=+")
 
-        fetch_sql = mock_fetch.call_args_list[0][0][0]
-        assert "LIKE" not in fetch_sql and "MATCH" not in fetch_sql
+        # Verify search was passed as whitespace (the DB function handles stripping)
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["search"] == " "
 
 
 SAMPLE_RESEARCHER = {
@@ -84,39 +103,41 @@ class TestResearcherSearch:
     def test_search_returns_200(self, client):
         """Basic name search returns 200."""
         with (
-            patch("api.Database.fetch_all") as mock_fetch,
+            patch("api.Database.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
+            patch("api.Database.get_urls_for_researchers", return_value={}),
+            patch("api.Database.get_pub_counts_for_researchers", return_value={1: 5}),
+            patch("api.Database.get_fields_for_researchers", return_value={}),
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
-            mock_fetch.side_effect = [
-                [SAMPLE_RESEARCHER],  # researchers
-                [],                    # urls
-                [{"researcher_id": 1, "cnt": 5}],  # pub counts
-                [],                    # fields
-            ]
             response = client.get("/api/researchers?search=Steinhardt")
 
         assert response.status_code == 200
         body = response.json()
         assert len(body["items"]) == 1
 
-    def test_search_matches_first_and_last_name(self, client):
-        """Search checks both first_name and last_name."""
-        with patch("api.Database.fetch_all") as mock_fetch:
-            mock_fetch.side_effect = [[], [], [], []]
+    def test_search_passes_search_to_db(self, client):
+        """Search checks both first_name and last_name (handled by search_researchers)."""
+        with (
+            patch("api.Database.search_researchers", return_value=([], 0)) as mock_search,
+            patch("api.Database.get_urls_for_researchers", return_value={}),
+            patch("api.Database.get_pub_counts_for_researchers", return_value={}),
+            patch("api.Database.get_fields_for_researchers", return_value={}),
+            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
+        ):
             client.get("/api/researchers?search=Max")
 
-        fetch_sql = mock_fetch.call_args_list[0][0][0]
-        assert "first_name" in fetch_sql and "last_name" in fetch_sql
+        call_kwargs = mock_search.call_args[1]
+        assert call_kwargs["search"] == "Max"
 
     def test_search_combined_with_institution(self, client):
         """Search works alongside institution filter."""
         with (
-            patch("api.Database.fetch_all") as mock_fetch,
+            patch("api.Database.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
+            patch("api.Database.get_urls_for_researchers", return_value={}),
+            patch("api.Database.get_pub_counts_for_researchers", return_value={1: 5}),
+            patch("api.Database.get_fields_for_researchers", return_value={}),
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
-            mock_fetch.side_effect = [
-                [SAMPLE_RESEARCHER], [], [{"researcher_id": 1, "cnt": 5}], [],
-            ]
             response = client.get("/api/researchers?search=Max&institution=Berlin")
 
         assert response.status_code == 200

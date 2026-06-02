@@ -1,4 +1,4 @@
-"""Researcher data access: find/create, URL management, CSV import."""
+"""Researcher data access: find/create, URL management, CSV import, search."""
 from __future__ import annotations
 
 import csv
@@ -10,6 +10,14 @@ import re
 from database.connection import execute_query, fetch_one, fetch_all
 from database.llm import log_llm_usage
 from encoding_guard import fix_encoding
+
+
+from database.search_helpers import (
+    escape_like as _escape_like,
+    escape_fulltext as _escape_fulltext,
+    FT_MIN_TOKEN_SIZE as _FT_MIN_TOKEN_SIZE,
+    TOP20_DEPT_KEYWORDS as _TOP20_DEPT_KEYWORDS,
+)
 
 
 def _strip_initial(name: str) -> str | None:
@@ -347,3 +355,227 @@ def import_data_from_file(file_path: str) -> None:
         logging.info("Data imported successfully from file")
     except Exception as e:
         logging.error("Error importing data from file: %s", type(e).__name__)
+
+
+# ---------------------------------------------------------------------------
+# Batch-fetch helpers
+# ---------------------------------------------------------------------------
+
+def get_urls_for_researchers(researcher_ids: list[int]) -> dict[int, list[dict]]:
+    """Batch-fetch URLs for multiple researchers from researcher_urls.
+
+    Returns {researcher_id: [{id, page_type, url}, ...]}.
+    Empty input returns {}.
+    """
+    if not researcher_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(researcher_ids))
+    rows = fetch_all(
+        f"SELECT researcher_id, id, page_type, url FROM researcher_urls "
+        f"WHERE researcher_id IN ({placeholders})",
+        tuple(researcher_ids),
+    )
+    result: dict[int, list[dict]] = {rid: [] for rid in researcher_ids}
+    for row in rows:
+        result[row['researcher_id']].append({
+            "id": row['id'],
+            "page_type": row['page_type'],
+            "url": row['url'],
+        })
+    return result
+
+
+def get_pub_counts_for_researchers(researcher_ids: list[int]) -> dict[int, int]:
+    """Batch-fetch publication counts for multiple researchers via authorship GROUP BY.
+
+    Returns {researcher_id: count}. Missing IDs default to 0.
+    Empty input returns {}.
+    """
+    if not researcher_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(researcher_ids))
+    rows = fetch_all(
+        f"SELECT researcher_id, COUNT(*) AS cnt FROM authorship "
+        f"WHERE researcher_id IN ({placeholders}) GROUP BY researcher_id",
+        tuple(researcher_ids),
+    )
+    result: dict[int, int] = {rid: 0 for rid in researcher_ids}
+    for row in rows:
+        result[row['researcher_id']] = row['cnt']
+    return result
+
+
+def get_fields_for_researchers(researcher_ids: list[int]) -> dict[int, list[dict]]:
+    """Batch-fetch research fields for multiple researchers via researcher_fields JOIN research_fields.
+
+    Returns {researcher_id: [{id, name, slug}, ...]} ordered by rf.name.
+    Empty input returns {}.
+    """
+    if not researcher_ids:
+        return {}
+    placeholders = ",".join(["%s"] * len(researcher_ids))
+    rows = fetch_all(
+        f"""SELECT rf_link.researcher_id, rf.id, rf.name, rf.slug
+            FROM researcher_fields rf_link
+            JOIN research_fields rf ON rf.id = rf_link.field_id
+            WHERE rf_link.researcher_id IN ({placeholders})
+            ORDER BY rf.name""",
+        tuple(researcher_ids),
+    )
+    result: dict[int, list[dict]] = {rid: [] for rid in researcher_ids}
+    for row in rows:
+        result[row['researcher_id']].append({
+            "id": row['id'],
+            "name": row['name'],
+            "slug": row['slug'],
+        })
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Single-researcher queries
+# ---------------------------------------------------------------------------
+
+def get_researcher_detail(researcher_id: int) -> dict | None:
+    """Fetch a single researcher by ID.
+
+    Returns dict with columns: id, first_name, last_name, position, affiliation, description.
+    Returns None if not found.
+    """
+    return fetch_one(
+        "SELECT id, first_name, last_name, position, affiliation, description "
+        "FROM researchers WHERE id = %s",
+        (researcher_id,),
+    )
+
+
+def get_researcher_papers(researcher_id: int) -> list[dict]:
+    """Fetch papers for a researcher via papers JOIN authorship, ordered by discovered_at DESC.
+
+    Returns list of dicts with keys:
+    id, title, year, venue, source_url, discovered_at, status, draft_url,
+    abstract, draft_url_status, doi.
+    """
+    return fetch_all(
+        """
+        SELECT p.id, p.title, p.year, p.venue, p.source_url, p.discovered_at, p.status,
+               p.draft_url, p.abstract, p.draft_url_status, p.doi
+        FROM papers p
+        JOIN authorship a ON a.publication_id = p.id
+        WHERE a.researcher_id = %s
+        ORDER BY p.discovered_at DESC
+        """,
+        (researcher_id,),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Researcher search
+# ---------------------------------------------------------------------------
+
+def search_researchers(
+    *,
+    search: str | None = None,
+    institution: str | None = None,
+    field_slug: str | None = None,
+    position: str | None = None,
+    preset: str | None = None,
+    offset: int = 0,
+    limit: int = 20,
+) -> tuple[list[dict], int]:
+    """Search researchers with dynamic WHERE filters.
+
+    Returns (rows, total_count). All filter params are optional.
+
+    Base conditions (always applied):
+    - Only validated researchers: have openalex_author_id OR researcher_urls entry
+    - Hide initial-only names (CHAR_LENGTH > 2, not matching '^[A-Z]\\.$')
+
+    Filters:
+    - institution: r.affiliation LIKE %value%
+    - position: r.position LIKE %value%
+    - preset='top20': affiliation matches top-20 economics department keywords
+    - field_slug: single slug uses =, comma-separated uses IN
+    - search: FULLTEXT for >= _FT_MIN_TOKEN_SIZE chars, LIKE fallback for shorter
+    """
+    conditions: list[str] = []
+    params: list = []
+
+    # Base conditions: only validated researchers
+    conditions.append(
+        "(r.openalex_author_id IS NOT NULL OR EXISTS "
+        "(SELECT 1 FROM researcher_urls ru WHERE ru.researcher_id = r.id))"
+    )
+
+    # Hide abbreviated/initial-only names
+    conditions.append(
+        "r.first_name IS NOT NULL AND CHAR_LENGTH(r.first_name) > 2 "
+        "AND r.first_name NOT REGEXP '^[A-Z]\\\\.$' "
+        "AND r.last_name IS NOT NULL AND CHAR_LENGTH(r.last_name) > 2 "
+        "AND r.last_name NOT REGEXP '^[A-Z]\\\\.$'"
+    )
+
+    if institution:
+        conditions.append("r.affiliation LIKE %s")
+        params.append(f"%{_escape_like(institution)}%")
+
+    if position:
+        conditions.append("r.position LIKE %s")
+        params.append(f"%{_escape_like(position)}%")
+
+    if preset == "top20":
+        dept_conditions = " OR ".join(["r.affiliation LIKE %s"] * len(_TOP20_DEPT_KEYWORDS))
+        conditions.append(f"({dept_conditions})")
+        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP20_DEPT_KEYWORDS)
+
+    if field_slug:
+        field_slugs = [f.strip() for f in field_slug.split(",") if f.strip()]
+        if len(field_slugs) == 1:
+            conditions.append(
+                "EXISTS (SELECT 1 FROM researcher_fields rf "
+                "JOIN research_fields f ON f.id = rf.field_id "
+                "WHERE rf.researcher_id = r.id AND f.slug = %s)"
+            )
+            params.append(field_slugs[0])
+        elif len(field_slugs) > 1:
+            placeholders = ",".join(["%s"] * len(field_slugs))
+            conditions.append(
+                f"EXISTS (SELECT 1 FROM researcher_fields rf "
+                f"JOIN research_fields f ON f.id = rf.field_id "
+                f"WHERE rf.researcher_id = r.id AND f.slug IN ({placeholders}))"
+            )
+            params.extend(field_slugs)
+
+    search_term = (search or "").strip()
+    if search_term:
+        if len(search_term) >= _FT_MIN_TOKEN_SIZE:
+            conditions.append(
+                "(MATCH(r.first_name, r.last_name) AGAINST (%s IN BOOLEAN MODE)"
+                " OR CONCAT(r.first_name, ' ', r.last_name) LIKE %s ESCAPE '\\\\')"
+            )
+            params.append(_escape_fulltext(search_term))
+            params.append(f"%{_escape_like(search_term)}%")
+        else:
+            escaped = f"%{_escape_like(search_term)}%"
+            conditions.append(
+                "(r.first_name LIKE %s ESCAPE '\\\\'"
+                " OR r.last_name LIKE %s ESCAPE '\\\\'"
+                " OR CONCAT(r.first_name, ' ', r.last_name) LIKE %s ESCAPE '\\\\')"
+            )
+            params.extend([escaped, escaped, escaped])
+
+    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
+
+    rows = fetch_all(
+        f"""
+        SELECT r.id, r.first_name, r.last_name, r.position, r.affiliation, r.description,
+               COUNT(*) OVER() AS total_count
+        FROM researchers r
+        {where}
+        ORDER BY r.last_name, r.first_name
+        LIMIT %s OFFSET %s
+        """,
+        (*params, limit, offset),
+    )
+    total = rows[0]['total_count'] if rows else 0
+    return rows, total

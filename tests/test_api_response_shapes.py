@@ -78,8 +78,6 @@ SCRAPE_LAST_KEYS = {
 # Sample data (minimal, just enough to produce responses)
 # ---------------------------------------------------------------------------
 
-# Feed events row shape: fe.id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
-#   p.id, p.title, p.year, p.venue, p.url, p.timestamp, p.status, p.draft_url, p.abstract, p.draft_url_status
 SAMPLE_PUB = {
     "event_id": 100, "event_type": "new_paper", "old_status": None,
     "new_status": "working_paper", "old_title": None, "new_title": None,
@@ -91,8 +89,8 @@ SAMPLE_PUB = {
     "draft_url_status": "valid", "doi": None,
     "total_count": 1,
 }
-SAMPLE_AUTHORS = [{"publication_id": 1, "researcher_id": 10, "first_name": "Max", "last_name": "Steinhardt"}]
-# Single publication detail (10-column papers row, used by GET /api/publications/{id} and researcher detail)
+SAMPLE_AUTHORS_MAP = {1: [{"id": 10, "first_name": "Max", "last_name": "Steinhardt"}]}
+# Single publication detail (used by GET /api/publications/{id} and researcher detail)
 SAMPLE_PUB_DETAIL = {
     "id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
     "source_url": "https://example.com/p",
@@ -106,9 +104,9 @@ SAMPLE_RESEARCHER = {
     "description": "Economist.",
     "total_count": 1,
 }
-SAMPLE_URLS = [{"researcher_id": 10, "id": 1, "page_type": "homepage", "url": "https://example.com"}]
-SAMPLE_PUB_COUNTS = [{"researcher_id": 10, "cnt": 5}]
-SAMPLE_FIELDS = [{"researcher_id": 10, "id": 1, "name": "Labour Economics", "slug": "labour-economics"}]
+SAMPLE_URLS_MAP = {10: [{"id": 1, "page_type": "homepage", "url": "https://example.com"}]}
+SAMPLE_PUB_COUNTS_MAP = {10: 5}
+SAMPLE_FIELDS_MAP = {10: [{"id": 1, "name": "Labour Economics", "slug": "labour-economics"}]}
 SAMPLE_SCRAPE = {
     "id": 1, "status": "completed",
     "started_at": datetime(2026, 3, 16, 10, 0),
@@ -125,15 +123,23 @@ class TestPublicationShape:
     """GET /api/publications response matches types.ts Publication."""
 
     def test_paginated_envelope_keys(self, client):
-        with patch("api.Database.fetch_all") as mock_all:
-            mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS, [], []]  # pubs, authors, coauthors, links
+        with (
+            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUB], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             body = client.get("/api/publications").json()
 
         assert set(body.keys()) >= PAGINATED_KEYS
 
     def test_publication_item_keys(self, client):
-        with patch("api.Database.fetch_all") as mock_all:
-            mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS, [], []]  # pubs, authors, coauthors, links
+        with (
+            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUB], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             body = client.get("/api/publications").json()
 
         item = body["items"][0]
@@ -142,8 +148,12 @@ class TestPublicationShape:
         )
 
     def test_author_sub_object_keys(self, client):
-        with patch("api.Database.fetch_all") as mock_all:
-            mock_all.side_effect = [[SAMPLE_PUB], SAMPLE_AUTHORS, [], []]  # pubs, authors, coauthors, links
+        with (
+            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUB], 1)),
+            patch("api.Database.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
+        ):
             body = client.get("/api/publications").json()
 
         author = body["items"][0]["authors"][0]
@@ -161,13 +171,12 @@ class TestResearcherShape:
 
     def test_researcher_list_item_keys(self, client):
         with (
-            patch("api.Database.fetch_all") as mock_all,
+            patch("api.Database.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
+            patch("api.Database.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
+            patch("api.Database.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
+            patch("api.Database.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
-            mock_all.side_effect = [
-                [SAMPLE_RESEARCHER], SAMPLE_URLS,
-                SAMPLE_PUB_COUNTS, SAMPLE_FIELDS,
-            ]
             body = client.get("/api/researchers").json()
 
         assert set(body.keys()) >= PAGINATED_KEYS
@@ -178,13 +187,12 @@ class TestResearcherShape:
 
     def test_researcher_url_sub_object_keys(self, client):
         with (
-            patch("api.Database.fetch_all") as mock_all,
+            patch("api.Database.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
+            patch("api.Database.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
+            patch("api.Database.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
+            patch("api.Database.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
-            mock_all.side_effect = [
-                [SAMPLE_RESEARCHER], SAMPLE_URLS,
-                SAMPLE_PUB_COUNTS, SAMPLE_FIELDS,
-            ]
             body = client.get("/api/researchers").json()
 
         url_obj = body["items"][0]["urls"][0]
@@ -194,13 +202,12 @@ class TestResearcherShape:
 
     def test_research_field_sub_object_keys(self, client):
         with (
-            patch("api.Database.fetch_all") as mock_all,
+            patch("api.Database.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
+            patch("api.Database.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
+            patch("api.Database.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
+            patch("api.Database.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
             patch("api.Database.get_jel_codes_for_researchers", return_value={}),
         ):
-            mock_all.side_effect = [
-                [SAMPLE_RESEARCHER], SAMPLE_URLS,
-                SAMPLE_PUB_COUNTS, SAMPLE_FIELDS,
-            ]
             body = client.get("/api/researchers").json()
 
         field_obj = body["items"][0]["fields"][0]
@@ -218,17 +225,16 @@ class TestResearcherDetailShape:
 
     def test_detail_has_publications_key(self, client):
         with (
-            patch("api.Database.fetch_one") as mock_one,
-            patch("api.Database.fetch_all") as mock_all,
+            patch("api.Database.get_researcher_detail", return_value=SAMPLE_RESEARCHER),
+            patch("api.Database.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
+            patch("api.Database.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
+            patch("api.Database.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
             patch("api.Database.get_jel_codes_for_researcher", return_value=[]),
+            patch("api.Database.get_researcher_papers", return_value=[SAMPLE_PUB_DETAIL]),
+            patch("api.Database.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
+            patch("api.Database.get_coauthors_for_papers", return_value={}),
+            patch("api.Database.get_links_for_papers", return_value={}),
         ):
-            mock_one.side_effect = [SAMPLE_RESEARCHER, {"cnt": 5}]
-            single_urls = [{"id": 1, "page_type": "homepage", "url": "https://example.com"}]
-            single_fields = [{"id": 1, "name": "Labour Economics", "slug": "labour-economics"}]
-            mock_all.side_effect = [
-                single_urls, single_fields,
-                [SAMPLE_PUB_DETAIL], SAMPLE_AUTHORS, [], [],  # urls, fields, pubs, authors, coauthors, links
-            ]
             body = client.get("/api/researchers/10").json()
 
         all_expected = RESEARCHER_KEYS | RESEARCHER_DETAIL_EXTRA_KEYS
