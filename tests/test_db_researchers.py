@@ -363,19 +363,6 @@ class TestSearchResearchers:
         assert "CONCAT" in sql
         assert "LIKE" in sql
 
-    def test_query_param_used_as_fallback_when_search_absent(self):
-        (_, _), mock_fetch = self._call(query="macro")
-        sql, params = mock_fetch.call_args[0]
-        assert "MATCH" in sql  # "macro" has 5 chars >= 3
-
-    def test_search_takes_priority_over_query(self):
-        """When both are provided, `search` wins."""
-        (_, _), mock_fetch = self._call(search="fiscal", query="monetary")
-        sql, params = mock_fetch.call_args[0]
-        # "fiscal" must be in params (as the search term), "monetary" must not
-        assert any("fiscal" in str(p) for p in params)
-        assert not any("monetary" in str(p) for p in params)
-
     def test_pagination_params_are_last_in_tuple(self):
         """LIMIT and OFFSET must be the final params."""
         (_, _), mock_fetch = self._call(institution="Harvard", limit=10, offset=20)

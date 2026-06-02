@@ -115,19 +115,6 @@ _AUTHORS_MAP_PUB2 = {2: [{"id": 11, "first_name": "John", "last_name": "Smith"}]
 _AUTHORS_MAP_PUB3 = {3: [{"id": 12, "first_name": "Alice", "last_name": "Brown"}]}
 
 
-# ---------------------------------------------------------------------------
-# Helper -- mock a successful single-publication list response
-# ---------------------------------------------------------------------------
-
-def _mock_single_pub_patches(pub_row, authors_map):
-    """Return a dict of patches for a single-pub list response."""
-    return {
-        "search_feed_events": ([pub_row], 1),
-        "get_authors_for_papers": authors_map,
-        "get_coauthors_for_papers": {},
-        "get_links_for_papers": {},
-    }
-
 
 # ---------------------------------------------------------------------------
 # ?status= filter

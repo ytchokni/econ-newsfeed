@@ -475,12 +475,10 @@ def get_researcher_papers(researcher_id: int) -> list[dict]:
 
 def search_researchers(
     *,
-    query: str | None = None,
     search: str | None = None,
     institution: str | None = None,
     field_slug: str | None = None,
     position: str | None = None,
-    jel_code: str | None = None,
     preset: str | None = None,
     offset: int = 0,
     limit: int = 20,
@@ -488,7 +486,6 @@ def search_researchers(
     """Search researchers with dynamic WHERE filters.
 
     Returns (rows, total_count). All filter params are optional.
-    `search` takes priority over `query` (backwards compat alias).
 
     Base conditions (always applied):
     - Only validated researchers: have openalex_author_id OR researcher_urls entry
@@ -499,7 +496,7 @@ def search_researchers(
     - position: r.position LIKE %value%
     - preset='top20': affiliation matches top-20 economics department keywords
     - field_slug: single slug uses =, comma-separated uses IN
-    - search/query: FULLTEXT for >= _FT_MIN_TOKEN_SIZE chars, LIKE fallback for shorter
+    - search: FULLTEXT for >= _FT_MIN_TOKEN_SIZE chars, LIKE fallback for shorter
     """
     conditions: list[str] = []
     params: list = []
@@ -549,8 +546,7 @@ def search_researchers(
             )
             params.extend(field_slugs)
 
-    # `search` takes priority over `query` (backwards compat alias)
-    search_term = (search or query or "").strip()
+    search_term = (search or "").strip()
     if search_term:
         if len(search_term) >= _FT_MIN_TOKEN_SIZE:
             conditions.append(

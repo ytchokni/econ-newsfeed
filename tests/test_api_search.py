@@ -91,7 +91,7 @@ class TestPublicationSearch:
 
 SAMPLE_RESEARCHER = {
     "id": 1, "first_name": "Max", "last_name": "Steinhardt",
-    "position": "Professor", "affiliation": "Freie Universitat Berlin",
+    "position": "Professor", "affiliation": "Freie Universität Berlin",
     "description": "Labor economist",
     "total_count": 1,
 }

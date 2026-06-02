@@ -30,11 +30,11 @@ def client():
 # Sample DB return shapes
 SAMPLE_RESEARCHERS = [
     # {id, first_name, last_name, position, affiliation, description, total_count}
-    {"id": 1, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "Freie Universitat Berlin", "description": "A leading researcher in trade economics.", "total_count": 2},
+    {"id": 1, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "Freie Universität Berlin", "description": "A leading researcher in trade economics.", "total_count": 2},
     {"id": 2, "first_name": "Jane", "last_name": "Doe", "position": "Assistant Professor", "affiliation": "MIT", "description": None, "total_count": 2},
 ]
 
-SAMPLE_RESEARCHER_DETAIL = {"id": 1, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "Freie Universitat Berlin", "description": "A leading researcher in trade economics."}
+SAMPLE_RESEARCHER_DETAIL = {"id": 1, "first_name": "Max Friedrich", "last_name": "Steinhardt", "position": "Professor", "affiliation": "Freie Universität Berlin", "description": "A leading researcher in trade economics."}
 
 SAMPLE_PUBLICATIONS_R1 = [
     # {id, title, year, venue, source_url, discovered_at, status, draft_url, abstract, draft_url_status}
@@ -127,7 +127,7 @@ class TestListResearchers:
         assert item["first_name"] == "Max Friedrich"
         assert item["last_name"] == "Steinhardt"
         assert item["position"] == "Professor"
-        assert item["affiliation"] == "Freie Universitat Berlin"
+        assert item["affiliation"] == "Freie Universität Berlin"
         assert item["publication_count"] == 23
         assert "description" in item
         assert len(item["urls"]) == 3
