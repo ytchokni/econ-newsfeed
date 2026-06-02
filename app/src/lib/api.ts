@@ -191,8 +191,8 @@ export interface AdminDashboardData {
   };
 }
 
-async function fetchJsonWithAuth<T>(url: string): Promise<T> {
-  const res = await fetch(url);
+async function fetchJsonWithAuth<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
   if (res.status === 401) {
     throw new Error("UNAUTHORIZED");
   }
@@ -245,9 +245,7 @@ export function useAtRiskUrls() {
 }
 
 export async function reactivateUrl(urlId: number): Promise<void> {
-  const res = await fetch(`/api/admin/reactivate-url/${urlId}`, {
+  await fetchJsonWithAuth(`/api/admin/reactivate-url/${urlId}`, {
     method: "POST",
   });
-  if (res.status === 401) throw new Error("UNAUTHORIZED");
-  if (!res.ok) throw new Error(`API error: ${res.status}`);
 }

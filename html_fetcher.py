@@ -563,6 +563,7 @@ class HTMLFetcher:
             return False
 
         if not HTMLFetcher.is_allowed_by_robots(url):
+            record_url_fetch_failure(url_id, "robots_blocked")
             return False
 
         logging.info(f"Fetching URL ID {url_id}: {url}")

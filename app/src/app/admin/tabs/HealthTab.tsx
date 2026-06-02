@@ -59,14 +59,16 @@ function DeactivatedUrlsSection() {
   const { data: deactivated, mutate: mutateDeactivated } = useDeactivatedUrls();
   const { data: atRisk } = useAtRiskUrls();
   const [reactivating, setReactivating] = useState<number | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleReactivate(urlId: number) {
     setReactivating(urlId);
+    setError(null);
     try {
       await reactivateUrl(urlId);
       mutateDeactivated();
     } catch {
-      // Silently fail — URL remains in list
+      setError("Failed to re-activate URL");
     } finally {
       setReactivating(null);
     }
@@ -74,6 +76,11 @@ function DeactivatedUrlsSection() {
 
   return (
     <div className="space-y-4">
+      {error && (
+        <div className="px-3 py-2 bg-red-900/20 border border-red-800/50 rounded text-sm text-red-400">
+          {error}
+        </div>
+      )}
       {atRisk && atRisk.length > 0 && (
         <div className="px-3 py-2 bg-amber-900/20 border border-amber-800/50 rounded">
           <p className="text-sm text-amber-400 font-medium mb-2">

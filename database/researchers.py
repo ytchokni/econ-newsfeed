@@ -351,20 +351,20 @@ def record_url_fetch_failure(url_id: int, error_type: str) -> None:
         logging.warning("Deactivated URL %d: %s", url_id, error_type)
         return
 
+    # Atomic increment + conditional deactivation (no TOCTOU race)
     execute_query(
-        "UPDATE researcher_urls SET consecutive_failures = consecutive_failures + 1 WHERE id = %s",
-        (url_id,),
+        """UPDATE researcher_urls
+           SET consecutive_failures = consecutive_failures + 1,
+               is_active = IF(consecutive_failures + 1 >= %s, FALSE, is_active),
+               deactivated_at = IF(consecutive_failures + 1 >= %s AND is_active = TRUE, NOW(), deactivated_at),
+               deactivation_reason = IF(consecutive_failures + 1 >= %s, %s, deactivation_reason)
+           WHERE id = %s""",
+        (_URL_DEACTIVATION_THRESHOLD, _URL_DEACTIVATION_THRESHOLD, _URL_DEACTIVATION_THRESHOLD, "consecutive_failures", url_id),
     )
     row = fetch_one(
         "SELECT consecutive_failures FROM researcher_urls WHERE id = %s", (url_id,),
     )
     if row and row["consecutive_failures"] >= _URL_DEACTIVATION_THRESHOLD:
-        execute_query(
-            """UPDATE researcher_urls
-               SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = %s
-               WHERE id = %s""",
-            ("consecutive_failures", url_id),
-        )
         logging.warning("Deactivated URL %d after %d consecutive failures", url_id, row["consecutive_failures"])
 
 
