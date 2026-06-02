@@ -6,6 +6,7 @@ import time
 from datetime import datetime, timezone
 
 import mysql.connector
+import mysql.connector.errors
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from database import Database
@@ -168,6 +169,34 @@ def _validate_draft_urls() -> None:
 
 _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD = 10
 
+_TRANSIENT_MYSQL_ERRORS = (
+    mysql.connector.errors.OperationalError,
+    mysql.connector.errors.InterfaceError,
+)
+
+
+def _with_db_retry(fn, *args, max_retries: int = 3, **kwargs):
+    """Call *fn* and retry on transient MySQL connection errors.
+
+    Retries up to *max_retries* times with exponential backoff (2s, 4s, 8s).
+    Only catches OperationalError and InterfaceError — all other exceptions
+    propagate immediately.
+    """
+    for attempt in range(max_retries + 1):
+        try:
+            return fn(*args, **kwargs)
+        except _TRANSIENT_MYSQL_ERRORS:
+            if attempt == max_retries:
+                raise
+            delay = 2 ** (attempt + 1)  # 2, 4, 8
+            logger.warning(
+                "Transient MySQL error in %s (attempt %d/%d), retrying in %ds",
+                fn.__name__ if hasattr(fn, '__name__') else str(fn),
+                attempt + 1, max_retries, delay,
+                exc_info=True,
+            )
+            time.sleep(delay)
+
 
 def run_scrape_job() -> None:
     """Orchestrates a full scraping cycle: fetch all HTML first, then extract.
@@ -205,11 +234,11 @@ def run_scrape_job() -> None:
             urls_checked += 1
 
             try:
-                old_text = HTMLFetcher.get_previous_text(url_id)
+                old_text = _with_db_retry(HTMLFetcher.get_previous_text, url_id)
                 is_first_scrape = old_text is None
 
                 t0 = time.time()
-                changed = HTMLFetcher.fetch_and_save_if_changed(url_id, url, researcher_id)
+                changed = _with_db_retry(HTMLFetcher.fetch_and_save_if_changed, url_id, url, researcher_id)
                 fetch_ms = (time.time() - t0) * 1000
                 logger.info(f"[{urls_checked}/{len(urls)}] fetch {url} — {fetch_ms:.0f}ms (changed={changed})")
 
@@ -222,8 +251,11 @@ def run_scrape_job() -> None:
                     })
 
                 if urls_checked % 10 == 0:
-                    _update_progress(log_id, urls_checked=urls_checked, urls_changed=urls_changed)
+                    _with_db_retry(_update_progress, log_id, urls_checked=urls_checked, urls_changed=urls_changed)
 
+            except _TRANSIENT_MYSQL_ERRORS as e:
+                logger.error("MySQL connection error fetching URL %s (id=%s) after retries: %s", url, url_id, e)
+                continue
             except Exception as e:
                 logger.error("Error fetching URL %s (id=%s): %s", url, url_id, e)
                 continue
@@ -249,7 +281,7 @@ def run_scrape_job() -> None:
                 break
 
             try:
-                new_text = HTMLFetcher.get_latest_text(url_id)
+                new_text = _with_db_retry(HTMLFetcher.get_latest_text, url_id)
                 extraction_text = HTMLFetcher.compute_diff(old_text, new_text) if old_text else new_text
 
                 if extraction_text:
@@ -262,24 +294,24 @@ def run_scrape_job() -> None:
                         consecutive_failures = 0
 
                         t0 = time.time()
-                        Publication.save_publications(url, pubs, is_seed=is_first_scrape)
+                        _with_db_retry(Publication.save_publications, url, pubs, is_seed=is_first_scrape)
                         save_ms = (time.time() - t0) * 1000
                         logger.info(f"  save_publications — {save_ms:.0f}ms")
 
                         t0_recon = time.time()
-                        reconcile_title_renames(url, pubs)
+                        _with_db_retry(reconcile_title_renames, url, pubs)
                         recon_ms = (time.time() - t0_recon) * 1000
                         logger.info(f"  title reconciliation — {recon_ms:.0f}ms")
 
                         pubs_extracted += len(pubs)
 
                         t0 = time.time()
-                        match_and_save_paper_links(url_id, pubs)
+                        _with_db_retry(match_and_save_paper_links, url_id, pubs)
                         links_ms = (time.time() - t0) * 1000
                         logger.info(f"  paper links — {links_ms:.0f}ms")
 
                         t0 = time.time()
-                        append_snapshots_for_pubs(pubs, url)
+                        _with_db_retry(append_snapshots_for_pubs, pubs, url)
                         snapshot_ms = (time.time() - t0) * 1000
                         logger.info(f"  paper snapshots — {snapshot_ms:.0f}ms")
                     else:
@@ -295,7 +327,7 @@ def run_scrape_job() -> None:
                             )
                             circuit_broken = True
 
-                _update_progress(log_id, pubs_extracted=pubs_extracted, extraction_errors=extraction_errors)
+                _with_db_retry(_update_progress, log_id, pubs_extracted=pubs_extracted, extraction_errors=extraction_errors)
 
                 if page_type == "HOME" and not circuit_broken and new_text:
                     t0 = time.time()
@@ -303,16 +335,31 @@ def run_scrape_job() -> None:
                     desc_ms = (time.time() - t0) * 1000
                     logger.info(f"  description extract — {desc_ms:.0f}ms (found={description is not None})")
                     if description:
-                        r_row = Database.fetch_one(
+                        r_row = _with_db_retry(
+                            Database.fetch_one,
                             "SELECT position, affiliation FROM researchers WHERE id = %s",
                             (researcher_id,),
                         )
                         position = r_row['position'] if r_row else None
                         affiliation = r_row['affiliation'] if r_row else None
-                        Database.append_researcher_snapshot(
-                            researcher_id, position, affiliation, description, source_url=url
+                        _with_db_retry(
+                            Database.append_researcher_snapshot,
+                            researcher_id, position, affiliation, description, source_url=url,
                         )
 
+            except _TRANSIENT_MYSQL_ERRORS as e:
+                logger.error("MySQL connection error extracting URL %s (id=%s) after retries: %s", url, url_id, e)
+                extraction_errors += 1
+                consecutive_failures += 1
+                if consecutive_failures >= _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD:
+                    remaining = len(changed_urls) - idx - 1
+                    logger.warning(
+                        "Circuit breaker: %d consecutive extraction failures — "
+                        "stopping extraction. Remaining %d changed URLs will be extracted next run.",
+                        consecutive_failures, remaining,
+                    )
+                    circuit_broken = True
+                continue
             except Exception as e:
                 logger.error("Error extracting URL %s (id=%s): %s", url, url_id, e)
                 extraction_errors += 1

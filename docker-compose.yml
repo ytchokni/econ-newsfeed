@@ -1,7 +1,7 @@
 services:
   db:
     image: mysql:8.0.40
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --innodb-buffer-pool-size=512M
     restart: unless-stopped
     mem_limit: 1024m
     cpus: 1.0
