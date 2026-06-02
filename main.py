@@ -349,6 +349,10 @@ def extract_only(limit: int | None = None) -> None:
             try:
                 new_text = HTMLFetcher.get_latest_text(url_id)
                 if not new_text:
+                    raw_html = HTMLFetcher.get_raw_html(url_id)
+                    if raw_html:
+                        new_text = HTMLFetcher.extract_text_content(raw_html)
+                if not new_text:
                     continue
 
                 is_seed = HTMLFetcher.is_first_extraction(url_id)
