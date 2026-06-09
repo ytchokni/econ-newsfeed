@@ -765,3 +765,77 @@ class TestStartStopExtractionWorker:
     def test_stop_when_not_running_is_noop(self):
         scheduler._extraction_thread = None
         stop_extraction_worker()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# 12. Scheduler lifecycle — extraction worker
+# ---------------------------------------------------------------------------
+
+class TestSchedulerStartsExtractionWorker:
+    """Extraction worker starts/stops with the scheduler when enabled."""
+
+    def teardown_method(self):
+        import scheduler
+        scheduler._scheduler = None
+        scheduler._scheduler_lock_conn = None
+
+    def test_starts_extraction_worker_when_enabled(self):
+        with patch("scheduler.mysql.connector.connect") as mock_connect, \
+             patch("scheduler._cleanup_stale_scrape_logs"), \
+             patch("scheduler.BackgroundScheduler"), \
+             patch("scheduler.start_extraction_worker") as mock_start_worker, \
+             patch("scheduler.signal.signal"), \
+             patch.object(scheduler, 'EXTRACTION_WORKER_ENABLED', True), \
+             patch.object(scheduler, 'ENRICHMENT_WORKER_ENABLED', False), \
+             patch.object(scheduler, '_scheduler', None), \
+             patch.object(scheduler, '_scheduler_lock_conn', None):
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.fetchone.return_value = (1,)
+            mock_conn.cursor.return_value = mock_cursor
+            mock_connect.return_value = mock_conn
+
+            from scheduler import start_scheduler
+            start_scheduler()
+
+            mock_start_worker.assert_called_once()
+
+            scheduler._scheduler = None
+            scheduler._scheduler_lock_conn = None
+
+    def test_skips_extraction_worker_when_disabled(self):
+        with patch("scheduler.mysql.connector.connect") as mock_connect, \
+             patch("scheduler._cleanup_stale_scrape_logs"), \
+             patch("scheduler.BackgroundScheduler"), \
+             patch("scheduler.start_extraction_worker") as mock_start_worker, \
+             patch("scheduler.signal.signal"), \
+             patch.object(scheduler, 'EXTRACTION_WORKER_ENABLED', False), \
+             patch.object(scheduler, 'ENRICHMENT_WORKER_ENABLED', False), \
+             patch.object(scheduler, '_scheduler', None), \
+             patch.object(scheduler, '_scheduler_lock_conn', None):
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.fetchone.return_value = (1,)
+            mock_conn.cursor.return_value = mock_cursor
+            mock_connect.return_value = mock_conn
+
+            from scheduler import start_scheduler
+            start_scheduler()
+
+            mock_start_worker.assert_not_called()
+
+            scheduler._scheduler = None
+            scheduler._scheduler_lock_conn = None
+
+    def test_shutdown_stops_extraction_worker(self):
+        with patch("scheduler.stop_extraction_worker") as mock_stop_worker, \
+             patch("scheduler.stop_enrichment_worker"):
+            scheduler._scheduler = MagicMock()
+            scheduler._scheduler_lock_conn = MagicMock()
+
+            from scheduler import shutdown_scheduler
+            shutdown_scheduler()
+
+            mock_stop_worker.assert_called_once()

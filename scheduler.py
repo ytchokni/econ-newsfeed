@@ -497,11 +497,15 @@ def start_scheduler() -> None:
     if ENRICHMENT_WORKER_ENABLED:
         start_enrichment_worker()
 
+    if EXTRACTION_WORKER_ENABLED:
+        start_extraction_worker()
+
 
 def shutdown_scheduler() -> None:
     """Shut down the scheduler gracefully, waiting for any running job to complete."""
     global _scheduler, _scheduler_lock_conn
     stop_enrichment_worker()
+    stop_extraction_worker()
     if _scheduler is not None:
         _scheduler.shutdown(wait=True)
         _scheduler = None
