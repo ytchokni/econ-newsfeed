@@ -65,6 +65,8 @@ Extraction is owned by the extraction worker (below) — the scrape job only ref
 
 **Extraction circuit breaker (CLI):** The `make extract` CLI stops after 10 consecutive failed extractions (e.g. LLM quota exhausted). Fetched HTML is preserved — extraction resumes on the next run for URLs where `content_hash ≠ extracted_hash`. The continuous worker uses backoff + per-URL retry limits instead of stopping.
 
+**Paper merge:** `merge_duplicate_papers()` dedupes papers post-run.
+
 **Stale scrape_log cleanup:** On scheduler start, any `scrape_log` entries stuck in `'running'` for >24 hours are automatically marked as `'failed'`.
 
 **`make fetch`** runs stage 1 only (download HTML). Extraction is handled by the extraction worker (or `make extract` manually) — both use the shared `extraction.extract_one_url()`, which protects feed event integrity via `_title_in_previous_snapshot()` and the `_url_has_baseline()` check.
@@ -160,7 +162,7 @@ cd /opt/econ-newsfeed && ./scripts/deploy.sh
 git pull origin main && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
-**Env vars:** Production `.env` lives on the server at `/opt/econ-newsfeed/.env`. Key differences from dev: `DB_HOST=db`, `FRONTEND_URL=https://econ-newsfeed.vercel.app`, `WEB_CONCURRENCY=2`.
+**Env vars:** Production `.env` lives on the server at `/opt/econ-newsfeed/.env`. Key differences from dev: `DB_HOST=db`, `FRONTEND_URL=https://econ-newsfeed.vercel.app`, `WEB_CONCURRENCY=2`, `EXTRACTION_WORKER_ENABLED=true` (required in prod — the scrape job is fetch-only, so without the worker extraction stops).
 
 ## Configuration
 
