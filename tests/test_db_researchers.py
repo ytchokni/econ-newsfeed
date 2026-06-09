@@ -401,3 +401,24 @@ class TestSearchResearchers:
         (_, _), mock_fetch = self._call()
         sql, _ = mock_fetch.call_args[0]
         assert "WHERE" in sql
+
+
+# ---------------------------------------------------------------------------
+# get_urls_needing_extraction
+# ---------------------------------------------------------------------------
+
+class TestGetUrlsNeedingExtraction:
+    def test_queries_active_urls_with_hash_mismatch(self):
+        from database.researchers import get_urls_needing_extraction
+        rows = [{"id": 1, "researcher_id": 10, "url": "https://a.com", "page_type": "PUBLICATIONS"}]
+        with patch("database.researchers.fetch_all", return_value=rows) as mock_fetch:
+            result = get_urls_needing_extraction()
+        assert result == rows
+        query = mock_fetch.call_args[0][0]
+        assert "is_active = TRUE" in query
+        assert "extracted_hash IS NULL" in query
+        assert "extracted_hash != hc.content_hash" in query
+
+    def test_facade_exposes_it(self):
+        from database import Database
+        assert hasattr(Database, "get_urls_needing_extraction")

@@ -47,6 +47,7 @@ from database.researchers import (
     get_fields_for_researchers,
     get_deactivated_urls,
     get_at_risk_urls,
+    get_urls_needing_extraction,
     reactivate_url,
 )
 from database.papers import (
@@ -128,6 +129,7 @@ class Database:
     get_fields_for_researchers = staticmethod(get_fields_for_researchers)
     get_deactivated_urls = staticmethod(get_deactivated_urls)
     get_at_risk_urls = staticmethod(get_at_risk_urls)
+    get_urls_needing_extraction = staticmethod(get_urls_needing_extraction)
     reactivate_url = staticmethod(reactivate_url)
 
     # Papers
