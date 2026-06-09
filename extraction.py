@@ -35,7 +35,13 @@ class ExtractionOutcome:
 
 
 def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> ExtractionOutcome:
-    """Extract publications for one researcher URL from stored HTML."""
+    """Extract publications for one researcher URL from stored HTML.
+
+    is_seed deliberately uses extracted_at IS NULL (first *extraction*), not
+    fetch-time state — decoupled from fetching, that is the only reliable
+    seed signal and it stays correct when a URL is fetched repeatedly before
+    its first extraction.
+    """
     url_id = url_row['id']
     url = url_row['url']
     researcher_id = url_row['researcher_id']

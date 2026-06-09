@@ -9,7 +9,7 @@ os.environ.setdefault("GOOGLE_API_KEY", "test-google-key")
 os.environ.setdefault("SCRAPE_API_KEY", "test-key")
 os.environ.setdefault("CONTENT_MAX_CHARS", "20000")
 
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
 import pytest
 
@@ -168,3 +168,20 @@ class TestExtractOneUrl:
             for p in patches.values():
                 p.stop()
         mocks["extract_desc"].assert_not_called()
+
+    def test_save_exception_propagates_and_does_not_mark(self):
+        """Mid-sequence persistence errors propagate (caller counts a failure);
+        the URL stays unmarked so it is retried. Retry is safe: saves dedup
+        via INSERT IGNORE + title_hash."""
+        from extraction import extract_one_url
+        patches = _patches(pubs=[{"title": "P"}])
+        patches["save"] = patch(
+            "extraction.Publication.save_publications", side_effect=RuntimeError("db down"))
+        mocks = {k: p.start() for k, p in patches.items()}
+        try:
+            with pytest.raises(RuntimeError):
+                extract_one_url(_row())
+        finally:
+            for p in patches.values():
+                p.stop()
+        mocks["mark"].assert_not_called()
