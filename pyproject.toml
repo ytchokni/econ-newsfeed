@@ -22,7 +22,7 @@ ftfy = "^6.3.1"
 google-genai = "^1.75.0"
 
 [tool.poetry.group.dev.dependencies]
-pytest = "^8.0"
+pytest = ">=8,<10"
 httpx = "^0.28"
 matplotlib = "^3.10.8"
 
