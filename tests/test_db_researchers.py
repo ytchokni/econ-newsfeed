@@ -416,6 +416,7 @@ class TestGetUrlsNeedingExtraction:
         assert result == rows
         query = mock_fetch.call_args[0][0]
         assert "is_active = TRUE" in query
+        assert "content_hash IS NOT NULL" in query
         assert "extracted_hash IS NULL" in query
         assert "extracted_hash != hc.content_hash" in query
 

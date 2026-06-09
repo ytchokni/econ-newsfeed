@@ -415,6 +415,7 @@ def get_urls_needing_extraction() -> list[dict]:
         FROM researcher_urls ru
         JOIN html_content hc ON hc.url_id = ru.id
         WHERE ru.is_active = TRUE
+          AND hc.content_hash IS NOT NULL
           AND (hc.extracted_hash IS NULL OR hc.extracted_hash != hc.content_hash)
         ORDER BY ru.id
     """
