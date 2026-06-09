@@ -85,7 +85,8 @@ class TestExtractJson:
         assert result.usage.total_tokens == 15
 
     @patch("llm_client.get_client")
-    def test_uses_json_schema_response_format(self, mock_get_client):
+    def test_uses_json_schema_response_format(self, mock_get_client, monkeypatch):
+        monkeypatch.setenv("LLM_MODEL", "gemma-4-31b-it")
         import llm_client
         mock_client = mock_get_client.return_value
         mock_client.chat.completions.create.return_value = _mock_completion('{"items":[]}')

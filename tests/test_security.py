@@ -294,9 +294,7 @@ class TestRateLimitErrorEnvelope:
         mock_limit.limit = "60 per 1 minute"
         exc = RateLimitExceeded(mock_limit)
 
-        response = asyncio.get_event_loop().run_until_complete(
-            _rate_limit_handler(req, exc)
-        )
+        response = asyncio.run(_rate_limit_handler(req, exc))
         import json
         body = json.loads(response.body)
         assert response.status_code == 429
