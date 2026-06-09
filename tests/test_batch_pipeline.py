@@ -71,9 +71,10 @@ class TestBatchCheckFileDownload(unittest.TestCase):
         # OpenAI SDK: batch is completed with an output file
         mock_openai = MagicMock()
         mock_batch_obj = MagicMock()
+        mock_batch_obj.id = "batch_abc"
         mock_batch_obj.status = "completed"
         mock_batch_obj.output_file_id = "files/output123"
-        mock_openai.batches.retrieve.return_value = mock_batch_obj
+        mock_openai.batches.list.return_value = [mock_batch_obj]
 
         # genai SDK: file download returns JSONL with one valid result
         result_line = json_module.dumps({
@@ -117,8 +118,8 @@ class TestBatchCheckFileDownload(unittest.TestCase):
         # genai SDK used for download
         mock_genai.files.download.assert_called_once_with(file="files/output123")
 
-        # OpenAI SDK used for batch retrieve
-        mock_openai.batches.retrieve.assert_called_once_with("batch_abc")
+        # OpenAI SDK used to list pending batches
+        mock_openai.batches.list.assert_called_once_with(limit=100)
 
 
 class TestBatchValidationGap(unittest.TestCase):

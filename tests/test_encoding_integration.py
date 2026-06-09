@@ -18,8 +18,9 @@ import pytest
 class TestPublicationEncodingGuard:
     """Verify save_publications passes text through encoding guard."""
 
-    @patch("publication.Database")
-    def test_mojibake_title_is_fixed_before_insert(self, mock_db):
+    @patch("feed_events.Database")
+    @patch("paper_saver.Database")
+    def test_mojibake_title_is_fixed_before_insert(self, mock_db, mock_events_db):
         """A paper with mojibake in title should be cleaned before DB insert."""
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -30,6 +31,7 @@ class TestPublicationEncodingGuard:
         mock_conn.__enter__ = lambda s: s
         mock_conn.__exit__ = MagicMock(return_value=False)
         mock_db.get_connection.return_value = mock_conn
+        mock_events_db.get_connection.return_value = mock_conn
 
         from publication import Publication
 
