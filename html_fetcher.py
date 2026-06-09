@@ -694,6 +694,18 @@ class HTMLFetcher:
         return result['raw_html'] if result else None
 
     @staticmethod
+    def get_extraction_payload(url_id: int) -> dict | None:
+        """Read content, raw_html, and content_hash in one query for extraction.
+
+        Reading the hash together with the text guarantees mark_extracted()
+        can record exactly what was extracted.
+        """
+        return Database.fetch_one(
+            "SELECT content, raw_html, content_hash FROM html_content WHERE url_id = %s",
+            (url_id,),
+        )
+
+    @staticmethod
     def needs_extraction(url_id: int) -> bool:
         """
         Return True if LLM extraction is needed for this URL.
@@ -723,17 +735,26 @@ class HTMLFetcher:
         return result is not None and result['extracted_at'] is None
 
     @staticmethod
-    def mark_extracted(url_id: int) -> None:
+    def mark_extracted(url_id: int, extracted_hash: str | None = None) -> None:
+        """Record that extraction has run.
+
+        Pass the content_hash that was read at extraction *start* so a fetch
+        landing mid-extraction is not silently marked as extracted (the URL
+        stays in the needs-extraction queue). When extracted_hash is None,
+        falls back to copying the current content_hash (legacy callers where
+        fetch and extraction cannot overlap).
         """
-        Record that extraction has been run on the current content by setting
-        extracted_hash = content_hash and extracted_at = now.
-        """
-        query = """
-            UPDATE html_content
-            SET extracted_at = %s, extracted_hash = content_hash
-            WHERE url_id = %s
-        """
-        Database.execute_query(query, (datetime.now(timezone.utc), url_id))
+        now = datetime.now(timezone.utc)
+        if extracted_hash is None:
+            Database.execute_query(
+                "UPDATE html_content SET extracted_at = %s, extracted_hash = content_hash WHERE url_id = %s",
+                (now, url_id),
+            )
+        else:
+            Database.execute_query(
+                "UPDATE html_content SET extracted_at = %s, extracted_hash = %s WHERE url_id = %s",
+                (now, extracted_hash, url_id),
+            )
 
     @staticmethod
     def get_previous_text(url_id: int) -> str | None:

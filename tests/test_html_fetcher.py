@@ -431,3 +431,36 @@ class TestNormalizationIntegration:
         new_text = "Paper A, accepted at AER"
         assert HTMLFetcher.hash_text_content(HTMLFetcher.normalize_text(old_text)) != \
                HTMLFetcher.hash_text_content(HTMLFetcher.normalize_text(new_text))
+
+
+class TestMarkExtractedWithHash:
+    """mark_extracted records the hash read at extraction start, not mark time."""
+
+    def test_explicit_hash_is_written(self):
+        with patch("html_fetcher.Database.execute_query") as mock_exec:
+            HTMLFetcher.mark_extracted(7, "abc123")
+        query, params = mock_exec.call_args[0]
+        assert "extracted_hash = %s" in query
+        assert params[1] == "abc123"
+        assert params[2] == 7
+
+    def test_no_hash_falls_back_to_content_hash(self):
+        """Legacy callers (batch_check) keep the old copy-current-hash behavior."""
+        with patch("html_fetcher.Database.execute_query") as mock_exec:
+            HTMLFetcher.mark_extracted(7)
+        query, params = mock_exec.call_args[0]
+        assert "extracted_hash = content_hash" in query
+        assert params[1] == 7
+
+
+class TestGetExtractionPayload:
+    def test_returns_row(self):
+        row = {"content": "text", "raw_html": "<html>", "content_hash": "h1"}
+        with patch("html_fetcher.Database.fetch_one", return_value=row) as mock_fetch:
+            result = HTMLFetcher.get_extraction_payload(7)
+        assert result == row
+        assert mock_fetch.call_args[0][1] == (7,)
+
+    def test_returns_none_when_no_html(self):
+        with patch("html_fetcher.Database.fetch_one", return_value=None):
+            assert HTMLFetcher.get_extraction_payload(7) is None
