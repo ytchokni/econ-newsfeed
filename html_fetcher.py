@@ -1,4 +1,3 @@
-import difflib
 import ipaddress
 import os
 import re
@@ -756,23 +755,4 @@ class HTMLFetcher:
                 (now, extracted_hash, url_id),
             )
 
-    @staticmethod
-    def get_previous_text(url_id: int) -> str | None:
-        """Retrieve the previous text content for a given URL ID (before current upsert).
-        With upsert, there's only one row per url_id, so this returns the current stored
-        content (which represents the *previous* version before fetch_and_save_if_changed
-        overwrites it).
-        """
-        return HTMLFetcher.get_latest_text(url_id)
 
-    @staticmethod
-    def compute_diff(old_text: str, new_text: str) -> str:
-        """Compute a unified diff between old and new text content.
-        Returns only added/changed lines to reduce LLM token usage.
-        """
-        old_lines = old_text.splitlines(keepends=True)
-        new_lines = new_text.splitlines(keepends=True)
-        diff = difflib.unified_diff(old_lines, new_lines, n=1)
-        # Extract only added lines (starting with '+' but not '+++')
-        added_lines = [line[1:] for line in diff if line.startswith('+') and not line.startswith('+++')]
-        return ''.join(added_lines) if added_lines else new_text

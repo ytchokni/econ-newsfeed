@@ -41,6 +41,11 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
     fetch-time state — decoupled from fetching, that is the only reliable
     seed signal and it stays correct when a URL is fetched repeatedly before
     its first extraction.
+
+    A crash between save_publications and mark_extracted re-extracts the URL
+    on the next pass; saves dedup via title_hash, but a duplicate paper
+    snapshot / status_change event is possible in that window — accepted
+    tradeoff of the non-transactional persist-then-mark sequence.
     """
     url_id = url_row['id']
     url = url_row['url']

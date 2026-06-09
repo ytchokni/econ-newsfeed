@@ -21,7 +21,7 @@ make seed                 # Create tables + run migrations (idempotent)
 make reset-db             # Drop and recreate database from scratch
 
 # Scraping pipeline
-make scrape               # Full pipeline: fetch HTML → LLM extract → save → link match
+make scrape               # Fetch-only pipeline: download HTML + draft URL validation
 make fetch                # Stage 1: Download HTML from researcher URLs (hash-based change detection)
 make batch-submit         # Stage 2: Submit changed URLs to Gemini Batch API for extraction
 make batch-check          # Stage 3: Process completed batch results → save papers, snapshots, links
@@ -53,18 +53,21 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build  #
 
 ### Pipeline Details
 
-**`make scrape`** runs the full scheduler job (`scheduler.run_scrape_job()`). Fetch and extract run as **separate phases** — fetch always completes even if the LLM provider is down:
-1. **Fetch phase** (all URLs): Download HTML for all researcher URLs, skip unchanged (content hash). Collects list of changed URLs.
-2. **Extract phase** (changed URLs only): LLM extracts publications from changed pages, saves to `papers`. Includes link matching, title reconciliation, and paper snapshots.
-3. **Draft URL validation**: HEAD-request validation of `draft_url` fields
+**`make scrape`** runs the scheduler job (`scheduler.run_scrape_job()`), which is **fetch-only**:
+1. **Fetch phase** (all URLs): Download HTML for all researcher URLs, skip unchanged (content hash).
+2. **Draft URL validation**: HEAD-request validation of `draft_url` fields
+
+Extraction is owned by the extraction worker (below) — the scrape job only refreshes stored HTML and the `content_hash ≠ extracted_hash` queue.
 
 **Enrichment worker:** When `ENRICHMENT_WORKER_ENABLED=true`, a background thread in the API process continuously enriches unenriched papers via OpenAlex. Polls every 5 minutes, processes batches of 50, respects the daily budget. Backs off to 10-minute sleep after 5 consecutive failures. In local dev (worker disabled), run `make enrich` manually after scraping.
 
-**Extraction circuit breaker:** If 10 consecutive URLs return empty extraction results (e.g. LLM quota exhausted), the extraction phase stops early. Fetched HTML is preserved — extraction will resume on the next run for URLs where `content_hash ≠ extracted_hash`. The `scrape_log.extraction_errors` column tracks how many URLs failed extraction per run.
+**Extraction worker:** When `EXTRACTION_WORKER_ENABLED=true`, a background thread in the API process continuously extracts publications from changed pages (`content_hash ≠ extracted_hash`) using synchronous free-tier Gemma calls. Calls are latency-bound (45–190s each, ~35 output tokens/s); `EXTRACTION_DELAY_SECONDS` (default 2) paces the fast tail under the 30 RPM free-tier cap. Polls every 5 minutes when idle, backs off 10 minutes after 10 consecutive failures (quota exhaustion), and skips a URL for the process lifetime after 3 failed attempts (poison-pill guard). In local dev (worker disabled), run `make extract` manually after fetching.
+
+**Extraction circuit breaker (CLI):** The `make extract` CLI stops after 10 consecutive failed extractions (e.g. LLM quota exhausted). Fetched HTML is preserved — extraction resumes on the next run for URLs where `content_hash ≠ extracted_hash`. The continuous worker uses backoff + per-URL retry limits instead of stopping.
 
 **Stale scrape_log cleanup:** On scheduler start, any `scrape_log` entries stuck in `'running'` for >24 hours are automatically marked as `'failed'`.
 
-**`make fetch`** runs stage 1 only (download HTML). Extraction is handled exclusively by `make scrape` (scheduler), which uses diff-based extraction — the only path that correctly creates feed events.
+**`make fetch`** runs stage 1 only (download HTML). Extraction is handled by the extraction worker (or `make extract` manually) — both use the shared `extraction.extract_one_url()`, which protects feed event integrity via `_title_in_previous_snapshot()` and the `_url_has_baseline()` check.
 
 **Granular batch pipeline** (run stages independently):
 1. `make fetch` — Download HTML, detect changes via content hash. Safe to run anytime.
@@ -94,6 +97,7 @@ Researcher URLs (DB) → HTMLFetcher (fetch + hash-based change detection)
 | `main.py` | CLI entry points for scraping pipeline stages |
 | `html_fetcher.py` | Web scraper — per-domain rate limiting, robots.txt compliance, content hashing for change detection |
 | `publication.py` | LLM extraction (Google AI Studio/Gemini) — Pydantic structured outputs, title dedup via SHA-256 hash |
+| `extraction.py` | Per-URL extraction logic shared by worker and CLI — reads stored HTML, runs LLM, persists papers/links/snapshots, marks extracted |
 | `llm_client.py` | Google AI Studio LLM client — OpenAI-compatible SDK, guided JSON via `response_format`, retry with reprompt |
 | `link_extractor.py` | Trusted-domain link extraction from HTML, DOI-based and anchor text matching to papers |
 | `doi_resolver.py` | DOI resolution from publisher URLs — regex extraction + Crossref PII-to-DOI lookup |
