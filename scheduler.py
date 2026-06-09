@@ -76,6 +76,16 @@ _ENRICHMENT_BACKOFF_SECONDS = 600  # 10 minutes
 _enrichment_thread = None
 _enrichment_stop_event = threading.Event()
 
+EXTRACTION_WORKER_ENABLED = os.environ.get('EXTRACTION_WORKER_ENABLED', 'false').lower() == 'true'
+_EXTRACTION_DELAY_SECONDS = float(os.environ.get('EXTRACTION_DELAY_SECONDS', '2'))
+_EXTRACTION_IDLE_SECONDS = 300       # queue empty → re-poll every 5 min
+_EXTRACTION_BACKOFF_THRESHOLD = 10   # consecutive failures before backing off
+_EXTRACTION_BACKOFF_SECONDS = 600    # 10 min (rides out free-tier quota exhaustion)
+_EXTRACTION_MAX_URL_FAILURES = 3     # poison-pill guard: skip URL until restart
+
+_extraction_thread = None
+_extraction_stop_event = threading.Event()
+
 
 def create_scrape_log() -> int:
     """Create a new scrape_log entry and return its ID."""
@@ -338,6 +348,101 @@ def stop_enrichment_worker() -> None:
     _enrichment_thread.join(timeout=30)
     _enrichment_thread = None
     logger.info("Enrichment worker thread stopped")
+
+
+def _extraction_worker_loop() -> None:
+    """Continuously extract publications from changed pages until stopped.
+
+    Free-tier Gemma pacing (measured 2026-06-09, see spec): calls take
+    45-190s on real pages so the worker is latency-bound; the fixed delay
+    only guards runs of tiny pages against the 30 RPM cap.
+    """
+    from extraction import extract_one_url
+
+    logger.info("Extraction worker started")
+    url_failures: dict[int, int] = {}
+    consecutive_failures = 0
+    processed = 0
+    pubs_total = 0
+
+    while not _extraction_stop_event.is_set():
+        try:
+            queue = Database.get_urls_needing_extraction()
+        except Exception as e:
+            logger.error("Extraction worker queue query failed: %s: %s", type(e).__name__, e)
+            _extraction_stop_event.wait(_EXTRACTION_IDLE_SECONDS)
+            continue
+
+        pending = [r for r in queue if url_failures.get(r['id'], 0) < _EXTRACTION_MAX_URL_FAILURES]
+        if not pending:
+            _extraction_stop_event.wait(_EXTRACTION_IDLE_SECONDS)
+            continue
+
+        logger.info("Extraction worker: %d URLs pending (%d skipped as poison pills)",
+                    len(pending), len(queue) - len(pending))
+
+        for row in pending:
+            if _extraction_stop_event.is_set():
+                break
+            url_id = row['id']
+            try:
+                outcome = extract_one_url(row)
+            except Exception as e:
+                logger.error("Extraction worker error on %s (id=%s): %s: %s",
+                             row['url'], url_id, type(e).__name__, e)
+                outcome = None
+
+            processed += 1
+            if outcome is not None and outcome.ok:
+                consecutive_failures = 0
+                url_failures.pop(url_id, None)
+                pubs_total += outcome.pubs_count
+            else:
+                consecutive_failures += 1
+                url_failures[url_id] = url_failures.get(url_id, 0) + 1
+                if url_failures[url_id] >= _EXTRACTION_MAX_URL_FAILURES:
+                    logger.warning("Extraction worker: skipping url_id=%s (%s) after %d failures "
+                                   "until next restart", url_id, row['url'], url_failures[url_id])
+
+            if processed % 25 == 0:
+                logger.info("Extraction worker progress: %d processed, %d pubs total", processed, pubs_total)
+
+            if consecutive_failures >= _EXTRACTION_BACKOFF_THRESHOLD:
+                logger.warning("Extraction worker backing off %ds after %d consecutive failures "
+                               "(likely quota exhausted)", _EXTRACTION_BACKOFF_SECONDS, consecutive_failures)
+                _extraction_stop_event.wait(_EXTRACTION_BACKOFF_SECONDS)
+            else:
+                _extraction_stop_event.wait(_EXTRACTION_DELAY_SECONDS)
+
+    logger.info("Extraction worker stopped (%d processed, %d pubs)", processed, pubs_total)
+
+
+def start_extraction_worker() -> None:
+    """Start the extraction background worker thread."""
+    global _extraction_thread
+    if _extraction_thread is not None and _extraction_thread.is_alive():
+        logger.warning("Extraction worker already running")
+        return
+
+    _extraction_stop_event.clear()
+    _extraction_thread = threading.Thread(
+        target=_extraction_worker_loop,
+        name="extraction-worker",
+        daemon=True,
+    )
+    _extraction_thread.start()
+    logger.info("Extraction worker thread started")
+
+
+def stop_extraction_worker() -> None:
+    """Stop the extraction worker gracefully."""
+    global _extraction_thread
+    if _extraction_thread is None:
+        return
+    _extraction_stop_event.set()
+    _extraction_thread.join(timeout=30)
+    _extraction_thread = None
+    logger.info("Extraction worker thread stopped")
 
 
 def start_scheduler() -> None:

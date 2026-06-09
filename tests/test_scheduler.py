@@ -13,6 +13,7 @@ from scheduler import (
     run_scrape_job, create_scrape_log, update_scrape_log,
     _cleanup_stale_scrape_logs,
     _enrichment_worker_loop, start_enrichment_worker, stop_enrichment_worker,
+    _extraction_worker_loop, start_extraction_worker, stop_extraction_worker,
 )
 
 
@@ -566,3 +567,201 @@ class TestSchedulerStartsEnrichmentWorker:
             shutdown_scheduler()
 
             mock_stop_worker.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 11. Extraction worker
+# ---------------------------------------------------------------------------
+
+def _outcome(status, pubs_count=0):
+    from extraction import ExtractionOutcome
+    return ExtractionOutcome(status, pubs_count=pubs_count)
+
+
+class TestExtractionWorkerLoop:
+    """Tests for the continuous extraction background worker."""
+
+    def setup_method(self):
+        scheduler._extraction_stop_event.clear()
+
+    def teardown_method(self):
+        scheduler._extraction_stop_event.clear()
+
+    def test_processes_pending_urls(self):
+        rows = [_make_url_row(url_id=1), _make_url_row(url_id=2)]
+        processed = []
+
+        def fake_extract(row, scrape_log_id=None):
+            processed.append(row["id"])
+            if len(processed) >= 2:
+                scheduler._extraction_stop_event.set()
+            return _outcome("extracted", pubs_count=3)
+
+        with patch("scheduler.Database.get_urls_needing_extraction", return_value=rows), \
+             patch("extraction.extract_one_url", side_effect=fake_extract), \
+             patch.object(scheduler, "_EXTRACTION_DELAY_SECONDS", 0):
+            _extraction_worker_loop()
+
+        assert processed == [1, 2]
+
+    def test_idles_when_queue_empty(self):
+        calls = [0]
+
+        def empty_then_stop():
+            calls[0] += 1
+            if calls[0] >= 2:
+                scheduler._extraction_stop_event.set()
+            return []
+
+        waits = []
+
+        def record_wait(timeout=None):
+            waits.append(timeout)
+            return scheduler._extraction_stop_event.is_set()
+
+        with patch("scheduler.Database.get_urls_needing_extraction", side_effect=empty_then_stop), \
+             patch.object(scheduler._extraction_stop_event, "wait", side_effect=record_wait):
+            _extraction_worker_loop()
+
+        assert scheduler._EXTRACTION_IDLE_SECONDS in waits
+
+    def test_skips_url_after_max_failures(self):
+        """A URL that fails 3 times is excluded until restart (poison-pill guard)."""
+        rows = [_make_url_row(url_id=1)]
+        attempts = [0]
+        scans = [0]
+
+        def failing(row, scrape_log_id=None):
+            attempts[0] += 1
+            return _outcome("failed")
+
+        def get_queue():
+            scans[0] += 1
+            if scans[0] >= 6:
+                scheduler._extraction_stop_event.set()
+            return rows
+
+        with patch("scheduler.Database.get_urls_needing_extraction", side_effect=get_queue), \
+             patch("extraction.extract_one_url", side_effect=failing), \
+             patch.object(scheduler, "_EXTRACTION_DELAY_SECONDS", 0), \
+             patch.object(scheduler, "_EXTRACTION_IDLE_SECONDS", 0), \
+             patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 99):
+            _extraction_worker_loop()
+
+        assert attempts[0] == 3  # 4th+ scans filter the URL out
+
+    def test_backs_off_after_threshold_consecutive_failures(self):
+        rows = [_make_url_row(url_id=i) for i in range(1, 5)]
+        count = [0]
+
+        def failing(row, scrape_log_id=None):
+            count[0] += 1
+            if count[0] >= 4:
+                scheduler._extraction_stop_event.set()
+            return _outcome("failed")
+
+        waits = []
+
+        def record_wait(timeout=None):
+            waits.append(timeout)
+            return scheduler._extraction_stop_event.is_set()
+
+        with patch("scheduler.Database.get_urls_needing_extraction", return_value=rows), \
+             patch("extraction.extract_one_url", side_effect=failing), \
+             patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 3), \
+             patch.object(scheduler, "_EXTRACTION_MAX_URL_FAILURES", 99), \
+             patch.object(scheduler._extraction_stop_event, "wait", side_effect=record_wait):
+            _extraction_worker_loop()
+
+        assert scheduler._EXTRACTION_BACKOFF_SECONDS in waits
+
+    def test_success_resets_consecutive_failures(self):
+        rows = [_make_url_row(url_id=i) for i in range(1, 5)]
+        count = [0]
+
+        def fail_fail_succeed(row, scrape_log_id=None):
+            count[0] += 1
+            if count[0] >= 4:
+                scheduler._extraction_stop_event.set()
+            if count[0] == 3:
+                return _outcome("extracted", pubs_count=1)
+            return _outcome("failed")
+
+        waits = []
+
+        def record_wait(timeout=None):
+            waits.append(timeout)
+            return scheduler._extraction_stop_event.is_set()
+
+        with patch("scheduler.Database.get_urls_needing_extraction", return_value=rows), \
+             patch("extraction.extract_one_url", side_effect=fail_fail_succeed), \
+             patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 3), \
+             patch.object(scheduler, "_EXTRACTION_MAX_URL_FAILURES", 99), \
+             patch.object(scheduler._extraction_stop_event, "wait", side_effect=record_wait):
+            _extraction_worker_loop()
+
+        # Success at call 3 reset the counter, so the threshold (3) was never
+        # reached and no backoff wait happened.
+        assert scheduler._EXTRACTION_BACKOFF_SECONDS not in waits
+
+    def test_unexpected_exception_counts_as_failure(self):
+        rows = [_make_url_row(url_id=1)]
+        count = [0]
+
+        def exploding(row, scrape_log_id=None):
+            count[0] += 1
+            if count[0] >= 2:
+                scheduler._extraction_stop_event.set()
+            raise RuntimeError("DB down")
+
+        with patch("scheduler.Database.get_urls_needing_extraction", return_value=rows), \
+             patch("extraction.extract_one_url", side_effect=exploding), \
+             patch.object(scheduler, "_EXTRACTION_DELAY_SECONDS", 0), \
+             patch.object(scheduler, "_EXTRACTION_IDLE_SECONDS", 0), \
+             patch.object(scheduler, "_EXTRACTION_MAX_URL_FAILURES", 99), \
+             patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 99):
+            _extraction_worker_loop()  # must not raise
+
+        assert count[0] == 2
+
+
+class TestStartStopExtractionWorker:
+    def test_start_creates_daemon_thread(self):
+        with patch("scheduler.threading.Thread") as mock_thread_cls:
+            mock_thread = MagicMock()
+            mock_thread_cls.return_value = mock_thread
+
+            start_extraction_worker()
+
+            mock_thread_cls.assert_called_once()
+            assert mock_thread_cls.call_args[1]["daemon"] is True
+            assert mock_thread_cls.call_args[1]["name"] == "extraction-worker"
+            mock_thread.start.assert_called_once()
+
+            scheduler._extraction_thread = None
+            scheduler._extraction_stop_event.clear()
+
+    def test_start_is_idempotent(self):
+        scheduler._extraction_thread = MagicMock(is_alive=MagicMock(return_value=True))
+        try:
+            with patch("scheduler.threading.Thread") as mock_thread_cls:
+                start_extraction_worker()
+                mock_thread_cls.assert_not_called()
+        finally:
+            scheduler._extraction_thread = None
+
+    def test_stop_sets_event_and_joins(self):
+        mock_thread = MagicMock()
+        scheduler._extraction_thread = mock_thread
+        scheduler._extraction_stop_event.clear()
+
+        stop_extraction_worker()
+
+        assert scheduler._extraction_stop_event.is_set()
+        mock_thread.join.assert_called_once_with(timeout=30)
+        assert scheduler._extraction_thread is None
+        scheduler._extraction_stop_event.clear()
+
+    def test_stop_when_not_running_is_noop(self):
+        scheduler._extraction_thread = None
+        stop_extraction_worker()  # should not raise
