@@ -419,6 +419,28 @@ def admin_dashboard(request: Request):
     return Database.get_admin_dashboard_stats()
 
 
+@app.get("/api/admin/deactivated-urls")
+def get_deactivated_urls(request: Request):
+    """List all deactivated researcher URLs."""
+    _require_api_key(request)
+    return Database.get_deactivated_urls()
+
+
+@app.get("/api/admin/at-risk-urls")
+def get_at_risk_urls(request: Request):
+    """List active URLs with 2+ consecutive failures."""
+    _require_api_key(request)
+    return Database.get_at_risk_urls()
+
+
+@app.post("/api/admin/reactivate-url/{url_id}")
+def reactivate_url(url_id: int, request: Request):
+    """Re-activate a deactivated URL."""
+    _require_api_key(request)
+    Database.reactivate_url(url_id)
+    return {"status": "ok"}
+
+
 # ---------------------------------------------------------------------------
 # Publication endpoints
 # ---------------------------------------------------------------------------

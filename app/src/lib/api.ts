@@ -134,6 +134,8 @@ export interface AdminDashboardData {
     scrape_in_progress: boolean;
     total_researcher_urls: number;
     urls_by_page_type: Record<string, number>;
+    deactivated_urls: number;
+    at_risk_urls: number;
   };
   content: {
     total_papers: number;
@@ -189,8 +191,8 @@ export interface AdminDashboardData {
   };
 }
 
-async function fetchJsonWithAuth<T>(url: string): Promise<T> {
-  const res = await fetch(url);
+async function fetchJsonWithAuth<T>(url: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, init);
   if (res.status === 401) {
     throw new Error("UNAUTHORIZED");
   }
@@ -206,4 +208,44 @@ export function useAdminDashboard() {
     fetchJsonWithAuth,
     { refreshInterval: 60000 }
   );
+}
+
+export interface DeactivatedUrl {
+  id: number;
+  url: string;
+  page_type: string;
+  deactivation_reason: string;
+  deactivated_at: string;
+  consecutive_failures: number;
+  researcher_name: string;
+  researcher_id: number;
+}
+
+export interface AtRiskUrl {
+  id: number;
+  url: string;
+  page_type: string;
+  consecutive_failures: number;
+  researcher_name: string;
+  researcher_id: number;
+}
+
+export function useDeactivatedUrls() {
+  return useSWR<DeactivatedUrl[]>(
+    "/api/admin/deactivated-urls",
+    fetchJsonWithAuth,
+  );
+}
+
+export function useAtRiskUrls() {
+  return useSWR<AtRiskUrl[]>(
+    "/api/admin/at-risk-urls",
+    fetchJsonWithAuth,
+  );
+}
+
+export async function reactivateUrl(urlId: number): Promise<void> {
+  await fetchJsonWithAuth(`/api/admin/reactivate-url/${urlId}`, {
+    method: "POST",
+  });
 }

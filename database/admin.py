@@ -51,11 +51,19 @@ def _get_health_stats() -> dict:
 
     scrape_in_progress = scheduler.is_scrape_running()
 
-    url_row = fetch_one("SELECT COUNT(*) AS total FROM researcher_urls")
-    total_urls = url_row.get("total", 0) if url_row else 0
+    url_counts = fetch_one(
+        """SELECT
+               SUM(is_active = TRUE) AS active_count,
+               SUM(is_active = FALSE) AS deactivated_count,
+               SUM(is_active = TRUE AND consecutive_failures >= 2) AS at_risk_count
+           FROM researcher_urls"""
+    )
+    total_urls = int(url_counts["active_count"] or 0) if url_counts else 0
+    deactivated_count = int(url_counts["deactivated_count"] or 0) if url_counts else 0
+    at_risk_count = int(url_counts["at_risk_count"] or 0) if url_counts else 0
 
     url_types = fetch_all(
-        "SELECT page_type, COUNT(*) AS cnt FROM researcher_urls GROUP BY page_type"
+        "SELECT page_type, COUNT(*) AS cnt FROM researcher_urls WHERE is_active = TRUE GROUP BY page_type"
     )
     urls_by_page_type = {r["page_type"]: r["cnt"] for r in url_types}
 
@@ -65,6 +73,8 @@ def _get_health_stats() -> dict:
         "scrape_in_progress": scrape_in_progress,
         "total_researcher_urls": total_urls,
         "urls_by_page_type": urls_by_page_type,
+        "deactivated_urls": deactivated_count,
+        "at_risk_urls": at_risk_count,
     }
 
 

@@ -74,7 +74,9 @@ check:
 	poetry run pytest
 	@echo "=== Step 3: TypeScript check ==="
 	cd app && npx tsc --noEmit
-	@echo "=== Step 4: Frontend tests ==="
+	@echo "=== Step 4: ESLint ==="
+	cd app && npx next lint
+	@echo "=== Step 5: Frontend tests ==="
 	cd app && npx jest
 	@echo "=== All checks passed ==="
 

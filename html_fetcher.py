@@ -16,8 +16,15 @@ from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
 from database import Database
+from database.researchers import record_url_fetch_failure, record_url_fetch_success
 from bs4 import BeautifulSoup
 import urllib3.util.connection as _urllib3_cn
+
+
+class ResponseTooLarge(Exception):
+    """Raised when a response exceeds CONTENT_MAX_BYTES."""
+    pass
+
 
 # Serialises access to the urllib3 create_connection monkey-patch so
 # concurrent threads (e.g. parse-fast via ThreadPoolExecutor) don't race.
@@ -305,7 +312,7 @@ class HTMLFetcher:
                         response.raise_for_status()
                         if len(response.content) > CONTENT_MAX_BYTES:
                             logging.warning(f"Response too large ({len(response.content)} bytes) for {current_url}, rejecting")
-                            return None
+                            raise ResponseTooLarge(f"{len(response.content)} bytes")
                         logging.info(f"Successfully fetched HTML content from {current_url}")
                         response.encoding = response.apparent_encoding
                         return response.text
@@ -552,16 +559,25 @@ class HTMLFetcher:
         is_safe, resolved_ip = HTMLFetcher.validate_url_with_pin(url)
         if not is_safe:
             logging.warning(f"URL failed SSRF validation, skipping: {url}")
+            record_url_fetch_failure(url_id, "ssrf_blocked")
             return False
 
         if not HTMLFetcher.is_allowed_by_robots(url):
+            record_url_fetch_failure(url_id, "robots_blocked")
             return False
 
         logging.info(f"Fetching URL ID {url_id}: {url}")
-        raw_html = HTMLFetcher.fetch_html(url, resolved_ip=resolved_ip)
+        try:
+            raw_html = HTMLFetcher.fetch_html(url, resolved_ip=resolved_ip)
+        except ResponseTooLarge:
+            record_url_fetch_failure(url_id, "response_too_large")
+            return False
         if not raw_html:
             logging.warning(f"Failed to fetch HTML content for URL ID: {url_id}, URL: {url}")
+            record_url_fetch_failure(url_id, "fetch_failed")
             return False
+
+        record_url_fetch_success(url_id)
 
         # Parse HTML once, reuse for both comparison and storage
         text_content = HTMLFetcher.extract_text_content(raw_html)

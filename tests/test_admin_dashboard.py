@@ -35,6 +35,9 @@ def test_get_admin_dashboard_stats_returns_all_sections():
         "total_tokens": 0,
         "total_scrapes": 0,
         "total_pubs_extracted": 0,
+        "active_count": 0,
+        "deactivated_count": 0,
+        "at_risk_count": 0,
     })
 
     with patch("database.admin.fetch_all", mock_fetch_all), \
@@ -53,6 +56,8 @@ def test_get_admin_dashboard_stats_returns_all_sections():
     assert "scrape_in_progress" in result["health"]
     assert "total_researcher_urls" in result["health"]
     assert "urls_by_page_type" in result["health"]
+    assert "deactivated_urls" in result["health"]
+    assert "at_risk_urls" in result["health"]
 
     # Content section
     assert "total_papers" in result["content"]

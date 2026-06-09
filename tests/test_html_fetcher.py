@@ -5,7 +5,7 @@ import zlib
 import pytest
 from unittest.mock import patch, MagicMock
 
-from html_fetcher import HTMLFetcher
+from html_fetcher import HTMLFetcher, ResponseTooLarge
 
 
 class TestRobotsTxtCaching:
@@ -104,9 +104,8 @@ class TestFetchHtml:
         mock_session.get.return_value = mock_resp
         with patch.object(HTMLFetcher, '_rate_limit'), \
              patch.object(HTMLFetcher, '_get_session', return_value=mock_session):
-            result = HTMLFetcher.fetch_html("https://example.com")
-
-        assert result is None
+            with pytest.raises(ResponseTooLarge):
+                HTMLFetcher.fetch_html("https://example.com")
 
 
 class TestChangeDetection:
