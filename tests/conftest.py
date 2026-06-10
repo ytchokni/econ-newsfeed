@@ -16,6 +16,7 @@ os.environ.setdefault("DB_PASSWORD", "test")
 os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
 os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
 os.environ.setdefault("SCRAPE_INTERVAL_HOURS", "24")
+os.environ.setdefault("NEXTAUTH_SECRET", "test-nextauth-secret-for-ci")
 
 from contextlib import contextmanager
 from unittest.mock import patch

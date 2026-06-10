@@ -4,6 +4,7 @@
 
 !requirements.txt
 !api.py
+!auth.py
 !database/
 !db_config.py
 !doi_resolver.py
