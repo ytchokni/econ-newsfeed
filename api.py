@@ -181,6 +181,39 @@ def _require_api_key(request: Request) -> None:
 VALID_EVENT_TYPES = frozenset({"new_paper", "status_change"})
 
 
+def _parse_feed_filters(
+    *, status: str | None, institution: str | None,
+    preset: str | None, event_type: str | None,
+    since: str | None, until: str | None,
+) -> tuple[list[str], list[str], datetime | None, datetime | None]:
+    """Parse and validate shared filter params. Returns (status_list, institution_list, since_dt, until_dt)."""
+    status_list = [s.strip() for s in status.split(",") if s.strip()] if status else []
+    institution_list = [i.strip() for i in institution.split(",") if i.strip()] if institution else []
+
+    for s in status_list:
+        if s not in VALID_STATUSES:
+            raise HTTPException(status_code=400, detail=f"Invalid status value '{s}'. Must be one of: {', '.join(sorted(VALID_STATUSES))}")
+    if event_type and event_type not in VALID_EVENT_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid event_type value '{event_type}'. Must be one of: {', '.join(sorted(VALID_EVENT_TYPES))}")
+
+    since_dt = None
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since.rstrip("Z"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid ?since= value; expected ISO8601 timestamp")
+    until_dt = None
+    if until:
+        try:
+            until_dt = datetime.fromisoformat(until.rstrip("Z"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid ?until= value; expected ISO8601 timestamp")
+        if until_dt == until_dt.replace(hour=0, minute=0, second=0, microsecond=0):
+            until_dt = until_dt.replace(hour=23, minute=59, second=59)
+
+    return status_list, institution_list, since_dt, until_dt
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     if len(_SCRAPE_API_KEY) < 16:
@@ -470,32 +503,14 @@ def list_publications(
     non-published papers with known status generate events, so no
     include_seed parameter is needed.
     """
-    valid_statuses = VALID_STATUSES
     valid_presets = {"top20"}
-
-    # Parse comma-separated multi-values
-    status_list = [s.strip() for s in status.split(",") if s.strip()] if status else []
-    institution_list = [i.strip() for i in institution.split(",") if i.strip()] if institution else []
-
-    for s in status_list:
-        if s not in valid_statuses:
-            raise HTTPException(status_code=400, detail=f"Invalid status value '{s}'. Must be one of: {', '.join(sorted(valid_statuses))}")
     if preset and preset not in valid_presets:
         raise HTTPException(status_code=400, detail=f"Invalid preset value. Must be one of: {', '.join(sorted(valid_presets))}")
-    if event_type and event_type not in VALID_EVENT_TYPES:
-        raise HTTPException(status_code=400, detail=f"Invalid event_type value '{event_type}'. Must be one of: {', '.join(sorted(VALID_EVENT_TYPES))}")
-    since_dt = None
-    if since:
-        try:
-            since_dt = datetime.fromisoformat(since.rstrip("Z"))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid ?since= value; expected ISO8601 timestamp")
-    until_dt = None
-    if until:
-        try:
-            until_dt = datetime.fromisoformat(until.rstrip("Z"))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid ?until= value; expected ISO8601 timestamp")
+
+    status_list, institution_list, since_dt, until_dt = _parse_feed_filters(
+        status=status, institution=institution, preset=preset,
+        event_type=event_type, since=since, until=until,
+    )
 
     offset = (page - 1) * per_page
     with connection_scope():
@@ -590,11 +605,11 @@ def get_publication(
 # ---------------------------------------------------------------------------
 
 ATOM_NS = "http://www.w3.org/2005/Atom"
+ET.register_namespace("", ATOM_NS)
 
 
 def _build_atom_feed(items: list[dict], self_url: str) -> str:
     """Build an Atom XML feed string from formatted publication dicts."""
-    ET.register_namespace("", ATOM_NS)
     feed = ET.Element("feed", xmlns=ATOM_NS)
 
     ET.SubElement(feed, "title").text = "Econ Newsfeed"
@@ -656,27 +671,10 @@ def atom_feed(
     until: str | None = Query(None),
 ):
     """Atom feed of recent publications, supports same filters as /api/publications."""
-    status_list = [s.strip() for s in status.split(",") if s.strip()] if status else []
-    institution_list = [i.strip() for i in institution.split(",") if i.strip()] if institution else []
-
-    for s in status_list:
-        if s not in VALID_STATUSES:
-            raise HTTPException(status_code=400, detail=f"Invalid status value '{s}'")
-    if event_type and event_type not in VALID_EVENT_TYPES:
-        raise HTTPException(status_code=400, detail=f"Invalid event_type value '{event_type}'")
-
-    since_dt = None
-    if since:
-        try:
-            since_dt = datetime.fromisoformat(since.rstrip("Z"))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid ?since= value")
-    until_dt = None
-    if until:
-        try:
-            until_dt = datetime.fromisoformat(until.rstrip("Z"))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid ?until= value")
+    status_list, institution_list, since_dt, until_dt = _parse_feed_filters(
+        status=status, institution=institution, preset=preset,
+        event_type=event_type, since=since, until=until,
+    )
 
     with connection_scope():
         rows, _ = Database.search_feed_events(
@@ -690,9 +688,7 @@ def atom_feed(
         authors_by_pub = Database.get_authors_for_papers(pub_ids)
 
     items = [
-        {
-            **_format_feed_event(row, authors_by_pub.get(row['paper_id'], [])),
-        }
+        _format_feed_event(row, authors_by_pub.get(row['paper_id'], []))
         for row in rows
     ]
 

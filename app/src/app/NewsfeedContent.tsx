@@ -29,7 +29,7 @@ function groupByDate(publications: Publication[]) {
   return groups;
 }
 
-const FILTER_PARAM_KEYS = ["status", "institution", "preset", "year", "search", "jel_code", "since", "until"] as const;
+const FILTER_PARAM_KEYS = ["status", "institution", "preset", "year", "search", "jel_code", "since", "until"] as const satisfies readonly (keyof Omit<FeedFilters, "event_type">)[];
 
 function filtersFromParams(params: URLSearchParams): FeedFilters {
   const filters: FeedFilters = {};
@@ -278,13 +278,11 @@ export default function NewsfeedContent() {
   const router = useRouter();
   const pathname = usePathname();
 
-  const initialTab = (searchParams.get("tab") === "status_change" ? "status_change" : "new_paper") as TabValue;
-  const initialPage = Math.max(1, Number(searchParams.get("page")) || 1);
-  const initialFilters = useMemo(() => filtersFromParams(searchParams), [searchParams]);
-
-  const [activeTab, setActiveTab] = useState<TabValue>(initialTab);
-  const [page, setPage] = useState(initialPage);
-  const [filters, setFilters] = useState<FeedFilters>(initialFilters);
+  const [activeTab, setActiveTab] = useState<TabValue>(
+    searchParams.get("tab") === "status_change" ? "status_change" : "new_paper"
+  );
+  const [page, setPage] = useState(Math.max(1, Number(searchParams.get("page")) || 1));
+  const [filters, setFilters] = useState<FeedFilters>(() => filtersFromParams(searchParams));
 
   const isInitialMount = useRef(true);
   useEffect(() => {
@@ -296,7 +294,8 @@ export default function NewsfeedContent() {
     const qs = params.toString();
     const next = qs ? `${pathname}?${qs}` : pathname;
     router.replace(next, { scroll: false });
-  }, [filters, activeTab, page, pathname, router]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, activeTab, page, pathname]);
 
   const mergedFilters = useMemo<FeedFilters>(
     () => ({ ...filters, event_type: activeTab }),

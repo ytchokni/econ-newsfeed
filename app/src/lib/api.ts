@@ -40,7 +40,7 @@ function buildPublicationsUrl(
   if (filters?.event_type) params.set("event_type", filters.event_type);
   if (filters?.jel_code) params.set("jel_code", filters.jel_code);
   if (filters?.since) params.set("since", filters.since);
-  if (filters?.until) params.set("until", filters.until + "T23:59:59");
+  if (filters?.until) params.set("until", filters.until);
   return `/api/publications?${params.toString()}`;
 }
 
