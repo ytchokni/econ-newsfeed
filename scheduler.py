@@ -77,6 +77,7 @@ _enrichment_thread = None
 _enrichment_stop_event = threading.Event()
 
 EXTRACTION_WORKER_ENABLED = os.environ.get('EXTRACTION_WORKER_ENABLED', 'false').lower() == 'true'
+DIGEST_ENABLED = os.environ.get('RESEND_API_KEY', '') != ''
 _EXTRACTION_DELAY_SECONDS = float(os.environ.get('EXTRACTION_DELAY_SECONDS', '2'))
 _EXTRACTION_IDLE_SECONDS = 300       # queue empty → re-poll every 5 min
 _EXTRACTION_BACKOFF_THRESHOLD = 10   # consecutive failures before backing off
@@ -499,6 +500,18 @@ def start_scheduler() -> None:
 
     if EXTRACTION_WORKER_ENABLED:
         start_extraction_worker()
+
+    if DIGEST_ENABLED:
+        from digest import run_weekly_digest
+        _scheduler.add_job(
+            run_weekly_digest,
+            'cron',
+            day_of_week='mon',
+            hour=8,
+            minute=0,
+            id='weekly_digest',
+        )
+        logger.info("Weekly digest job scheduled for Mondays 8:00 UTC")
 
 
 def shutdown_scheduler() -> None:
