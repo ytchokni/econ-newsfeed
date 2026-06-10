@@ -276,6 +276,104 @@ def _get_activity_stats() -> dict:
     }
 
 
+def _get_extraction_stats() -> dict:
+    """Extraction worker surveillance: queue, throughput, ETA, liveness."""
+    import scheduler
+
+    def _i(row, key) -> int:
+        return int(row[key] or 0) if row else 0
+
+    # Same predicate as the worker's get_urls_needing_extraction(), split by reason.
+    queue = fetch_one(
+        """SELECT
+               SUM(hc.extracted_hash IS NULL) AS never_extracted,
+               SUM(hc.extracted_hash IS NOT NULL
+                   AND hc.extracted_hash != hc.content_hash) AS changed_pending
+           FROM html_content hc
+           JOIN researcher_urls ru ON ru.id = hc.url_id
+           WHERE ru.is_active = TRUE AND hc.content_hash IS NOT NULL"""
+    )
+    never_extracted = _i(queue, "never_extracted")
+    changed_pending = _i(queue, "changed_pending")
+    queue_total = never_extracted + changed_pending
+
+    # Completions = successful mark_extracted timestamps.
+    completions = fetch_one(
+        """SELECT
+               SUM(extracted_at >= NOW() - INTERVAL 1 HOUR) AS last_hour,
+               SUM(extracted_at >= NOW() - INTERVAL 24 HOUR) AS last_24h,
+               SUM(extracted_at >= NOW() - INTERVAL 7 DAY) AS last_7d
+           FROM html_content"""
+    )
+
+    # Attempts = every extraction LLM call (failures included), plus liveness + tokens.
+    attempts = fetch_one(
+        """SELECT
+               SUM(called_at >= NOW() - INTERVAL 1 HOUR) AS last_hour,
+               SUM(called_at >= NOW() - INTERVAL 24 HOUR) AS last_24h,
+               SUM(called_at >= NOW() - INTERVAL 7 DAY) AS last_7d,
+               MAX(called_at) AS last_call_at,
+               COALESCE(SUM(CASE WHEN called_at >= NOW() - INTERVAL 24 HOUR
+                                 THEN total_tokens ELSE 0 END), 0) AS tokens_last_24h
+           FROM llm_usage WHERE call_type = 'publication_extraction'"""
+    )
+
+    last_extracted = fetch_one(
+        "SELECT MAX(extracted_at) AS last_extracted_at FROM html_content"
+    )
+
+    daily = fetch_all(
+        """SELECT DATE(extracted_at) AS date, COUNT(*) AS count
+           FROM html_content
+           WHERE extracted_at >= DATE_SUB(CURDATE(), INTERVAL 14 DAY)
+           GROUP BY DATE(extracted_at) ORDER BY date"""
+    )
+
+    recent_calls = fetch_all(
+        """SELECT called_at, context_url, model, total_tokens
+           FROM llm_usage WHERE call_type = 'publication_extraction'
+           ORDER BY id DESC LIMIT 20"""
+    )
+
+    completions_24h = _i(completions, "last_24h")
+    eta_days = round(queue_total / completions_24h, 1) if completions_24h else None
+
+    return {
+        "worker_enabled": scheduler.EXTRACTION_WORKER_ENABLED,
+        "queue": {
+            "never_extracted": never_extracted,
+            "changed_pending": changed_pending,
+            "total": queue_total,
+        },
+        "throughput": {
+            "completions": {
+                "last_hour": _i(completions, "last_hour"),
+                "last_24h": completions_24h,
+                "last_7d": _i(completions, "last_7d"),
+            },
+            "attempts": {
+                "last_hour": _i(attempts, "last_hour"),
+                "last_24h": _i(attempts, "last_24h"),
+                "last_7d": _i(attempts, "last_7d"),
+            },
+        },
+        "eta_days": eta_days,
+        "last_call_at": _iso_z(attempts["last_call_at"]) if attempts and attempts["last_call_at"] else None,
+        "last_extracted_at": _iso_z(last_extracted["last_extracted_at"]) if last_extracted and last_extracted["last_extracted_at"] else None,
+        "tokens_last_24h": _i(attempts, "tokens_last_24h"),
+        "daily": [{"date": str(r["date"]), "count": int(r["count"])} for r in daily],
+        "recent_calls": [
+            {
+                "called_at": _iso_z(r["called_at"]),
+                "context_url": r["context_url"],
+                "model": r["model"],
+                "total_tokens": int(r["total_tokens"] or 0),
+            }
+            for r in recent_calls
+        ],
+    }
+
+
 def get_admin_dashboard_stats() -> dict:
     """Aggregate all dashboard metrics into a single response dict."""
     return {
@@ -285,4 +383,5 @@ def get_admin_dashboard_stats() -> dict:
         "costs": _get_cost_stats(),
         "scrapes": _get_scrape_stats(),
         "activity": _get_activity_stats(),
+        "extraction": _get_extraction_stats(),
     }
