@@ -1,4 +1,4 @@
-.PHONY: setup dev kill seed reset-db scrape fetch extract batch-submit batch-check classify-jel enrich enrich-jel discover-domains backfill-normalize populate-fields backfill-affiliations audit-zero-pubs check
+.PHONY: setup dev kill seed reset-db scrape fetch extract batch-submit batch-check classify-jel enrich enrich-jel discover-domains discover-research-pages backfill-normalize populate-fields backfill-affiliations audit-zero-pubs check
 
 setup:
 	poetry install
@@ -54,6 +54,9 @@ enrich-jel:  ## Enrich researcher JEL codes from paper topics
 
 discover-domains:  ## Scan for untrusted domains that may host paper links
 	poetry run python main.py discover-domains
+
+discover-research-pages:  ## Find research/publications pages from stored homepage HTML
+	poetry run python scripts/discover_research_pages.py
 
 backfill-normalize:  ## Re-normalize html_content hashes (one-time, after deploying text normalization)
 	poetry run python scripts/backfill_normalized_hashes.py
