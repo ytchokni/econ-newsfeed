@@ -189,6 +189,25 @@ export interface AdminDashboardData {
       details: string | null;
     }[];
   };
+  extraction: {
+    worker_enabled: boolean;
+    queue: { never_extracted: number; changed_pending: number; total: number };
+    throughput: {
+      completions: { last_hour: number; last_24h: number; last_7d: number };
+      attempts: { last_hour: number; last_24h: number; last_7d: number };
+    };
+    eta_days: number | null;
+    last_call_at: string | null;
+    last_extracted_at: string | null;
+    tokens_last_24h: number;
+    daily: { date: string; count: number }[];
+    recent_calls: {
+      called_at: string;
+      context_url: string | null;
+      model: string;
+      total_tokens: number;
+    }[];
+  };
 }
 
 async function fetchJsonWithAuth<T>(url: string, init?: RequestInit): Promise<T> {
