@@ -38,6 +38,15 @@ def test_get_admin_dashboard_stats_returns_all_sections():
         "active_count": 0,
         "deactivated_count": 0,
         "at_risk_count": 0,
+        # extraction section keys
+        "never_extracted": 0,
+        "changed_pending": 0,
+        "last_hour": 0,
+        "last_24h": 0,
+        "last_7d": 0,
+        "last_call_at": None,
+        "tokens_last_24h": 0,
+        "last_extracted_at": None,
     })
 
     with patch("database.admin.fetch_all", mock_fetch_all), \
@@ -85,6 +94,15 @@ def test_get_admin_dashboard_stats_returns_all_sections():
     assert "events_last_30d" in result["activity"]
     assert "recent_events" in result["activity"]
 
+    # Extraction section
+    assert "extraction" in result
+    assert "worker_enabled" in result["extraction"]
+    assert "queue" in result["extraction"]
+    assert "throughput" in result["extraction"]
+    assert "eta_days" in result["extraction"]
+    assert "daily" in result["extraction"]
+    assert "recent_calls" in result["extraction"]
+
 
 def test_admin_dashboard_endpoint_requires_api_key(client):
     """GET /api/admin/dashboard returns 401 without API key."""
@@ -121,3 +139,61 @@ def test_admin_dashboard_endpoint_returns_data(client):
     assert "health" in data
     assert "content" in data
     assert data["content"]["total_papers"] == 10
+
+
+def _extraction_fetch_one(queue=None, completions=None, attempts=None, last_extracted=None):
+    """Build a fetch_one side_effect for _get_extraction_stats's four queries, in call order."""
+    rows = [
+        queue or {"never_extracted": 0, "changed_pending": 0},
+        completions or {"last_hour": 0, "last_24h": 0, "last_7d": 0},
+        attempts or {"last_hour": 0, "last_24h": 0, "last_7d": 0,
+                     "last_call_at": None, "tokens_last_24h": 0},
+        last_extracted or {"last_extracted_at": None},
+    ]
+    return MagicMock(side_effect=rows)
+
+
+def test_extraction_stats_queue_split_and_eta():
+    """Queue split sums to total; ETA = total / completions_24h, 1 decimal."""
+    from database.admin import _get_extraction_stats
+    mock_one = _extraction_fetch_one(
+        queue={"never_extracted": 6000, "changed_pending": 4000},
+        completions={"last_hour": 40, "last_24h": 1000, "last_7d": 5000},
+    )
+    with patch("database.admin.fetch_one", mock_one), \
+         patch("database.admin.fetch_all", MagicMock(return_value=[])):
+        stats = _get_extraction_stats()
+    assert stats["queue"] == {"never_extracted": 6000, "changed_pending": 4000, "total": 10000}
+    assert stats["eta_days"] == 10.0
+    assert stats["throughput"]["completions"]["last_24h"] == 1000
+
+
+def test_extraction_stats_eta_null_when_no_completions():
+    """ETA is None when nothing completed in 24h (avoid div-by-zero)."""
+    from database.admin import _get_extraction_stats
+    mock_one = _extraction_fetch_one(queue={"never_extracted": 5, "changed_pending": 0})
+    with patch("database.admin.fetch_one", mock_one), \
+         patch("database.admin.fetch_all", MagicMock(return_value=[])):
+        stats = _get_extraction_stats()
+    assert stats["eta_days"] is None
+
+
+def test_extraction_stats_recent_calls_and_daily_shapes():
+    """recent_calls and daily map DB rows into the documented shape."""
+    from datetime import datetime, timezone, date
+    from database.admin import _get_extraction_stats
+    mock_one = _extraction_fetch_one()
+    called = datetime(2026, 6, 10, 8, 0, 0, tzinfo=timezone.utc)
+    mock_all = MagicMock(side_effect=[
+        [{"date": date(2026, 6, 10), "count": 950}],                     # daily
+        [{"called_at": called, "context_url": "https://x.com/pubs",
+          "model": "gemma-4-31b-it", "total_tokens": 4102}],             # recent_calls
+    ])
+    with patch("database.admin.fetch_one", mock_one), \
+         patch("database.admin.fetch_all", mock_all):
+        stats = _get_extraction_stats()
+    assert stats["daily"] == [{"date": "2026-06-10", "count": 950}]
+    assert stats["recent_calls"] == [{
+        "called_at": "2026-06-10T08:00:00Z", "context_url": "https://x.com/pubs",
+        "model": "gemma-4-31b-it", "total_tokens": 4102,
+    }]
