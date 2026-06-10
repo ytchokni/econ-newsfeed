@@ -247,7 +247,7 @@ class Publication:
 For each publication, extract:
 - title: the full publication title
 - authors: a list of [first_name, last_name] pairs. Use full first names when available (e.g., "John" not "J."). If only an initial appears, use it as given.
-- year: publication year as a string, or null if unknown
+- year: the year associated with this paper as a 4-digit string. Use the publication year, working paper release year, revision date, or most recent year shown near the paper entry. Only return null if no year appears anywhere near the paper entry.
 - venue: journal or conference name, or null if unknown
 - status: one of "published", "accepted", "revise_and_resubmit", "reject_and_resubmit", "working_paper", or null if unknown
 - draft_url: a URL to a PDF, SSRN, NBER, or working paper version, or null if not available
