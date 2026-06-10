@@ -3,6 +3,7 @@ import type {
   FeedFilters,
   FilterOptions,
   JelCode,
+  NotificationPrefs,
   PaginatedResponse,
   Publication,
   PublicationDetail,
@@ -10,6 +11,7 @@ import type {
   Researcher,
   ResearcherDetail,
   ResearcherFilters,
+  UserFollowing,
 } from "./types";
 
 export const API_BASE_URL =
@@ -266,5 +268,62 @@ export function useAtRiskUrls() {
 export async function reactivateUrl(urlId: number): Promise<void> {
   await fetchJsonWithAuth(`/api/admin/reactivate-url/${urlId}`, {
     method: "POST",
+  });
+}
+
+// --- Authenticated API helpers ---
+
+async function fetchJsonAuth<T>(url: string, token: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    ...init,
+    headers: {
+      ...init?.headers,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (res.status === 401) throw new Error("UNAUTHORIZED");
+  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+export function useFollowing(token: string | null) {
+  return useSWR<UserFollowing>(
+    token ? ["/api/users/following", token] : null,
+    ([url, t]: [string, string]) => fetchJsonAuth(url, t),
+  );
+}
+
+export async function followResearcher(researcherId: number, token: string): Promise<void> {
+  await fetch(`/api/users/follow/${researcherId}`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export async function unfollowResearcher(researcherId: number, token: string): Promise<void> {
+  await fetch(`/api/users/follow/${researcherId}`, {
+    method: "DELETE",
+    headers: { Authorization: `Bearer ${token}` },
+  });
+}
+
+export function useNotificationPrefs(token: string | null) {
+  return useSWR<NotificationPrefs>(
+    token ? ["/api/users/notifications", token] : null,
+    ([url, t]: [string, string]) => fetchJsonAuth(url, t),
+  );
+}
+
+export async function updateNotificationPrefs(
+  prefs: { digest_enabled: boolean },
+  token: string,
+): Promise<void> {
+  await fetch("/api/users/notifications", {
+    method: "PATCH",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+    body: JSON.stringify(prefs),
   });
 }
