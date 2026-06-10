@@ -9,6 +9,22 @@ from datetime import datetime, timezone
 from database.connection import get_connection, fetch_all
 
 
+_STATUS_RANK = {
+    'working_paper': 0,
+    'reject_and_resubmit': 1,
+    'revise_and_resubmit': 2,
+    'accepted': 3,
+    'published': 4,
+}
+
+
+def _is_status_progression(old: str | None, new: str | None) -> bool:
+    """Return True only if new status strictly outranks old status."""
+    if not old or not new or old == new:
+        return False
+    return _STATUS_RANK.get(new, -1) > _STATUS_RANK.get(old, -1)
+
+
 @dataclass
 class PaperSnapshotResult:
     changed: bool
@@ -17,9 +33,7 @@ class PaperSnapshotResult:
 
     @property
     def status_changed(self) -> bool:
-        return (self.old_status is not None
-                and self.new_status is not None
-                and self.old_status != self.new_status)
+        return _is_status_progression(self.old_status, self.new_status)
 
 
 # ── Researcher snapshots ──
@@ -109,6 +123,7 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
 
             old_status = prev['status'] if prev else None
 
+            # Always store raw LLM output in snapshots for audit
             cursor.execute(
                 """INSERT INTO paper_snapshots
                    (paper_id, title, status, venue, abstract, draft_url, draft_url_status, year,
@@ -116,12 +131,15 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
                    VALUES (%s, %s, %s, %s, %s, %s, 'unchecked', %s, %s, %s, %s)""",
                 (paper_id, title, status, venue, abstract, draft_url, year, now, source_url, content_hash),
             )
+
+            # Block status regressions on the denormalized papers table
+            effective_status = status if _is_status_progression(old_status, status) or old_status is None else old_status
             cursor.execute(
                 """UPDATE papers
                    SET status = %s, venue = %s, abstract = %s, draft_url = %s,
                        draft_url_status = 'unchecked', year = %s
                    WHERE id = %s""",
-                (status, venue, abstract, draft_url, year, paper_id),
+                (effective_status, venue, abstract, draft_url, year, paper_id),
             )
 
             conn.commit()

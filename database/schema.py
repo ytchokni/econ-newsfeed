@@ -677,6 +677,41 @@ def create_tables() -> None:
                             logging.info("Migration: capitalized %d lowercase paper titles", total)
                     except Exception as e:
                         logging.warning("Migration: capitalize titles: %s", e)
+
+                    # Clean up status regression events and restore papers.status
+                    # to highest-ranked status seen across snapshots
+                    _S = "'working_paper','reject_and_resubmit','revise_and_resubmit','accepted','published'"
+                    try:
+                        cursor.execute(f"""
+                            DELETE FROM feed_events
+                            WHERE event_type = 'status_change'
+                            AND FIELD(new_status, {_S}) < FIELD(old_status, {_S})
+                            AND FIELD(new_status, {_S}) > 0
+                            AND FIELD(old_status, {_S}) > 0
+                        """)
+                        deleted = cursor.rowcount
+                        cursor.execute(f"""
+                            UPDATE papers p
+                            JOIN (
+                                SELECT paper_id,
+                                       ELT(MAX(FIELD(status, {_S})), {_S}) AS best_status
+                                FROM paper_snapshots
+                                WHERE status IS NOT NULL
+                                GROUP BY paper_id
+                            ) best ON best.paper_id = p.id
+                            SET p.status = best.best_status
+                            WHERE FIELD(p.status, {_S}) < FIELD(best.best_status, {_S})
+                        """)
+                        restored = cursor.rowcount
+                        conn.commit()
+                        if deleted or restored:
+                            logging.info(
+                                "Migration: cleaned %d status regression events, "
+                                "restored %d paper statuses to highest rank",
+                                deleted, restored,
+                            )
+                    except Exception as e:
+                        logging.warning("Migration: status regression cleanup: %s", e)
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                     cursor.fetchone()
