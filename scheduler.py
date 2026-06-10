@@ -132,15 +132,15 @@ def update_scrape_log(log_id: int, status: str, urls_checked: int = 0, urls_chan
     ))
 
 
-_STALE_SCRAPE_HOURS = 24
+_STALE_SCRAPE_HOURS = 3
 
 
 def _cleanup_stale_scrape_logs() -> None:
-    """Mark scrape_log entries stuck in 'running' for >24h as 'failed'."""
+    """Mark scrape_log entries stuck in 'running' for >3h as 'failed'."""
     affected = Database.execute_query(
         """UPDATE scrape_log
            SET finished_at = NOW(), status = 'failed',
-               error_message = 'Stale running entry — cleaned up on scheduler start'
+               error_message = 'Stale running entry — cleaned up automatically'
            WHERE status = 'running'
              AND started_at < DATE_SUB(NOW(), INTERVAL %s HOUR)""",
         (_STALE_SCRAPE_HOURS,),
@@ -486,6 +486,12 @@ def start_scheduler() -> None:
         'interval',
         hours=SCRAPE_INTERVAL_HOURS,
         id='scrape_job',
+    )
+    _scheduler.add_job(
+        _cleanup_stale_scrape_logs,
+        'interval',
+        hours=1,
+        id='stale_scrape_cleanup',
     )
     _scheduler.start()
     logger.info(f"Scheduler started: scraping every {SCRAPE_INTERVAL_HOURS} hours")
