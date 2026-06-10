@@ -67,11 +67,12 @@ def _title_in_previous_snapshot(title: str, prev_html_lower: str | None) -> bool
 
 class FeedEventEmitter:
     @staticmethod
-    def emit_new_paper_events(results, url: str, is_seed: bool = False) -> int:
+    def emit_new_paper_events(results, url: str, is_seed: bool = False, event_date: datetime | None = None) -> int:
         """Create new_paper feed events for save results. Returns count of events created."""
         if is_seed or not results:
             return 0
 
+        created_at = event_date or datetime.now(timezone.utc)
         events_created = 0
         with Database.get_connection() as conn:
             cursor = conn.cursor(buffered=True)
@@ -94,7 +95,7 @@ class FeedEventEmitter:
                     cursor.execute(
                         """INSERT INTO feed_events (paper_id, event_type, new_status, created_at)
                            VALUES (%s, 'new_paper', %s, %s)""",
-                        (r.paper_id, r.status, datetime.now(timezone.utc)),
+                        (r.paper_id, r.status, created_at),
                     )
                     events_created += 1
                 elif r.new_to_this_url:
@@ -106,7 +107,7 @@ class FeedEventEmitter:
                         cursor.execute(
                             """INSERT INTO feed_events (paper_id, event_type, new_status, created_at)
                                VALUES (%s, 'new_paper', %s, %s)""",
-                            (r.paper_id, r.status, datetime.now(timezone.utc)),
+                            (r.paper_id, r.status, created_at),
                         )
                         events_created += 1
                 cursor.close()
@@ -115,29 +116,31 @@ class FeedEventEmitter:
         return events_created
 
     @staticmethod
-    def emit_status_change(paper_id: int, old_status: str, new_status: str) -> None:
+    def emit_status_change(paper_id: int, old_status: str, new_status: str, event_date: datetime | None = None) -> None:
         """Create a status_change feed event."""
+        created_at = event_date or datetime.now(timezone.utc)
         with Database.get_connection() as conn:
             cursor = conn.cursor(buffered=True)
             cursor.execute(
                 """INSERT INTO feed_events
                    (paper_id, event_type, old_status, new_status, created_at)
                    VALUES (%s, 'status_change', %s, %s, %s)""",
-                (paper_id, old_status, new_status, datetime.now(timezone.utc)),
+                (paper_id, old_status, new_status, created_at),
             )
             conn.commit()
             cursor.close()
 
     @staticmethod
-    def emit_title_change(paper_id: int, old_title: str, new_title: str) -> None:
+    def emit_title_change(paper_id: int, old_title: str, new_title: str, event_date: datetime | None = None) -> None:
         """Create a title_change feed event."""
+        created_at = event_date or datetime.now(timezone.utc)
         with Database.get_connection() as conn:
             cursor = conn.cursor(buffered=True)
             cursor.execute(
                 """INSERT INTO feed_events
                    (paper_id, event_type, old_title, new_title, created_at)
                    VALUES (%s, 'title_change', %s, %s, %s)""",
-                (paper_id, old_title, new_title, datetime.now(timezone.utc)),
+                (paper_id, old_title, new_title, created_at),
             )
             conn.commit()
             cursor.close()

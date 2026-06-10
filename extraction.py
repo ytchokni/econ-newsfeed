@@ -62,17 +62,18 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
     if not text:
         return ExtractionOutcome("no_content")
     content_hash = payload['content_hash']
+    is_seed = payload['extracted_at'] is None
 
-    is_seed = HTMLFetcher.is_first_extraction(url_id)
     pubs = Publication.try_extract_publications(text, url, scrape_log_id=scrape_log_id)
     if pubs is None:
         return ExtractionOutcome("failed")
 
     if pubs:
-        Publication.save_publications(url, pubs, is_seed=is_seed)
-        reconcile_title_renames(url, pubs)
+        fetch_date = HTMLFetcher.get_fetch_timestamp(url_id)
+        Publication.save_publications(url, pubs, is_seed=is_seed, event_date=fetch_date)
+        reconcile_title_renames(url, pubs, event_date=fetch_date)
         match_and_save_paper_links(url_id, pubs)
-        append_snapshots_for_pubs(pubs, url)
+        append_snapshots_for_pubs(pubs, url, event_date=fetch_date)
 
     if page_type == "HOME":
         _update_home_description(researcher_id, text, url, scrape_log_id)
