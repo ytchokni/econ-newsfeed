@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Source_Serif_4, DM_Sans } from "next/font/google";
 import "./globals.css";
 import Header from "@/components/Header";
+import { AuthProvider } from "@/lib/auth";
 
 const sourceSerif = Source_Serif_4({
   subsets: ["latin"],
@@ -31,8 +32,10 @@ export default function RootLayout({
   return (
     <html lang="en" className={`${sourceSerif.variable} ${dmSans.variable}`}>
       <body className="antialiased">
-        <Header />
-        <main className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-8">{children}</main>
+        <AuthProvider>
+          <Header />
+          <main className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-8">{children}</main>
+        </AuthProvider>
       </body>
     </html>
   );
