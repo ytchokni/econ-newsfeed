@@ -33,7 +33,7 @@ const nextConfig = {
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: https:",
               "font-src 'self'",
-              "connect-src 'self'",
+              "connect-src 'self' https://accounts.google.com",
               "frame-ancestors 'none'",
             ].join("; "),
           },
