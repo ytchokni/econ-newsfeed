@@ -599,10 +599,13 @@ def search_researchers(
     conditions: list[str] = []
     params: list = []
 
-    # Base conditions: only validated researchers
+    # Base conditions: only validated researchers with at least one publication
     conditions.append(
         "(r.openalex_author_id IS NOT NULL OR EXISTS "
         "(SELECT 1 FROM researcher_urls ru WHERE ru.researcher_id = r.id))"
+    )
+    conditions.append(
+        "EXISTS (SELECT 1 FROM authorship a WHERE a.researcher_id = r.id)"
     )
 
     # Hide abbreviated/initial-only names
