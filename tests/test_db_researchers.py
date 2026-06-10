@@ -293,6 +293,11 @@ class TestSearchResearchers:
         assert "openalex_author_id IS NOT NULL" in sql
         assert "researcher_urls" in sql
 
+    def test_base_condition_requires_at_least_one_publication(self):
+        (_, _), mock_fetch = self._call()
+        sql, _ = mock_fetch.call_args[0]
+        assert "authorship" in sql
+
     def test_base_condition_char_length_always_present(self):
         (_, _), mock_fetch = self._call()
         sql, _ = mock_fetch.call_args[0]
