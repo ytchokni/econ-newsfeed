@@ -88,6 +88,21 @@ from database.jel import (
     sync_researcher_fields_from_jel,
 )
 from database.admin import get_admin_dashboard_stats as _get_admin_dashboard_stats
+from database.users import (
+    get_or_create_user,
+    get_user_by_google_id,
+    add_follow,
+    remove_follow,
+    get_followed_researcher_ids,
+    get_notification_prefs,
+    update_notification_prefs,
+    get_digest_recipients,
+    get_feed_events_for_researchers,
+    update_last_digest_sent,
+    researcher_exists,
+    generate_unsubscribe_token,
+    verify_unsubscribe_token,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -172,3 +187,18 @@ class Database:
 
     # Admin
     get_admin_dashboard_stats = staticmethod(_get_admin_dashboard_stats)
+
+    # Users
+    get_or_create_user = staticmethod(get_or_create_user)
+    get_user_by_google_id = staticmethod(get_user_by_google_id)
+    add_follow = staticmethod(add_follow)
+    remove_follow = staticmethod(remove_follow)
+    get_followed_researcher_ids = staticmethod(get_followed_researcher_ids)
+    get_notification_prefs = staticmethod(get_notification_prefs)
+    update_notification_prefs = staticmethod(update_notification_prefs)
+    get_digest_recipients = staticmethod(get_digest_recipients)
+    get_feed_events_for_researchers = staticmethod(get_feed_events_for_researchers)
+    update_last_digest_sent = staticmethod(update_last_digest_sent)
+    researcher_exists = staticmethod(researcher_exists)
+    generate_unsubscribe_token = staticmethod(generate_unsubscribe_token)
+    verify_unsubscribe_token = staticmethod(verify_unsubscribe_token)
