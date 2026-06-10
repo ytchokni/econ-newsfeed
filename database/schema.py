@@ -660,6 +660,27 @@ def create_tables() -> None:
                     except Exception as e:
                         if getattr(e, 'errno', None) != 1061:
                             logging.warning("Migration: researcher_urls.idx_is_active: %s", e)
+
+                    # Capitalize first letter of lowercase paper titles
+                    try:
+                        cursor.execute("""
+                            UPDATE papers
+                            SET title = CONCAT(UPPER(LEFT(title, 1)), SUBSTRING(title, 2))
+                            WHERE title REGEXP '^[a-z]'
+                        """)
+                        rows = cursor.rowcount
+                        if rows:
+                            cursor.execute("""
+                                UPDATE paper_snapshots
+                                SET title = CONCAT(UPPER(LEFT(title, 1)), SUBSTRING(title, 2))
+                                WHERE title REGEXP '^[a-z]'
+                            """)
+                            conn.commit()
+                            logging.info("Migration: capitalized %d lowercase paper titles", rows)
+                        else:
+                            conn.commit()
+                    except Exception as e:
+                        logging.warning("Migration: capitalize titles: %s", e)
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                     cursor.fetchone()
