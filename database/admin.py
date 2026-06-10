@@ -336,7 +336,10 @@ def _get_extraction_stats() -> dict:
     )
 
     completions_24h = _i(completions, "last_24h")
-    eta_days = round(queue_total / completions_24h, 1) if completions_24h else None
+    # ETA from the last hour's rate (×24): reflects current throughput quickly
+    # instead of being dragged down by deploy gaps in a trailing 24h window.
+    completions_hour = _i(completions, "last_hour")
+    eta_days = round(queue_total / (completions_hour * 24), 1) if completions_hour else None
 
     return {
         "worker_enabled": scheduler.EXTRACTION_WORKER_ENABLED,
