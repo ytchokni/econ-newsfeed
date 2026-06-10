@@ -5,7 +5,9 @@ import NewsfeedContent from "../NewsfeedContent";
 import type { PaginatedResponse, Publication } from "@/lib/types";
 
 jest.mock("next/navigation", () => ({
-  useRouter: () => ({ push: jest.fn(), back: jest.fn() }),
+  useRouter: () => ({ push: jest.fn(), back: jest.fn(), replace: jest.fn() }),
+  useSearchParams: () => new URLSearchParams(window.location.search),
+  usePathname: () => "/",
 }));
 
 const page1: PaginatedResponse<Publication> = {

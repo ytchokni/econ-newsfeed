@@ -8,6 +8,7 @@ import math
 import os
 import threading
 import time
+import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
@@ -178,6 +179,39 @@ def _require_api_key(request: Request) -> None:
 
 
 VALID_EVENT_TYPES = frozenset({"new_paper", "status_change"})
+
+
+def _parse_feed_filters(
+    *, status: str | None, institution: str | None,
+    preset: str | None, event_type: str | None,
+    since: str | None, until: str | None,
+) -> tuple[list[str], list[str], datetime | None, datetime | None]:
+    """Parse and validate shared filter params. Returns (status_list, institution_list, since_dt, until_dt)."""
+    status_list = [s.strip() for s in status.split(",") if s.strip()] if status else []
+    institution_list = [i.strip() for i in institution.split(",") if i.strip()] if institution else []
+
+    for s in status_list:
+        if s not in VALID_STATUSES:
+            raise HTTPException(status_code=400, detail=f"Invalid status value '{s}'. Must be one of: {', '.join(sorted(VALID_STATUSES))}")
+    if event_type and event_type not in VALID_EVENT_TYPES:
+        raise HTTPException(status_code=400, detail=f"Invalid event_type value '{event_type}'. Must be one of: {', '.join(sorted(VALID_EVENT_TYPES))}")
+
+    since_dt = None
+    if since:
+        try:
+            since_dt = datetime.fromisoformat(since.rstrip("Z"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid ?since= value; expected ISO8601 timestamp")
+    until_dt = None
+    if until:
+        try:
+            until_dt = datetime.fromisoformat(until.rstrip("Z"))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="Invalid ?until= value; expected ISO8601 timestamp")
+        if until_dt == until_dt.replace(hour=0, minute=0, second=0, microsecond=0):
+            until_dt = until_dt.replace(hour=23, minute=59, second=59)
+
+    return status_list, institution_list, since_dt, until_dt
 
 
 @asynccontextmanager
@@ -456,6 +490,7 @@ def list_publications(
     researcher_id: int | None = Query(None),
     status: str | None = Query(None),
     since: str | None = Query(None),
+    until: str | None = Query(None),
     institution: str | None = Query(None),
     preset: str | None = Query(None),
     search: str | None = Query(None, max_length=200),
@@ -468,33 +503,22 @@ def list_publications(
     non-published papers with known status generate events, so no
     include_seed parameter is needed.
     """
-    valid_statuses = VALID_STATUSES
     valid_presets = {"top20"}
-
-    # Parse comma-separated multi-values
-    status_list = [s.strip() for s in status.split(",") if s.strip()] if status else []
-    institution_list = [i.strip() for i in institution.split(",") if i.strip()] if institution else []
-
-    for s in status_list:
-        if s not in valid_statuses:
-            raise HTTPException(status_code=400, detail=f"Invalid status value '{s}'. Must be one of: {', '.join(sorted(valid_statuses))}")
     if preset and preset not in valid_presets:
         raise HTTPException(status_code=400, detail=f"Invalid preset value. Must be one of: {', '.join(sorted(valid_presets))}")
-    if event_type and event_type not in VALID_EVENT_TYPES:
-        raise HTTPException(status_code=400, detail=f"Invalid event_type value '{event_type}'. Must be one of: {', '.join(sorted(VALID_EVENT_TYPES))}")
-    since_dt = None
-    if since:
-        try:
-            since_dt = datetime.fromisoformat(since.rstrip("Z"))
-        except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid ?since= value; expected ISO8601 timestamp")
+
+    status_list, institution_list, since_dt, until_dt = _parse_feed_filters(
+        status=status, institution=institution, preset=preset,
+        event_type=event_type, since=since, until=until,
+    )
 
     offset = (page - 1) * per_page
     with connection_scope():
         rows, total = Database.search_feed_events(
             year=year, researcher_id=researcher_id,
             status_list=status_list or None,
-            since=since_dt, institution_list=institution_list or None,
+            since=since_dt, until=until_dt,
+            institution_list=institution_list or None,
             preset=preset, search=search, event_type=event_type,
             jel_code=jel_code, offset=offset, limit=per_page,
         )
@@ -574,6 +598,105 @@ def get_publication(
         result["openalex_id"] = row.get('openalex_id')
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Atom feed
+# ---------------------------------------------------------------------------
+
+ATOM_NS = "http://www.w3.org/2005/Atom"
+ET.register_namespace("", ATOM_NS)
+
+
+def _build_atom_feed(items: list[dict], self_url: str) -> str:
+    """Build an Atom XML feed string from formatted publication dicts."""
+    feed = ET.Element("feed", xmlns=ATOM_NS)
+
+    ET.SubElement(feed, "title").text = "Econ Newsfeed"
+    ET.SubElement(feed, "id").text = FRONTEND_URL + "/"
+    ET.SubElement(feed, "link", href=self_url, rel="self", type="application/atom+xml")
+    ET.SubElement(feed, "link", href=FRONTEND_URL, rel="alternate", type="text/html")
+
+    updated_at = items[0]["event_date"] if items else datetime.now(timezone.utc).isoformat() + "Z"
+    ET.SubElement(feed, "updated").text = updated_at
+
+    for item in items:
+        entry = ET.SubElement(feed, "entry")
+        paper_url = f"{FRONTEND_URL}/papers/{item['id']}"
+
+        ET.SubElement(entry, "id").text = f"urn:econ-newsfeed:event:{item.get('event_id', item['id'])}"
+        ET.SubElement(entry, "title").text = item["title"]
+        ET.SubElement(entry, "link", href=paper_url, rel="alternate", type="text/html")
+        ET.SubElement(entry, "updated").text = item.get("event_date") or item.get("discovered_at") or ""
+
+        author_names = [f"{a['first_name']} {a['last_name']}" for a in item.get("authors", [])]
+        if author_names:
+            author_el = ET.SubElement(entry, "author")
+            ET.SubElement(author_el, "name").text = ", ".join(author_names)
+
+        parts = []
+        if item.get("event_type") == "status_change":
+            old = (item.get("old_status") or "unknown").replace("_", " ")
+            new = (item.get("new_status") or "unknown").replace("_", " ")
+            parts.append(f"Status changed: {old} → {new}")
+        if item.get("venue"):
+            parts.append(item["venue"])
+        if item.get("year"):
+            parts.append(str(item["year"]))
+        if item.get("abstract"):
+            parts.append(item["abstract"][:500])
+
+        if parts:
+            ET.SubElement(entry, "summary").text = " | ".join(parts)
+
+        if item.get("doi"):
+            ET.SubElement(entry, "link", href=f"https://doi.org/{item['doi']}", rel="related", title="DOI")
+
+    return '<?xml version="1.0" encoding="utf-8"?>\n' + ET.tostring(feed, encoding="unicode")
+
+
+@app.get("/api/feed.xml")
+@limiter.limit("30/minute")
+def atom_feed(
+    request: Request,
+    response: Response,
+    status: str | None = Query(None),
+    institution: str | None = Query(None),
+    preset: str | None = Query(None),
+    year: str | None = Query(None),
+    search: str | None = Query(None, max_length=200),
+    event_type: str | None = Query(None),
+    jel_code: str | None = Query(None),
+    since: str | None = Query(None),
+    until: str | None = Query(None),
+):
+    """Atom feed of recent publications, supports same filters as /api/publications."""
+    status_list, institution_list, since_dt, until_dt = _parse_feed_filters(
+        status=status, institution=institution, preset=preset,
+        event_type=event_type, since=since, until=until,
+    )
+
+    with connection_scope():
+        rows, _ = Database.search_feed_events(
+            year=year, status_list=status_list or None,
+            since=since_dt, until=until_dt,
+            institution_list=institution_list or None,
+            preset=preset, search=search, event_type=event_type,
+            jel_code=jel_code, offset=0, limit=50,
+        )
+        pub_ids = [row['paper_id'] for row in rows]
+        authors_by_pub = Database.get_authors_for_papers(pub_ids)
+
+    items = [
+        _format_feed_event(row, authors_by_pub.get(row['paper_id'], []))
+        for row in rows
+    ]
+
+    self_url = str(request.url)
+    xml = _build_atom_feed(items, self_url)
+
+    response.headers["Cache-Control"] = "public, max-age=900, stale-while-revalidate=1800"
+    return Response(content=xml, media_type="application/atom+xml; charset=utf-8")
 
 
 # ---------------------------------------------------------------------------

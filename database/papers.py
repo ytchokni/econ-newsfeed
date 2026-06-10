@@ -229,6 +229,7 @@ def search_feed_events(
     researcher_id=None,
     status_list=None,
     since: datetime | None = None,
+    until: datetime | None = None,
     institution_list=None,
     preset=None,
     search=None,
@@ -277,6 +278,10 @@ def search_feed_events(
     if since:
         conditions.append("fe.created_at >= %s")
         params.append(since)
+
+    if until:
+        conditions.append("fe.created_at <= %s")
+        params.append(until)
 
     if institution_list and not preset:
         if len(institution_list) == 1:
