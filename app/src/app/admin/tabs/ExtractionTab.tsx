@@ -158,8 +158,19 @@ export default function ExtractionTab({ data }: Props) {
                     <td className="py-2 pr-3 text-zinc-500 whitespace-nowrap">
                       {formatRelativeTime(c.called_at)}
                     </td>
-                    <td className="py-2 pr-3 text-zinc-300 max-w-md truncate">
-                      {c.context_url ?? "—"}
+                    <td className="py-2 pr-3 max-w-md truncate">
+                      {c.context_url ? (
+                        <a
+                          href={c.context_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-zinc-300 hover:text-zinc-100 hover:underline"
+                        >
+                          {c.context_url}
+                        </a>
+                      ) : (
+                        <span className="text-zinc-300">—</span>
+                      )}
                     </td>
                     <td className="py-2 pr-3 text-zinc-400">{c.model}</td>
                     <td className="py-2 text-right text-zinc-300">{formatTokens(c.total_tokens)}</td>
