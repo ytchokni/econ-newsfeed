@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { usePublications, useJelCodes, useFilterOptions } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { formatDate } from "@/lib/publication-utils";
 import type { FeedFilters, Publication } from "@/lib/types";
 import PublicationCard from "@/components/PublicationCard";
@@ -58,11 +59,13 @@ function FilterBar({
   onChange,
   activeTab,
   onTabChange,
+  showMyFeed,
 }: {
   filters: FeedFilters;
   onChange: (next: FeedFilters) => void;
   activeTab: TabValue;
   onTabChange: (tab: TabValue) => void;
+  showMyFeed: boolean;
 }) {
   const selectedStatuses = filters.status ? filters.status.split(",") : [];
   const selectedInstitutions = (() => {
@@ -161,6 +164,25 @@ function FilterBar({
           placeholder="Search papers by title..."
         />
       </div>
+          {showMyFeed && (
+            <button
+              onClick={() => {
+                const isActive = filters.preset === "following";
+                onChange({
+                  ...filters,
+                  preset: isActive ? undefined : "following",
+                  institution: isActive ? filters.institution : undefined,
+                });
+              }}
+              className={`font-sans text-xs font-semibold px-3 py-1 rounded-full transition-all ${
+                filters.preset === "following"
+                  ? "bg-[var(--accent)] text-white"
+                  : "border border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
+              }`}
+            >
+              My Feed
+            </button>
+          )}
       <div className="flex items-center gap-3 flex-wrap">
         <span className="font-sans text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mr-1">
           Filter
@@ -219,6 +241,7 @@ function FilterBar({
 /* ---------- main component ---------- */
 
 export default function NewsfeedContent() {
+  const { isAuthenticated } = useAuth();
   const [activeTab, setActiveTab] = useState<TabValue>("new_paper");
   const [page, setPage] = useState(1);
 
@@ -258,6 +281,7 @@ export default function NewsfeedContent() {
         onChange={handleFilterChange}
         activeTab={activeTab}
         onTabChange={handleTabChange}
+        showMyFeed={isAuthenticated}
       />
 
       {isLoading && !data && (
