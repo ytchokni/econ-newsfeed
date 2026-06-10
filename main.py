@@ -272,12 +272,13 @@ def batch_check() -> None:
                         logging.info("Batch validation dropped: %s", d.get("title", "<no title>"))
 
                 if validated:
+                    fetch_date = HTMLFetcher.get_fetch_timestamp(url_id)
                     is_seed = HTMLFetcher.is_first_extraction(url_id)
-                    Publication.save_publications(url, validated, is_seed=is_seed)
-                    reconcile_title_renames(url, validated)
+                    Publication.save_publications(url, validated, is_seed=is_seed, event_date=fetch_date)
+                    reconcile_title_renames(url, validated, event_date=fetch_date)
                     match_and_save_paper_links(url_id, validated)
 
-                    append_snapshots_for_pubs(validated, url)
+                    append_snapshots_for_pubs(validated, url, event_date=fetch_date)
 
                     saved_pubs += len(validated)
                 HTMLFetcher.mark_extracted(url_id)

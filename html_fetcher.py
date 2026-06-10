@@ -674,6 +674,19 @@ class HTMLFetcher:
             return 'invalid'
 
     @staticmethod
+    def get_fetch_timestamp(url_id: int) -> datetime | None:
+        """Return the timestamp of the last HTML fetch for a URL ID."""
+        result = Database.fetch_one(
+            "SELECT timestamp FROM html_content WHERE url_id = %s", (url_id,)
+        )
+        if not result or not result['timestamp']:
+            return None
+        ts = result['timestamp']
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts
+
+    @staticmethod
     def get_latest_text(url_id: int) -> str | None:
         """Retrieve the latest text content for a given URL ID."""
         query = """

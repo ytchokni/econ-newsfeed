@@ -209,12 +209,13 @@ class Publication:
         url: str,
         publications: list[dict],
         is_seed: bool = False,
+        event_date=None,
     ) -> None:
         """Save extracted publications. Delegates to PaperSaver + FeedEventEmitter."""
         from paper_saver import PaperSaver
         from feed_events import FeedEventEmitter
         results = PaperSaver.save_publications(url, publications, is_seed=is_seed)
-        FeedEventEmitter.emit_new_paper_events(results, url, is_seed=is_seed)
+        FeedEventEmitter.emit_new_paper_events(results, url, is_seed=is_seed, event_date=event_date)
 
     @staticmethod
     def extract_relevant_html(html_content: str) -> str:
@@ -295,7 +296,7 @@ Content:
 
 
 
-def append_snapshots_for_pubs(pubs: list[dict], source_url: str) -> None:
+def append_snapshots_for_pubs(pubs: list[dict], source_url: str, event_date=None) -> None:
     """Append paper snapshots for a batch of extracted publications.
 
     Resolves title_hash → paper_id in a single query, then appends
@@ -330,13 +331,13 @@ def append_snapshots_for_pubs(pubs: list[dict], source_url: str) -> None:
             title=pub.get('title'),
         )
         if result.status_changed:
-            FeedEventEmitter.emit_status_change(row['id'], result.old_status, result.new_status)
+            FeedEventEmitter.emit_status_change(row['id'], result.old_status, result.new_status, event_date=event_date)
 
 
-def reconcile_title_renames(source_url: str, extracted_pubs: list[dict]) -> None:
+def reconcile_title_renames(source_url: str, extracted_pubs: list[dict], event_date=None) -> None:
     """Detect title renames. Delegates to PaperSaver + FeedEventEmitter."""
     from paper_saver import PaperSaver
     from feed_events import FeedEventEmitter
     renames = PaperSaver.reconcile_title_renames(source_url, extracted_pubs)
     for r in renames:
-        FeedEventEmitter.emit_title_change(r.paper_id, r.old_title, r.new_title)
+        FeedEventEmitter.emit_title_change(r.paper_id, r.old_title, r.new_title, event_date=event_date)

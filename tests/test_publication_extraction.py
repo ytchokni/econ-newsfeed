@@ -264,7 +264,7 @@ class TestSavePublications:
         Publication.save_publications("https://example.com", [pub], is_seed=True)
 
         mock_saver.assert_called_once_with("https://example.com", [pub], is_seed=True)
-        mock_emitter.assert_called_once_with([], "https://example.com", is_seed=True)
+        mock_emitter.assert_called_once_with([], "https://example.com", is_seed=True, event_date=None)
 
     @patch("feed_events.FeedEventEmitter.emit_new_paper_events", return_value=0)
     @patch("paper_saver.PaperSaver.save_publications")
@@ -275,7 +275,7 @@ class TestSavePublications:
         Publication.save_publications("https://example.com", [])
 
         mock_saver.assert_called_once_with("https://example.com", [], is_seed=False)
-        mock_emitter.assert_called_once_with([], "https://example.com", is_seed=False)
+        mock_emitter.assert_called_once_with([], "https://example.com", is_seed=False, event_date=None)
 
 
 # ---------------------------------------------------------------------------
@@ -481,7 +481,7 @@ class TestReconcileTitleRenames:
         reconcile_title_renames("https://example.com", extracted)
 
         mock_reconcile.assert_called_once_with("https://example.com", extracted)
-        mock_emit.assert_called_once_with(10, "Old Title", "New Title")
+        mock_emit.assert_called_once_with(10, "Old Title", "New Title", event_date=None)
 
     @patch("feed_events.FeedEventEmitter.emit_title_change")
     @patch("paper_saver.PaperSaver.reconcile_title_renames")
@@ -507,8 +507,8 @@ class TestReconcileTitleRenames:
         reconcile_title_renames("https://example.com", [])
 
         assert mock_emit.call_count == 2
-        mock_emit.assert_any_call(10, "Old A", "New A")
-        mock_emit.assert_any_call(20, "Old B", "New B")
+        mock_emit.assert_any_call(10, "Old A", "New A", event_date=None)
+        mock_emit.assert_any_call(20, "Old B", "New B", event_date=None)
 
 
 # ---------------------------------------------------------------------------
