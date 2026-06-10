@@ -64,6 +64,12 @@ class TestCleanTitle:
         ("New Evidence on Trade", "New Evidence on Trade"),
         ("Submitted Bids in Auctions", "Submitted Bids in Auctions"),
         ("On Accepted Norms", "On Accepted Norms"),
+        # Lowercase title capitalization
+        ("a macroeconomic model with financially constrained producers", "A macroeconomic model with financially constrained producers"),
+        ("anatomy of the phillips curve", "Anatomy of the phillips curve"),
+        ("Already Capitalized", "Already Capitalized"),
+        ("123 numerical start", "123 numerical start"),
+        ("\"quoted title start\"", "\"quoted title start\""),
         # Edge cases
         ("  Spaces  -- JMP  ", "Spaces"),
         ("", ""),

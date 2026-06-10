@@ -124,10 +124,13 @@ _TITLE_BRACKET_SUFFIXES = re.compile(
 
 
 def clean_title(title: str) -> str:
-    """Strip metadata annotations that LLMs sometimes leave in paper titles."""
+    """Strip metadata annotations and ensure title starts with uppercase."""
     title = _TITLE_METADATA_SUFFIXES.sub('', title)
     title = _TITLE_BRACKET_SUFFIXES.sub('', title)
-    return title.strip()
+    title = title.strip()
+    if title and title[0].islower():
+        title = title[0].upper() + title[1:]
+    return title
 
 
 def validate_publication(pub: dict) -> bool:
