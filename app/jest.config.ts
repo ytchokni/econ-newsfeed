@@ -18,6 +18,7 @@ const config: Config = {
   moduleNameMapper: {
     "^@/(.*)$": "<rootDir>/src/$1",
     "next/font/google": "<rootDir>/__mocks__/next-font-google.ts",
+    "next-auth/react": "<rootDir>/__mocks__/next-auth-react.tsx",
   },
   setupFilesAfterEnv: ["<rootDir>/jest.setup.ts"],
 };
