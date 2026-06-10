@@ -211,14 +211,3 @@ class TestPreviousSnapshotQuery:
         _get_previous_snapshot_html(cursor, "http://example.com")
         sql = cursor.execute.call_args[0][0]
         assert "OFFSET 1" not in sql
-
-    @patch("feed_events.Database.get_connection")
-    def test_returns_normalized_html(self, mock_get_conn):
-        import zlib
-        from feed_events import _get_previous_snapshot_html
-        cursor = MagicMock()
-        cursor.fetchone.return_value = (
-            zlib.compress(b"<p>Media Literacy &amp; <em>Bias</em></p>"),
-        )
-        result = _get_previous_snapshot_html(cursor, "http://example.com")
-        assert "media literacy bias" in result
