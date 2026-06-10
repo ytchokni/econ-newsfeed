@@ -101,6 +101,20 @@ describe("ResearcherDetailContent", () => {
     expect(screen.getByText(/Loading/i)).toBeInTheDocument();
   });
 
+  it("shows placeholder when affiliation is null", async () => {
+    const noAffiliation = { ...researcher, position: null, affiliation: null };
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => noAffiliation,
+    });
+
+    renderWithSWR(<ResearcherDetailContent id={1} />);
+
+    await waitFor(() => {
+      expect(screen.getByText("Affiliation unknown")).toBeInTheDocument();
+    });
+  });
+
   it("shows error state", async () => {
     (global.fetch as jest.Mock).mockRejectedValueOnce(
       new Error("Not found")

@@ -6,6 +6,7 @@ import PublicationCard from "@/components/PublicationCard";
 import PublicationCardSkeleton from "@/components/PublicationCardSkeleton";
 import ErrorMessage from "@/components/ErrorMessage";
 import EmptyState from "@/components/EmptyState";
+import AffiliationLine from "@/components/AffiliationLine";
 import type { ResearcherDetail } from "@/lib/types";
 
 export default function ResearcherDetailContent({ id, initialData }: { id: number; initialData?: ResearcherDetail }) {
@@ -64,13 +65,11 @@ export default function ResearcherDetailContent({ id, initialData }: { id: numbe
             </a>
           )}
         </div>
-        {(researcher.position || researcher.affiliation) && (
-          <p className="mt-1.5 font-sans text-[var(--text-secondary)]">
-            {researcher.position}
-            {researcher.position && researcher.affiliation && ", "}
-            {researcher.affiliation}
-          </p>
-        )}
+        <AffiliationLine
+          position={researcher.position}
+          affiliation={researcher.affiliation}
+          className="mt-1.5 font-sans text-[var(--text-secondary)]"
+        />
         {researcher.description && (
           <p className="mt-3 font-serif text-sm text-[var(--text-secondary)] leading-relaxed">
             {researcher.description}

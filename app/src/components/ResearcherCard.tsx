@@ -1,4 +1,5 @@
 import Link from "next/link";
+import AffiliationLine from "@/components/AffiliationLine";
 import type { Researcher } from "@/lib/types";
 
 export default function ResearcherCard({
@@ -21,13 +22,11 @@ export default function ResearcherCard({
           {researcher.first_name} {researcher.last_name}
         </Link>
       </h3>
-      {(researcher.position || researcher.affiliation) && (
-        <p className="mt-1 font-sans text-sm text-[var(--text-secondary)]">
-          {researcher.position}
-          {researcher.position && researcher.affiliation && ", "}
-          {researcher.affiliation}
-        </p>
-      )}
+      <AffiliationLine
+        position={researcher.position}
+        affiliation={researcher.affiliation}
+        className="mt-1 font-sans text-sm text-[var(--text-secondary)]"
+      />
       <p className="mt-1.5 font-sans text-sm text-[var(--text-muted)]">
         {researcher.publication_count} publications tracked
       </p>
