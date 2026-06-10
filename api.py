@@ -11,7 +11,7 @@ import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 
-from fastapi import FastAPI, HTTPException, Query, Request, Response
+from fastapi import FastAPI, HTTPException, Query, Request, Response, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -21,6 +21,7 @@ from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
 from database import Database, connection_scope
+from auth import get_current_user, get_optional_user
 from publication import VALID_STATUSES
 import scheduler
 from scheduler import (
@@ -442,12 +443,91 @@ def reactivate_url(url_id: int, request: Request):
 
 
 # ---------------------------------------------------------------------------
+# User endpoints (require authentication)
+# ---------------------------------------------------------------------------
+
+class NotificationPrefsUpdate(BaseModel):
+    digest_enabled: bool
+
+
+@app.get("/api/users/me")
+async def get_me(user: dict = Depends(get_current_user)):
+    """Return the current user's profile."""
+    return {
+        "id": user["id"],
+        "email": user["email"],
+        "name": user.get("name"),
+        "picture_url": user.get("picture_url"),
+        "created_at": user.get("created_at"),
+    }
+
+
+@app.get("/api/users/following")
+async def get_following(user: dict = Depends(get_current_user)):
+    """List researcher IDs the current user follows."""
+    with connection_scope():
+        ids = Database.get_followed_researcher_ids(user["id"])
+    return {"researcher_ids": ids}
+
+
+@app.post("/api/users/follow/{researcher_id}", status_code=204)
+async def follow_researcher(researcher_id: int, user: dict = Depends(get_current_user)):
+    """Follow a researcher. Idempotent."""
+    with connection_scope():
+        if not Database.researcher_exists(researcher_id):
+            raise HTTPException(status_code=404, detail="Researcher not found")
+        Database.add_follow(user["id"], researcher_id)
+
+
+@app.delete("/api/users/follow/{researcher_id}", status_code=204)
+async def unfollow_researcher(researcher_id: int, user: dict = Depends(get_current_user)):
+    """Unfollow a researcher. Idempotent."""
+    with connection_scope():
+        Database.remove_follow(user["id"], researcher_id)
+
+
+@app.get("/api/users/notifications")
+async def get_notifications(user: dict = Depends(get_current_user)):
+    """Get the current user's notification preferences."""
+    with connection_scope():
+        prefs = Database.get_notification_prefs(user["id"])
+    return {
+        "digest_enabled": prefs["digest_enabled"],
+        "last_digest_sent": prefs.get("last_digest_sent"),
+    }
+
+
+@app.patch("/api/users/notifications")
+async def update_notifications(
+    body: NotificationPrefsUpdate,
+    user: dict = Depends(get_current_user),
+):
+    """Update notification preferences."""
+    with connection_scope():
+        Database.update_notification_prefs(user["id"], body.digest_enabled)
+    return {"digest_enabled": body.digest_enabled}
+
+
+@app.get("/api/users/unsubscribe")
+async def unsubscribe(token: str = Query(...)):
+    """One-click email unsubscribe via HMAC-signed token."""
+    import os
+    secret = os.environ.get("NEXTAUTH_SECRET", "")
+    user_id = Database.verify_unsubscribe_token(token, secret)
+    if user_id is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired unsubscribe link")
+    with connection_scope():
+        Database.update_notification_prefs(user_id, digest_enabled=False)
+    return {"message": "You have been unsubscribed from the weekly digest."}
+
+
+# ---------------------------------------------------------------------------
 # Publication endpoints
 # ---------------------------------------------------------------------------
 
 @app.get("/api/publications", response_model=PaginatedPublications)
 @limiter.limit("60/minute")
-def list_publications(
+async def list_publications(
     request: Request,
     response: Response,
     page: int = Query(1, ge=1),
@@ -469,7 +549,7 @@ def list_publications(
     include_seed parameter is needed.
     """
     valid_statuses = VALID_STATUSES
-    valid_presets = {"top20"}
+    valid_presets = {"top20", "following"}
 
     # Parse comma-separated multi-values
     status_list = [s.strip() for s in status.split(",") if s.strip()] if status else []
@@ -482,6 +562,18 @@ def list_publications(
         raise HTTPException(status_code=400, detail=f"Invalid preset value. Must be one of: {', '.join(sorted(valid_presets))}")
     if event_type and event_type not in VALID_EVENT_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid event_type value '{event_type}'. Must be one of: {', '.join(sorted(VALID_EVENT_TYPES))}")
+
+    followed_ids = None
+    if preset == "following":
+        opt_user = await get_optional_user(request)
+        if opt_user:
+            with connection_scope():
+                followed_ids = Database.get_followed_researcher_ids(opt_user["id"])
+            if not followed_ids:
+                return {"items": [], "total": 0, "page": page, "per_page": per_page, "pages": 0}
+        else:
+            return {"items": [], "total": 0, "page": page, "per_page": per_page, "pages": 0}
+
     since_dt = None
     if since:
         try:
@@ -497,6 +589,7 @@ def list_publications(
             since=since_dt, institution_list=institution_list or None,
             preset=preset, search=search, event_type=event_type,
             jel_code=jel_code, offset=offset, limit=per_page,
+            followed_ids=followed_ids,
         )
         pages = math.ceil(total / per_page) if total else 0
 

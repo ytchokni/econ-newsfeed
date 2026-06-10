@@ -236,6 +236,7 @@ def search_feed_events(
     jel_code=None,
     offset: int = 0,
     limit: int = 20,
+    followed_ids: list[int] | None = None,
 ) -> tuple[list[dict], int]:
     """Search feed_events with dynamic filters.
 
@@ -264,6 +265,14 @@ def search_feed_events(
             "EXISTS (SELECT 1 FROM authorship WHERE publication_id = p.id AND researcher_id = %s)"
         )
         params.append(researcher_id)
+
+    if followed_ids:
+        placeholders = ",".join(["%s"] * len(followed_ids))
+        conditions.append(
+            f"EXISTS (SELECT 1 FROM authorship WHERE publication_id = p.id "
+            f"AND researcher_id IN ({placeholders}))"
+        )
+        params.extend(followed_ids)
 
     if status_list:
         if len(status_list) == 1:
