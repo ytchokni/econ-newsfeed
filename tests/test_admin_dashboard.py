@@ -154,7 +154,7 @@ def _extraction_fetch_one(queue=None, completions=None, attempts=None, last_extr
 
 
 def test_extraction_stats_queue_split_and_eta():
-    """Queue split sums to total; ETA = total / completions_24h, 1 decimal."""
+    """Queue split sums to total; ETA = total / (last_hour rate × 24), 1 decimal."""
     from database.admin import _get_extraction_stats
     mock_one = _extraction_fetch_one(
         queue={"never_extracted": 6000, "changed_pending": 4000},
@@ -164,12 +164,13 @@ def test_extraction_stats_queue_split_and_eta():
          patch("database.admin.fetch_all", MagicMock(return_value=[])):
         stats = _get_extraction_stats()
     assert stats["queue"] == {"never_extracted": 6000, "changed_pending": 4000, "total": 10000}
-    assert stats["eta_days"] == 10.0
+    # 40/hour → 960/day → 10000/960 = 10.4 days
+    assert stats["eta_days"] == 10.4
     assert stats["throughput"]["completions"]["last_24h"] == 1000
 
 
 def test_extraction_stats_eta_null_when_no_completions():
-    """ETA is None when nothing completed in 24h (avoid div-by-zero)."""
+    """ETA is None when nothing completed in the last hour (avoid div-by-zero)."""
     from database.admin import _get_extraction_stats
     mock_one = _extraction_fetch_one(queue={"never_extracted": 5, "changed_pending": 0})
     with patch("database.admin.fetch_one", mock_one), \

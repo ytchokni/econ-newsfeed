@@ -35,7 +35,7 @@ Added to `get_admin_dashboard_stats()` as `"extraction"`. Response shape:
 Definitions:
 - **Queue** uses the same predicate as the worker's `get_urls_needing_extraction()` (active URLs, `content_hash IS NOT NULL`, hash mismatch or never extracted), split by `extracted_hash IS NULL`. The number on the dashboard matches what the worker logs.
 - **Completions** = `html_content.extracted_at` in window (a successful `mark_extracted`). **Attempts** = `llm_usage` rows with `call_type = 'publication_extraction'` in window. Attempts − completions ≈ failures/empty-parse retries, making quota exhaustion visible.
-- **eta_days** = `queue.total / completions.last_24h` (null when the 24h rate is 0). Float, one decimal in UI.
+- **eta_days** = `queue.total / (completions.last_hour × 24)` (null when nothing completed in the last hour). The hourly basis reflects current throughput quickly instead of being dragged down by deploy gaps in a trailing 24h window. Float, one decimal in UI.
 - **worker_enabled** read from `scheduler.EXTRACTION_WORKER_ENABLED` (same import-in-function pattern as `_get_health_stats`).
 - **daily** = completions per day, last 14 days, from `extracted_at`. Caveat (accepted): `extracted_at` is overwritten on re-extraction, so historic days undercount slightly.
 - **recent_calls** = last 20 `publication_extraction` rows (called_at, context_url, model, total_tokens).
