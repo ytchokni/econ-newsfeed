@@ -21,13 +21,17 @@ export default function ResearcherCard({
           {researcher.first_name} {researcher.last_name}
         </Link>
       </h3>
-      {(researcher.position || researcher.affiliation) && (
-        <p className="mt-1 font-sans text-sm text-[var(--text-secondary)]">
-          {researcher.position}
-          {researcher.position && researcher.affiliation && ", "}
-          {researcher.affiliation}
-        </p>
-      )}
+      <p className="mt-1 font-sans text-sm text-[var(--text-secondary)]">
+        {researcher.position || researcher.affiliation ? (
+          <>
+            {researcher.position}
+            {researcher.position && researcher.affiliation && ", "}
+            {researcher.affiliation}
+          </>
+        ) : (
+          <span className="text-[var(--text-muted)] italic">Affiliation unknown</span>
+        )}
+      </p>
       <p className="mt-1.5 font-sans text-sm text-[var(--text-muted)]">
         {researcher.publication_count} publications tracked
       </p>

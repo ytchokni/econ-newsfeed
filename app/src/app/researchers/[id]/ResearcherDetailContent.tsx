@@ -64,13 +64,17 @@ export default function ResearcherDetailContent({ id, initialData }: { id: numbe
             </a>
           )}
         </div>
-        {(researcher.position || researcher.affiliation) && (
-          <p className="mt-1.5 font-sans text-[var(--text-secondary)]">
-            {researcher.position}
-            {researcher.position && researcher.affiliation && ", "}
-            {researcher.affiliation}
-          </p>
-        )}
+        <p className="mt-1.5 font-sans text-[var(--text-secondary)]">
+          {researcher.position || researcher.affiliation ? (
+            <>
+              {researcher.position}
+              {researcher.position && researcher.affiliation && ", "}
+              {researcher.affiliation}
+            </>
+          ) : (
+            <span className="text-[var(--text-muted)] italic">Affiliation unknown</span>
+          )}
+        </p>
         {researcher.description && (
           <p className="mt-3 font-serif text-sm text-[var(--text-secondary)] leading-relaxed">
             {researcher.description}

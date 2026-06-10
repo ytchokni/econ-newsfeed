@@ -37,6 +37,12 @@ describe("ResearcherCard", () => {
     expect(screen.getByText(/23 publications/)).toBeInTheDocument();
   });
 
+  it("shows placeholder when affiliation and position are null", () => {
+    const noAffiliation = { ...researcher, position: null, affiliation: null };
+    render(<ResearcherCard researcher={noAffiliation} />);
+    expect(screen.getByText("Affiliation unknown")).toBeInTheDocument();
+  });
+
   it("links to the researcher detail page", () => {
     render(<ResearcherCard researcher={researcher} />);
     const links = screen.getAllByRole("link");
