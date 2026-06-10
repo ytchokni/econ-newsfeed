@@ -206,3 +206,63 @@ class TestGetGenaiClient(unittest.TestCase):
             c1 = llm_client.get_genai_client()
             c2 = llm_client.get_genai_client()
         self.assertIs(c1, c2)
+
+
+class TestExtractJsonFenceSalvage:
+    """Gemma (2026-06-10 server-side change) wraps guided-JSON output in
+    markdown fences for some prompts. extract_json must salvage the object."""
+
+    @patch("llm_client.get_client")
+    def test_trailing_fence_is_salvaged(self, mock_get_client):
+        import llm_client
+        mock_client = mock_get_client.return_value
+        mock_client.chat.completions.create.return_value = _mock_completion(
+            '{"items": [{"name": "a", "count": 1}]}\n```'
+        )
+        result = llm_client.extract_json("prompt", _ItemList)
+        assert result.parsed is not None
+        assert result.parsed.items[0].name == "a"
+
+    @patch("llm_client.get_client")
+    def test_full_fence_wrap_is_salvaged(self, mock_get_client):
+        import llm_client
+        mock_client = mock_get_client.return_value
+        mock_client.chat.completions.create.return_value = _mock_completion(
+            '```json\n{"items": []}\n```'
+        )
+        result = llm_client.extract_json("prompt", _ItemList)
+        assert result.parsed is not None
+        assert result.parsed.items == []
+
+    @patch("llm_client.get_client")
+    def test_prose_around_json_is_salvaged(self, mock_get_client):
+        import llm_client
+        mock_client = mock_get_client.return_value
+        mock_client.chat.completions.create.return_value = _mock_completion(
+            'Here is the extraction:\n{"items": [{"name": "b", "count": 2}]}\nHope that helps!'
+        )
+        result = llm_client.extract_json("prompt", _ItemList)
+        assert result.parsed is not None
+        assert result.parsed.items[0].count == 2
+
+    @patch("llm_client.get_client")
+    def test_salvaged_json_must_still_match_schema(self, mock_get_client):
+        import llm_client
+        mock_client = mock_get_client.return_value
+        mock_client.chat.completions.create.side_effect = [
+            _mock_completion('{"wrong_key": true}\n```'),
+            _mock_completion('{"wrong_key": true}\n```'),
+        ]
+        result = llm_client.extract_json("prompt", _ItemList, retries=1)
+        assert result.parsed is None
+
+    @patch("llm_client.get_client")
+    def test_garbage_without_json_still_returns_none(self, mock_get_client):
+        import llm_client
+        mock_client = mock_get_client.return_value
+        mock_client.chat.completions.create.side_effect = [
+            _mock_completion("no json here"),
+            _mock_completion("really none"),
+        ]
+        result = llm_client.extract_json("prompt", _ItemList, retries=1)
+        assert result.parsed is None

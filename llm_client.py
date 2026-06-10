@@ -158,7 +158,7 @@ def extract_json(
         content = completion.choices[0].message.content or ""
 
         try:
-            parsed = model_class.model_validate_json(content)
+            parsed = _validate_content(model_class, content)
             return StructuredResponse(parsed=parsed, usage=last_usage)
         except (ValidationError, json.JSONDecodeError) as e:
             logging.warning(
@@ -167,3 +167,26 @@ def extract_json(
             )
 
     return StructuredResponse(parsed=None, usage=last_usage)
+
+
+def _validate_content(model_class: type[T], content: str) -> T:
+    """Validate LLM output, salvaging JSON wrapped in code fences or prose.
+
+    Guided decoding normally yields bare JSON, but providers occasionally
+    leak markdown fences or surrounding text (observed with Gemma on
+    2026-06-10: valid JSON followed by a trailing ``` fence). Strict parse
+    first; on failure, extract the first JSON object from the text and
+    validate that. Schema violations still raise so the caller's retry/
+    failure path is unchanged.
+    """
+    try:
+        return model_class.model_validate_json(content)
+    except (ValidationError, json.JSONDecodeError) as strict_err:
+        start = content.find("{")
+        if start == -1:
+            raise strict_err
+        try:
+            obj, _ = json.JSONDecoder().raw_decode(content, start)
+        except ValueError:
+            raise strict_err
+        return model_class.model_validate(obj)
