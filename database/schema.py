@@ -589,7 +589,9 @@ def create_tables() -> None:
                         conn.commit()
                         logging.info("Migration: feed_events snapshot guard trigger created")
                     except Exception as e:
-                        logging.warning("Migration: feed_events trigger: %s", e)
+                        # Without the trigger the DB-level new_paper guard silently
+                        # does not exist (this hid MySQL error 1419 in prod for months)
+                        logging.error("Migration: feed_events trigger NOT created: %s", e)
 
                     # Add title column to paper_snapshots for rename tracking
                     try:

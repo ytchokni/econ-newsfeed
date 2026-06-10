@@ -5,7 +5,9 @@ Consolidates event logic previously scattered across publication.py
 """
 from database import Database
 from datetime import datetime, timezone
+import html as html_module
 import logging
+import re
 import zlib
 
 
@@ -23,18 +25,40 @@ def _url_has_baseline(cursor, url: str, min_snapshots: int = 2) -> bool:
     return (row[0] if row else 0) >= min_snapshots
 
 
+def _normalize_for_matching(text: str) -> str:
+    """Collapse text to lowercase alphanumeric tokens separated by single spaces."""
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def _normalize_html_for_matching(raw_html: str) -> str:
+    """Normalize raw page HTML so title substring matching is robust.
+
+    Handles the three encodings that hide titles from a naive substring check:
+    \\uXXXX JS escapes (Google Sites embeds content in JSON), HTML entities
+    (&amp;, &#39;), and titles split across inline tags (<em>, <b>, ...).
+    """
+    def _decode_unicode_escape(m):
+        try:
+            return chr(int(m.group(1), 16))
+        except ValueError:
+            return m.group(0)
+
+    text = re.sub(r"\\u([0-9a-fA-F]{4})", _decode_unicode_escape, raw_html)
+    text = html_module.unescape(text)
+    text = re.sub(r"<[^>]+>", " ", text)
+    return _normalize_for_matching(text)
+
+
 def _get_previous_snapshot_html(cursor, url: str) -> str | None:
-    """Fetch and decompress the previous HTML snapshot for a URL.
+    """Fetch, decompress, and normalize the previous HTML snapshot for a URL.
 
-    Returns lowercased HTML text, or None if no previous snapshot exists.
-    Designed to be called once per URL (before the publication loop),
-    not once per publication.
+    Returns normalized text (see _normalize_html_for_matching), or None if no
+    previous snapshot exists. Designed to be called once per URL (before the
+    publication loop), not once per publication.
 
-    The query uses OFFSET 1 to skip the most-recent snapshot (the one just
-    fetched in the current run) and return the second-most-recent *distinct*
-    HTML state.  This is a proxy for "what the page looked like when the LLM
-    last ran" — not an exact match, but sufficient because researcher pages
-    rarely revert to a prior state.
+    html_snapshots archives the *old* raw_html each time a fetch overwrites
+    html_content (HTMLFetcher.archive_snapshot), so the most-recent snapshot
+    already is the previous page state — no OFFSET needed.
     """
     cursor.execute(
         """SELECT hs.raw_html_compressed
@@ -42,27 +66,28 @@ def _get_previous_snapshot_html(cursor, url: str) -> str | None:
            JOIN researcher_urls ru ON ru.id = hs.url_id
            WHERE ru.url = %s
            ORDER BY hs.snapshot_at DESC
-           LIMIT 1 OFFSET 1""",
+           LIMIT 1""",
         (url,),
     )
     row = cursor.fetchone()
     if not row or not row[0]:
         return None
     try:
-        return zlib.decompress(row[0]).decode("utf-8", errors="replace").lower()
+        raw = zlib.decompress(row[0]).decode("utf-8", errors="replace")
+        return _normalize_html_for_matching(raw)
     except Exception:
         return None
 
 
-def _title_in_previous_snapshot(title: str, prev_html_lower: str | None) -> bool:
+def _title_in_previous_snapshot(title: str, prev_html_normalized: str | None) -> bool:
     """Return True if the paper title appears in the previous HTML snapshot text.
 
-    If the full cleaned title is found in the pre-fetched HTML, the paper was
-    already on the page and should not generate a new_paper feed event.
+    If the normalized title is found in the pre-fetched, normalized HTML, the
+    paper was already on the page and should not generate a new_paper feed event.
     """
-    if not prev_html_lower:
+    if not prev_html_normalized:
         return False
-    return title.lower() in prev_html_lower
+    return _normalize_for_matching(title) in prev_html_normalized
 
 
 class FeedEventEmitter:
@@ -77,7 +102,7 @@ class FeedEventEmitter:
         with Database.get_connection() as conn:
             cursor = conn.cursor(buffered=True)
             has_baseline = _url_has_baseline(cursor, url)
-            prev_html_lower = _get_previous_snapshot_html(cursor, url)
+            prev_html_normalized = _get_previous_snapshot_html(cursor, url)
             cursor.close()
 
             for r in results:
@@ -86,7 +111,7 @@ class FeedEventEmitter:
                 if not has_baseline:
                     logging.info("Suppressed new_paper event for '%s': source URL lacks baseline snapshots", r.title)
                     continue
-                if _title_in_previous_snapshot(r.title, prev_html_lower):
+                if _title_in_previous_snapshot(r.title, prev_html_normalized):
                     logging.info("Suppressed new_paper event for '%s': title found in previous HTML snapshot", r.title)
                     continue
 
