@@ -1,5 +1,10 @@
+import { Suspense } from "react";
 import NewsfeedContent from "./NewsfeedContent";
 
 export default function Home() {
-  return <NewsfeedContent />;
+  return (
+    <Suspense>
+      <NewsfeedContent />
+    </Suspense>
+  );
 }
