@@ -21,11 +21,13 @@ def _row(url_id=1, researcher_id=10, url="https://example.com/pubs", page_type="
 def _patches(payload=None, pubs=None, is_seed=False):
     """Common patch set. pubs=None simulates LLM failure."""
     if payload is None:
-        payload = {"content": "page text", "raw_html": "<html>", "content_hash": "h1"}
+        payload = {
+            "content": "page text", "raw_html": "<html>", "content_hash": "h1",
+            "timestamp": None, "extracted_at": None if is_seed else "2026-01-01",
+        }
     return {
         "payload": patch("extraction.HTMLFetcher.get_extraction_payload", return_value=payload),
         "fetch_ts": patch("extraction.HTMLFetcher.get_fetch_timestamp", return_value=None),
-        "is_first": patch("extraction.HTMLFetcher.is_first_extraction", return_value=is_seed),
         "mark": patch("extraction.HTMLFetcher.mark_extracted"),
         "extract_text": patch("extraction.HTMLFetcher.extract_text_content", return_value="from raw html"),
         "extract_desc": patch("extraction.HTMLFetcher.extract_description", return_value=None),
@@ -103,7 +105,8 @@ class TestExtractOneUrl:
 
     def test_null_content_falls_back_to_raw_html(self):
         from extraction import extract_one_url
-        payload = {"content": None, "raw_html": "<html>x</html>", "content_hash": "h2"}
+        payload = {"content": None, "raw_html": "<html>x</html>", "content_hash": "h2",
+                   "timestamp": None, "extracted_at": "2026-01-01"}
         patches = _patches(payload=payload, pubs=[])
         mocks = {k: p.start() for k, p in patches.items()}
         try:
@@ -118,7 +121,11 @@ class TestExtractOneUrl:
 
     def test_seed_flag_passed_through(self):
         from extraction import extract_one_url
-        patches = _patches(pubs=[{"title": "P"}], is_seed=True)
+        payload = {
+            "content": "text", "raw_html": "<html>", "content_hash": "h1",
+            "timestamp": None, "extracted_at": None,
+        }
+        patches = _patches(payload=payload, pubs=[{"title": "P"}])
         mocks = {k: p.start() for k, p in patches.items()}
         try:
             extract_one_url(_row())

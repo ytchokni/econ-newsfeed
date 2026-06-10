@@ -455,7 +455,8 @@ class TestMarkExtractedWithHash:
 
 class TestGetExtractionPayload:
     def test_returns_row(self):
-        row = {"content": "text", "raw_html": "<html>", "content_hash": "h1"}
+        row = {"content": "text", "raw_html": "<html>", "content_hash": "h1",
+               "timestamp": None, "extracted_at": None}
         with patch("html_fetcher.Database.fetch_one", return_value=row) as mock_fetch:
             result = HTMLFetcher.get_extraction_payload(7)
         assert result == row

@@ -529,18 +529,9 @@ class HTMLFetcher:
     def _was_fetched_recently(url_id: int) -> bool:
         """Return True if this URL was successfully fetched within SCRAPE_INTERVAL_HOURS."""
         hours = int(os.environ.get('SCRAPE_INTERVAL_HOURS', '24'))
-        result = Database.fetch_one(
-            "SELECT timestamp FROM html_content WHERE url_id = %s", (url_id,)
-        )
-        if not result or not result['timestamp']:
+        ts = HTMLFetcher.get_fetch_timestamp(url_id)
+        if not ts:
             return False
-        # MySQL connector returns naive datetimes (no tzinfo) stored as UTC.
-        # Use replace() only when the value is naive; use astimezone() if aware.
-        ts = result['timestamp']
-        if ts.tzinfo is None:
-            ts = ts.replace(tzinfo=timezone.utc)
-        else:
-            ts = ts.astimezone(timezone.utc)
         age = datetime.now(timezone.utc) - ts
         return age.total_seconds() < hours * 3600
 
@@ -707,13 +698,15 @@ class HTMLFetcher:
 
     @staticmethod
     def get_extraction_payload(url_id: int) -> dict | None:
-        """Read content, raw_html, and content_hash in one query for extraction.
+        """Read content, raw_html, content_hash, timestamp, and extracted_at in one query.
 
         Reading the hash together with the text guarantees mark_extracted()
-        can record exactly what was extracted.
+        can record exactly what was extracted. timestamp and extracted_at
+        avoid separate round-trips for fetch time and seed detection.
         """
         return Database.fetch_one(
-            "SELECT content, raw_html, content_hash FROM html_content WHERE url_id = %s",
+            "SELECT content, raw_html, content_hash, timestamp, extracted_at"
+            " FROM html_content WHERE url_id = %s",
             (url_id,),
         )
 
