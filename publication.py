@@ -255,8 +255,13 @@ Content:
 {text_content[:CONTENT_MAX_CHARS]}"""
 
     @staticmethod
-    def extract_publications(text_content: str, url: str, scrape_log_id: int | None = None) -> list[dict]:
-        """Use the configured LLM to extract publication details from text content."""
+    def try_extract_publications(text_content: str, url: str, scrape_log_id: int | None = None) -> list[dict] | None:
+        """Extract publications via the LLM.
+
+        Returns None when the LLM call failed (API error, schema validation
+        failure after retries) — callers should retry the URL later. Returns
+        [] when the call succeeded but the page genuinely has no publications.
+        """
         prompt = Publication.build_extraction_prompt(text_content, url)
         model = get_model()
         logging.info(f"Extracting publications from {url} using LLM ({model})")
@@ -271,7 +276,7 @@ Content:
 
         if result.parsed is None:
             logging.warning(f"Publication extraction returned no parsed result for {url}")
-            return []
+            return None
 
         validated = []
         for pub in result.parsed.publications:
@@ -281,6 +286,12 @@ Content:
             else:
                 logging.info(f"Validation dropped: {d.get('title', '<no title>')}")
         return validated
+
+    @staticmethod
+    def extract_publications(text_content: str, url: str, scrape_log_id: int | None = None) -> list[dict]:
+        """Legacy wrapper: failure collapses to [] (kept for scheduler/batch callers)."""
+        pubs = Publication.try_extract_publications(text_content, url, scrape_log_id=scrape_log_id)
+        return pubs if pubs is not None else []
 
 
 

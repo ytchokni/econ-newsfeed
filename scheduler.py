@@ -13,8 +13,6 @@ from database import Database
 from db_config import db_config
 from researcher import Researcher
 from html_fetcher import HTMLFetcher
-from publication import Publication, reconcile_title_renames, append_snapshots_for_pubs
-from link_extractor import match_and_save_paper_links
 logger = logging.getLogger(__name__)
 
 _LOCK_NAME = 'econ_newsfeed_scrape'
@@ -77,6 +75,16 @@ _ENRICHMENT_BACKOFF_SECONDS = 600  # 10 minutes
 
 _enrichment_thread = None
 _enrichment_stop_event = threading.Event()
+
+EXTRACTION_WORKER_ENABLED = os.environ.get('EXTRACTION_WORKER_ENABLED', 'false').lower() == 'true'
+_EXTRACTION_DELAY_SECONDS = float(os.environ.get('EXTRACTION_DELAY_SECONDS', '2'))
+_EXTRACTION_IDLE_SECONDS = 300       # queue empty → re-poll every 5 min
+_EXTRACTION_BACKOFF_THRESHOLD = 10   # consecutive failures before backing off
+_EXTRACTION_BACKOFF_SECONDS = 600    # 10 min (rides out free-tier quota exhaustion)
+_EXTRACTION_MAX_URL_FAILURES = 3     # poison-pill guard: skip URL until restart
+
+_extraction_thread = None
+_extraction_stop_event = threading.Event()
 
 
 def create_scrape_log() -> int:
@@ -167,8 +175,6 @@ def _validate_draft_urls() -> None:
             logger.error(f"Error validating draft URL for paper {paper_id}: {e}")
 
 
-_EXTRACTION_CIRCUIT_BREAKER_THRESHOLD = 10
-
 _TRANSIENT_MYSQL_ERRORS = (
     mysql.connector.errors.OperationalError,
     mysql.connector.errors.InterfaceError,
@@ -199,10 +205,10 @@ def _with_db_retry(fn, *args, max_retries: int = 3, **kwargs):
 
 
 def run_scrape_job() -> None:
-    """Orchestrates a full scraping cycle: fetch all HTML first, then extract.
+    """Fetch HTML for all researcher URLs (change detection via content hash).
 
-    Fetch always completes. Extraction circuit-breaks after
-    _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD consecutive failures (e.g. quota exhausted).
+    Extraction is owned by the continuous extraction worker — this job only
+    downloads pages and validates draft URLs.
     """
     global _lock_conn
     lock_conn = _acquire_db_lock()
@@ -219,24 +225,15 @@ def run_scrape_job() -> None:
         urls = Researcher.get_all_researcher_urls()
         urls_checked = 0
         urls_changed = 0
-        pubs_extracted = 0
-        extraction_errors = 0
 
-        # ── PHASE 1: Fetch all HTML ──────────────────────────────────
         scrape_start = time.time()
-        changed_urls = []
-
         for url_row in urls:
             url_id = url_row['id']
             researcher_id = url_row['researcher_id']
             url = url_row['url']
-            page_type = url_row['page_type']
             urls_checked += 1
 
             try:
-                old_text = _with_db_retry(HTMLFetcher.get_previous_text, url_id)
-                is_first_scrape = old_text is None
-
                 t0 = time.time()
                 changed = _with_db_retry(HTMLFetcher.fetch_and_save_if_changed, url_id, url, researcher_id)
                 fetch_ms = (time.time() - t0) * 1000
@@ -244,11 +241,6 @@ def run_scrape_job() -> None:
 
                 if changed:
                     urls_changed += 1
-                    changed_urls.append({
-                        **url_row,
-                        'old_text': old_text,
-                        'is_first_scrape': is_first_scrape,
-                    })
 
                 if urls_checked % 10 == 0:
                     _with_db_retry(_update_progress, log_id, urls_checked=urls_checked, urls_changed=urls_changed)
@@ -264,131 +256,14 @@ def run_scrape_job() -> None:
         fetch_phase_s = time.time() - scrape_start
         logger.info(f"Fetch phase done: {fetch_phase_s:.1f}s — {urls_checked} checked, {urls_changed} changed")
 
-        # ── PHASE 2: Extract publications from changed URLs ──────────
-        extract_start = time.time()
-        consecutive_failures = 0
-        circuit_broken = False
-
-        for idx, entry in enumerate(changed_urls):
-            url_id = entry['id']
-            researcher_id = entry['researcher_id']
-            url = entry['url']
-            page_type = entry['page_type']
-            old_text = entry.pop('old_text')
-            is_first_scrape = entry.pop('is_first_scrape')
-
-            if circuit_broken:
-                break
-
-            try:
-                new_text = _with_db_retry(HTMLFetcher.get_latest_text, url_id)
-                extraction_text = HTMLFetcher.compute_diff(old_text, new_text) if old_text else new_text
-
-                if extraction_text:
-                    t0 = time.time()
-                    pubs = Publication.extract_publications(extraction_text, url, scrape_log_id=log_id)
-                    extract_ms = (time.time() - t0) * 1000
-                    logger.info(f"  LLM extract {url} — {extract_ms:.0f}ms, {len(pubs)} pubs")
-
-                    if pubs:
-                        consecutive_failures = 0
-
-                        t0 = time.time()
-                        _with_db_retry(Publication.save_publications, url, pubs, is_seed=is_first_scrape)
-                        save_ms = (time.time() - t0) * 1000
-                        logger.info(f"  save_publications — {save_ms:.0f}ms")
-
-                        t0_recon = time.time()
-                        _with_db_retry(reconcile_title_renames, url, pubs)
-                        recon_ms = (time.time() - t0_recon) * 1000
-                        logger.info(f"  title reconciliation — {recon_ms:.0f}ms")
-
-                        pubs_extracted += len(pubs)
-
-                        t0 = time.time()
-                        _with_db_retry(match_and_save_paper_links, url_id, pubs)
-                        links_ms = (time.time() - t0) * 1000
-                        logger.info(f"  paper links — {links_ms:.0f}ms")
-
-                        t0 = time.time()
-                        _with_db_retry(append_snapshots_for_pubs, pubs, url)
-                        snapshot_ms = (time.time() - t0) * 1000
-                        logger.info(f"  paper snapshots — {snapshot_ms:.0f}ms")
-                    else:
-                        consecutive_failures += 1
-                        extraction_errors += 1
-                        if consecutive_failures >= _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD:
-                            remaining = len(changed_urls) - idx - 1
-                            logger.warning(
-                                "Circuit breaker: %d consecutive extraction failures — "
-                                "stopping extraction (likely LLM quota exhausted). "
-                                "Remaining %d changed URLs will be extracted next run.",
-                                consecutive_failures, remaining,
-                            )
-                            circuit_broken = True
-
-                _with_db_retry(_update_progress, log_id, pubs_extracted=pubs_extracted, extraction_errors=extraction_errors)
-
-                if page_type == "HOME" and not circuit_broken and new_text:
-                    t0 = time.time()
-                    description = HTMLFetcher.extract_description(new_text, url, scrape_log_id=log_id)
-                    desc_ms = (time.time() - t0) * 1000
-                    logger.info(f"  description extract — {desc_ms:.0f}ms (found={description is not None})")
-                    if description:
-                        r_row = _with_db_retry(
-                            Database.fetch_one,
-                            "SELECT position, affiliation FROM researchers WHERE id = %s",
-                            (researcher_id,),
-                        )
-                        position = r_row['position'] if r_row else None
-                        affiliation = r_row['affiliation'] if r_row else None
-                        _with_db_retry(
-                            Database.append_researcher_snapshot,
-                            researcher_id, position, affiliation, description, source_url=url,
-                        )
-
-            except _TRANSIENT_MYSQL_ERRORS as e:
-                logger.error("MySQL connection error extracting URL %s (id=%s) after retries: %s", url, url_id, e)
-                extraction_errors += 1
-                consecutive_failures += 1
-                if consecutive_failures >= _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD:
-                    remaining = len(changed_urls) - idx - 1
-                    logger.warning(
-                        "Circuit breaker: %d consecutive extraction failures — "
-                        "stopping extraction. Remaining %d changed URLs will be extracted next run.",
-                        consecutive_failures, remaining,
-                    )
-                    circuit_broken = True
-                continue
-            except Exception as e:
-                logger.error("Error extracting URL %s (id=%s): %s", url, url_id, e)
-                extraction_errors += 1
-                consecutive_failures += 1
-                if consecutive_failures >= _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD:
-                    remaining = len(changed_urls) - idx - 1
-                    logger.warning(
-                        "Circuit breaker: %d consecutive extraction failures — "
-                        "stopping extraction. Remaining %d changed URLs will be extracted next run.",
-                        consecutive_failures, remaining,
-                    )
-                    circuit_broken = True
-                continue
-
-        extract_phase_s = time.time() - extract_start
-        logger.info(f"Extract phase done: {extract_phase_s:.1f}s — {pubs_extracted} pubs, {extraction_errors} errors")
-
         t0 = time.time()
         _validate_draft_urls()
         validate_s = time.time() - t0
         logger.info(f"Draft URL validation: {validate_s:.1f}s")
 
-        error_msg = None
-        if circuit_broken:
-            error_msg = f"Extraction circuit-breaker tripped after {_EXTRACTION_CIRCUIT_BREAKER_THRESHOLD} consecutive failures"
-
         total_s = time.time() - scrape_start
-        update_scrape_log(log_id, "completed", urls_checked, urls_changed, pubs_extracted, extraction_errors, error_msg)
-        logger.info(f"Scrape completed: {urls_checked} checked, {urls_changed} changed, {pubs_extracted} extracted, {extraction_errors} errors — {total_s:.1f}s total")
+        update_scrape_log(log_id, "completed", urls_checked, urls_changed)
+        logger.info(f"Scrape completed: {urls_checked} checked, {urls_changed} changed — {total_s:.1f}s total")
 
     except Exception as e:
         logger.error("Scrape job failed: %s: %s", type(e).__name__, e)
@@ -475,6 +350,101 @@ def stop_enrichment_worker() -> None:
     logger.info("Enrichment worker thread stopped")
 
 
+def _extraction_worker_loop() -> None:
+    """Continuously extract publications from changed pages until stopped.
+
+    Free-tier Gemma pacing (measured 2026-06-09, see spec): calls take
+    45-190s on real pages so the worker is latency-bound; the fixed delay
+    only guards runs of tiny pages against the 30 RPM cap.
+    """
+    from extraction import extract_one_url
+
+    logger.info("Extraction worker started")
+    url_failures: dict[int, int] = {}
+    consecutive_failures = 0
+    processed = 0
+    pubs_total = 0
+
+    while not _extraction_stop_event.is_set():
+        try:
+            queue = Database.get_urls_needing_extraction()
+        except Exception as e:
+            logger.error("Extraction worker queue query failed: %s: %s", type(e).__name__, e)
+            _extraction_stop_event.wait(_EXTRACTION_IDLE_SECONDS)
+            continue
+
+        pending = [r for r in queue if url_failures.get(r['id'], 0) < _EXTRACTION_MAX_URL_FAILURES]
+        if not pending:
+            _extraction_stop_event.wait(_EXTRACTION_IDLE_SECONDS)
+            continue
+
+        logger.info("Extraction worker: %d URLs pending (%d skipped as poison pills)",
+                    len(pending), len(queue) - len(pending))
+
+        for row in pending:
+            if _extraction_stop_event.is_set():
+                break
+            url_id = row['id']
+            try:
+                outcome = extract_one_url(row)
+            except Exception as e:
+                logger.error("Extraction worker error on %s (id=%s): %s: %s",
+                             row['url'], url_id, type(e).__name__, e)
+                outcome = None
+
+            processed += 1
+            if outcome is not None and outcome.ok:
+                consecutive_failures = 0
+                url_failures.pop(url_id, None)
+                pubs_total += outcome.pubs_count
+            else:
+                consecutive_failures += 1
+                url_failures[url_id] = url_failures.get(url_id, 0) + 1
+                if url_failures[url_id] >= _EXTRACTION_MAX_URL_FAILURES:
+                    logger.warning("Extraction worker: skipping url_id=%s (%s) after %d failures "
+                                   "until next restart", url_id, row['url'], url_failures[url_id])
+
+            if processed % 25 == 0:
+                logger.info("Extraction worker progress: %d processed, %d pubs total", processed, pubs_total)
+
+            if consecutive_failures >= _EXTRACTION_BACKOFF_THRESHOLD:
+                logger.warning("Extraction worker backing off %ds after %d consecutive failures "
+                               "(likely quota exhausted)", _EXTRACTION_BACKOFF_SECONDS, consecutive_failures)
+                _extraction_stop_event.wait(_EXTRACTION_BACKOFF_SECONDS)
+            else:
+                _extraction_stop_event.wait(_EXTRACTION_DELAY_SECONDS)
+
+    logger.info("Extraction worker stopped (%d processed, %d pubs)", processed, pubs_total)
+
+
+def start_extraction_worker() -> None:
+    """Start the extraction background worker thread."""
+    global _extraction_thread
+    if _extraction_thread is not None and _extraction_thread.is_alive():
+        logger.warning("Extraction worker already running")
+        return
+
+    _extraction_stop_event.clear()
+    _extraction_thread = threading.Thread(
+        target=_extraction_worker_loop,
+        name="extraction-worker",
+        daemon=True,
+    )
+    _extraction_thread.start()
+    logger.info("Extraction worker thread started")
+
+
+def stop_extraction_worker() -> None:
+    """Stop the extraction worker gracefully."""
+    global _extraction_thread
+    if _extraction_thread is None:
+        return
+    _extraction_stop_event.set()
+    _extraction_thread.join(timeout=30)
+    _extraction_thread = None
+    logger.info("Extraction worker thread stopped")
+
+
 def start_scheduler() -> None:
     """Start the APScheduler BackgroundScheduler with the configured interval.
 
@@ -527,11 +497,15 @@ def start_scheduler() -> None:
     if ENRICHMENT_WORKER_ENABLED:
         start_enrichment_worker()
 
+    if EXTRACTION_WORKER_ENABLED:
+        start_extraction_worker()
+
 
 def shutdown_scheduler() -> None:
     """Shut down the scheduler gracefully, waiting for any running job to complete."""
     global _scheduler, _scheduler_lock_conn
     stop_enrichment_worker()
+    stop_extraction_worker()
     if _scheduler is not None:
         _scheduler.shutdown(wait=True)
         _scheduler = None

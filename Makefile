@@ -1,4 +1,4 @@
-.PHONY: setup dev kill seed reset-db scrape fetch batch-submit batch-check classify-jel enrich enrich-jel discover-domains backfill-normalize populate-fields backfill-affiliations audit-zero-pubs check
+.PHONY: setup dev kill seed reset-db scrape fetch extract batch-submit batch-check classify-jel enrich enrich-jel discover-domains backfill-normalize populate-fields backfill-affiliations audit-zero-pubs check
 
 setup:
 	poetry install
@@ -33,6 +33,9 @@ scrape:
 
 fetch:
 	poetry run python -c "from main import download_htmls; download_htmls()"
+
+extract:  ## Run LLM extraction for URLs with pending changes (no fetching)
+	poetry run python main.py extract
 
 batch-submit:
 	poetry run python main.py batch-submit

@@ -403,6 +403,25 @@ def get_at_risk_urls() -> list[dict]:
     )
 
 
+def get_urls_needing_extraction() -> list[dict]:
+    """Active researcher URLs whose stored HTML changed since last extraction.
+
+    A URL needs extraction when its content_hash differs from extracted_hash
+    (changed since last LLM run, or never extracted). URLs with no stored
+    HTML are excluded (nothing to extract).
+    """
+    query = """
+        SELECT ru.id, ru.researcher_id, ru.url, ru.page_type
+        FROM researcher_urls ru
+        JOIN html_content hc ON hc.url_id = ru.id
+        WHERE ru.is_active = TRUE
+          AND hc.content_hash IS NOT NULL
+          AND (hc.extracted_hash IS NULL OR hc.extracted_hash != hc.content_hash)
+        ORDER BY ru.id
+    """
+    return fetch_all(query)
+
+
 def reactivate_url(url_id: int) -> None:
     """Re-activate a deactivated URL and reset all failure tracking."""
     execute_query(

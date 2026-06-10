@@ -13,6 +13,7 @@
 !openalex.py
 !llm_client.py
 !publication.py
+!extraction.py
 !researcher.py
 !encoding_guard.py
 !feed_events.py

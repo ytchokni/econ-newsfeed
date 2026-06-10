@@ -13,6 +13,7 @@ from scheduler import (
     run_scrape_job, create_scrape_log, update_scrape_log,
     _cleanup_stale_scrape_logs,
     _enrichment_worker_loop, start_enrichment_worker, stop_enrichment_worker,
+    _extraction_worker_loop, start_extraction_worker, stop_extraction_worker,
 )
 
 
@@ -41,18 +42,8 @@ def _base_patches():
         "update_progress": patch("scheduler._update_progress"),
         "get_urls": patch("scheduler.Researcher.get_all_researcher_urls", return_value=[]),
         "validate": patch("scheduler._validate_draft_urls"),
-        "get_prev": patch("scheduler.HTMLFetcher.get_previous_text", return_value=None),
         "fetch": patch("scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=False),
-        "get_latest": patch("scheduler.HTMLFetcher.get_latest_text", return_value=""),
-        "compute_diff": patch("scheduler.HTMLFetcher.compute_diff", return_value="diff text"),
-        "extract_desc": patch("scheduler.HTMLFetcher.extract_description", return_value=None),
-        "extract_pubs": patch("scheduler.Publication.extract_publications", return_value=[]),
-        "save_pubs": patch("scheduler.Publication.save_publications"),
-        "match_links": patch("scheduler.match_and_save_paper_links"),
         "fetch_one": patch("scheduler.Database.fetch_one", return_value=None),
-        "paper_snap": patch("scheduler.append_snapshots_for_pubs"),
-        "researcher_snap": patch("scheduler.Database.append_researcher_snapshot"),
-        "reconcile_renames": patch("scheduler.reconcile_title_renames"),
     }
 
 
@@ -72,7 +63,7 @@ class TestRunScrapeJobHappyPath:
 
             mocks["acquire"].assert_called_once()
             mocks["create_log"].assert_called_once()
-            mocks["update_log"].assert_called_once_with(42, "completed", 0, 0, 0, 0, None)
+            mocks["update_log"].assert_called_once_with(42, "completed", 0, 0)
             mocks["validate"].assert_called_once()
             mocks["release"].assert_called_once()
         finally:
@@ -92,38 +83,23 @@ class TestRunScrapeJobHappyPath:
                 p.stop()
 
     def test_happy_path_with_changed_url(self):
-        """One URL changes, publications extracted and saved, log reflects counts."""
-        url_row = _make_url_row()
-        pubs = [{"title": "My Paper", "status": "published", "venue": "AER",
-                 "abstract": "...", "draft_url": None, "year": "2025"}]
-
+        """A changed URL increments urls_changed; no extraction happens in the scrape job."""
         patches = _base_patches()
         patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls", return_value=[url_row]
-        )
+            "scheduler.Researcher.get_all_researcher_urls",
+            return_value=[_make_url_row()])
         patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True
-        )
-        patches["get_latest"] = patch(
-            "scheduler.HTMLFetcher.get_latest_text", return_value="page content"
-        )
-        patches["extract_pubs"] = patch(
-            "scheduler.Publication.extract_publications", return_value=pubs
-        )
-
+            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True)
         mocks = {name: p.start() for name, p in patches.items()}
         try:
             run_scrape_job()
-
-            mocks["extract_pubs"].assert_called_once()
-            mocks["save_pubs"].assert_called_once_with(
-                url_row["url"], pubs, is_seed=True,
-            )
-            mocks["paper_snap"].assert_called_once_with(pubs, url_row["url"])
-            mocks["update_log"].assert_called_once_with(42, "completed", 1, 1, 1, 0, None)
         finally:
             for p in patches.values():
                 p.stop()
+        args = mocks["update_log"].call_args[0]
+        assert args[1] == "completed"
+        assert args[2] == 1  # urls_checked
+        assert args[3] == 1  # urls_changed
 
 
 # ---------------------------------------------------------------------------
@@ -254,87 +230,6 @@ class TestLockReleaseOnError:
 class TestURLProcessing:
     """Changed URLs trigger extraction; unchanged URLs do not."""
 
-    def test_unchanged_url_skips_extraction(self):
-        url_row = _make_url_row()
-        patches = _base_patches()
-        patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls", return_value=[url_row]
-        )
-        # fetch returns False => unchanged
-        patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=False
-        )
-        mocks = {name: p.start() for name, p in patches.items()}
-        try:
-            run_scrape_job()
-
-            mocks["get_prev"].assert_called_once_with(url_row["id"])
-            mocks["fetch"].assert_called_once()
-            mocks["get_latest"].assert_not_called()
-            mocks["extract_pubs"].assert_not_called()
-            mocks["update_log"].assert_called_once_with(42, "completed", 1, 0, 0, 0, None)
-        finally:
-            for p in patches.values():
-                p.stop()
-
-    def test_changed_url_with_old_text_uses_diff(self):
-        """When old content exists, compute_diff is called and its result passed to extraction."""
-        url_row = _make_url_row()
-        patches = _base_patches()
-        patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls", return_value=[url_row]
-        )
-        patches["get_prev"] = patch(
-            "scheduler.HTMLFetcher.get_previous_text", return_value="old content"
-        )
-        patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True
-        )
-        patches["get_latest"] = patch(
-            "scheduler.HTMLFetcher.get_latest_text", return_value="new content"
-        )
-        patches["compute_diff"] = patch(
-            "scheduler.HTMLFetcher.compute_diff", return_value="the diff"
-        )
-        mocks = {name: p.start() for name, p in patches.items()}
-        try:
-            run_scrape_job()
-
-            mocks["compute_diff"].assert_called_once_with("old content", "new content")
-            mocks["extract_pubs"].assert_called_once()
-            # First positional arg to extract_publications should be the diff
-            assert mocks["extract_pubs"].call_args[0][0] == "the diff"
-        finally:
-            for p in patches.values():
-                p.stop()
-
-    def test_first_scrape_uses_full_text_not_diff(self):
-        """On first scrape (old_text is None), full new text is used directly."""
-        url_row = _make_url_row()
-        patches = _base_patches()
-        patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls", return_value=[url_row]
-        )
-        patches["get_prev"] = patch(
-            "scheduler.HTMLFetcher.get_previous_text", return_value=None
-        )
-        patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True
-        )
-        patches["get_latest"] = patch(
-            "scheduler.HTMLFetcher.get_latest_text", return_value="full page text"
-        )
-        mocks = {name: p.start() for name, p in patches.items()}
-        try:
-            run_scrape_job()
-
-            mocks["compute_diff"].assert_not_called()
-            mocks["extract_pubs"].assert_called_once()
-            assert mocks["extract_pubs"].call_args[0][0] == "full page text"
-        finally:
-            for p in patches.values():
-                p.stop()
-
     def test_per_url_exception_continues_to_next(self):
         """An exception processing one URL should not abort the whole scrape."""
         url1 = _make_url_row(url_id=1, url="https://example.com/a")
@@ -344,126 +239,20 @@ class TestURLProcessing:
         patches["get_urls"] = patch(
             "scheduler.Researcher.get_all_researcher_urls", return_value=[url1, url2]
         )
-        # First URL's get_previous_text raises, second one succeeds
-        patches["get_prev"] = patch(
-            "scheduler.HTMLFetcher.get_previous_text",
-            side_effect=[RuntimeError("timeout"), None],
-        )
         patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=False
+            "scheduler.HTMLFetcher.fetch_and_save_if_changed",
+            side_effect=[RuntimeError("timeout"), False],
         )
         mocks = {name: p.start() for name, p in patches.items()}
         try:
             run_scrape_job()
 
-            # fetch should be called for url2 even though url1 failed
-            assert mocks["fetch"].call_count == 1
+            # fetch was attempted for both urls; url1 raised, url2 succeeded
+            assert mocks["fetch"].call_count == 2
             # Log should show completed (per-URL errors are caught)
-            mocks["update_log"].assert_called_once_with(42, "completed", 2, 0, 0, 0, None)
-        finally:
-            for p in patches.values():
-                p.stop()
-
-    def test_home_page_extracts_description_on_change(self):
-        """HOME page type triggers description extraction when content changed."""
-        url_row = _make_url_row(page_type="HOME")
-        patches = _base_patches()
-        patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls", return_value=[url_row]
-        )
-        patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True
-        )
-        patches["get_latest"] = patch(
-            "scheduler.HTMLFetcher.get_latest_text", return_value="homepage text"
-        )
-        patches["extract_desc"] = patch(
-            "scheduler.HTMLFetcher.extract_description", return_value="A labor economist."
-        )
-        patches["fetch_one"] = patch(
-            "scheduler.Database.fetch_one",
-            return_value={"position": "Professor", "affiliation": "MIT"},
-        )
-        mocks = {name: p.start() for name, p in patches.items()}
-        try:
-            run_scrape_job()
-
-            mocks["extract_desc"].assert_called_once()
-            mocks["researcher_snap"].assert_called_once_with(
-                url_row["researcher_id"], "Professor", "MIT",
-                "A labor economist.", source_url=url_row["url"],
-            )
-        finally:
-            for p in patches.values():
-                p.stop()
-
-    def test_home_page_no_description_skips_snapshot(self):
-        """HOME page where extract_description returns None should not append snapshot."""
-        url_row = _make_url_row(page_type="HOME")
-        patches = _base_patches()
-        patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls", return_value=[url_row]
-        )
-        patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True
-        )
-        patches["get_latest"] = patch(
-            "scheduler.HTMLFetcher.get_latest_text", return_value="homepage text"
-        )
-        patches["extract_desc"] = patch(
-            "scheduler.HTMLFetcher.extract_description", return_value=None
-        )
-        mocks = {name: p.start() for name, p in patches.items()}
-        try:
-            run_scrape_job()
-
-            mocks["extract_desc"].assert_called_once()
-            mocks["researcher_snap"].assert_not_called()
-        finally:
-            for p in patches.values():
-                p.stop()
-
-    def test_unchanged_home_page_skips_description(self):
-        """HOME page that didn't change should NOT re-extract description."""
-        url_row = _make_url_row(page_type="HOME")
-        patches = _base_patches()
-        patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls", return_value=[url_row]
-        )
-        patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=False
-        )
-        mocks = {name: p.start() for name, p in patches.items()}
-        try:
-            run_scrape_job()
-
-            mocks["extract_desc"].assert_not_called()
-        finally:
-            for p in patches.values():
-                p.stop()
-
-    def test_snapshots_called_with_pubs(self):
-        """append_snapshots_for_pubs is called with extracted publications."""
-        url_row = _make_url_row()
-        pubs = [{"title": "Ghost Paper", "status": "published"}]
-        patches = _base_patches()
-        patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls", return_value=[url_row]
-        )
-        patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True
-        )
-        patches["get_latest"] = patch(
-            "scheduler.HTMLFetcher.get_latest_text", return_value="text"
-        )
-        patches["extract_pubs"] = patch(
-            "scheduler.Publication.extract_publications", return_value=pubs
-        )
-        mocks = {name: p.start() for name, p in patches.items()}
-        try:
-            run_scrape_job()
-
-            mocks["paper_snap"].assert_called_once_with(pubs, url_row["url"])
+            args = mocks["update_log"].call_args[0]
+            assert args[1] == "completed"
+            assert args[2] == 2  # urls_checked
         finally:
             for p in patches.values():
                 p.stop()
@@ -529,189 +318,30 @@ class TestUpdateScrapeLog:
 
 
 # ---------------------------------------------------------------------------
-# 7. Phase separation — fetch before extract
+# 7. Scrape job is fetch-only
 # ---------------------------------------------------------------------------
 
-class TestPhaseSeparation:
-    """Verify all URLs are fetched before any extraction begins."""
-
-    def test_fetch_runs_before_any_extraction(self):
-        """All fetch calls complete before any extract_publications call."""
-        url_rows = [
-            _make_url_row(url_id=1, url="http://a.com"),
-            _make_url_row(url_id=2, url="http://b.com"),
-        ]
+class TestScrapeJobIsFetchOnly:
+    def test_scrape_never_calls_llm_extraction(self):
+        """run_scrape_job must not extract — the worker owns extraction."""
         patches = _base_patches()
         patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls", return_value=url_rows,
-        )
+            "scheduler.Researcher.get_all_researcher_urls",
+            return_value=[_make_url_row()])
         patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True,
-        )
-        patches["get_latest"] = patch(
-            "scheduler.HTMLFetcher.get_latest_text", return_value="text",
-        )
-        patches["extract_pubs"] = patch(
-            "scheduler.Publication.extract_publications",
-            return_value=[{"title": "P", "status": "published"}],
-        )
-
-        call_order = []
-
+            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True)
         mocks = {name: p.start() for name, p in patches.items()}
         try:
-            orig_fetch = mocks["fetch"].side_effect
-            mocks["fetch"].side_effect = lambda *a, **kw: (call_order.append("fetch"), True)[1]
-            mocks["extract_pubs"].side_effect = lambda *a, **kw: (call_order.append("extract"), [{"title": "P"}])[1]
-
-            run_scrape_job()
-
-            fetch_indices = [i for i, c in enumerate(call_order) if c == "fetch"]
-            extract_indices = [i for i, c in enumerate(call_order) if c == "extract"]
-            assert len(fetch_indices) > 0
-            assert len(extract_indices) > 0
-            assert max(fetch_indices) < min(extract_indices)
-        finally:
-            for p in patches.values():
-                p.stop()
-
-    def test_all_urls_fetched_when_extraction_fails(self):
-        """All URLs are fetched even when extraction returns empty for all."""
-        url_rows = [
-            _make_url_row(url_id=i, url=f"http://r{i}.com")
-            for i in range(1, 6)
-        ]
-        patches = _base_patches()
-        patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls", return_value=url_rows,
-        )
-        patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True,
-        )
-        patches["get_latest"] = patch(
-            "scheduler.HTMLFetcher.get_latest_text", return_value="text",
-        )
-        mocks = {name: p.start() for name, p in patches.items()}
-        try:
-            run_scrape_job()
-            assert mocks["fetch"].call_count == 5
+            with patch("publication.Publication.try_extract_publications") as mock_llm:
+                run_scrape_job()
+                mock_llm.assert_not_called()
         finally:
             for p in patches.values():
                 p.stop()
 
 
 # ---------------------------------------------------------------------------
-# 8. Extraction circuit breaker
-# ---------------------------------------------------------------------------
-
-class TestExtractionCircuitBreaker:
-    """Verify circuit breaker stops extraction after consecutive failures."""
-
-    def test_stops_after_threshold_consecutive_failures(self):
-        url_rows = [
-            _make_url_row(url_id=i, url=f"http://r{i}.com")
-            for i in range(1, 21)
-        ]
-        patches = _base_patches()
-        patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls", return_value=url_rows,
-        )
-        patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True,
-        )
-        patches["get_latest"] = patch(
-            "scheduler.HTMLFetcher.get_latest_text", return_value="text",
-        )
-        # extract always returns empty (quota failure)
-        patches["extract_pubs"] = patch(
-            "scheduler.Publication.extract_publications", return_value=[],
-        )
-        mocks = {name: p.start() for name, p in patches.items()}
-        try:
-            from scheduler import _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD
-            run_scrape_job()
-
-            # All 20 fetched
-            assert mocks["fetch"].call_count == 20
-            # Extraction stops at threshold
-            assert mocks["extract_pubs"].call_count == _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD
-        finally:
-            for p in patches.values():
-                p.stop()
-
-    def test_resets_on_successful_extraction(self):
-        """A successful extraction resets the consecutive failure counter."""
-        url_rows = [
-            _make_url_row(url_id=i, url=f"http://r{i}.com")
-            for i in range(1, 21)
-        ]
-        patches = _base_patches()
-        patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls", return_value=url_rows,
-        )
-        patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True,
-        )
-        patches["get_latest"] = patch(
-            "scheduler.HTMLFetcher.get_latest_text", return_value="text",
-        )
-
-        # Fail 5 times, succeed on 6th, repeat — never hits 10 consecutive
-        call_count = [0]
-        def alternating(*a, **kw):
-            call_count[0] += 1
-            if call_count[0] % 6 == 0:
-                return [{"title": "Paper", "status": "published"}]
-            return []
-
-        patches["extract_pubs"] = patch(
-            "scheduler.Publication.extract_publications", side_effect=alternating,
-        )
-        mocks = {name: p.start() for name, p in patches.items()}
-        try:
-            run_scrape_job()
-            # All 20 extracted (no circuit break)
-            assert mocks["extract_pubs"].call_count == 20
-        finally:
-            for p in patches.values():
-                p.stop()
-
-    def test_records_error_message_when_tripped(self):
-        """Circuit breaker sets error_message on scrape_log."""
-        url_rows = [
-            _make_url_row(url_id=i, url=f"http://r{i}.com")
-            for i in range(1, 15)
-        ]
-        patches = _base_patches()
-        patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls", return_value=url_rows,
-        )
-        patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True,
-        )
-        patches["get_latest"] = patch(
-            "scheduler.HTMLFetcher.get_latest_text", return_value="text",
-        )
-        patches["extract_pubs"] = patch(
-            "scheduler.Publication.extract_publications", return_value=[],
-        )
-        mocks = {name: p.start() for name, p in patches.items()}
-        try:
-            from scheduler import _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD
-            run_scrape_job()
-
-            mocks["update_log"].assert_called_once()
-            args = mocks["update_log"].call_args[0]
-            assert args[1] == "completed"  # status still completed (fetch did finish)
-            assert args[5] == _EXTRACTION_CIRCUIT_BREAKER_THRESHOLD  # extraction_errors
-            assert "circuit-breaker" in args[6].lower()  # error_message
-        finally:
-            for p in patches.values():
-                p.stop()
-
-
-# ---------------------------------------------------------------------------
-# 9. Stale scrape_log cleanup
+# 8. Stale scrape_log cleanup
 # ---------------------------------------------------------------------------
 
 class TestStaleLogCleanup:
@@ -739,7 +369,7 @@ class TestStaleLogCleanup:
 
 
 # ---------------------------------------------------------------------------
-# 10. Enrichment worker
+# 9. Enrichment worker
 # ---------------------------------------------------------------------------
 
 class TestEnrichmentWorkerLoop:
@@ -930,6 +560,278 @@ class TestSchedulerStartsEnrichmentWorker:
         import scheduler
 
         with patch("scheduler.stop_enrichment_worker") as mock_stop_worker:
+            scheduler._scheduler = MagicMock()
+            scheduler._scheduler_lock_conn = MagicMock()
+
+            from scheduler import shutdown_scheduler
+            shutdown_scheduler()
+
+            mock_stop_worker.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# 11. Extraction worker
+# ---------------------------------------------------------------------------
+
+def _outcome(status, pubs_count=0):
+    from extraction import ExtractionOutcome
+    return ExtractionOutcome(status, pubs_count=pubs_count)
+
+
+class TestExtractionWorkerLoop:
+    """Tests for the continuous extraction background worker."""
+
+    def setup_method(self):
+        scheduler._extraction_stop_event.clear()
+
+    def teardown_method(self):
+        scheduler._extraction_stop_event.clear()
+
+    def test_processes_pending_urls(self):
+        rows = [_make_url_row(url_id=1), _make_url_row(url_id=2)]
+        processed = []
+
+        def fake_extract(row, scrape_log_id=None):
+            processed.append(row["id"])
+            if len(processed) >= 2:
+                scheduler._extraction_stop_event.set()
+            return _outcome("extracted", pubs_count=3)
+
+        with patch("scheduler.Database.get_urls_needing_extraction", return_value=rows), \
+             patch("extraction.extract_one_url", side_effect=fake_extract), \
+             patch.object(scheduler, "_EXTRACTION_DELAY_SECONDS", 0):
+            _extraction_worker_loop()
+
+        assert processed == [1, 2]
+
+    def test_idles_when_queue_empty(self):
+        calls = [0]
+
+        def empty_then_stop():
+            calls[0] += 1
+            if calls[0] >= 2:
+                scheduler._extraction_stop_event.set()
+            return []
+
+        waits = []
+
+        def record_wait(timeout=None):
+            waits.append(timeout)
+            return scheduler._extraction_stop_event.is_set()
+
+        with patch("scheduler.Database.get_urls_needing_extraction", side_effect=empty_then_stop), \
+             patch.object(scheduler._extraction_stop_event, "wait", side_effect=record_wait):
+            _extraction_worker_loop()
+
+        assert scheduler._EXTRACTION_IDLE_SECONDS in waits
+
+    def test_skips_url_after_max_failures(self):
+        """A URL that fails 3 times is excluded until restart (poison-pill guard)."""
+        rows = [_make_url_row(url_id=1)]
+        attempts = [0]
+        scans = [0]
+
+        def failing(row, scrape_log_id=None):
+            attempts[0] += 1
+            return _outcome("failed")
+
+        def get_queue():
+            scans[0] += 1
+            if scans[0] >= 6:
+                scheduler._extraction_stop_event.set()
+            return rows
+
+        with patch("scheduler.Database.get_urls_needing_extraction", side_effect=get_queue), \
+             patch("extraction.extract_one_url", side_effect=failing), \
+             patch.object(scheduler, "_EXTRACTION_DELAY_SECONDS", 0), \
+             patch.object(scheduler, "_EXTRACTION_IDLE_SECONDS", 0), \
+             patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 99):
+            _extraction_worker_loop()
+
+        assert attempts[0] == 3  # 4th+ scans filter the URL out
+
+    def test_backs_off_after_threshold_consecutive_failures(self):
+        rows = [_make_url_row(url_id=i) for i in range(1, 5)]
+        count = [0]
+
+        def failing(row, scrape_log_id=None):
+            count[0] += 1
+            if count[0] >= 4:
+                scheduler._extraction_stop_event.set()
+            return _outcome("failed")
+
+        waits = []
+
+        def record_wait(timeout=None):
+            waits.append(timeout)
+            return scheduler._extraction_stop_event.is_set()
+
+        with patch("scheduler.Database.get_urls_needing_extraction", return_value=rows), \
+             patch("extraction.extract_one_url", side_effect=failing), \
+             patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 3), \
+             patch.object(scheduler, "_EXTRACTION_MAX_URL_FAILURES", 99), \
+             patch.object(scheduler._extraction_stop_event, "wait", side_effect=record_wait):
+            _extraction_worker_loop()
+
+        assert scheduler._EXTRACTION_BACKOFF_SECONDS in waits
+
+    def test_success_resets_consecutive_failures(self):
+        rows = [_make_url_row(url_id=i) for i in range(1, 5)]
+        count = [0]
+
+        def fail_fail_succeed(row, scrape_log_id=None):
+            count[0] += 1
+            if count[0] >= 4:
+                scheduler._extraction_stop_event.set()
+            if count[0] == 3:
+                return _outcome("extracted", pubs_count=1)
+            return _outcome("failed")
+
+        waits = []
+
+        def record_wait(timeout=None):
+            waits.append(timeout)
+            return scheduler._extraction_stop_event.is_set()
+
+        with patch("scheduler.Database.get_urls_needing_extraction", return_value=rows), \
+             patch("extraction.extract_one_url", side_effect=fail_fail_succeed), \
+             patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 3), \
+             patch.object(scheduler, "_EXTRACTION_MAX_URL_FAILURES", 99), \
+             patch.object(scheduler._extraction_stop_event, "wait", side_effect=record_wait):
+            _extraction_worker_loop()
+
+        # Success at call 3 reset the counter, so the threshold (3) was never
+        # reached and no backoff wait happened.
+        assert scheduler._EXTRACTION_BACKOFF_SECONDS not in waits
+
+    def test_unexpected_exception_counts_as_failure(self):
+        rows = [_make_url_row(url_id=1)]
+        count = [0]
+
+        def exploding(row, scrape_log_id=None):
+            count[0] += 1
+            if count[0] >= 2:
+                scheduler._extraction_stop_event.set()
+            raise RuntimeError("DB down")
+
+        with patch("scheduler.Database.get_urls_needing_extraction", return_value=rows), \
+             patch("extraction.extract_one_url", side_effect=exploding), \
+             patch.object(scheduler, "_EXTRACTION_DELAY_SECONDS", 0), \
+             patch.object(scheduler, "_EXTRACTION_IDLE_SECONDS", 0), \
+             patch.object(scheduler, "_EXTRACTION_MAX_URL_FAILURES", 99), \
+             patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 99):
+            _extraction_worker_loop()  # must not raise
+
+        assert count[0] == 2
+
+
+class TestStartStopExtractionWorker:
+    def test_start_creates_daemon_thread(self):
+        with patch("scheduler.threading.Thread") as mock_thread_cls:
+            mock_thread = MagicMock()
+            mock_thread_cls.return_value = mock_thread
+
+            start_extraction_worker()
+
+            mock_thread_cls.assert_called_once()
+            assert mock_thread_cls.call_args[1]["daemon"] is True
+            assert mock_thread_cls.call_args[1]["name"] == "extraction-worker"
+            mock_thread.start.assert_called_once()
+
+            scheduler._extraction_thread = None
+            scheduler._extraction_stop_event.clear()
+
+    def test_start_is_idempotent(self):
+        scheduler._extraction_thread = MagicMock(is_alive=MagicMock(return_value=True))
+        try:
+            with patch("scheduler.threading.Thread") as mock_thread_cls:
+                start_extraction_worker()
+                mock_thread_cls.assert_not_called()
+        finally:
+            scheduler._extraction_thread = None
+
+    def test_stop_sets_event_and_joins(self):
+        mock_thread = MagicMock()
+        scheduler._extraction_thread = mock_thread
+        scheduler._extraction_stop_event.clear()
+
+        stop_extraction_worker()
+
+        assert scheduler._extraction_stop_event.is_set()
+        mock_thread.join.assert_called_once_with(timeout=30)
+        assert scheduler._extraction_thread is None
+        scheduler._extraction_stop_event.clear()
+
+    def test_stop_when_not_running_is_noop(self):
+        scheduler._extraction_thread = None
+        stop_extraction_worker()  # should not raise
+
+
+# ---------------------------------------------------------------------------
+# 12. Scheduler lifecycle — extraction worker
+# ---------------------------------------------------------------------------
+
+class TestSchedulerStartsExtractionWorker:
+    """Extraction worker starts/stops with the scheduler when enabled."""
+
+    def teardown_method(self):
+        import scheduler
+        scheduler._scheduler = None
+        scheduler._scheduler_lock_conn = None
+
+    def test_starts_extraction_worker_when_enabled(self):
+        with patch("scheduler.mysql.connector.connect") as mock_connect, \
+             patch("scheduler._cleanup_stale_scrape_logs"), \
+             patch("scheduler.BackgroundScheduler"), \
+             patch("scheduler.start_extraction_worker") as mock_start_worker, \
+             patch("scheduler.signal.signal"), \
+             patch.object(scheduler, 'EXTRACTION_WORKER_ENABLED', True), \
+             patch.object(scheduler, 'ENRICHMENT_WORKER_ENABLED', False), \
+             patch.object(scheduler, '_scheduler', None), \
+             patch.object(scheduler, '_scheduler_lock_conn', None):
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.fetchone.return_value = (1,)
+            mock_conn.cursor.return_value = mock_cursor
+            mock_connect.return_value = mock_conn
+
+            from scheduler import start_scheduler
+            start_scheduler()
+
+            mock_start_worker.assert_called_once()
+
+            scheduler._scheduler = None
+            scheduler._scheduler_lock_conn = None
+
+    def test_skips_extraction_worker_when_disabled(self):
+        with patch("scheduler.mysql.connector.connect") as mock_connect, \
+             patch("scheduler._cleanup_stale_scrape_logs"), \
+             patch("scheduler.BackgroundScheduler"), \
+             patch("scheduler.start_extraction_worker") as mock_start_worker, \
+             patch("scheduler.signal.signal"), \
+             patch.object(scheduler, 'EXTRACTION_WORKER_ENABLED', False), \
+             patch.object(scheduler, 'ENRICHMENT_WORKER_ENABLED', False), \
+             patch.object(scheduler, '_scheduler', None), \
+             patch.object(scheduler, '_scheduler_lock_conn', None):
+
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_cursor.fetchone.return_value = (1,)
+            mock_conn.cursor.return_value = mock_cursor
+            mock_connect.return_value = mock_conn
+
+            from scheduler import start_scheduler
+            start_scheduler()
+
+            mock_start_worker.assert_not_called()
+
+            scheduler._scheduler = None
+            scheduler._scheduler_lock_conn = None
+
+    def test_shutdown_stops_extraction_worker(self):
+        with patch("scheduler.stop_extraction_worker") as mock_stop_worker, \
+             patch("scheduler.stop_enrichment_worker"):
             scheduler._scheduler = MagicMock()
             scheduler._scheduler_lock_conn = MagicMock()
 

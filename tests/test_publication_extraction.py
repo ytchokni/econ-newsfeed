@@ -25,6 +25,7 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 from openai import OpenAIError
 
+from llm_client import StructuredResponse
 from publication import Publication, PublicationExtraction, PublicationExtractionList, clean_title, reconcile_title_renames
 from paper_saver import _title_similarity
 
@@ -508,3 +509,58 @@ class TestReconcileTitleRenames:
         assert mock_emit.call_count == 2
         mock_emit.assert_any_call(10, "Old A", "New A")
         mock_emit.assert_any_call(20, "Old B", "New B")
+
+
+# ---------------------------------------------------------------------------
+# 7. try_extract_publications()
+# ---------------------------------------------------------------------------
+
+class TestTryExtractPublications:
+    """try_extract_publications distinguishes LLM failure (None) from empty ([])."""
+
+    @pytest.fixture(autouse=True)
+    def _patch_content_max(self):
+        """CONTENT_MAX_CHARS is read from env as a string at import time.
+        Patch it to an int so text_content[:CONTENT_MAX_CHARS] works."""
+        with patch("publication.CONTENT_MAX_CHARS", 20000):
+            yield
+
+    def test_returns_none_on_llm_failure(self):
+        """parsed=None (API error / validation failure) → None, not []."""
+        failed = StructuredResponse(parsed=None, usage=None)
+        with patch("publication.extract_json", return_value=failed), \
+             patch("publication.Database.log_llm_usage"):
+            result = Publication.try_extract_publications("some text", "https://x.com")
+        assert result is None
+
+    def test_returns_empty_list_when_no_pubs_found(self):
+        """A valid response with zero publications → [] (genuine empty)."""
+        parsed = PublicationExtractionList(publications=[])
+        ok = StructuredResponse(parsed=parsed, usage=MagicMock())
+        with patch("publication.extract_json", return_value=ok), \
+             patch("publication.Database.log_llm_usage"):
+            result = Publication.try_extract_publications("some text", "https://x.com")
+        assert result == []
+
+    def test_returns_validated_pubs(self):
+        """Valid publications are returned as dicts."""
+        parsed = PublicationExtractionList.model_validate(
+            {"publications": [{"title": "A Great Paper", "authors": [["Jane", "Doe"]],
+                               "year": "2024", "venue": None, "status": None,
+                               "draft_url": None, "abstract": None}]}
+        )
+        ok = StructuredResponse(parsed=parsed, usage=MagicMock())
+        with patch("publication.extract_json", return_value=ok), \
+             patch("publication.Database.log_llm_usage"), \
+             patch("publication.validate_publication", return_value=True):
+            result = Publication.try_extract_publications("text", "https://x.com")
+        assert len(result) == 1
+        assert result[0]["title"] == "A Great Paper"
+
+    def test_extract_publications_returns_empty_list_on_failure(self):
+        """The legacy wrapper still returns [] (not None) on failure."""
+        failed = StructuredResponse(parsed=None, usage=None)
+        with patch("publication.extract_json", return_value=failed), \
+             patch("publication.Database.log_llm_usage"):
+            result = Publication.extract_publications("some text", "https://x.com")
+        assert result == []

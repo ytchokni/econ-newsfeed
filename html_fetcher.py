@@ -1,4 +1,3 @@
-import difflib
 import ipaddress
 import os
 import re
@@ -694,6 +693,18 @@ class HTMLFetcher:
         return result['raw_html'] if result else None
 
     @staticmethod
+    def get_extraction_payload(url_id: int) -> dict | None:
+        """Read content, raw_html, and content_hash in one query for extraction.
+
+        Reading the hash together with the text guarantees mark_extracted()
+        can record exactly what was extracted.
+        """
+        return Database.fetch_one(
+            "SELECT content, raw_html, content_hash FROM html_content WHERE url_id = %s",
+            (url_id,),
+        )
+
+    @staticmethod
     def needs_extraction(url_id: int) -> bool:
         """
         Return True if LLM extraction is needed for this URL.
@@ -723,35 +734,25 @@ class HTMLFetcher:
         return result is not None and result['extracted_at'] is None
 
     @staticmethod
-    def mark_extracted(url_id: int) -> None:
-        """
-        Record that extraction has been run on the current content by setting
-        extracted_hash = content_hash and extracted_at = now.
-        """
-        query = """
-            UPDATE html_content
-            SET extracted_at = %s, extracted_hash = content_hash
-            WHERE url_id = %s
-        """
-        Database.execute_query(query, (datetime.now(timezone.utc), url_id))
+    def mark_extracted(url_id: int, extracted_hash: str | None = None) -> None:
+        """Record that extraction has run.
 
-    @staticmethod
-    def get_previous_text(url_id: int) -> str | None:
-        """Retrieve the previous text content for a given URL ID (before current upsert).
-        With upsert, there's only one row per url_id, so this returns the current stored
-        content (which represents the *previous* version before fetch_and_save_if_changed
-        overwrites it).
+        Pass the content_hash that was read at extraction *start* so a fetch
+        landing mid-extraction is not silently marked as extracted (the URL
+        stays in the needs-extraction queue). When extracted_hash is None,
+        falls back to copying the current content_hash (legacy callers where
+        fetch and extraction cannot overlap).
         """
-        return HTMLFetcher.get_latest_text(url_id)
+        now = datetime.now(timezone.utc)
+        if extracted_hash is None:
+            Database.execute_query(
+                "UPDATE html_content SET extracted_at = %s, extracted_hash = content_hash WHERE url_id = %s",
+                (now, url_id),
+            )
+        else:
+            Database.execute_query(
+                "UPDATE html_content SET extracted_at = %s, extracted_hash = %s WHERE url_id = %s",
+                (now, extracted_hash, url_id),
+            )
 
-    @staticmethod
-    def compute_diff(old_text: str, new_text: str) -> str:
-        """Compute a unified diff between old and new text content.
-        Returns only added/changed lines to reduce LLM token usage.
-        """
-        old_lines = old_text.splitlines(keepends=True)
-        new_lines = new_text.splitlines(keepends=True)
-        diff = difflib.unified_diff(old_lines, new_lines, n=1)
-        # Extract only added lines (starting with '+' but not '+++')
-        added_lines = [line[1:] for line in diff if line.startswith('+') and not line.startswith('+++')]
-        return ''.join(added_lines) if added_lines else new_text
+

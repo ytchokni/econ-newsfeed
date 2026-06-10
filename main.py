@@ -321,10 +321,9 @@ def batch_check() -> None:
 def extract_only(limit: int | None = None) -> None:
     """Run LLM extraction for URLs with pending content changes (skips fetching)."""
     from scheduler import create_scrape_log, update_scrape_log, _update_progress
+    from extraction import extract_one_url
 
-    researcher_urls = Researcher.get_all_researcher_urls()
-    pending = [row for row in researcher_urls if HTMLFetcher.needs_extraction(row['id'])]
-
+    pending = Database.get_urls_needing_extraction()
     if not pending:
         logging.info("No URLs need extraction")
         return
@@ -342,48 +341,31 @@ def extract_only(limit: int | None = None) -> None:
 
     try:
         for idx, row in enumerate(pending):
-            url_id = row['id']
-            url = row['url']
-            researcher_id = row['researcher_id']
-
             try:
-                new_text = HTMLFetcher.get_latest_text(url_id)
-                if not new_text:
-                    raw_html = HTMLFetcher.get_raw_html(url_id)
-                    if raw_html:
-                        new_text = HTMLFetcher.extract_text_content(raw_html)
-                if not new_text:
-                    continue
-
-                is_seed = HTMLFetcher.is_first_extraction(url_id)
-
-                pubs = Publication.extract_publications(new_text, url, scrape_log_id=log_id)
-                logging.info("[%d/%d] extract %s — %d pubs", idx + 1, len(pending), url, len(pubs))
-
-                if pubs:
-                    consecutive_failures = 0
-                    Publication.save_publications(url, pubs, is_seed=is_seed)
-                    reconcile_title_renames(url, pubs)
-                    pubs_extracted += len(pubs)
-                    match_and_save_paper_links(url_id, pubs)
-                    append_snapshots_for_pubs(pubs, url)
-                else:
-                    consecutive_failures += 1
-                    extraction_errors += 1
-                    if consecutive_failures >= 10:
-                        logging.warning("Circuit breaker: 10 consecutive empty extractions")
-                        break
-
-                HTMLFetcher.mark_extracted(url_id)
-                _update_progress(log_id, pubs_extracted=pubs_extracted, extraction_errors=extraction_errors)
-
+                outcome = extract_one_url(row, scrape_log_id=log_id)
             except Exception as e:
-                logging.error("Error extracting %s: %s", url, e)
+                logging.error("Error extracting %s: %s", row['url'], e)
                 extraction_errors += 1
                 consecutive_failures += 1
                 if consecutive_failures >= 10:
                     logging.warning("Circuit breaker: 10 consecutive failures")
                     break
+                continue
+
+            logging.info("[%d/%d] extract %s — %s (%d pubs)",
+                         idx + 1, len(pending), row['url'], outcome.status, outcome.pubs_count)
+
+            if outcome.ok:
+                consecutive_failures = 0
+                pubs_extracted += outcome.pubs_count
+            else:
+                consecutive_failures += 1
+                extraction_errors += 1
+                if consecutive_failures >= 10:
+                    logging.warning("Circuit breaker: 10 consecutive extraction failures")
+                    break
+
+            _update_progress(log_id, pubs_extracted=pubs_extracted, extraction_errors=extraction_errors)
 
         update_scrape_log(log_id, "completed", urls_checked=0, urls_changed=len(pending),
                           pubs_extracted=pubs_extracted, extraction_errors=extraction_errors)
