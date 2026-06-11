@@ -19,6 +19,30 @@ _VALID_STATUSES = Literal[
 ]
 
 
+def _coerce_year(v: object) -> str | None:
+    if v is None:
+        return v
+    s = str(v).strip()
+    if not s:
+        return None
+    m = re.search(r'(19|20)\d{2}', s)
+    if m:
+        return m.group(0)
+    return s[:4]
+
+
+def _validate_url_scheme(v: object) -> str | None:
+    if v is None:
+        return v
+    try:
+        parsed = urlparse(str(v))
+    except Exception:
+        return None
+    if parsed.scheme not in ('http', 'https'):
+        return None
+    return v
+
+
 class PublicationExtraction(BaseModel):
     title: str
     authors: list[list[str]]  # [[first_name, last_name], ...]
@@ -31,30 +55,12 @@ class PublicationExtraction(BaseModel):
     @field_validator('year', mode='before')
     @classmethod
     def coerce_year_to_str(cls, v: object) -> str | None:
-        if v is None:
-            return v
-        s = str(v).strip()
-        if not s:
-            return None
-        # Extract first 4-digit year if present (handles "2024a", "2023-24", "forthcoming 2024")
-        m = re.search(r'(19|20)\d{2}', s)
-        if m:
-            return m.group(0)
-        # Fall back to truncating to 4 chars to satisfy VARCHAR(4)
-        return s[:4]
+        return _coerce_year(v)
 
     @field_validator('draft_url', mode='before')
     @classmethod
     def validate_draft_url(cls, v: object) -> str | None:
-        if v is None:
-            return v
-        try:
-            parsed = urlparse(str(v))
-        except Exception:
-            return None
-        if parsed.scheme not in ('http', 'https'):
-            return None
-        return v
+        return _validate_url_scheme(v)
 
 
 class PublicationExtractionList(BaseModel):
@@ -78,28 +84,12 @@ class PublicationChange(BaseModel):
     @field_validator('year', mode='before')
     @classmethod
     def coerce_year_to_str(cls, v: object) -> str | None:
-        if v is None:
-            return v
-        s = str(v).strip()
-        if not s:
-            return None
-        m = re.search(r'(19|20)\d{2}', s)
-        if m:
-            return m.group(0)
-        return s[:4]
+        return _coerce_year(v)
 
     @field_validator('draft_url', mode='before')
     @classmethod
     def validate_draft_url(cls, v: object) -> str | None:
-        if v is None:
-            return v
-        try:
-            parsed = urlparse(str(v))
-        except Exception:
-            return None
-        if parsed.scheme not in ('http', 'https'):
-            return None
-        return v
+        return _validate_url_scheme(v)
 
 
 class PublicationChangeList(BaseModel):

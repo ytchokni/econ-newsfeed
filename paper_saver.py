@@ -182,6 +182,55 @@ class PaperSaver:
         return results
 
     @staticmethod
+    def apply_title_rename(paper_id: int, old_title: str, new_title: str,
+                           metadata: dict, source_url: str) -> None:
+        """Apply a known title rename: snapshot, update, dedup collisions.
+
+        metadata should contain status, venue, abstract, draft_url, year.
+        """
+        new_hash = Database.compute_title_hash(new_title)
+
+        Database.append_paper_snapshot(
+            paper_id=paper_id,
+            status=metadata.get('status'),
+            venue=metadata.get('venue'),
+            abstract=metadata.get('abstract'),
+            draft_url=metadata.get('draft_url'),
+            year=metadata.get('year'),
+            source_url=source_url,
+            title=old_title,
+        )
+
+        with Database.get_connection() as conn:
+            cursor = conn.cursor(buffered=True)
+            try:
+                cursor.execute(
+                    "UPDATE papers SET title = %s, title_hash = %s WHERE id = %s",
+                    (new_title, new_hash, paper_id),
+                )
+                cursor.execute(
+                    "SELECT id FROM papers WHERE title_hash = %s AND id != %s",
+                    (new_hash, paper_id),
+                )
+                dup = cursor.fetchone()
+                if dup:
+                    dup_id = dup[0]
+                    cursor.execute(
+                        "UPDATE IGNORE paper_urls SET paper_id = %s WHERE paper_id = %s",
+                        (paper_id, dup_id),
+                    )
+                    cursor.execute("DELETE FROM feed_events WHERE paper_id = %s", (dup_id,))
+                    cursor.execute("DELETE FROM papers WHERE id = %s", (dup_id,))
+                conn.commit()
+            except Exception as e:
+                conn.rollback()
+                logging.error("Error applying title rename %s → %s: %s",
+                              old_title[:50], new_title[:50], e)
+                raise
+            finally:
+                cursor.close()
+
+    @staticmethod
     def reconcile_title_renames(source_url: str, extracted_pubs: list[dict]) -> list[TitleRename]:
         """Detect and apply title renames. Returns list of TitleRename for event emission.
 
@@ -235,62 +284,27 @@ class PaperSaver:
             return []
 
         renames = []
-        with Database.get_connection() as conn:
-            cursor = conn.cursor(buffered=True)
+        for old_paper, new_pub, sim in renames_to_apply:
+            old_id = old_paper['id']
+            old_title = old_paper['title']
+            new_title = new_pub['title'].strip()
+
             try:
-                for old_paper, new_pub, sim in renames_to_apply:
-                    old_id = old_paper['id']
-                    old_title = old_paper['title']
-                    new_title = new_pub['title'].strip()
-                    new_hash = Database.compute_title_hash(new_title)
+                PaperSaver.apply_title_rename(
+                    old_id, old_title, new_title, new_pub, source_url,
+                )
+            except Exception:
+                continue
 
-                    Database.append_paper_snapshot(
-                        paper_id=old_id,
-                        status=new_pub.get('status'),
-                        venue=new_pub.get('venue'),
-                        abstract=new_pub.get('abstract'),
-                        draft_url=new_pub.get('draft_url'),
-                        year=new_pub.get('year'),
-                        source_url=source_url,
-                        title=old_title,
-                    )
-
-                    cursor.execute(
-                        "UPDATE papers SET title = %s, title_hash = %s WHERE id = %s",
-                        (new_title, new_hash, old_id),
-                    )
-
-                    cursor.execute(
-                        "SELECT id FROM papers WHERE title_hash = %s AND id != %s",
-                        (new_hash, old_id),
-                    )
-                    dup = cursor.fetchone()
-                    if dup:
-                        dup_id = dup[0]
-                        cursor.execute(
-                            "UPDATE IGNORE paper_urls SET paper_id = %s WHERE paper_id = %s",
-                            (old_id, dup_id),
-                        )
-                        cursor.execute("DELETE FROM feed_events WHERE paper_id = %s", (dup_id,))
-                        cursor.execute("DELETE FROM papers WHERE id = %s", (dup_id,))
-
-                    renames.append(TitleRename(
-                        paper_id=old_id,
-                        old_title=old_title,
-                        new_title=new_title,
-                        similarity=sim,
-                    ))
-
-                    logging.info(
-                        "Title rename detected (sim=%.2f): '%s' → '%s' (paper_id=%d)",
-                        sim, old_title[:50], new_title[:50], old_id,
-                    )
-
-                conn.commit()
-            except Exception as e:
-                conn.rollback()
-                logging.error("Error reconciling title renames for %s: %s", source_url, e)
-            finally:
-                cursor.close()
+            renames.append(TitleRename(
+                paper_id=old_id,
+                old_title=old_title,
+                new_title=new_title,
+                similarity=sim,
+            ))
+            logging.info(
+                "Title rename detected (sim=%.2f): '%s' → '%s' (paper_id=%d)",
+                sim, old_title[:50], new_title[:50], old_id,
+            )
 
         return renames

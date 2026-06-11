@@ -254,7 +254,6 @@ class TestExtractOneUrlDiffPath:
         return {
             "payload": patch("extraction.HTMLFetcher.get_extraction_payload",
                              return_value=_payload()),
-            "fetch_ts": patch("extraction.HTMLFetcher.get_fetch_timestamp", return_value=None),
             "mark": patch("extraction.HTMLFetcher.mark_extracted"),
             "extract_text": patch("extraction.HTMLFetcher.extract_text_content",
                                   return_value="from raw html"),
@@ -268,9 +267,7 @@ class TestExtractOneUrlDiffPath:
             "links": patch("extraction.match_and_save_paper_links"),
             "snapshots": patch("extraction.append_snapshots_for_pubs"),
             "fetch_one": patch("extraction.Database.fetch_one", return_value=None),
-            "execute": patch("extraction.Database.execute_query"),
             "compute_hash": patch("extraction.Database.compute_title_hash", return_value="hash1"),
-            "append_snap": patch("extraction.Database.append_paper_snapshot"),
             "researcher_snap": patch("extraction.Database.append_researcher_snapshot"),
         }
 
@@ -374,36 +371,33 @@ class TestExtractOneUrlDiffPath:
         assert outcome.ok
         mocks["mark"].assert_called_once()
 
-    def test_diff_status_change_applies_snapshot(self):
-        """Status change from diff path calls append_paper_snapshot."""
+    def test_diff_status_change_routes_through_append_snapshots(self):
+        """Status change from diff path routes through append_snapshots_for_pubs."""
         from extraction import extract_one_url
         patches = self._base_patches()
         mocks = {k: p.start() for k, p in patches.items()}
 
         sc = _status_change()
         mocks["try_changes"].return_value = [sc]
-        mocks["fetch_one"].return_value = {"id": 42}
-        snap_result = MagicMock()
-        snap_result.status_changed = True
-        snap_result.old_status = "working_paper"
-        snap_result.new_status = "published"
-        mocks["append_snap"].return_value = snap_result
 
         try:
-            with patch("feed_events.FeedEventEmitter.emit_status_change") as mock_emit:
-                outcome = extract_one_url(_row())
+            outcome = extract_one_url(_row())
         finally:
             for p in patches.values():
                 p.stop()
 
         assert outcome.status == "extracted"
-        mocks["append_snap"].assert_called_once()
-        mock_emit.assert_called_once_with(42, "working_paper", "published", event_date=None)
+        assert outcome.pubs_count == 1
+        mocks["snapshots"].assert_called()
+        calls = mocks["snapshots"].call_args_list
+        status_call = [c for c in calls if c[0][0] == [sc]]
+        assert len(status_call) == 1
 
     def test_diff_title_change_updates_paper(self):
-        """Title change from diff path updates paper title and emits event."""
+        """Title change from diff path calls apply_title_rename and emits event."""
         from extraction import extract_one_url
         patches = self._base_patches()
+        patches["apply_rename"] = patch("paper_saver.PaperSaver.apply_title_rename")
         mocks = {k: p.start() for k, p in patches.items()}
 
         tc = _title_change()
@@ -418,7 +412,10 @@ class TestExtractOneUrlDiffPath:
                 p.stop()
 
         assert outcome.status == "extracted"
-        mocks["execute"].assert_called()
+        mocks["apply_rename"].assert_called_once_with(
+            99, "Old Title for My Paper", "Improved Title for My Paper", tc,
+            "https://example.com/pubs",
+        )
         mock_emit.assert_called_once()
         emit_args = mock_emit.call_args[0]
         assert emit_args[0] == 99
