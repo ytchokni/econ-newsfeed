@@ -33,6 +33,7 @@ make discover-domains     # Scan HTML for untrusted domains with paper-like link
 
 # Testing & validation
 make check                # Full suite: env check → pytest → tsc → jest
+make check-data           # Data-quality invariants against the real DB (tests_data_quality/) — failures are bad rows, not code bugs
 poetry run pytest                        # All Python tests
 poetry run pytest tests/test_api_publications.py  # Single test file
 poetry run pytest -k test_name           # Single test by name
