@@ -9,13 +9,11 @@ from datetime import datetime, timezone
 from database.connection import get_connection, fetch_all
 
 
-_STATUS_RANK = {
-    'working_paper': 0,
-    'reject_and_resubmit': 1,
-    'revise_and_resubmit': 2,
-    'accepted': 3,
-    'published': 4,
-}
+# Canonical publication-status progression, lowest to highest rank.
+# schema.py derives its SQL FIELD() list from this — keep it the single source.
+STATUS_ORDER = ('working_paper', 'reject_and_resubmit', 'revise_and_resubmit',
+                'accepted', 'published')
+_STATUS_RANK = {status: rank for rank, status in enumerate(STATUS_ORDER)}
 
 
 def _is_status_progression(old: str | None, new: str | None) -> bool:

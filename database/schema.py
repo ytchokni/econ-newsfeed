@@ -8,6 +8,7 @@ from mysql.connector import Error
 
 from db_config import db_config
 from database.connection import get_connection, execute_query
+from database.snapshots import STATUS_ORDER
 
 
 def create_database() -> None:
@@ -682,7 +683,7 @@ def create_tables() -> None:
 
                     # Clean up status regression events and restore papers.status
                     # to highest-ranked status seen across snapshots
-                    _S = "'working_paper','reject_and_resubmit','revise_and_resubmit','accepted','published'"
+                    _S = ",".join(f"'{s}'" for s in STATUS_ORDER)
                     try:
                         cursor.execute(f"""
                             DELETE FROM feed_events
@@ -731,7 +732,6 @@ def create_tables() -> None:
                              AND (a.created_at < b.created_at
                                   OR (a.created_at = b.created_at AND a.id < b.id))
                              AND FIELD(a.new_status, {_S}) >= FIELD(b.new_status, {_S})
-                             AND FIELD(a.new_status, {_S}) > 0
                              AND FIELD(b.new_status, {_S}) > 0
                             WHERE b.event_type = 'status_change'
                         """)

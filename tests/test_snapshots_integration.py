@@ -278,14 +278,19 @@ def _make_two_read_mock_conn(snapshot_row, papers_row):
     snapshot_row : dict | None — previous paper_snapshots row (content_hash check)
     papers_row : dict | None — papers row read with FOR UPDATE (event baseline)
     """
-    mock_cursor = MagicMock()
+    mock_conn, mock_cursor = _make_mock_conn()
     mock_cursor.fetchone.side_effect = [snapshot_row, papers_row]
-    mock_conn = MagicMock()
-    mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
-    mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
-    mock_conn.__enter__ = MagicMock(return_value=mock_conn)
-    mock_conn.__exit__ = MagicMock(return_value=False)
     return mock_conn, mock_cursor
+
+
+def _update_papers_args(mock_cursor):
+    """Return the params of the single UPDATE papers call."""
+    calls = [
+        c for c in mock_cursor.execute.call_args_list
+        if "UPDATE papers" in str(c)
+    ]
+    assert len(calls) == 1
+    return calls[0][0][1]
 
 
 class TestEffectiveStatusBaseline:
@@ -337,12 +342,7 @@ class TestEffectiveStatusBaseline:
             result = append_paper_snapshot(1, "working_paper", "AER", "new abs", None, "2024")
 
         assert result.status_changed is False
-        update_calls = [
-            c for c in mock_cursor.execute.call_args_list
-            if "UPDATE papers" in str(c)
-        ]
-        assert len(update_calls) == 1
-        assert update_calls[0][0][1][0] == "published"
+        assert _update_papers_args(mock_cursor)[0] == "published"
 
     def test_null_effective_status_takes_new_without_event(self):
         """papers.status NULL: adopt the new status, but emit nothing."""
@@ -355,11 +355,7 @@ class TestEffectiveStatusBaseline:
             result = append_paper_snapshot(1, "working_paper", "AER", "abs", None, "2024")
 
         assert result.status_changed is False
-        update_calls = [
-            c for c in mock_cursor.execute.call_args_list
-            if "UPDATE papers" in str(c)
-        ]
-        assert update_calls[0][0][1][0] == "working_paper"
+        assert _update_papers_args(mock_cursor)[0] == "working_paper"
 
     def test_papers_row_read_with_for_update(self):
         """The papers.status read must lock the row (FOR UPDATE) so concurrent
