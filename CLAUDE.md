@@ -19,6 +19,7 @@ make kill                 # Kill processes on ports 8000/8001/3000/3001
 # Database
 make seed                 # Create tables + run migrations (idempotent)
 make reset-db             # Drop and recreate database from scratch
+make sync-prod            # DESTRUCTIVE: replace local DB with latest prod backup (downloads dump first, then recreates volume)
 
 # Scraping pipeline
 make scrape               # Fetch-only pipeline: download HTML + draft URL validation

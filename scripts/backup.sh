@@ -32,7 +32,21 @@ if [ -z "$DB_CONTAINER" ]; then
     exit 1
 fi
 
-docker exec "$DB_CONTAINER" mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" econ_newsfeed | gzip > "$BACKUP_FILE"
+# Dump to a .partial file and only promote it after verifying the
+# '-- Dump completed' trailer. A mysqldump that dies mid-stream (e.g. the
+# db container under memory pressure on the html blob tables) still leaves
+# a gzip-valid file — without this check a truncated dump silently becomes
+# the "latest backup" (happened on 2026-06-01: the dump lacked researchers
+# and papers entirely).
+docker exec "$DB_CONTAINER" mysqldump -u root -p"$MYSQL_ROOT_PASSWORD" \
+    --single-transaction --quick econ_newsfeed | gzip > "$BACKUP_FILE.partial"
+
+if ! gunzip -c "$BACKUP_FILE.partial" | tail -1 | grep -q '^-- Dump completed'; then
+    rm -f "$BACKUP_FILE.partial"
+    echo "ERROR: dump truncated (no '-- Dump completed' trailer) — backup discarded" >&2
+    exit 1
+fi
+mv "$BACKUP_FILE.partial" "$BACKUP_FILE"
 
 echo "Backup created: $BACKUP_FILE ($(du -h "$BACKUP_FILE" | cut -f1))"
 
