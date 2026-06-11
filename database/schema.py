@@ -717,7 +717,11 @@ def create_tables() -> None:
 
                     # Remove forward-flapping duplicates: a status_change event
                     # is spurious unless it advances past the highest rank an
-                    # earlier event already reached for the same paper
+                    # earlier event already reached for the same paper.
+                    # Not just one-time cleanup: created_at is backdated to the
+                    # HTML fetch time, so this enforces monotone rank in *feed
+                    # order* on every boot (emission order can differ when the
+                    # extraction backlog reorders pages)
                     try:
                         cursor.execute(f"""
                             DELETE b FROM feed_events b
