@@ -132,21 +132,31 @@ def update_scrape_log(log_id: int, status: str, urls_checked: int = 0, urls_chan
     ))
 
 
-_STALE_SCRAPE_HOURS = 3
-
-
 def _cleanup_stale_scrape_logs() -> None:
-    """Mark scrape_log entries stuck in 'running' for >3h as 'failed'."""
+    """Mark zombie 'running' scrape_log entries as 'failed'.
+
+    The scrape advisory lock is the source of truth: if no connection holds
+    it, every 'running' row is a leftover from a killed process (e.g. a
+    deploy restarting the container mid-scrape). While the lock is held, the
+    holder's row is the newest 'running' row — anything older is a zombie.
+    The 5-minute grace window avoids racing a scrape that acquired the lock
+    just after we checked it.
+    """
+    if is_scrape_running():
+        where = """status = 'running'
+             AND id < (SELECT mx FROM (SELECT MAX(id) AS mx FROM scrape_log
+                                       WHERE status = 'running') AS newest)"""
+    else:
+        where = """status = 'running'
+             AND started_at < DATE_SUB(NOW(), INTERVAL 5 MINUTE)"""
     affected = Database.execute_query(
-        """UPDATE scrape_log
+        f"""UPDATE scrape_log
            SET finished_at = NOW(), status = 'failed',
-               error_message = 'Stale running entry — cleaned up automatically'
-           WHERE status = 'running'
-             AND started_at < DATE_SUB(NOW(), INTERVAL %s HOUR)""",
-        (_STALE_SCRAPE_HOURS,),
+               error_message = 'Zombie running entry — process died mid-scrape'
+           WHERE {where}"""
     )
     if affected:
-        logger.info("Cleaned up %d stale scrape_log entries", affected)
+        logger.info("Cleaned up %d zombie scrape_log entries", affected)
 
 
 _DRAFT_VALIDATION_BUDGET_SECONDS = 300  # 5-minute time budget

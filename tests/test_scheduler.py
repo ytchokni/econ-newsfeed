@@ -345,10 +345,11 @@ class TestScrapeJobIsFetchOnly:
 # ---------------------------------------------------------------------------
 
 class TestStaleLogCleanup:
-    """Verify stale running scrape_log entries get cleaned up."""
+    """Verify zombie running scrape_log entries get cleaned up."""
 
+    @patch("scheduler.is_scrape_running", return_value=False)
     @patch("scheduler.Database.execute_query")
-    def test_marks_old_running_entries_as_failed(self, mock_exec):
+    def test_lock_free_marks_running_entries_as_failed(self, mock_exec, mock_lock):
         mock_exec.return_value = 2
 
         _cleanup_stale_scrape_logs()
@@ -357,10 +358,23 @@ class TestStaleLogCleanup:
         query = mock_exec.call_args[0][0]
         assert "UPDATE scrape_log" in query
         assert "status = 'failed'" in query
-        assert "INTERVAL %s HOUR" in query
+        assert "INTERVAL 5 MINUTE" in query
 
+    @patch("scheduler.is_scrape_running", return_value=True)
     @patch("scheduler.Database.execute_query")
-    def test_skips_when_none_stale(self, mock_exec):
+    def test_lock_held_spares_newest_running_entry(self, mock_exec, mock_lock):
+        mock_exec.return_value = 1
+
+        _cleanup_stale_scrape_logs()
+
+        mock_exec.assert_called_once()
+        query = mock_exec.call_args[0][0]
+        assert "MAX(id)" in query
+        assert "status = 'failed'" in query
+
+    @patch("scheduler.is_scrape_running", return_value=False)
+    @patch("scheduler.Database.execute_query")
+    def test_skips_when_none_stale(self, mock_exec, mock_lock):
         mock_exec.return_value = 0
 
         _cleanup_stale_scrape_logs()
