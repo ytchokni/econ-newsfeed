@@ -2,7 +2,11 @@
 set -euo pipefail
 
 # Daily MySQL backup for econ-newsfeed
-# Cron: 0 3 * * * /opt/econ-newsfeed/scripts/backup.sh
+# Cron: 0 3 * * * /opt/econ-newsfeed/scripts/backup.sh >> /backups/backup.log 2>&1
+#
+# The log MUST live somewhere the ubuntu user can write (/backups, not
+# /var/log) — a failing redirect kills the cron job before this script
+# even starts, which silently disabled backups until 2026-06-11.
 #
 # Requires: MYSQL_ROOT_PASSWORD set in environment or sourced from .env
 
