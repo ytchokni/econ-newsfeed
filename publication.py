@@ -62,6 +62,51 @@ class PublicationExtractionList(BaseModel):
     publications: list[PublicationExtraction]
 
 
+class PublicationChange(BaseModel):
+    """A single detected change on a researcher's publication page."""
+    change_type: Literal["new_paper", "status_change", "title_change", "removed"]
+    title: str
+    authors: list[list[str]]
+    year: Optional[str] = None
+    venue: Optional[str] = None
+    status: Optional[_VALID_STATUSES] = None
+    draft_url: Optional[str] = None
+    abstract: Optional[str] = None
+    old_status: Optional[str] = None
+    old_title: Optional[str] = None
+
+    @field_validator('year', mode='before')
+    @classmethod
+    def coerce_year_to_str(cls, v: object) -> str | None:
+        if v is None:
+            return v
+        s = str(v).strip()
+        if not s:
+            return None
+        m = re.search(r'(19|20)\d{2}', s)
+        if m:
+            return m.group(0)
+        return s[:4]
+
+    @field_validator('draft_url', mode='before')
+    @classmethod
+    def validate_draft_url(cls, v: object) -> str | None:
+        if v is None:
+            return v
+        try:
+            parsed = urlparse(str(v))
+        except Exception:
+            return None
+        if parsed.scheme not in ('http', 'https'):
+            return None
+        return v
+
+
+class PublicationChangeList(BaseModel):
+    """Structured output for diff-based extraction."""
+    changes: list[PublicationChange]
+
+
 # Words too common to count as author-title overlap
 _STOPWORDS = frozenset({
     'a', 'an', 'the', 'of', 'on', 'in', 'and', 'or', 'for', 'to', 'at',
@@ -257,6 +302,72 @@ If no publications are found in the content, return an empty list. Do not fabric
 
 Content:
 {text_content[:CONTENT_MAX_CHARS]}"""
+
+    @staticmethod
+    def build_diff_extraction_prompt(old_text: str, new_text: str, url: str) -> str:
+        """Build the LLM prompt for diff-based change detection."""
+        return f"""I have two versions of a researcher's publication page at {url}.
+Compare the OLD and NEW versions and identify ALL changes to publications:
+
+1. **new_paper**: A publication that appears in NEW but is completely absent from OLD.
+2. **status_change**: A publication that existed in OLD but moved sections (e.g. from "Working Papers" to "Publications"), or gained a venue/status it didn't have before. Set old_status to the previous status.
+3. **title_change**: A publication whose title was modified. Set old_title to the previous title.
+4. **removed**: A publication that was in OLD but is completely absent from NEW.
+
+If a paper moved from "Working Papers" to "Refereed Publications" or gained "forthcoming"/"accepted", that is a status_change, NOT a new_paper.
+
+Do NOT report publications that are identical in both versions.
+
+OLD VERSION:
+{old_text[:CONTENT_MAX_CHARS]}
+
+NEW VERSION:
+{new_text[:CONTENT_MAX_CHARS]}
+
+For each change, provide:
+- change_type: one of "new_paper", "status_change", "title_change", "removed"
+- title: the publication title (current/new version)
+- authors: a list of [first_name, last_name] pairs
+- year, venue, status, draft_url, abstract: from the NEW version (or OLD version for "removed")
+- old_status: previous status (for status_change only)
+- old_title: previous title (for title_change only)
+
+If no changes were detected, return an empty changes list."""
+
+    @staticmethod
+    def try_extract_changes(old_text: str, new_text: str, url: str,
+                            scrape_log_id: int | None = None) -> list[dict] | None:
+        """Detect publication changes by comparing old and new page text.
+
+        Returns None on LLM failure, [] when no changes detected.
+        Each dict has a 'change_type' key indicating what happened.
+        """
+        prompt = Publication.build_diff_extraction_prompt(old_text, new_text, url)
+        model = get_model()
+        logging.info("Diff-extracting changes from %s using LLM (%s)", url, model)
+
+        result = extract_json(prompt, PublicationChangeList)
+
+        if result.usage is not None:
+            Database.log_llm_usage(
+                "diff_extraction", model, result.usage,
+                context_url=url, scrape_log_id=scrape_log_id,
+            )
+
+        if result.parsed is None:
+            logging.warning("Diff extraction returned no parsed result for %s", url)
+            return None
+
+        validated = []
+        for change in result.parsed.changes:
+            d = change.model_dump()
+            if d['change_type'] == 'removed':
+                validated.append(d)
+            elif validate_publication(d):
+                validated.append(d)
+            else:
+                logging.info("Validation dropped change: %s", d.get('title', '<no title>'))
+        return validated
 
     @staticmethod
     def try_extract_publications(text_content: str, url: str, scrape_log_id: int | None = None) -> list[dict] | None:

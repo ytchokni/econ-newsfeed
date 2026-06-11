@@ -678,6 +678,33 @@ class HTMLFetcher:
         return ts
 
     @staticmethod
+    def get_previous_text(url_id: int) -> str | None:
+        """Retrieve the previous version's normalized text from the most recent snapshot.
+
+        Decompresses the archived raw_html, extracts text, and normalizes it
+        the same way fetch_and_save_if_changed does — so the diff between this
+        and the current html_content.content is meaningful.
+        Returns None if no snapshot exists (first extraction).
+        """
+        row = Database.fetch_one(
+            "SELECT raw_html_compressed FROM html_snapshots "
+            "WHERE url_id = %s ORDER BY snapshot_at DESC LIMIT 1",
+            (url_id,),
+        )
+        if not row or not row["raw_html_compressed"]:
+            return None
+        try:
+            raw_bytes = zlib.decompress(row["raw_html_compressed"])
+            raw_html = raw_bytes.decode("utf-8", errors="replace")
+            text = HTMLFetcher.extract_text_content(raw_html)
+            if len(text) > CONTENT_MAX_CHARS:
+                text = text[:CONTENT_MAX_CHARS]
+            return HTMLFetcher.normalize_text(text)
+        except Exception as e:
+            logging.warning("Failed to reconstruct previous text for url_id %s: %s", url_id, e)
+            return None
+
+    @staticmethod
     def get_latest_text(url_id: int) -> str | None:
         """Retrieve the latest text content for a given URL ID."""
         query = """

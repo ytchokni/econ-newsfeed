@@ -27,6 +27,7 @@ def _patches(payload=None, pubs=None, is_seed=False):
         }
     return {
         "payload": patch("extraction.HTMLFetcher.get_extraction_payload", return_value=payload),
+        "prev_text": patch("extraction.HTMLFetcher.get_previous_text", return_value=None),
         "fetch_ts": patch("extraction.HTMLFetcher.get_fetch_timestamp", return_value=None),
         "mark": patch("extraction.HTMLFetcher.mark_extracted"),
         "extract_text": patch("extraction.HTMLFetcher.extract_text_content", return_value="from raw html"),
