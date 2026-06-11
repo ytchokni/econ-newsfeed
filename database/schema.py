@@ -8,6 +8,7 @@ from mysql.connector import Error
 
 from db_config import db_config
 from database.connection import get_connection, execute_query
+from database.snapshots import STATUS_ORDER
 
 
 def create_database() -> None:
@@ -682,7 +683,7 @@ def create_tables() -> None:
 
                     # Clean up status regression events and restore papers.status
                     # to highest-ranked status seen across snapshots
-                    _S = "'working_paper','reject_and_resubmit','revise_and_resubmit','accepted','published'"
+                    _S = ",".join(f"'{s}'" for s in STATUS_ORDER)
                     try:
                         cursor.execute(f"""
                             DELETE FROM feed_events
@@ -714,6 +715,35 @@ def create_tables() -> None:
                             )
                     except Exception as e:
                         logging.warning("Migration: status regression cleanup: %s", e)
+
+                    # Remove forward-flapping duplicates: a status_change event
+                    # is spurious unless it advances past the highest rank an
+                    # earlier event already reached for the same paper.
+                    # Not just one-time cleanup: created_at is backdated to the
+                    # HTML fetch time, so this enforces monotone rank in *feed
+                    # order* on every boot (emission order can differ when the
+                    # extraction backlog reorders pages)
+                    try:
+                        cursor.execute(f"""
+                            DELETE b FROM feed_events b
+                            JOIN feed_events a
+                              ON a.paper_id = b.paper_id
+                             AND a.event_type = 'status_change'
+                             AND (a.created_at < b.created_at
+                                  OR (a.created_at = b.created_at AND a.id < b.id))
+                             AND FIELD(a.new_status, {_S}) >= FIELD(b.new_status, {_S})
+                             AND FIELD(b.new_status, {_S}) > 0
+                            WHERE b.event_type = 'status_change'
+                        """)
+                        flap_deleted = cursor.rowcount
+                        conn.commit()
+                        if flap_deleted:
+                            logging.info(
+                                "Migration: removed %d non-advancing status_change events",
+                                flap_deleted,
+                            )
+                    except Exception as e:
+                        logging.warning("Migration: forward-flapping cleanup: %s", e)
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                     cursor.fetchone()

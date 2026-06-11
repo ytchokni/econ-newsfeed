@@ -204,3 +204,29 @@ class TestMigrationAdvisoryLock:
         assert any("RELEASE_LOCK" in s for s in executed_sql), (
             "RELEASE_LOCK must be called even when ALTER TABLE fails"
         )
+
+
+# ---------------------------------------------------------------------------
+# Forward-flapping status_change cleanup migration
+# ---------------------------------------------------------------------------
+
+class TestForwardFlappingCleanupMigration:
+    """create_tables must delete status_change events that do not advance past
+    the highest rank already reached by an earlier event for the same paper."""
+
+    def test_create_tables_runs_forward_flapping_delete(self):
+        mock_conn, mock_cursor = _make_mock_conn()
+        from database import Database
+
+        with patch("database.schema.get_connection", return_value=mock_conn):
+            with patch("database.schema.seed_research_fields"), \
+                 patch("database.schema.seed_jel_codes"):
+                Database.create_tables()
+
+        executed_sql = [str(c) for c in mock_cursor.execute.call_args_list]
+        flap_deletes = [s for s in executed_sql if "DELETE b FROM feed_events b" in s]
+        assert len(flap_deletes) == 1
+        # Self-join orders by (created_at, id) and compares new_status ranks
+        assert "a.created_at < b.created_at" in flap_deletes[0]
+        assert "a.id < b.id" in flap_deletes[0]
+        assert "FIELD(a.new_status" in flap_deletes[0]
