@@ -105,7 +105,8 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
                           abstract: str | None, draft_url: str | None, year: str | None,
                           source_url: str | None = None, title: str | None = None) -> PaperSnapshotResult:
     """Append a paper snapshot if metadata changed. Updates denormalized papers table.
-    Returns PaperSnapshotResult with status change info for explicit event emission.
+    Returns PaperSnapshotResult with status change info for explicit event emission;
+    old_status is the paper's effective (monotone) status, not the latest raw snapshot.
     Hash check and insert run in a single transaction to prevent race conditions."""
     content_hash = _compute_paper_content_hash(status, venue, abstract, draft_url, year, title=title)
     now = datetime.now(timezone.utc)
@@ -113,7 +114,7 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
     with get_connection() as conn:
         with conn.cursor(dictionary=True) as cursor:
             cursor.execute(
-                "SELECT content_hash, status FROM paper_snapshots "
+                "SELECT content_hash FROM paper_snapshots "
                 "WHERE paper_id = %s ORDER BY scraped_at DESC LIMIT 1",
                 (paper_id,),
             )
@@ -121,7 +122,16 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
             if prev and prev['content_hash'] == content_hash:
                 return PaperSnapshotResult(changed=False)
 
-            old_status = prev['status'] if prev else None
+            # Baseline is the paper's effective status, not the latest raw
+            # snapshot: snapshots keep raw LLM output and flap when co-author
+            # pages disagree, which would re-emit forward events every cycle.
+            # FOR UPDATE serializes concurrent extractions of the same paper.
+            cursor.execute(
+                "SELECT status FROM papers WHERE id = %s FOR UPDATE",
+                (paper_id,),
+            )
+            paper_row = cursor.fetchone()
+            old_status = paper_row['status'] if paper_row else None
 
             # Always store raw LLM output in snapshots for audit
             cursor.execute(
