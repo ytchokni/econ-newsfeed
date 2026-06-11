@@ -1,12 +1,19 @@
 """Per-URL publication extraction, shared by the background worker and CLI.
 
-Decoupled from fetching: reads stored HTML, runs LLM extraction on the full
-text, persists papers/links/snapshots, and marks the URL extracted with the
-content hash read *before* the LLM call — so a fetch that updates the page
-mid-extraction leaves the URL in the needs-extraction queue.
+Decoupled from fetching: reads stored HTML, runs LLM extraction, persists
+papers/links/snapshots, and marks the URL extracted with the content hash
+read *before* the LLM call — so a fetch that updates the page mid-extraction
+leaves the URL in the needs-extraction queue.
+
+Two extraction paths:
+  - **Diff path** (non-seed, previous snapshot available): compares old and new
+    page text side-by-side, extracting only new/changed publications.
+  - **Full path** (seed or no previous snapshot): extracts all publications from
+    the full page text (original behaviour).
 """
 import logging
 from dataclasses import dataclass
+from datetime import timezone
 
 from database import Database
 from html_fetcher import HTMLFetcher
@@ -37,15 +44,9 @@ class ExtractionOutcome:
 def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> ExtractionOutcome:
     """Extract publications for one researcher URL from stored HTML.
 
-    is_seed deliberately uses extracted_at IS NULL (first *extraction*), not
-    fetch-time state — decoupled from fetching, that is the only reliable
-    seed signal and it stays correct when a URL is fetched repeatedly before
-    its first extraction.
-
-    A crash between save_publications and mark_extracted re-extracts the URL
-    on the next pass; saves dedup via title_hash, but a duplicate paper
-    snapshot / status_change event is possible in that window — accepted
-    tradeoff of the non-transactional persist-then-mark sequence.
+    Uses diff-based extraction when a previous snapshot exists (non-seed),
+    falling back to full extraction for seed URLs or when no snapshot is
+    available.
     """
     url_id = url_row['id']
     url = url_row['url']
@@ -64,31 +65,107 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
     content_hash = payload['content_hash']
     is_seed = payload['extracted_at'] is None
 
+    ts = payload.get('timestamp')
+    if ts and ts.tzinfo is None:
+        ts = ts.replace(tzinfo=timezone.utc)
+    fetch_date = ts
+
+    previous_text = None if is_seed else HTMLFetcher.get_previous_text(url_id)
+
+    if previous_text is not None:
+        outcome = _extract_via_diff(url_id, url, text, previous_text, content_hash,
+                                    scrape_log_id, fetch_date)
+    else:
+        outcome = _extract_full(url_id, url, text, is_seed, content_hash,
+                                scrape_log_id, fetch_date)
+
+    if outcome.ok and page_type == "HOME":
+        _update_home_description(researcher_id, text, url, scrape_log_id)
+
+    return outcome
+
+
+def _extract_full(url_id: int, url: str, text: str, is_seed: bool,
+                  content_hash: str, scrape_log_id: int | None,
+                  fetch_date=None) -> ExtractionOutcome:
+    """Original full-page extraction path."""
     pubs = Publication.try_extract_publications(text, url, scrape_log_id=scrape_log_id)
     if pubs is None:
         return ExtractionOutcome("failed")
 
     if pubs:
-        fetch_date = HTMLFetcher.get_fetch_timestamp(url_id)
         Publication.save_publications(url, pubs, is_seed=is_seed, event_date=fetch_date)
         reconcile_title_renames(url, pubs, event_date=fetch_date)
         match_and_save_paper_links(url_id, pubs)
         append_snapshots_for_pubs(pubs, url, event_date=fetch_date)
 
-    if page_type == "HOME":
-        _update_home_description(researcher_id, text, url, scrape_log_id)
-
     HTMLFetcher.mark_extracted(url_id, content_hash)
     return ExtractionOutcome("extracted" if pubs else "empty", pubs_count=len(pubs))
 
 
+def _extract_via_diff(url_id: int, url: str, new_text: str, old_text: str,
+                      content_hash: str, scrape_log_id: int | None,
+                      fetch_date=None) -> ExtractionOutcome:
+    """Diff-based extraction: compare old and new page, extract only changes."""
+    changes = Publication.try_extract_changes(old_text, new_text, url, scrape_log_id=scrape_log_id)
+    if changes is None:
+        return ExtractionOutcome("failed")
+
+    count = _process_diff_changes(changes, url, url_id, fetch_date)
+
+    HTMLFetcher.mark_extracted(url_id, content_hash)
+    return ExtractionOutcome("extracted" if count > 0 else "empty", pubs_count=count)
+
+
+def _process_diff_changes(changes: list[dict], url: str, url_id: int,
+                          fetch_date=None) -> int:
+    """Process structured change events from diff extraction.
+
+    Handles new_paper, status_change, and title_change events. Returns
+    the number of actionable changes processed.
+    """
+    new_pubs = [c for c in changes if c['change_type'] == 'new_paper']
+    status_changes = [c for c in changes if c['change_type'] == 'status_change']
+    title_changes = [c for c in changes if c['change_type'] == 'title_change']
+
+    if new_pubs:
+        Publication.save_publications(url, new_pubs, is_seed=False, event_date=fetch_date)
+        match_and_save_paper_links(url_id, new_pubs)
+        append_snapshots_for_pubs(new_pubs, url, event_date=fetch_date)
+
+    if status_changes:
+        append_snapshots_for_pubs(status_changes, url, event_date=fetch_date)
+
+    for tc in title_changes:
+        _apply_title_change(tc, url, fetch_date)
+
+    return len(new_pubs) + len(status_changes) + len(title_changes)
+
+
+def _apply_title_change(change: dict, source_url: str, event_date) -> None:
+    """Apply a title change detected by diff extraction."""
+    from feed_events import FeedEventEmitter
+    from paper_saver import PaperSaver
+
+    old_title = change.get('old_title')
+    new_title = change.get('title')
+    if not old_title or not new_title:
+        return
+
+    old_hash = Database.compute_title_hash(old_title)
+    row = Database.fetch_one("SELECT id FROM papers WHERE title_hash = %s", (old_hash,))
+    if not row:
+        logger.warning("Title change for unknown paper: %s -> %s", old_title, new_title)
+        return
+
+    paper_id = row['id']
+    PaperSaver.apply_title_rename(paper_id, old_title, new_title, change, source_url)
+    FeedEventEmitter.emit_title_change(paper_id, old_title, new_title, event_date=event_date)
+
+
 def _update_home_description(researcher_id: int, text: str, url: str,
                              scrape_log_id: int | None = None) -> None:
-    """Best-effort researcher description refresh from a HOME page.
-
-    Failures are logged, never propagated — a description glitch must not
-    block publication extraction.
-    """
+    """Best-effort researcher description refresh from a HOME page."""
     try:
         description = HTMLFetcher.extract_description(text, url, scrape_log_id=scrape_log_id)
         if not description:
