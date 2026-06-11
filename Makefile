@@ -86,6 +86,12 @@ check:
 	cd app && npx jest
 	@echo "=== All checks passed ==="
 
+check-data:  ## Data-quality invariant checks against the real DB (.env); fails on bad rows
+	poetry run pytest tests_data_quality -v
+
+sync-prod:  ## DESTRUCTIVE: replace local DB with latest prod backup (scp + fresh volume + migrations)
+	./scripts/sync_prod_db.sh
+
 # Eval
 eval-export:
 	poetry run python eval/export_test_cases.py
