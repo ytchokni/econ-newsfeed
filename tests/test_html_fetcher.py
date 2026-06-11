@@ -465,3 +465,29 @@ class TestGetExtractionPayload:
     def test_returns_none_when_no_html(self):
         with patch("html_fetcher.Database.fetch_one", return_value=None):
             assert HTMLFetcher.get_extraction_payload(7) is None
+
+
+class TestUnchangedPathBackfill:
+    """The unchanged-hash path must backfill missing bodies (data-quality finding
+    2026-06-11: 4,536 prod rows had content_hash but NULL content — restored from
+    a metadata-only dump — and extraction looped on no_content forever because
+    the matching hash meant the save path never ran)."""
+
+    @patch("html_fetcher.Database.execute_query")
+    def test_touch_unchanged_backfills_content_and_raw_html(self, mock_execute):
+        HTMLFetcher._touch_unchanged(42, "<html>raw</html>", "page text")
+        sql, params = mock_execute.call_args[0]
+        assert "COALESCE(raw_html" in sql
+        assert "content IS NULL OR content = ''" in sql
+        assert "timestamp" in sql
+        assert params[-1] == 42  # url_id is the WHERE param
+        assert "<html>raw</html>" in params
+        assert "page text" in params
+
+    @patch("html_fetcher.Database.execute_query")
+    def test_touch_unchanged_preserves_existing_content(self, mock_execute):
+        """Backfill must be conditional (IF/COALESCE), never an unconditional overwrite."""
+        HTMLFetcher._touch_unchanged(42, "<html/>", "text")
+        sql, _ = mock_execute.call_args[0]
+        assert "SET timestamp" in sql
+        assert "content = IF(content IS NULL OR content = ''" in sql

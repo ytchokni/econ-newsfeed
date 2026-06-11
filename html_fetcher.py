@@ -583,15 +583,29 @@ class HTMLFetcher:
             logging.info(f"New version of text content saved for URL ID: {url_id}, URL: {url}")
             return True
 
-        # Update timestamp (for cooldown) and backfill raw_html if missing
-        from database import Database
-        Database.execute_query(
-            "UPDATE html_content SET timestamp = %s, raw_html = COALESCE(raw_html, %s) WHERE url_id = %s",
-            (datetime.now(timezone.utc), raw_html, url_id),
-        )
+        HTMLFetcher._touch_unchanged(url_id, raw_html, text_content)
 
         logging.info(f"No text changes detected for URL ID: {url_id}, URL: {url}")
         return False
+
+    @staticmethod
+    def _touch_unchanged(url_id: int, raw_html: str | None, text_content: str) -> None:
+        """Update the cooldown timestamp and backfill missing bodies when the hash is unchanged.
+
+        Rows restored from a metadata-only dump carry content_hash but NULL
+        content; the matching hash means the save path never runs, so without
+        this backfill the body stays missing forever and extraction loops on
+        no_content (4,536 prod rows were stuck this way on 2026-06-11).
+        """
+        from database import Database
+        Database.execute_query(
+            """UPDATE html_content
+               SET timestamp = %s,
+                   raw_html = COALESCE(raw_html, %s),
+                   content = IF(content IS NULL OR content = '', %s, content)
+               WHERE url_id = %s""",
+            (datetime.now(timezone.utc), raw_html, text_content, url_id),
+        )
 
     @staticmethod
     def extract_description(text_content: str, url: str, scrape_log_id=None) -> str | None:
