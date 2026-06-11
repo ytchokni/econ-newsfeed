@@ -27,7 +27,6 @@ import scheduler
 from scheduler import (
     start_scheduler,
     shutdown_scheduler,
-    create_scrape_log,
     run_scrape_job,
 )
 
@@ -897,18 +896,17 @@ async def trigger_scrape(request: Request):
             detail="A scrape is already running. Wait for it to complete.",
         )
 
-    log_id = create_scrape_log()
-    started_at = datetime.now(timezone.utc)
-
+    # run_scrape_job() creates its own scrape_log entry (and acquires the
+    # advisory lock).  Do NOT create one here — that produces an orphan
+    # "running" row that never gets updated.
     t = threading.Thread(
         target=run_scrape_job, daemon=False, name="manual-scrape"
     )
     t.start()
 
     return {
-        "scrape_id": log_id,
         "status": "running",
-        "started_at": _iso_z(started_at),
+        "started_at": _iso_z(datetime.now(timezone.utc)),
     }
 
 

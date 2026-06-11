@@ -207,6 +207,7 @@ def _get_scrape_stats() -> dict:
                             WHERE scrape_log_id = s.id), 0) AS tokens_used
            FROM scrape_log s ORDER BY id DESC LIMIT 30"""
     )
+    now = datetime.now(timezone.utc)
     recent_list = []
     for r in recent:
         started = r["started_at"]
@@ -214,6 +215,9 @@ def _get_scrape_stats() -> dict:
         duration = None
         if started and finished:
             duration = int((finished - started).total_seconds())
+        elif started and r["status"] == "running":
+            started_aware = started if started.tzinfo else started.replace(tzinfo=timezone.utc)
+            duration = int((now - started_aware).total_seconds())
         recent_list.append({
             "started_at": _iso_z(started),
             "status": r["status"],

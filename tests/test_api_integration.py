@@ -205,7 +205,6 @@ class TestFullCycle:
         # 7. Trigger scrape (authenticated)
         with (
             patch("api.scheduler.is_scrape_running", return_value=False),
-            patch("api.create_scrape_log", return_value=1),
             patch("api.threading.Thread"),
         ):
             resp = client.post("/api/scrape", headers=AUTH_HEADERS)

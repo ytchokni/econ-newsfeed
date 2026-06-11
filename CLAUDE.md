@@ -67,7 +67,7 @@ Extraction is owned by the extraction worker (below) — the scrape job only ref
 
 **Paper merge:** `merge_duplicate_papers()` dedupes papers post-run.
 
-**Stale scrape_log cleanup:** On scheduler start, any `scrape_log` entries stuck in `'running'` for >24 hours are automatically marked as `'failed'`.
+**Zombie scrape_log cleanup:** On scheduler start and hourly thereafter, `scrape_log` entries stuck in `'running'` are marked `'failed'` based on the scrape advisory lock: if no connection holds the lock, all running rows older than 5 minutes are zombies; if the lock is held, all but the newest running row are. Deploys that restart the container mid-scrape are swept on the next boot.
 
 **`make fetch`** runs stage 1 only (download HTML). Extraction is handled by the extraction worker (or `make extract` manually) — both use the shared `extraction.extract_one_url()`, which protects feed event integrity via `_title_in_previous_snapshot()` and the `_url_has_baseline()` check.
 

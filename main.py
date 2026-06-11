@@ -17,7 +17,14 @@ def import_data(file_path: str) -> None:
 
 def download_htmls() -> None:
     """Download HTML content for all URLs in the researcher_urls table."""
-    from scheduler import create_scrape_log, update_scrape_log
+    from scheduler import create_scrape_log, update_scrape_log, _acquire_db_lock, _release_db_lock
+
+    # Hold the scrape advisory lock: it prevents collisions with a scheduled
+    # scrape, and the zombie cleanup treats lock-less 'running' rows as dead.
+    lock_conn = _acquire_db_lock()
+    if lock_conn is None:
+        logging.warning("Another scrape is running (advisory lock held) — aborting")
+        return
 
     log_id = create_scrape_log()
     researcher_urls = Researcher.get_all_researcher_urls()
@@ -35,6 +42,8 @@ def download_htmls() -> None:
     except Exception as e:
         logging.error(f"Download failed: {e}")
         update_scrape_log(log_id, "failed", urls_checked, urls_changed, error_message=str(e))
+    finally:
+        _release_db_lock(lock_conn)
 
 
 def classify_jel() -> None:
@@ -321,7 +330,10 @@ def batch_check() -> None:
 
 def extract_only(limit: int | None = None) -> None:
     """Run LLM extraction for URLs with pending content changes (skips fetching)."""
-    from scheduler import create_scrape_log, update_scrape_log, _update_progress
+    from scheduler import (
+        create_scrape_log, update_scrape_log, _update_progress,
+        _acquire_db_lock, _release_db_lock,
+    )
     from extraction import extract_one_url
 
     pending = Database.get_urls_needing_extraction()
@@ -334,6 +346,13 @@ def extract_only(limit: int | None = None) -> None:
         pending = pending[:limit]
     else:
         logging.info("Extracting %d pending URLs", len(pending))
+
+    # Hold the scrape advisory lock: the zombie cleanup treats lock-less
+    # 'running' rows as dead, and a concurrent fetch would race extraction.
+    lock_conn = _acquire_db_lock()
+    if lock_conn is None:
+        logging.warning("Another scrape is running (advisory lock held) — aborting")
+        return
 
     log_id = create_scrape_log()
     pubs_extracted = 0
@@ -375,6 +394,8 @@ def extract_only(limit: int | None = None) -> None:
     except Exception as e:
         logging.error("Extraction failed: %s", e)
         update_scrape_log(log_id, "failed", error_message=str(e))
+    finally:
+        _release_db_lock(lock_conn)
 
 
 def discover_domains() -> None:

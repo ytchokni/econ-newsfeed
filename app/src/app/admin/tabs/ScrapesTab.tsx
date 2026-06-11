@@ -18,11 +18,14 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
-function formatDuration(seconds: number | null): string {
+function formatDuration(seconds: number | null, isRunning?: boolean): string {
   if (seconds == null) return "—";
-  const m = Math.floor(seconds / 60);
+  const h = Math.floor(seconds / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
   const s = seconds % 60;
-  return m > 0 ? `${m}m ${s}s` : `${s}s`;
+  const prefix = isRunning ? "~" : "";
+  if (h > 0) return `${prefix}${h}h ${m}m`;
+  return m > 0 ? `${prefix}${m}m ${s}s` : `${prefix}${s}s`;
 }
 
 function formatDate(iso: string): string {
@@ -64,17 +67,20 @@ export default function ScrapesTab({ data }: Props) {
             </tr>
           </thead>
           <tbody>
-            {recent.map((row, i) => (
-              <tr key={i} className="border-b border-[#2a2d3a] last:border-0">
-                <td className="py-2 text-zinc-300 font-mono text-xs">{formatDate(row.started_at)}</td>
-                <td className="py-2"><StatusBadge status={row.status} /></td>
-                <td className="py-2 text-right text-zinc-300">{row.urls_checked}</td>
-                <td className="py-2 text-right text-zinc-300">{row.urls_changed}</td>
-                <td className="py-2 text-right text-zinc-100 font-medium">{row.pubs_extracted}</td>
-                <td className="py-2 text-right text-zinc-300">{row.tokens_used.toLocaleString()}</td>
-                <td className="py-2 text-right text-zinc-300">{formatDuration(row.duration_seconds)}</td>
-              </tr>
-            ))}
+            {recent.map((row, i) => {
+              const isRunning = row.status === "running";
+              return (
+                <tr key={i} className="border-b border-[#2a2d3a] last:border-0">
+                  <td className="py-2 text-zinc-300 font-mono text-xs">{formatDate(row.started_at)}</td>
+                  <td className="py-2"><StatusBadge status={row.status} /></td>
+                  <td className="py-2 text-right text-zinc-300">{row.urls_checked}</td>
+                  <td className="py-2 text-right text-zinc-300">{row.urls_changed}</td>
+                  <td className="py-2 text-right text-zinc-100 font-medium">{row.pubs_extracted}</td>
+                  <td className="py-2 text-right text-zinc-300">{row.tokens_used.toLocaleString()}</td>
+                  <td className={`py-2 text-right ${isRunning ? "text-blue-400" : "text-zinc-300"}`}>{formatDuration(row.duration_seconds, isRunning)}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
         {recent.length === 0 && (

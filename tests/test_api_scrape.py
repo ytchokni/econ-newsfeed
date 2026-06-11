@@ -45,7 +45,6 @@ class TestTriggerScrape:
     def test_valid_key_returns_201(self, client):
         with (
             patch("api.scheduler.is_scrape_running", return_value=False),
-            patch("api.create_scrape_log", return_value=15),
             patch("api.threading.Thread") as mock_thread,
         ):
             response = client.post(
@@ -55,7 +54,6 @@ class TestTriggerScrape:
 
         assert response.status_code == 201
         body = response.json()
-        assert body["scrape_id"] == 15
         assert body["status"] == "running"
         assert "started_at" in body
 
@@ -63,7 +61,6 @@ class TestTriggerScrape:
         """Scrape thread must be non-daemon so it completes on shutdown."""
         with (
             patch("api.scheduler.is_scrape_running", return_value=False),
-            patch("api.create_scrape_log", return_value=1),
             patch("api.threading.Thread") as mock_thread_cls,
         ):
             client.post("/api/scrape", headers=AUTH_HEADERS)
