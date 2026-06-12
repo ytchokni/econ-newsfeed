@@ -21,12 +21,19 @@ _lock_conn = None  # connection holding the advisory lock for the duration of a 
 _scheduler = None
 _scheduler_lock_conn = None  # connection holding the advisory lock for the scheduler singleton
 
+# Lock connections sit idle while the lock is held (nothing ever queries on
+# them), so MySQL's default wait_timeout (8h) would kill them mid-scrape — the
+# lock silently drops, the zombie cleanup falsely fails the live scrape row,
+# and concurrent-scrape protection vanishes. A full scrape takes ~12h.
+_LOCK_CONN_WAIT_TIMEOUT = 7 * 24 * 3600  # 7 days
+
 
 def _acquire_db_lock() -> "mysql.connector.connection.MySQLConnection | None":
     """Try to acquire a MySQL advisory lock. Returns the connection if acquired, None otherwise."""
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
+        cursor.execute("SET SESSION wait_timeout = %s", (_LOCK_CONN_WAIT_TIMEOUT,))
         cursor.execute("SELECT GET_LOCK(%s, 0)", (_LOCK_NAME,))
         result = cursor.fetchone()
         cursor.close()
@@ -472,6 +479,7 @@ def start_scheduler() -> None:
     try:
         conn = mysql.connector.connect(**db_config)
         cursor = conn.cursor()
+        cursor.execute("SET SESSION wait_timeout = %s", (_LOCK_CONN_WAIT_TIMEOUT,))
         cursor.execute("SELECT GET_LOCK(%s, 0)", (_SCHEDULER_LOCK_NAME,))
         result = cursor.fetchone()
         cursor.close()

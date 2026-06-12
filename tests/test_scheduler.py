@@ -122,6 +122,30 @@ class TestLockAlreadyHeld:
 
 
 # ---------------------------------------------------------------------------
+# 2b. Lock connection keepalive
+# ---------------------------------------------------------------------------
+
+class TestLockConnectionKeepalive:
+    """The lock connection idles while held — it must outlive MySQL's default
+    8h wait_timeout or the lock drops mid-scrape and the zombie cleanup
+    falsely fails the live scrape row."""
+
+    @patch("scheduler.mysql.connector.connect")
+    def test_acquire_raises_session_wait_timeout(self, mock_connect):
+        cursor = mock_connect.return_value.cursor.return_value
+        cursor.fetchone.return_value = (1,)
+
+        conn = scheduler._acquire_db_lock()
+
+        assert conn is mock_connect.return_value
+        executed = [c.args[0] for c in cursor.execute.call_args_list]
+        assert any("wait_timeout" in q for q in executed)
+        # keepalive must be set before the lock is taken
+        assert "wait_timeout" in executed[0]
+        assert "GET_LOCK" in executed[1]
+
+
+# ---------------------------------------------------------------------------
 # 3. Error propagation — log updated to "failed"
 # ---------------------------------------------------------------------------
 
