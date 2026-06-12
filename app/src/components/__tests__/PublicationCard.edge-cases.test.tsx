@@ -72,7 +72,7 @@ describe("PublicationCard with null fields", () => {
   });
 
   it("does not render status pill when status is null", () => {
-    const { container } = render(<PublicationCard publication={basePublication} />);
+    render(<PublicationCard publication={basePublication} />);
     expect(screen.queryByText("Working Paper")).not.toBeInTheDocument();
     expect(screen.queryByText("Published")).not.toBeInTheDocument();
   });
