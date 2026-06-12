@@ -13,7 +13,7 @@ AUTH_HEADERS = {"X-API-Key": os.environ["SCRAPE_API_KEY"]}
 def client():
     """Create a test client with mocked database and scheduler."""
     with (
-        patch("database.Database.create_tables"),
+        patch("database.create_tables"),
         patch("scheduler.start_scheduler"),
         patch("scheduler.shutdown_scheduler"),
     ):
@@ -99,7 +99,7 @@ class TestScrapeStatus:
             "pubs_extracted": 7,
         }
         with (
-            patch("api.Database.fetch_one", return_value=last_scrape_row),
+            patch("api.fetch_one", return_value=last_scrape_row),
             patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
             response = client.get("/api/scrape/status", headers=AUTH_HEADERS)
@@ -116,7 +116,7 @@ class TestScrapeStatus:
 
     def test_returns_null_when_no_scrapes(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=None),
+            patch("api.fetch_one", return_value=None),
             patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
             response = client.get("/api/scrape/status", headers=AUTH_HEADERS)

@@ -10,11 +10,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Database
+from database import execute_query, fetch_all, fetch_one
 
 
 def main():
-    bad_events = Database.fetch_all("""
+    bad_events = fetch_all("""
         SELECT fe.id, fe.created_at, LEFT(p.title, 60) AS title,
                LEFT(p.source_url, 50) AS source_url,
                COALESCE((
@@ -32,7 +32,7 @@ def main():
         ORDER BY fe.created_at
     """)
 
-    total = Database.fetch_one("SELECT COUNT(*) AS c FROM feed_events")
+    total = fetch_one("SELECT COUNT(*) AS c FROM feed_events")
     print(f"Feed events total: {total['c']}")
     print(f"False new_paper events (source URL < 2 snapshots): {len(bad_events)}")
 
@@ -51,12 +51,12 @@ def main():
 
     ids = [ev['id'] for ev in bad_events]
     placeholders = ','.join(['%s'] * len(ids))
-    Database.execute_query(
+    execute_query(
         f"DELETE FROM feed_events WHERE id IN ({placeholders})",
         tuple(ids),
     )
 
-    remaining = Database.fetch_one("SELECT COUNT(*) AS c FROM feed_events")
+    remaining = fetch_one("SELECT COUNT(*) AS c FROM feed_events")
     print(f"Deleted {len(bad_events)} false feed events")
     print(f"Feed events remaining: {remaining['c']}")
 

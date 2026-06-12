@@ -3,7 +3,7 @@
 Reads researcher descriptions and classifies them into standard
 JEL (Journal of Economic Literature) codes.
 """
-from database import Database
+from database import log_llm_usage
 from llm_client import extract_json, get_model
 from pydantic import BaseModel, field_validator
 import logging
@@ -87,7 +87,7 @@ def classify_researcher(
     result = extract_json(prompt, JelClassificationResult)
 
     if result.usage is not None:
-        Database.log_llm_usage(
+        log_llm_usage(
             "jel_classification", model, result.usage,
             researcher_id=researcher_id,
         )

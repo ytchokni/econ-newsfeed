@@ -13,7 +13,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Database
+from database import execute_query, fetch_all
 from openalex import OPENALEX_BASE_URL, _get_session, _get_with_retry
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -48,7 +48,7 @@ def fetch_author_affiliation(openalex_author_id: str) -> str | None:
 def main():
     dry_run = "--dry-run" in sys.argv
 
-    rows = Database.fetch_all("""
+    rows = fetch_all("""
         SELECT r.id, r.first_name, r.last_name, r.openalex_author_id
         FROM researchers r
         LEFT JOIN researcher_urls ru ON ru.researcher_id = r.id
@@ -69,7 +69,7 @@ def main():
                 r["id"], r["first_name"], r["last_name"], affiliation,
             )
             if not dry_run:
-                Database.execute_query(
+                execute_query(
                     "UPDATE researchers SET affiliation = %s WHERE id = %s AND affiliation IS NULL",
                     (affiliation, r["id"]),
                 )

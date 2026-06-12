@@ -1,4 +1,4 @@
-from database import Database
+from database import log_llm_usage
 from bs4 import BeautifulSoup
 from llm_client import get_model, extract_json
 from pydantic import BaseModel, field_validator
@@ -243,19 +243,6 @@ def validate_publication(pub: dict) -> bool:
 
 class Publication:
     @staticmethod
-    def save_publications(
-        url: str,
-        publications: list[dict],
-        is_seed: bool = False,
-        event_date=None,
-    ) -> None:
-        """Save extracted publications. Delegates to PaperSaver + FeedEventEmitter."""
-        from paper_saver import PaperSaver
-        from feed_events import FeedEventEmitter
-        results = PaperSaver.save_publications(url, publications, is_seed=is_seed)
-        FeedEventEmitter.emit_new_paper_events(results, url, is_seed=is_seed, event_date=event_date)
-
-    @staticmethod
     def extract_relevant_html(html_content: str) -> str:
         """Extract the relevant parts of the HTML, preserving hyperlinks as inline text.
 
@@ -339,7 +326,7 @@ If no changes were detected, return an empty changes list."""
         result = extract_json(prompt, PublicationChangeList)
 
         if result.usage is not None:
-            Database.log_llm_usage(
+            log_llm_usage(
                 "diff_extraction", model, result.usage,
                 context_url=url, scrape_log_id=scrape_log_id,
             )
@@ -374,7 +361,7 @@ If no changes were detected, return an empty changes list."""
         result = extract_json(prompt, PublicationExtractionList)
 
         if result.usage is not None:
-            Database.log_llm_usage(
+            log_llm_usage(
                 "publication_extraction", model, result.usage,
                 context_url=url, scrape_log_id=scrape_log_id,
             )
@@ -398,50 +385,3 @@ If no changes were detected, return an empty changes list."""
         pubs = Publication.try_extract_publications(text_content, url, scrape_log_id=scrape_log_id)
         return pubs if pubs is not None else []
 
-
-
-def append_snapshots_for_pubs(pubs: list[dict], source_url: str, event_date=None) -> None:
-    """Append paper snapshots for a batch of extracted publications.
-
-    Resolves title_hash → paper_id in a single query, then appends
-    a snapshot for each matched paper. Emits status_change events
-    via FeedEventEmitter when status changes are detected.
-    """
-    from feed_events import FeedEventEmitter
-
-    hash_to_pub = {}
-    for pub in pubs:
-        title = pub.get('title')
-        if title:
-            hash_to_pub[Database.compute_title_hash(title)] = pub
-    if not hash_to_pub:
-        return
-
-    placeholders = ",".join(["%s"] * len(hash_to_pub))
-    rows = Database.fetch_all(
-        f"SELECT id, title_hash FROM papers WHERE title_hash IN ({placeholders})",
-        list(hash_to_pub.keys()),
-    )
-    for row in rows:
-        pub = hash_to_pub[row['title_hash']]
-        result = Database.append_paper_snapshot(
-            paper_id=row['id'],
-            status=pub.get('status'),
-            venue=pub.get('venue'),
-            abstract=pub.get('abstract'),
-            draft_url=pub.get('draft_url'),
-            year=pub.get('year'),
-            source_url=source_url,
-            title=pub.get('title'),
-        )
-        if result.status_changed:
-            FeedEventEmitter.emit_status_change(row['id'], result.old_status, result.new_status, event_date=event_date)
-
-
-def reconcile_title_renames(source_url: str, extracted_pubs: list[dict], event_date=None) -> None:
-    """Detect title renames. Delegates to PaperSaver + FeedEventEmitter."""
-    from paper_saver import PaperSaver
-    from feed_events import FeedEventEmitter
-    renames = PaperSaver.reconcile_title_renames(source_url, extracted_pubs)
-    for r in renames:
-        FeedEventEmitter.emit_title_change(r.paper_id, r.old_title, r.new_title, event_date=event_date)

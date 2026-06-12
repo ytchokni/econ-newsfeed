@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup, NavigableString
 
-from database import Database
+from database import compute_title_hash, execute_query, fetch_all, fetch_one
 from doi_resolver import resolve_doi
 from html_fetcher import HTMLFetcher
 from openalex import lookup_by_doi
@@ -427,11 +427,11 @@ def match_and_save_paper_links(url_id, publications):
     for pub in publications:
         title = (pub.get('title') or '').strip()
         if title:
-            hash_to_title[Database.compute_title_hash(title)] = title
+            hash_to_title[compute_title_hash(title)] = title
 
     if hash_to_title:
         placeholders = ",".join(["%s"] * len(hash_to_title))
-        rows = Database.fetch_all(
+        rows = fetch_all(
             f"SELECT id, title_hash FROM papers WHERE title_hash IN ({placeholders})",
             tuple(hash_to_title.keys()),
         )
@@ -449,8 +449,8 @@ def match_and_save_paper_links(url_id, publications):
             # Try to find paper by canonical title from OpenAlex
             openalex_data = lookup_by_doi(link_doi)
             if openalex_data and openalex_data.get('title'):
-                canonical_hash = Database.compute_title_hash(openalex_data['title'])
-                paper_row = Database.fetch_one(
+                canonical_hash = compute_title_hash(openalex_data['title'])
+                paper_row = fetch_one(
                     "SELECT id FROM papers WHERE title_hash = %s", (canonical_hash,)
                 )
                 if paper_row:
@@ -459,7 +459,7 @@ def match_and_save_paper_links(url_id, publications):
 
             # Also try matching DOI directly against papers.doi
             if not paper_id:
-                paper_row = Database.fetch_one(
+                paper_row = fetch_one(
                     "SELECT id FROM papers WHERE doi = %s", (link_doi,)
                 )
                 if paper_row:
@@ -473,7 +473,7 @@ def match_and_save_paper_links(url_id, publications):
 
         if paper_id:
             try:
-                Database.execute_query(
+                execute_query(
                     """INSERT IGNORE INTO paper_links (paper_id, url, link_type, doi, discovered_at)
                        VALUES (%s, %s, %s, %s, %s)""",
                     (paper_id, link['url'], link['link_type'], link_doi,

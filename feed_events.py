@@ -3,7 +3,7 @@
 Consolidates event logic previously scattered across publication.py
 (save_publications, reconcile_title_renames) and database/snapshots.py.
 """
-from database import Database
+from database import get_connection
 from datetime import datetime, timezone
 import html as html_module
 import logging
@@ -99,7 +99,7 @@ class FeedEventEmitter:
 
         created_at = event_date or datetime.now(timezone.utc)
         events_created = 0
-        with Database.get_connection() as conn:
+        with get_connection() as conn:
             cursor = conn.cursor(buffered=True)
             has_baseline = _url_has_baseline(cursor, url)
             prev_html_normalized = _get_previous_snapshot_html(cursor, url)
@@ -144,7 +144,7 @@ class FeedEventEmitter:
     def emit_status_change(paper_id: int, old_status: str, new_status: str, event_date: datetime | None = None) -> None:
         """Create a status_change feed event."""
         created_at = event_date or datetime.now(timezone.utc)
-        with Database.get_connection() as conn:
+        with get_connection() as conn:
             cursor = conn.cursor(buffered=True)
             cursor.execute(
                 """INSERT INTO feed_events
@@ -159,7 +159,7 @@ class FeedEventEmitter:
     def emit_title_change(paper_id: int, old_title: str, new_title: str, event_date: datetime | None = None) -> None:
         """Create a title_change feed event."""
         created_at = event_date or datetime.now(timezone.utc)
-        with Database.get_connection() as conn:
+        with get_connection() as conn:
             cursor = conn.cursor(buffered=True)
             cursor.execute(
                 """INSERT INTO feed_events

@@ -14,7 +14,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Database
+from database import execute_query, fetch_all, fetch_one
 from database.researchers import add_researcher_url
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -91,7 +91,7 @@ def main():
     logger.info("Found %d active researchers with homepages", len(candidates))
 
     # Build lookup of existing researchers
-    existing = Database.fetch_all("SELECT id, first_name, last_name FROM researchers")
+    existing = fetch_all("SELECT id, first_name, last_name FROM researchers")
     name_to_ids: dict[tuple[str, str], list[int]] = {}
     for r in existing:
         key = (r["first_name"].lower().strip(), r["last_name"].lower().strip())
@@ -99,7 +99,7 @@ def main():
 
     has_url = {
         r["researcher_id"]
-        for r in Database.fetch_all("SELECT DISTINCT researcher_id FROM researcher_urls")
+        for r in fetch_all("SELECT DISTINCT researcher_id FROM researcher_urls")
     }
 
     # Categorize
@@ -151,11 +151,11 @@ def main():
         if dry_run:
             logger.info("  NEW %s (%s) → %s", name, c["full_affiliation"] or "?", c["homepage"])
         else:
-            Database.execute_query(
+            execute_query(
                 "INSERT INTO researchers (first_name, last_name, affiliation) VALUES (%s, %s, %s)",
                 (c["full_first_name"], c["last_name"], c["full_affiliation"]),
             )
-            row = Database.fetch_one(
+            row = fetch_one(
                 "SELECT id FROM researchers WHERE first_name = %s AND last_name = %s ORDER BY id DESC LIMIT 1",
                 (c["full_first_name"], c["last_name"]),
             )

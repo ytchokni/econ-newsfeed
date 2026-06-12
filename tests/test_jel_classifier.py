@@ -106,7 +106,7 @@ def _make_llm_completion(jel_codes: list[dict]):
 
 
 class TestClassifyResearcher:
-    @patch("jel_classifier.Database.log_llm_usage")
+    @patch("jel_classifier.log_llm_usage")
     @patch("llm_client.get_client")
     def test_returns_codes(self, mock_get_client, mock_log):
         mock_client = mock_get_client.return_value
@@ -118,7 +118,7 @@ class TestClassifyResearcher:
         assert codes == ["J", "F"]
         mock_log.assert_called_once()
 
-    @patch("jel_classifier.Database.log_llm_usage")
+    @patch("jel_classifier.log_llm_usage")
     @patch("llm_client.get_client")
     def test_empty_on_api_error(self, mock_get_client, mock_log):
         mock_client = mock_get_client.return_value
@@ -126,7 +126,7 @@ class TestClassifyResearcher:
         codes = classify_researcher(1, "Jane", "Doe", "I study economics.")
         assert codes == []
 
-    @patch("jel_classifier.Database.log_llm_usage")
+    @patch("jel_classifier.log_llm_usage")
     @patch("llm_client.get_client")
     def test_logs_llm_usage(self, mock_get_client, mock_log):
         mock_client = mock_get_client.return_value

@@ -4,7 +4,14 @@ Returns SaveResult objects describing what changed.
 Does NOT create feed events — that is FeedEventEmitter's responsibility.
 """
 from dataclasses import dataclass
-from database import Database
+from database import (
+    append_paper_snapshot,
+    compute_title_hash,
+    fetch_all,
+    get_connection,
+    get_researcher_id,
+    normalize_title,
+)
 from encoding_guard import guard_text_fields
 from publication import clean_title
 from datetime import datetime, timezone
@@ -34,8 +41,8 @@ class TitleRename:
 
 def _title_similarity(title_a: str | None, title_b: str | None) -> float:
     """Jaccard similarity on normalized word tokens. Used to detect title renames."""
-    tokens_a = set(Database.normalize_title(title_a).split())
-    tokens_b = set(Database.normalize_title(title_b).split())
+    tokens_a = set(normalize_title(title_a).split())
+    tokens_b = set(normalize_title(title_b).split())
     if not tokens_a or not tokens_b:
         return 0.0
     return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
@@ -50,7 +57,7 @@ class PaperSaver:
     ) -> list[SaveResult]:
         """Save extracted publications. Returns SaveResult per successfully saved paper."""
         results = []
-        with Database.get_connection() as conn:
+        with get_connection() as conn:
             for pub in publications:
                 cursor = None
                 try:
@@ -61,7 +68,7 @@ class PaperSaver:
                         context=f"papers (url={url})",
                     )
                     title = pub['title']
-                    title_hash = Database.compute_title_hash(title)
+                    title_hash = compute_title_hash(title)
 
                     cursor = conn.cursor(buffered=True)
 
@@ -137,7 +144,7 @@ class PaperSaver:
                         if cache_key in _author_id_cache:
                             author_id = _author_id_cache[cache_key]
                         else:
-                            author_id = Database.get_researcher_id(first_name, last_name, conn=conn)
+                            author_id = get_researcher_id(first_name, last_name, conn=conn)
                             _author_id_cache[cache_key] = author_id
                         cursor.execute(
                             "INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order) VALUES (%s, %s, %s)",
@@ -188,9 +195,9 @@ class PaperSaver:
 
         metadata should contain status, venue, abstract, draft_url, year.
         """
-        new_hash = Database.compute_title_hash(new_title)
+        new_hash = compute_title_hash(new_title)
 
-        Database.append_paper_snapshot(
+        append_paper_snapshot(
             paper_id=paper_id,
             status=metadata.get('status'),
             venue=metadata.get('venue'),
@@ -201,7 +208,7 @@ class PaperSaver:
             title=old_title,
         )
 
-        with Database.get_connection() as conn:
+        with get_connection() as conn:
             cursor = conn.cursor(buffered=True)
             try:
                 # A paper with the target title may already exist (typically
@@ -250,16 +257,16 @@ class PaperSaver:
         Handles: title update, duplicate cleanup, snapshot recording.
         Does NOT create feed events — caller emits via FeedEventEmitter.
         """
-        existing = Database.fetch_all(
+        existing = fetch_all(
             "SELECT id, title, title_hash FROM papers WHERE source_url = %s",
             (source_url,),
         )
         if not existing:
             return []
 
-        existing_normalized = {Database.normalize_title(p['title']): p for p in existing}
+        existing_normalized = {normalize_title(p['title']): p for p in existing}
         extracted_normalized = {
-            Database.normalize_title(pub['title']): pub for pub in extracted_pubs if pub.get('title')
+            normalize_title(pub['title']): pub for pub in extracted_pubs if pub.get('title')
         }
 
         disappeared = set(existing_normalized.keys()) - set(extracted_normalized.keys())

@@ -18,22 +18,19 @@ import pytest
 class TestPublicationEncodingGuard:
     """Verify save_publications passes text through encoding guard."""
 
-    @patch("feed_events.Database")
-    @patch("paper_saver.Database")
-    def test_mojibake_title_is_fixed_before_insert(self, mock_db, mock_events_db):
+    @patch("paper_saver.get_connection")
+    def test_mojibake_title_is_fixed_before_insert(self, mock_get_conn):
         """A paper with mojibake in title should be cleaned before DB insert."""
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
         mock_cursor.lastrowid = 1
-        # fetchone() returns a tuple so row[0] works (used by _url_has_baseline etc.)
         mock_cursor.fetchone.return_value = (0,)
         mock_conn.cursor.return_value = mock_cursor
         mock_conn.__enter__ = lambda s: s
         mock_conn.__exit__ = MagicMock(return_value=False)
-        mock_db.get_connection.return_value = mock_conn
-        mock_events_db.get_connection.return_value = mock_conn
+        mock_get_conn.return_value = mock_conn
 
-        from publication import Publication
+        from paper_saver import PaperSaver
 
         publications = [{
             "title": "Ergebnisse fÃ¼r die Wirtschaft",
@@ -45,7 +42,7 @@ class TestPublicationEncodingGuard:
             "authors": [],
         }]
 
-        Publication.save_publications("http://example.com", publications)
+        PaperSaver.save_publications("http://example.com", publications)
 
         # Find the INSERT INTO papers call
         insert_calls = [

@@ -26,9 +26,9 @@ def _mock_conn(lastrowid=1):
 class TestSavePublicationsReturnsResults:
     """save_publications returns SaveResult objects instead of creating events."""
 
-    @patch("paper_saver.Database.get_researcher_id", return_value=42)
-    @patch("paper_saver.Database.get_connection")
-    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.get_researcher_id", return_value=42)
+    @patch("paper_saver.get_connection")
+    @patch("paper_saver.compute_title_hash", return_value="abc123")
     def test_new_paper_returns_is_new_true(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn(lastrowid=1)
         mock_get_conn.return_value = conn
@@ -47,9 +47,9 @@ class TestSavePublicationsReturnsResults:
         assert results[0].status == "working_paper"
         assert results[0].paper_id == 1
 
-    @patch("paper_saver.Database.get_researcher_id", return_value=42)
-    @patch("paper_saver.Database.get_connection")
-    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.get_researcher_id", return_value=42)
+    @patch("paper_saver.get_connection")
+    @patch("paper_saver.compute_title_hash", return_value="abc123")
     def test_duplicate_paper_returns_is_new_false(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn(lastrowid=0)
         mock_get_conn.return_value = conn
@@ -72,9 +72,9 @@ class TestSavePublicationsReturnsResults:
         assert results[0].new_to_this_url is True
         assert results[0].paper_id == 10
 
-    @patch("paper_saver.Database.get_researcher_id", return_value=42)
-    @patch("paper_saver.Database.get_connection")
-    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.get_researcher_id", return_value=42)
+    @patch("paper_saver.get_connection")
+    @patch("paper_saver.compute_title_hash", return_value="abc123")
     def test_no_feed_events_inserted(self, mock_hash, mock_get_conn, mock_rid):
         """PaperSaver must never INSERT INTO feed_events."""
         conn, cursor = _mock_conn(lastrowid=1)
@@ -93,9 +93,9 @@ class TestSavePublicationsReturnsResults:
 
 
 class TestAuthorNormalization:
-    @patch("paper_saver.Database.get_researcher_id", return_value=42)
-    @patch("paper_saver.Database.get_connection")
-    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.get_researcher_id", return_value=42)
+    @patch("paper_saver.get_connection")
+    @patch("paper_saver.compute_title_hash", return_value="abc123")
     def test_three_element_author(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
@@ -107,9 +107,9 @@ class TestAuthorNormalization:
 
         mock_rid.assert_called_once_with("Jose Luis", "Garcia", conn=conn)
 
-    @patch("paper_saver.Database.get_researcher_id", return_value=42)
-    @patch("paper_saver.Database.get_connection")
-    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.get_researcher_id", return_value=42)
+    @patch("paper_saver.get_connection")
+    @patch("paper_saver.compute_title_hash", return_value="abc123")
     def test_single_element_author(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
@@ -123,9 +123,9 @@ class TestAuthorNormalization:
 
 
 class TestPageOwnerAuthorship:
-    @patch("paper_saver.Database.get_researcher_id", return_value=42)
-    @patch("paper_saver.Database.get_connection")
-    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.get_researcher_id", return_value=42)
+    @patch("paper_saver.get_connection")
+    @patch("paper_saver.compute_title_hash", return_value="abc123")
     def test_owner_added_with_order_zero(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
@@ -143,9 +143,9 @@ class TestPageOwnerAuthorship:
 
 
 class TestBackfill:
-    @patch("paper_saver.Database.get_researcher_id", return_value=42)
-    @patch("paper_saver.Database.get_connection")
-    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.get_researcher_id", return_value=42)
+    @patch("paper_saver.get_connection")
+    @patch("paper_saver.compute_title_hash", return_value="abc123")
     def test_backfills_when_existing_has_nulls(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn(lastrowid=0)
         mock_get_conn.return_value = conn
@@ -160,9 +160,9 @@ class TestBackfill:
         backfill_calls = [c for c in cursor.execute.call_args_list if "COALESCE" in str(c)]
         assert len(backfill_calls) == 1
 
-    @patch("paper_saver.Database.get_researcher_id", return_value=42)
-    @patch("paper_saver.Database.get_connection")
-    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.get_researcher_id", return_value=42)
+    @patch("paper_saver.get_connection")
+    @patch("paper_saver.compute_title_hash", return_value="abc123")
     def test_skips_backfill_when_all_fields_present(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn(lastrowid=0)
         mock_get_conn.return_value = conn
@@ -179,9 +179,9 @@ class TestBackfill:
 
 
 class TestAuthorLookupCache:
-    @patch("paper_saver.Database.get_researcher_id", return_value=42)
-    @patch("paper_saver.Database.get_connection")
-    @patch("paper_saver.Database.compute_title_hash", return_value="abc123")
+    @patch("paper_saver.get_researcher_id", return_value=42)
+    @patch("paper_saver.get_connection")
+    @patch("paper_saver.compute_title_hash", return_value="abc123")
     def test_same_author_across_pubs_looked_up_once(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn

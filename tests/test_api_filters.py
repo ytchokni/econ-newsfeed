@@ -28,7 +28,7 @@ def _noop_connection_scope():
 def client():
     """Test client with mocked DB and scheduler (same pattern as existing tests)."""
     with (
-        patch("database.Database.create_tables"),
+        patch("database.create_tables"),
         patch("scheduler.start_scheduler"),
         patch("scheduler.shutdown_scheduler"),
         patch("api.connection_scope", _noop_connection_scope),
@@ -126,10 +126,10 @@ class TestStatusFilter:
     def test_working_paper_status_returns_200(self, client):
         """'working_paper' is a valid v2 status; must not return 400."""
         with (
-            patch("api.Database.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?status=working_paper")
 
@@ -138,10 +138,10 @@ class TestStatusFilter:
     def test_working_paper_status_included_in_items(self, client):
         """Items filtered by working_paper should carry status='working_paper'."""
         with (
-            patch("api.Database.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?status=working_paper")
 
@@ -150,10 +150,10 @@ class TestStatusFilter:
 
     def test_published_status_still_accepted(self, client):
         with (
-            patch("api.Database.search_feed_events", return_value=([_PUB_NO_ABSTRACT], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB2),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([_PUB_NO_ABSTRACT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB2),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?status=published")
 
@@ -161,10 +161,10 @@ class TestStatusFilter:
 
     def test_accepted_status_accepted(self, client):
         with (
-            patch("api.Database.search_feed_events", return_value=([_PUB_MIT], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?status=accepted")
 
@@ -172,10 +172,10 @@ class TestStatusFilter:
 
     def test_revise_and_resubmit_status_accepted(self, client):
         with (
-            patch("api.Database.search_feed_events", return_value=([], 0)),
-            patch("api.Database.get_authors_for_papers", return_value={}),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([], 0)),
+            patch("api.get_authors_for_papers", return_value={}),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?status=revise_and_resubmit")
 
@@ -183,10 +183,10 @@ class TestStatusFilter:
 
     def test_reject_and_resubmit_status_accepted(self, client):
         with (
-            patch("api.Database.search_feed_events", return_value=([], 0)),
-            patch("api.Database.get_authors_for_papers", return_value={}),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([], 0)),
+            patch("api.get_authors_for_papers", return_value={}),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?status=reject_and_resubmit")
 
@@ -218,10 +218,10 @@ class TestInstitutionFilter:
 
     def test_institution_filter_returns_200(self, client):
         with (
-            patch("api.Database.search_feed_events", return_value=([_PUB_MIT], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?institution=MIT")
 
@@ -229,10 +229,10 @@ class TestInstitutionFilter:
 
     def test_institution_filter_returns_items(self, client):
         with (
-            patch("api.Database.search_feed_events", return_value=([_PUB_MIT], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?institution=MIT")
 
@@ -240,10 +240,10 @@ class TestInstitutionFilter:
 
     def test_institution_filter_no_results_returns_empty_list(self, client):
         with (
-            patch("api.Database.search_feed_events", return_value=([], 0)),
-            patch("api.Database.get_authors_for_papers", return_value={}),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([], 0)),
+            patch("api.get_authors_for_papers", return_value={}),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?institution=Nonexistent+University")
 
@@ -253,10 +253,10 @@ class TestInstitutionFilter:
     def test_institution_filter_combined_with_year(self, client):
         """institution and year can be combined; must return 200."""
         with (
-            patch("api.Database.search_feed_events", return_value=([_PUB_MIT], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?institution=MIT&year=2024")
 
@@ -265,10 +265,10 @@ class TestInstitutionFilter:
     def test_institution_filter_escapes_percent(self, client):
         """A literal % in the institution name must not break the LIKE query."""
         with (
-            patch("api.Database.search_feed_events", return_value=([], 0)),
-            patch("api.Database.get_authors_for_papers", return_value={}),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([], 0)),
+            patch("api.get_authors_for_papers", return_value={}),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?institution=100%25MIT")
 
@@ -277,10 +277,10 @@ class TestInstitutionFilter:
     def test_institution_filter_combined_with_status(self, client):
         """institution and status can be combined."""
         with (
-            patch("api.Database.search_feed_events", return_value=([_PUB_MIT], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?institution=MIT&status=accepted")
 
@@ -296,10 +296,10 @@ class TestPresetTop20Filter:
 
     def test_preset_top20_returns_200(self, client):
         with (
-            patch("api.Database.search_feed_events", return_value=([_PUB_MIT], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?preset=top20")
 
@@ -307,10 +307,10 @@ class TestPresetTop20Filter:
 
     def test_preset_top20_returns_items(self, client):
         with (
-            patch("api.Database.search_feed_events", return_value=([_PUB_MIT], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?preset=top20")
 
@@ -320,10 +320,10 @@ class TestPresetTop20Filter:
 
     def test_preset_top20_no_results_returns_empty(self, client):
         with (
-            patch("api.Database.search_feed_events", return_value=([], 0)),
-            patch("api.Database.get_authors_for_papers", return_value={}),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([], 0)),
+            patch("api.get_authors_for_papers", return_value={}),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?preset=top20")
 
@@ -333,10 +333,10 @@ class TestPresetTop20Filter:
     def test_preset_top20_combined_with_year(self, client):
         """preset=top20 and year can be used together."""
         with (
-            patch("api.Database.search_feed_events", return_value=([_PUB_MIT], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?preset=top20&year=2024")
 
@@ -361,10 +361,10 @@ class TestResponseShape:
 
     def test_item_includes_abstract_field(self, client):
         with (
-            patch("api.Database.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications")
 
@@ -374,10 +374,10 @@ class TestResponseShape:
 
     def test_item_includes_draft_url_status_field(self, client):
         with (
-            patch("api.Database.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications")
 
@@ -388,10 +388,10 @@ class TestResponseShape:
     def test_draft_available_true_when_status_is_valid(self, client):
         """draft_available must be True only when draft_url_status == 'valid'."""
         with (
-            patch("api.Database.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications")
 
@@ -401,10 +401,10 @@ class TestResponseShape:
     def test_draft_available_false_when_status_is_unchecked(self, client):
         """draft_available must be False when draft_url_status is not 'valid'."""
         with (
-            patch("api.Database.search_feed_events", return_value=([_PUB_NO_ABSTRACT], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB2),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([_PUB_NO_ABSTRACT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB2),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications")
 
@@ -413,10 +413,10 @@ class TestResponseShape:
 
     def test_abstract_is_none_when_not_present(self, client):
         with (
-            patch("api.Database.search_feed_events", return_value=([_PUB_NO_ABSTRACT], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB2),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("api.search_feed_events", return_value=([_PUB_NO_ABSTRACT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB2),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications")
 

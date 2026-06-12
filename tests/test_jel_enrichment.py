@@ -178,11 +178,11 @@ class TestEnrichJelFromPapers:
         }
 
         with (
-            patch("jel_enrichment.Database.get_papers_needing_topics", return_value=papers_needing),
+            patch("jel_enrichment.get_papers_needing_topics", return_value=papers_needing),
             patch("jel_enrichment.fetch_topics_batch", return_value=topics_by_id),
-            patch("jel_enrichment.Database.save_paper_topics") as mock_save_topics,
-            patch("jel_enrichment.Database.get_all_researcher_topics", return_value=all_researcher_topics),
-            patch("jel_enrichment.Database.add_researcher_jel_codes") as mock_add_jel,
+            patch("jel_enrichment.save_paper_topics") as mock_save_topics,
+            patch("jel_enrichment.get_all_researcher_topics", return_value=all_researcher_topics),
+            patch("jel_enrichment.add_researcher_jel_codes") as mock_add_jel,
         ):
             from jel_enrichment import enrich_jel_from_papers
             count = enrich_jel_from_papers()
@@ -196,8 +196,8 @@ class TestEnrichJelFromPapers:
 
     def test_returns_zero_when_no_papers(self):
         with (
-            patch("jel_enrichment.Database.get_papers_needing_topics", return_value=[]),
-            patch("jel_enrichment.Database.get_all_researcher_topics", return_value={}),
+            patch("jel_enrichment.get_papers_needing_topics", return_value=[]),
+            patch("jel_enrichment.get_all_researcher_topics", return_value={}),
         ):
             from jel_enrichment import enrich_jel_from_papers
             count = enrich_jel_from_papers()

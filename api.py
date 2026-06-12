@@ -21,7 +21,33 @@ from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from database import Database, connection_scope
+from database import (
+    connection_scope,
+    create_tables,
+    fetch_all,
+    fetch_one,
+    get_admin_dashboard_stats,
+    get_all_jel_codes,
+    get_at_risk_urls as db_get_at_risk_urls,
+    get_authors_for_papers,
+    get_coauthors_for_papers,
+    get_deactivated_urls as db_get_deactivated_urls,
+    get_fields_for_researchers,
+    get_jel_codes_for_researcher,
+    get_jel_codes_for_researchers,
+    get_links_for_papers,
+    get_paper_detail,
+    get_paper_history,
+    get_paper_snapshots,
+    get_pub_counts_for_researchers,
+    get_researcher_detail,
+    get_researcher_papers,
+    get_researcher_snapshots,
+    get_urls_for_researchers,
+    reactivate_url as db_reactivate_url,
+    search_feed_events,
+    search_researchers,
+)
 from publication import VALID_STATUSES
 import scheduler
 from scheduler import (
@@ -224,7 +250,7 @@ async def lifespan(app: FastAPI):
     max_attempts = 10
     for attempt in range(1, max_attempts + 1):
         try:
-            Database.create_tables()
+            create_tables()
             break
         except Exception as e:
             if attempt == max_attempts:
@@ -431,7 +457,7 @@ def health_check():
 def metrics(request: Request, response: Response):
     """Basic application metrics for monitoring."""
     _require_api_key(request)
-    row = Database.fetch_one(
+    row = fetch_one(
         "SELECT "
         "(SELECT COUNT(*) FROM papers) AS publications, "
         "(SELECT COUNT(*) FROM researchers) AS researchers, "
@@ -449,28 +475,28 @@ def metrics(request: Request, response: Response):
 def admin_dashboard(request: Request):
     """Admin dashboard metrics — all stats in one response."""
     _require_api_key(request)
-    return Database.get_admin_dashboard_stats()
+    return get_admin_dashboard_stats()
 
 
 @app.get("/api/admin/deactivated-urls")
 def get_deactivated_urls(request: Request):
     """List all deactivated researcher URLs."""
     _require_api_key(request)
-    return Database.get_deactivated_urls()
+    return db_get_deactivated_urls()
 
 
 @app.get("/api/admin/at-risk-urls")
 def get_at_risk_urls(request: Request):
     """List active URLs with 2+ consecutive failures."""
     _require_api_key(request)
-    return Database.get_at_risk_urls()
+    return db_get_at_risk_urls()
 
 
 @app.post("/api/admin/reactivate-url/{url_id}")
 def reactivate_url(url_id: int, request: Request):
     """Re-activate a deactivated URL."""
     _require_api_key(request)
-    Database.reactivate_url(url_id)
+    db_reactivate_url(url_id)
     return {"status": "ok"}
 
 
@@ -513,7 +539,7 @@ def list_publications(
 
     offset = (page - 1) * per_page
     with connection_scope():
-        rows, total = Database.search_feed_events(
+        rows, total = search_feed_events(
             year=year, researcher_id=researcher_id,
             status_list=status_list or None,
             since=since_dt, until=until_dt,
@@ -524,9 +550,9 @@ def list_publications(
         pages = math.ceil(total / per_page) if total else 0
 
         pub_ids = [row['paper_id'] for row in rows]
-        authors_by_pub = Database.get_authors_for_papers(pub_ids)
-        coauthors_by_pub = Database.get_coauthors_for_papers(pub_ids)
-        links_by_pub = Database.get_links_for_papers(pub_ids)
+        authors_by_pub = get_authors_for_papers(pub_ids)
+        coauthors_by_pub = get_coauthors_for_papers(pub_ids)
+        links_by_pub = get_links_for_papers(pub_ids)
     items = [
         _format_feed_event(row, authors_by_pub.get(row['paper_id'], []),
                            coauthors_by_pub.get(row['paper_id'], []),
@@ -551,13 +577,13 @@ def get_publication(
     publication_id: int,
     include_history: bool = Query(False),
 ):
-    row = Database.get_paper_detail(publication_id)
+    row = get_paper_detail(publication_id)
     if not row:
         raise HTTPException(status_code=404, detail="Publication not found")
 
-    authors_map = Database.get_authors_for_papers([publication_id])
-    coauthors_map = Database.get_coauthors_for_papers([publication_id])
-    links_map = Database.get_links_for_papers([publication_id])
+    authors_map = get_authors_for_papers([publication_id])
+    coauthors_map = get_coauthors_for_papers([publication_id])
+    links_map = get_links_for_papers([publication_id])
     result = _format_publication(
         row, authors_map.get(publication_id, []),
         coauthors_map.get(publication_id, []),
@@ -565,7 +591,7 @@ def get_publication(
     )
 
     if include_history:
-        snapshots = Database.get_paper_snapshots(publication_id)
+        snapshots = get_paper_snapshots(publication_id)
         result["history"] = [
             {
                 "status": s['status'],
@@ -580,7 +606,7 @@ def get_publication(
             for s in snapshots
         ]
 
-        feed_events = Database.get_paper_history(publication_id)
+        feed_events = get_paper_history(publication_id)
         result["feed_events"] = [
             {
                 "id": fe['id'],
@@ -676,7 +702,7 @@ def atom_feed(
     )
 
     with connection_scope():
-        rows, _ = Database.search_feed_events(
+        rows, _ = search_feed_events(
             year=year, status_list=status_list or None,
             since=since_dt, until=until_dt,
             institution_list=institution_list or None,
@@ -684,7 +710,7 @@ def atom_feed(
             jel_code=jel_code, offset=0, limit=50,
         )
         pub_ids = [row['paper_id'] for row in rows]
-        authors_by_pub = Database.get_authors_for_papers(pub_ids)
+        authors_by_pub = get_authors_for_papers(pub_ids)
 
     items = [
         _format_feed_event(row, authors_by_pub.get(row['paper_id'], []))
@@ -721,7 +747,7 @@ def _get_website_url(urls: list[dict]) -> str | None:
 @limiter.limit("60/minute")
 def list_fields(request: Request, response: Response):
     def _fetch():
-        rows = Database.fetch_all("SELECT id, name, slug FROM research_fields ORDER BY name")
+        rows = fetch_all("SELECT id, name, slug FROM research_fields ORDER BY name")
         return {"items": [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in rows]}
 
     response.headers["Cache-Control"] = "public, max-age=3600"
@@ -732,7 +758,7 @@ def list_fields(request: Request, response: Response):
 @limiter.limit("60/minute")
 def list_jel_codes(request: Request, response: Response):
     def _fetch():
-        return {"items": Database.get_all_jel_codes()}
+        return {"items": get_all_jel_codes()}
 
     response.headers["Cache-Control"] = "public, max-age=3600"
     return _jel_codes_cache.get_or_set(_fetch)
@@ -742,17 +768,17 @@ def list_jel_codes(request: Request, response: Response):
 @limiter.limit("30/minute")
 def get_filter_options(request: Request, response: Response):
     def _fetch():
-        institutions = Database.fetch_all(
+        institutions = fetch_all(
             "SELECT DISTINCT affiliation FROM researchers "
             "WHERE affiliation IS NOT NULL AND affiliation != '' "
             "ORDER BY affiliation"
         )
-        positions = Database.fetch_all(
+        positions = fetch_all(
             "SELECT DISTINCT position FROM researchers "
             "WHERE position IS NOT NULL AND position != '' "
             "ORDER BY position"
         )
-        fields = Database.fetch_all(
+        fields = fetch_all(
             "SELECT id, name, slug FROM research_fields ORDER BY name"
         )
         return {
@@ -780,7 +806,7 @@ def list_researchers(
 ):
     offset = (page - 1) * per_page
     with connection_scope():
-        rows, total = Database.search_researchers(
+        rows, total = search_researchers(
             search=search, institution=institution, field_slug=field,
             position=position, preset=preset,
             offset=offset, limit=per_page,
@@ -788,10 +814,10 @@ def list_researchers(
         pages = math.ceil(total / per_page) if total else 0
 
         researcher_ids = [r['id'] for r in rows]
-        urls_by_researcher = Database.get_urls_for_researchers(researcher_ids)
-        pub_counts = Database.get_pub_counts_for_researchers(researcher_ids)
-        fields_by_researcher = Database.get_fields_for_researchers(researcher_ids)
-        jel_map = Database.get_jel_codes_for_researchers(researcher_ids)
+        urls_by_researcher = get_urls_for_researchers(researcher_ids)
+        pub_counts = get_pub_counts_for_researchers(researcher_ids)
+        fields_by_researcher = get_fields_for_researchers(researcher_ids)
+        jel_map = get_jel_codes_for_researchers(researcher_ids)
     items = [
         {
             "id": r['id'],
@@ -825,24 +851,24 @@ def get_researcher(
     researcher_id: int,
     include_history: bool = Query(False),
 ):
-    row = Database.get_researcher_detail(researcher_id)
+    row = get_researcher_detail(researcher_id)
     if not row:
         raise HTTPException(status_code=404, detail="Researcher not found")
 
-    urls_map = Database.get_urls_for_researchers([researcher_id])
+    urls_map = get_urls_for_researchers([researcher_id])
     urls = urls_map.get(researcher_id, [])
-    pub_counts = Database.get_pub_counts_for_researchers([researcher_id])
+    pub_counts = get_pub_counts_for_researchers([researcher_id])
     pub_count = pub_counts.get(researcher_id, 0)
-    fields_map = Database.get_fields_for_researchers([researcher_id])
+    fields_map = get_fields_for_researchers([researcher_id])
     fields = fields_map.get(researcher_id, [])
-    jel_codes = Database.get_jel_codes_for_researcher(researcher_id)
+    jel_codes = get_jel_codes_for_researcher(researcher_id)
 
     # Fetch this researcher's publications
-    pub_rows = Database.get_researcher_papers(researcher_id)
+    pub_rows = get_researcher_papers(researcher_id)
     pub_ids = [pr['id'] for pr in pub_rows]
-    authors_by_pub = Database.get_authors_for_papers(pub_ids)
-    coauthors_by_pub = Database.get_coauthors_for_papers(pub_ids)
-    links_by_pub = Database.get_links_for_papers(pub_ids)
+    authors_by_pub = get_authors_for_papers(pub_ids)
+    coauthors_by_pub = get_coauthors_for_papers(pub_ids)
+    links_by_pub = get_links_for_papers(pub_ids)
     publications = [
         _format_publication(pr, authors_by_pub.get(pr['id'], []),
                            coauthors_by_pub.get(pr['id'], []),
@@ -866,7 +892,7 @@ def get_researcher(
     }
 
     if include_history:
-        snapshots = Database.get_researcher_snapshots(researcher_id)
+        snapshots = get_researcher_snapshots(researcher_id)
         result["history"] = [
             {
                 "position": s['position'],
@@ -914,7 +940,7 @@ async def trigger_scrape(request: Request):
 @limiter.limit("60/minute")
 def scrape_status(request: Request):
     _require_api_key(request)
-    row = Database.fetch_one(
+    row = fetch_one(
         """
         SELECT id, status, started_at, finished_at,
                urls_checked, urls_changed, pubs_extracted

@@ -47,7 +47,7 @@ def _clear_api_caches():
 def client():
     """Test client with mocked DB and scheduler."""
     with (
-        patch("database.Database.create_tables"),
+        patch("database.create_tables"),
         patch("scheduler.start_scheduler"),
         patch("scheduler.shutdown_scheduler"),
         patch("api.connection_scope", _noop_connection_scope),

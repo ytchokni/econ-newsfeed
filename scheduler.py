@@ -9,7 +9,13 @@ import mysql.connector
 import mysql.connector.errors
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from database import Database
+from database import (
+    execute_query,
+    fetch_one,
+    get_unchecked_draft_urls,
+    get_urls_needing_extraction,
+    update_draft_url_status,
+)
 from db_config import db_config
 from researcher import Researcher
 from html_fetcher import HTMLFetcher
@@ -100,13 +106,13 @@ def create_scrape_log() -> int:
         INSERT INTO scrape_log (started_at, status)
         VALUES (%s, 'running')
     """
-    return Database.execute_query(query, (datetime.now(timezone.utc),))
+    return execute_query(query, (datetime.now(timezone.utc),))
 
 
 def _update_progress(log_id: int, **counters) -> None:
     """Incrementally flush counter values to scrape_log so the dashboard updates live."""
     sets = ", ".join(f"{col} = %s" for col in counters)
-    Database.execute_query(
+    execute_query(
         f"UPDATE scrape_log SET {sets} WHERE id = %s",
         (*counters.values(), log_id),
     )
@@ -115,7 +121,7 @@ def _update_progress(log_id: int, **counters) -> None:
 def update_scrape_log(log_id: int, status: str, urls_checked: int = 0, urls_changed: int = 0, pubs_extracted: int = 0, extraction_errors: int = 0, error_message: str | None = None) -> None:
     """Update an existing scrape_log entry with results."""
     # Aggregate token totals from llm_usage for this scrape run
-    token_row = Database.fetch_one(
+    token_row = fetch_one(
         """SELECT COALESCE(SUM(prompt_tokens), 0) AS prompt_total,
                   COALESCE(SUM(completion_tokens), 0) AS completion_total
            FROM llm_usage WHERE scrape_log_id = %s""",
@@ -132,7 +138,7 @@ def update_scrape_log(log_id: int, status: str, urls_checked: int = 0, urls_chan
             prompt_tokens_total = %s, completion_tokens_total = %s
         WHERE id = %s
     """
-    Database.execute_query(query, (
+    execute_query(query, (
         datetime.now(timezone.utc), status, urls_checked,
         urls_changed, pubs_extracted, extraction_errors, error_message,
         prompt_tokens_total, completion_tokens_total, log_id
@@ -156,7 +162,7 @@ def _cleanup_stale_scrape_logs() -> None:
     else:
         where = """status = 'running'
              AND started_at < DATE_SUB(NOW(), INTERVAL 5 MINUTE)"""
-    affected = Database.execute_query(
+    affected = execute_query(
         f"""UPDATE scrape_log
            SET finished_at = NOW(), status = 'failed',
                error_message = 'Zombie running entry — process died mid-scrape'
@@ -172,7 +178,7 @@ _DRAFT_VALIDATION_DELAY = 0.1  # 100ms between requests
 
 def _validate_draft_urls() -> None:
     """Validate papers with unchecked draft URLs (rate-limited, time-budgeted)."""
-    unchecked = Database.get_unchecked_draft_urls()
+    unchecked = get_unchecked_draft_urls()
     if not unchecked:
         return
     logger.info(f"Validating {len(unchecked)} unchecked draft URLs")
@@ -184,7 +190,7 @@ def _validate_draft_urls() -> None:
             break
         try:
             status = HTMLFetcher.validate_draft_url(draft_url)
-            Database.update_draft_url_status(paper_id, status)
+            update_draft_url_status(paper_id, status)
             logger.info(f"Draft URL for paper {paper_id}: {status}")
             validated += 1
             time.sleep(_DRAFT_VALIDATION_DELAY)
@@ -384,7 +390,7 @@ def _extraction_worker_loop() -> None:
 
     while not _extraction_stop_event.is_set():
         try:
-            queue = Database.get_urls_needing_extraction()
+            queue = get_urls_needing_extraction()
         except Exception as e:
             logger.error("Extraction worker queue query failed: %s: %s", type(e).__name__, e)
             _extraction_stop_event.wait(_EXTRACTION_IDLE_SECONDS)

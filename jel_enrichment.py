@@ -7,7 +7,7 @@ merges with existing bio-based JEL classifications.
 import logging
 from collections import Counter
 
-from database import Database
+from database import add_researcher_jel_codes, get_all_researcher_topics, get_papers_needing_topics, save_paper_topics
 from openalex import fetch_topics_batch
 from topic_jel_map import map_topic_to_jel
 
@@ -35,7 +35,7 @@ def enrich_jel_from_papers() -> int:
     Returns number of researchers enriched.
     """
     # Step 1: Fetch and store topics for papers missing them
-    papers = Database.get_papers_needing_topics()
+    papers = get_papers_needing_topics()
     if papers:
         logger.info("Fetching topics for %d papers from OpenAlex", len(papers))
         openalex_ids = [p["openalex_id"] for p in papers]
@@ -44,17 +44,17 @@ def enrich_jel_from_papers() -> int:
         for paper in papers:
             topics = topics_by_id.get(paper["openalex_id"], [])
             if topics:
-                Database.save_paper_topics(paper["id"], topics)
+                save_paper_topics(paper["id"], topics)
                 stored += 1
         logger.info("Stored topics for %d/%d papers", stored, len(papers))
 
     # Step 2: Batch-fetch all topics and aggregate per researcher
-    all_topics = Database.get_all_researcher_topics()
+    all_topics = get_all_researcher_topics()
     enriched = 0
     for researcher_id, topics in all_topics.items():
         codes = aggregate_jel_from_topics(topics)
         if codes:
-            Database.add_researcher_jel_codes(researcher_id, codes)
+            add_researcher_jel_codes(researcher_id, codes)
             enriched += 1
             logger.info(
                 "Enriched JEL for researcher %d: %s",

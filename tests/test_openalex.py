@@ -228,7 +228,7 @@ class TestEnrichPublication:
         }
         with (
             patch("openalex.search_work", return_value=openalex_result),
-            patch("openalex.Database.update_openalex_data") as mock_update,
+            patch("openalex.update_openalex_data") as mock_update,
             patch("openalex._backfill_researcher_openalex_ids"),
         ):
             from openalex import enrich_publication
@@ -260,7 +260,7 @@ class TestEnrichPublication:
         }
         with (
             patch("openalex.search_work", return_value=openalex_result),
-            patch("openalex.Database.update_openalex_data") as mock_update,
+            patch("openalex.update_openalex_data") as mock_update,
             patch("openalex._backfill_researcher_openalex_ids"),
         ):
             from openalex import enrich_publication
@@ -305,9 +305,9 @@ class TestEnrichNewPublications:
             "year": None,
         }
         with (
-            patch("openalex.Database.get_unenriched_papers", return_value=unenriched),
+            patch("openalex.get_unenriched_papers", return_value=unenriched),
             patch("openalex.search_work", return_value=openalex_result),
-            patch("openalex.Database.update_openalex_data"),
+            patch("openalex.update_openalex_data"),
             patch("openalex._backfill_researcher_openalex_ids"),
             patch("openalex.time.sleep"),  # skip rate-limit delay in tests
         ):
@@ -317,7 +317,7 @@ class TestEnrichNewPublications:
         assert count == 2
 
     def test_returns_zero_when_nothing_to_enrich(self):
-        with patch("openalex.Database.get_unenriched_papers", return_value=[]):
+        with patch("openalex.get_unenriched_papers", return_value=[]):
             from openalex import enrich_new_publications
             count = enrich_new_publications()
 
@@ -397,7 +397,7 @@ class TestEnrichWithDoiFirst:
         with (
             patch("openalex.lookup_by_doi", return_value=openalex_result) as mock_lookup,
             patch("openalex.search_work") as mock_search,
-            patch("openalex.Database.update_openalex_data") as mock_update,
+            patch("openalex.update_openalex_data") as mock_update,
             patch("openalex._backfill_researcher_openalex_ids"),
         ):
             from openalex import enrich_publication
@@ -423,10 +423,10 @@ class TestBackfillResearcherOpenalexIds:
             {"display_name": "Jane Doe", "openalex_author_id": "A5000000001"},
         ]
         with (
-            patch("openalex.Database.fetch_all", return_value=[
+            patch("openalex.fetch_all", return_value=[
                 {"id": 1, "first_name": "Max", "last_name": "Steinhardt", "openalex_author_id": None},
             ]),
-            patch("openalex.Database.execute_query") as mock_exec,
+            patch("openalex.execute_query") as mock_exec,
         ):
             from openalex import _backfill_researcher_openalex_ids
             _backfill_researcher_openalex_ids(paper_id=10, coauthors=coauthors)
@@ -436,7 +436,7 @@ class TestBackfillResearcherOpenalexIds:
 
     def test_skips_when_no_openalex_ids(self):
         coauthors = [{"display_name": "Author", "openalex_author_id": None}]
-        with patch("openalex.Database.fetch_all") as mock_fetch:
+        with patch("openalex.fetch_all") as mock_fetch:
             from openalex import _backfill_researcher_openalex_ids
             _backfill_researcher_openalex_ids(paper_id=10, coauthors=coauthors)
         mock_fetch.assert_not_called()
@@ -654,8 +654,8 @@ class TestEnrichPublicationYear:
     """enrich_publication passes year from OpenAlex to update_openalex_data."""
 
     @patch("openalex.lookup_by_doi")
-    @patch("openalex.Database")
-    def test_passes_year_to_update(self, mock_db, mock_lookup):
+    @patch("openalex.update_openalex_data")
+    def test_passes_year_to_update(self, mock_update, mock_lookup):
         mock_lookup.return_value = {
             "doi": "10.1234/test",
             "openalex_id": "W123",
@@ -673,6 +673,6 @@ class TestEnrichPublicationYear:
             doi="10.1234/test",
         )
 
-        mock_db.update_openalex_data.assert_called_once()
-        call_kwargs = mock_db.update_openalex_data.call_args
+        mock_update.assert_called_once()
+        call_kwargs = mock_update.call_args
         assert call_kwargs.kwargs.get("year") == "2024"

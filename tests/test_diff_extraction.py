@@ -188,7 +188,7 @@ class TestTryExtractChanges:
     def test_returns_none_on_llm_failure(self):
         failed = StructuredResponse(parsed=None, usage=None)
         with patch("publication.extract_json", return_value=failed), \
-             patch("publication.Database.log_llm_usage"):
+             patch("publication.log_llm_usage"):
             result = Publication.try_extract_changes("old", "new", "https://x.com")
         assert result is None
 
@@ -196,7 +196,7 @@ class TestTryExtractChanges:
         parsed = PublicationChangeList(changes=[])
         ok = StructuredResponse(parsed=parsed, usage=MagicMock())
         with patch("publication.extract_json", return_value=ok), \
-             patch("publication.Database.log_llm_usage"):
+             patch("publication.log_llm_usage"):
             result = Publication.try_extract_changes("old", "new", "https://x.com")
         assert result == []
 
@@ -206,7 +206,7 @@ class TestTryExtractChanges:
         ])
         ok = StructuredResponse(parsed=parsed, usage=MagicMock())
         with patch("publication.extract_json", return_value=ok), \
-             patch("publication.Database.log_llm_usage"):
+             patch("publication.log_llm_usage"):
             result = Publication.try_extract_changes("old", "new", "https://x.com")
         assert len(result) == 1
         assert result[0]["change_type"] == "new_paper"
@@ -218,7 +218,7 @@ class TestTryExtractChanges:
         ])
         ok = StructuredResponse(parsed=parsed, usage=MagicMock())
         with patch("publication.extract_json", return_value=ok), \
-             patch("publication.Database.log_llm_usage"):
+             patch("publication.log_llm_usage"):
             result = Publication.try_extract_changes("old", "new", "https://x.com")
         assert result == []
 
@@ -229,7 +229,7 @@ class TestTryExtractChanges:
         ])
         ok = StructuredResponse(parsed=parsed, usage=MagicMock())
         with patch("publication.extract_json", return_value=ok), \
-             patch("publication.Database.log_llm_usage"):
+             patch("publication.log_llm_usage"):
             result = Publication.try_extract_changes("old", "new", "https://x.com")
         assert len(result) == 1
         assert result[0]["change_type"] == "removed"
@@ -239,7 +239,7 @@ class TestTryExtractChanges:
         usage = MagicMock()
         ok = StructuredResponse(parsed=parsed, usage=usage)
         with patch("publication.extract_json", return_value=ok) as mock_extract, \
-             patch("publication.Database.log_llm_usage") as mock_log:
+             patch("publication.log_llm_usage") as mock_log:
             Publication.try_extract_changes("old", "new", "https://x.com", scrape_log_id=42)
         mock_log.assert_called_once()
         assert mock_log.call_args[0][0] == "diff_extraction"
@@ -262,13 +262,11 @@ class TestExtractOneUrlDiffPath:
                                return_value="old page text"),
             "try_changes": patch("extraction.Publication.try_extract_changes"),
             "try_extract": patch("extraction.Publication.try_extract_publications"),
-            "save": patch("extraction.Publication.save_publications"),
-            "reconcile": patch("extraction.reconcile_title_renames"),
-            "links": patch("extraction.match_and_save_paper_links"),
-            "snapshots": patch("extraction.append_snapshots_for_pubs"),
-            "fetch_one": patch("extraction.Database.fetch_one", return_value=None),
-            "compute_hash": patch("extraction.Database.compute_title_hash", return_value="hash1"),
-            "researcher_snap": patch("extraction.Database.append_researcher_snapshot"),
+            "persist": patch("extraction.persist_extraction"),
+            "snapshots": patch("extraction._append_snapshots"),
+            "fetch_one": patch("extraction.fetch_one", return_value=None),
+            "compute_hash": patch("extraction.compute_title_hash", return_value="hash1"),
+            "researcher_snap": patch("extraction.append_researcher_snapshot"),
         }
 
     def test_uses_diff_path_when_previous_text_available(self):
@@ -323,7 +321,7 @@ class TestExtractOneUrlDiffPath:
         mocks["try_changes"].assert_not_called()
 
     def test_diff_new_paper_saves_and_creates_events(self):
-        """New paper from diff extraction is saved via save_publications."""
+        """New paper from diff extraction is persisted via persist_extraction."""
         from extraction import extract_one_url
         patches = self._base_patches()
         mocks = {k: p.start() for k, p in patches.items()}
@@ -336,9 +334,9 @@ class TestExtractOneUrlDiffPath:
                 p.stop()
         assert outcome.status == "extracted"
         assert outcome.pubs_count == 1
-        mocks["save"].assert_called_once()
-        args = mocks["save"].call_args
-        assert args[0][1] == [new_pub]
+        mocks["persist"].assert_called_once()
+        args = mocks["persist"].call_args
+        assert args[0][2] == [new_pub]
         assert args[1]["is_seed"] is False
 
     def test_diff_llm_failure_returns_failed(self):
@@ -429,7 +427,7 @@ class TestExtractOneUrlDiffPath:
         patches["extract_desc"] = patch(
             "extraction.HTMLFetcher.extract_description", return_value="Bio text.")
         patches["fetch_one"] = patch(
-            "extraction.Database.fetch_one",
+            "extraction.fetch_one",
             return_value={"position": "Prof", "affiliation": "MIT"})
         mocks = {k: p.start() for k, p in patches.items()}
         mocks["try_changes"].return_value = []
@@ -449,13 +447,13 @@ class TestExtractOneUrlDiffPath:
 
 class TestGetPreviousText:
     def test_returns_none_when_no_snapshot(self):
-        with patch("html_fetcher.Database.fetch_one", return_value=None):
+        with patch("html_fetcher.fetch_one", return_value=None):
             from html_fetcher import HTMLFetcher
             result = HTMLFetcher.get_previous_text(1)
         assert result is None
 
     def test_returns_none_when_compressed_is_none(self):
-        with patch("html_fetcher.Database.fetch_one",
+        with patch("html_fetcher.fetch_one",
                    return_value={"raw_html_compressed": None}):
             from html_fetcher import HTMLFetcher
             result = HTMLFetcher.get_previous_text(1)
@@ -465,7 +463,7 @@ class TestGetPreviousText:
         import zlib
         html = "<html><body><p>Hello  World</p><script>bad</script></body></html>"
         compressed = zlib.compress(html.encode("utf-8"))
-        with patch("html_fetcher.Database.fetch_one",
+        with patch("html_fetcher.fetch_one",
                    return_value={"raw_html_compressed": compressed}):
             from html_fetcher import HTMLFetcher
             result = HTMLFetcher.get_previous_text(1)
@@ -475,7 +473,7 @@ class TestGetPreviousText:
         assert "bad" not in result
 
     def test_returns_none_on_decompression_error(self):
-        with patch("html_fetcher.Database.fetch_one",
+        with patch("html_fetcher.fetch_one",
                    return_value={"raw_html_compressed": b"not-compressed"}):
             from html_fetcher import HTMLFetcher
             result = HTMLFetcher.get_previous_text(1)
