@@ -597,7 +597,6 @@ class HTMLFetcher:
         this backfill the body stays missing forever and extraction loops on
         no_content (4,536 prod rows were stuck this way on 2026-06-11).
         """
-        from database import Database
         execute_query(
             """UPDATE html_content
                SET timestamp = %s,
@@ -627,7 +626,6 @@ class HTMLFetcher:
             f"Content:\n{text_content[:CONTENT_MAX_CHARS]}"
         )
         try:
-            from database import Database
             response = get_client().chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],
                 model=model,

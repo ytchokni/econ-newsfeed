@@ -183,10 +183,7 @@ def _process_diff_changes(changes: list[dict], url: str, url_id: int,
     title_changes = [c for c in changes if c['change_type'] == 'title_change']
 
     if new_pubs:
-        results = PaperSaver.save_publications(url, new_pubs, is_seed=False)
-        FeedEventEmitter.emit_new_paper_events(results, url, is_seed=False, event_date=fetch_date)
-        match_and_save_paper_links(url_id, new_pubs)
-        _append_snapshots(new_pubs, url, event_date=fetch_date)
+        persist_extraction(url, url_id, new_pubs, is_seed=False, event_date=fetch_date)
 
     if status_changes:
         _append_snapshots(status_changes, url, event_date=fetch_date)

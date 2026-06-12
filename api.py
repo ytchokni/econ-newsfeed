@@ -28,10 +28,10 @@ from database import (
     fetch_one,
     get_admin_dashboard_stats,
     get_all_jel_codes,
-    get_at_risk_urls,
+    get_at_risk_urls as db_get_at_risk_urls,
     get_authors_for_papers,
     get_coauthors_for_papers,
-    get_deactivated_urls,
+    get_deactivated_urls as db_get_deactivated_urls,
     get_fields_for_researchers,
     get_jel_codes_for_researcher,
     get_jel_codes_for_researchers,
@@ -44,7 +44,7 @@ from database import (
     get_researcher_papers,
     get_researcher_snapshots,
     get_urls_for_researchers,
-    reactivate_url,
+    reactivate_url as db_reactivate_url,
     search_feed_events,
     search_researchers,
 )
@@ -482,21 +482,21 @@ def admin_dashboard(request: Request):
 def get_deactivated_urls(request: Request):
     """List all deactivated researcher URLs."""
     _require_api_key(request)
-    return get_deactivated_urls()
+    return db_get_deactivated_urls()
 
 
 @app.get("/api/admin/at-risk-urls")
 def get_at_risk_urls(request: Request):
     """List active URLs with 2+ consecutive failures."""
     _require_api_key(request)
-    return get_at_risk_urls()
+    return db_get_at_risk_urls()
 
 
 @app.post("/api/admin/reactivate-url/{url_id}")
 def reactivate_url(url_id: int, request: Request):
     """Re-activate a deactivated URL."""
     _require_api_key(request)
-    reactivate_url(url_id)
+    db_reactivate_url(url_id)
     return {"status": "ok"}
 
 

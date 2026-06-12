@@ -262,10 +262,8 @@ class TestExtractOneUrlDiffPath:
                                return_value="old page text"),
             "try_changes": patch("extraction.Publication.try_extract_changes"),
             "try_extract": patch("extraction.Publication.try_extract_publications"),
-            "save": patch("extraction.Publication.save_publications"),
-            "reconcile": patch("extraction.reconcile_title_renames"),
-            "links": patch("extraction.match_and_save_paper_links"),
-            "snapshots": patch("extraction.append_snapshots_for_pubs"),
+            "persist": patch("extraction.persist_extraction"),
+            "snapshots": patch("extraction._append_snapshots"),
             "fetch_one": patch("extraction.fetch_one", return_value=None),
             "compute_hash": patch("extraction.compute_title_hash", return_value="hash1"),
             "researcher_snap": patch("extraction.append_researcher_snapshot"),
@@ -323,7 +321,7 @@ class TestExtractOneUrlDiffPath:
         mocks["try_changes"].assert_not_called()
 
     def test_diff_new_paper_saves_and_creates_events(self):
-        """New paper from diff extraction is saved via save_publications."""
+        """New paper from diff extraction is persisted via persist_extraction."""
         from extraction import extract_one_url
         patches = self._base_patches()
         mocks = {k: p.start() for k, p in patches.items()}
@@ -336,9 +334,9 @@ class TestExtractOneUrlDiffPath:
                 p.stop()
         assert outcome.status == "extracted"
         assert outcome.pubs_count == 1
-        mocks["save"].assert_called_once()
-        args = mocks["save"].call_args
-        assert args[0][1] == [new_pub]
+        mocks["persist"].assert_called_once()
+        args = mocks["persist"].call_args
+        assert args[0][2] == [new_pub]
         assert args[1]["is_seed"] is False
 
     def test_diff_llm_failure_returns_failed(self):
@@ -429,7 +427,7 @@ class TestExtractOneUrlDiffPath:
         patches["extract_desc"] = patch(
             "extraction.HTMLFetcher.extract_description", return_value="Bio text.")
         patches["fetch_one"] = patch(
-            "extraction.Database.fetch_one",
+            "extraction.fetch_one",
             return_value={"position": "Prof", "affiliation": "MIT"})
         mocks = {k: p.start() for k, p in patches.items()}
         mocks["try_changes"].return_value = []

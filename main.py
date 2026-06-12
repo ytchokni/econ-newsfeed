@@ -184,6 +184,7 @@ class _UsageDict:
 def batch_check() -> None:
     """Check pending batch jobs and process completed results."""
     from llm_client import get_client, get_genai_client, get_model
+    from extraction import persist_extraction
     from publication import PublicationExtraction, validate_publication
     from pydantic import ValidationError
     import json
@@ -290,7 +291,6 @@ def batch_check() -> None:
                         logging.info("Batch validation dropped: %s", d.get("title", "<no title>"))
 
                 if validated:
-                    from extraction import persist_extraction
                     fetch_date = HTMLFetcher.get_fetch_timestamp(url_id)
                     is_seed = HTMLFetcher.is_first_extraction(url_id)
                     persist_extraction(url, url_id, validated, is_seed=is_seed, event_date=fetch_date)
