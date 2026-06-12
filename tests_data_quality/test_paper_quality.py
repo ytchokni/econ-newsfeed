@@ -3,6 +3,8 @@
 Guards: issue #148 (lowercase titles), issue #146 (NULL years), PR #153
 (status regressions on the denormalized papers table), encoding incidents.
 """
+import re
+
 from conftest import STATUS_ORDER, fmt_violations, mojibake_condition
 
 
@@ -161,9 +163,20 @@ class TestNearDuplicatePapers:
     """Two papers by the same researcher with near-identical titles are the
     title-variant duplicates of issue #107 / the #177 collision family —
     merge_duplicate_papers only catches DOI/OpenAlex or 2+-shared-author cases.
+
+    Pairs whose differing words contain digits or distinct-paper markers
+    (Reply, Corrigendum, Part II, trailing years) are genuinely different
+    papers and excluded. Keep in sync with
+    scripts/cleanup_data_quality.py::_DISTINCT_MARKERS, which merges
+    whatever this check flags.
     """
 
     SIMILARITY = 0.92
+
+    # Mirrors scripts/cleanup_data_quality.py::_DISTINCT_MARKERS
+    DISTINCT_MARKERS = re.compile(
+        r"\d|^(i|ii|iii|iv|v|comment|reply|rejoinder|appendix|corrigendum|erratum|"
+        r"part|revisited|extension|update|updated)$")
 
     def test_no_near_duplicate_titles_per_researcher(self, db):
         from difflib import SequenceMatcher
@@ -192,6 +205,9 @@ class TestNearDuplicatePapers:
                     continue
                 if SequenceMatcher(None, n1.split(), n2.split()).ratio() >= self.SIMILARITY:
                     seen_pairs.add(pair)
+                    diff = set(n1.split()) ^ set(n2.split())
+                    if any(self.DISTINCT_MARKERS.search(w) for w in diff):
+                        continue
                     dupes.append({"paper_ids": pair, "t1": t1[:55], "t2": t2[:55]})
         assert not dupes, (
             f"near-duplicate paper titles within a researcher ({len(dupes)} pairs):\n"
