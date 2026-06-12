@@ -96,6 +96,7 @@ def _classify_by_hostname(hostname):
     if 'doi.org' in hostname: return 'doi'
     if 'drive.google.com' in hostname or 'docs.google.com' in hostname: return 'drive'
     if 'dropbox.com' in hostname: return 'dropbox'
+    if 'cargocollective.com' in hostname: return 'pdf'
     if any(d in hostname for d in ('repec.org', 'econstor.eu', 'cepr.org', 'iza.org', 'diw.de', 'ifo.de', 'cesifo-group.de')):
         return 'repository'
     return 'journal'
