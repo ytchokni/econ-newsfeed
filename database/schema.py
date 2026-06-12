@@ -271,7 +271,7 @@ _TABLE_DEFINITIONS = {
         CREATE TABLE IF NOT EXISTS llm_usage (
             id INT AUTO_INCREMENT PRIMARY KEY,
             called_at DATETIME NOT NULL,
-            call_type ENUM('publication_extraction','description_extraction','researcher_disambiguation','jel_classification') NOT NULL,
+            call_type ENUM('publication_extraction','description_extraction','researcher_disambiguation','jel_classification','diff_extraction') NOT NULL,
             model VARCHAR(100) NOT NULL,
             prompt_tokens INT NOT NULL DEFAULT 0,
             completion_tokens INT NOT NULL DEFAULT 0,
@@ -472,12 +472,16 @@ def create_tables() -> None:
                         except Exception as e:
                             logging.warning("Migration: utf8mb4 for %s: %s", tbl, e)
 
-                    # Add jel_classification to llm_usage.call_type ENUM
+                    # Extend llm_usage.call_type ENUM (jel_classification, diff_extraction).
+                    # Without diff_extraction, every diff-path usage INSERT fails with
+                    # MySQL 1265 and is silently dropped by log_llm_usage (seen in prod
+                    # 2026-06-12: ~350 untracked calls overnight)
                     try:
                         cursor.execute(
                             "ALTER TABLE llm_usage MODIFY COLUMN call_type "
                             "ENUM('publication_extraction','description_extraction',"
-                            "'researcher_disambiguation','jel_classification') NOT NULL"
+                            "'researcher_disambiguation','jel_classification',"
+                            "'diff_extraction') NOT NULL"
                         )
                         conn.commit()
                     except Exception as e:
