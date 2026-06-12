@@ -204,10 +204,10 @@ class PaperSaver:
         with Database.get_connection() as conn:
             cursor = conn.cursor(buffered=True)
             try:
-                cursor.execute(
-                    "UPDATE papers SET title = %s, title_hash = %s WHERE id = %s",
-                    (new_title, new_hash, paper_id),
-                )
+                # A paper with the target title may already exist (typically
+                # saved as "new" earlier in the same run). It must be absorbed
+                # BEFORE the title UPDATE — updating first violates
+                # uq_title_hash and crashed the extraction worker (#177).
                 cursor.execute(
                     "SELECT id FROM papers WHERE title_hash = %s AND id != %s",
                     (new_hash, paper_id),
@@ -215,12 +215,25 @@ class PaperSaver:
                 dup = cursor.fetchone()
                 if dup:
                     dup_id = dup[0]
-                    cursor.execute(
-                        "UPDATE IGNORE paper_urls SET paper_id = %s WHERE paper_id = %s",
-                        (paper_id, dup_id),
-                    )
+                    # Reassign children to the surviving paper; rows that would
+                    # violate a UNIQUE constraint are skipped (IGNORE) and
+                    # cleaned up by ON DELETE CASCADE. feed_events are deleted
+                    # instead — reassigning them would give the survivor a
+                    # duplicate new_paper event.
+                    from paper_merge import _CHILD_TABLES
+                    for table, col in _CHILD_TABLES:
+                        if table == 'feed_events':
+                            continue
+                        cursor.execute(
+                            f"UPDATE IGNORE `{table}` SET `{col}` = %s WHERE `{col}` = %s",
+                            (paper_id, dup_id),
+                        )
                     cursor.execute("DELETE FROM feed_events WHERE paper_id = %s", (dup_id,))
                     cursor.execute("DELETE FROM papers WHERE id = %s", (dup_id,))
+                cursor.execute(
+                    "UPDATE papers SET title = %s, title_hash = %s WHERE id = %s",
+                    (new_title, new_hash, paper_id),
+                )
                 conn.commit()
             except Exception as e:
                 conn.rollback()
