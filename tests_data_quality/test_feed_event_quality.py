@@ -223,3 +223,31 @@ class TestEventEvidence:
                LIMIT 50"""
         )
         assert not rows, "no-op title_change events:\n" + fmt_violations(rows)
+
+
+class TestStatusChainCoherence:
+    """papers.status keeps the highest rank ever seen (PR #153), so it can
+    never be outranked by the newest status_change event's new_status.
+
+    A violation usually means merge_paper_group moved a higher-status
+    duplicate's events onto a canonical paper without reconciling status.
+    """
+
+    def test_paper_status_not_outranked_by_latest_event(self, db):
+        from database.snapshots import _STATUS_RANK
+
+        rows = db.fetch_all(
+            """SELECT fe.paper_id, fe.new_status AS event_status, p.status AS paper_status
+               FROM feed_events fe
+               JOIN (SELECT paper_id, MAX(id) AS max_id FROM feed_events
+                     WHERE event_type = 'status_change' GROUP BY paper_id) latest
+                 ON latest.max_id = fe.id
+               JOIN papers p ON p.id = fe.paper_id"""
+        )
+        bad = [
+            r for r in rows
+            if r["event_status"] and _STATUS_RANK.get(r["event_status"], -1) > _STATUS_RANK.get(r["paper_status"], -1)
+        ]
+        assert not bad, (
+            "papers outranked by their own latest status_change event:\n" + fmt_violations(bad)
+        )

@@ -213,3 +213,42 @@ class TestUrlIntegrity:
                LIMIT 50"""
         )
         assert not rows, "URLs tracked under multiple researchers:\n" + fmt_violations(rows)
+
+
+class TestNameHygiene:
+    def test_no_digits_or_urls_in_names(self, db):
+        rows = db.fetch_all(
+            """SELECT id, first_name, last_name FROM researchers
+               WHERE first_name REGEXP '[0-9@/]' OR last_name REGEXP '[0-9@/]'
+               LIMIT 50"""
+        )
+        assert not rows, "researcher names containing digits/URL chars:\n" + fmt_violations(rows)
+
+    def test_no_untrimmed_names(self, db):
+        rows = db.fetch_all(
+            """SELECT id, CONCAT('[', first_name, '][', last_name, ']') AS bracketed
+               FROM researchers
+               WHERE first_name != TRIM(first_name) OR last_name != TRIM(last_name)
+               LIMIT 50"""
+        )
+        assert not rows, "researcher names with stray whitespace:\n" + fmt_violations(rows)
+
+
+class TestDescriptionQuality:
+    def test_no_literal_null_descriptions(self, db):
+        """LLMs sometimes return the strings 'null'/'None' — storing them
+        verbatim puts the word 'null' on researcher cards."""
+        rows = db.fetch_all(
+            """SELECT id, description FROM researchers
+               WHERE LOWER(TRIM(COALESCE(description, 'x'))) IN ('null', 'none', 'n/a', 'unknown')
+               LIMIT 50"""
+        )
+        assert not rows, "literal null-ish descriptions:\n" + fmt_violations(rows)
+
+    def test_no_mojibake_descriptions(self, db):
+        rows = db.fetch_all(
+            f"""SELECT id, LEFT(description, 60) AS head FROM researchers
+                WHERE {mojibake_condition('description')}
+                LIMIT 50"""
+        )
+        assert not rows, "mojibake researcher descriptions:\n" + fmt_violations(rows)
