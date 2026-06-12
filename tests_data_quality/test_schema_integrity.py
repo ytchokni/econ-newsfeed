@@ -37,6 +37,37 @@ class TestExpectedTablesExist:
         assert not missing, f"missing tables (migrations not applied?): {missing}"
 
 
+class TestLlmUsageCallTypeEnum:
+    """Every call_type the code logs must exist in the DB enum.
+
+    log_llm_usage silences INSERT failures, so a call_type missing from the
+    ENUM drops usage rows invisibly (2026-06-12: every diff_extraction call
+    failed with MySQL 1265 — ~350 untracked calls in one night).
+    """
+
+    # Keep in sync with log_llm_usage call sites (grep: log_llm_usage\()
+    USED_CALL_TYPES = {
+        "publication_extraction", "description_extraction",
+        "researcher_disambiguation", "jel_classification", "diff_extraction",
+    }
+
+    def test_enum_covers_all_call_types_used_in_code(self, db):
+        row = db.fetch_one(
+            """
+            SELECT COLUMN_TYPE FROM information_schema.COLUMNS
+            WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'llm_usage'
+              AND COLUMN_NAME = 'call_type'
+            """
+        )
+        assert row, "llm_usage.call_type column not found"
+        enum_def = row["COLUMN_TYPE"]
+        missing = [t for t in self.USED_CALL_TYPES if f"'{t}'" not in enum_def]
+        assert not missing, (
+            f"call_type values used in code but missing from ENUM {enum_def}: "
+            f"{missing} — their llm_usage INSERTs fail silently (error 1265)"
+        )
+
+
 class TestHtmlContentConsistency:
     """html_content drives the extraction queue; inconsistent rows stall it."""
 
