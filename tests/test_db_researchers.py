@@ -425,6 +425,7 @@ class TestGetUrlsNeedingExtraction:
         assert "extracted_hash IS NULL" in query
         assert "extracted_hash != hc.content_hash" in query
 
-    def test_facade_exposes_it(self):
-        from database import Database
-        assert hasattr(Database, "get_urls_needing_extraction")
+    def test_package_reexports_it(self):
+        """Callers import from `database` directly (the facade is gone)."""
+        import database
+        assert hasattr(database, "get_urls_needing_extraction")

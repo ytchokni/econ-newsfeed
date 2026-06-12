@@ -8,9 +8,9 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client():
     with (
-        patch("database.create_tables"),
-        patch("scheduler.start_scheduler"),
-        patch("scheduler.shutdown_scheduler"),
+        patch("api.create_tables"),
+        patch("api.start_scheduler"),
+        patch("api.shutdown_scheduler"),
     ):
         from api import app
         with TestClient(app) as c:
@@ -24,7 +24,7 @@ SAMPLE_JEL_CODES = [
 
 
 class TestGetJelCodes:
-    @patch("database.get_all_jel_codes", return_value=SAMPLE_JEL_CODES)
+    @patch("api.get_all_jel_codes", return_value=SAMPLE_JEL_CODES)
     def test_returns_jel_codes(self, mock_db, client):
         resp = client.get("/api/jel-codes")
         assert resp.status_code == 200
@@ -33,7 +33,7 @@ class TestGetJelCodes:
         assert len(data["items"]) == 2
         assert data["items"][0]["code"] == "J"
 
-    @patch("database.get_all_jel_codes", return_value=[])
+    @patch("api.get_all_jel_codes", return_value=[])
     def test_empty_list(self, mock_db, client):
         resp = client.get("/api/jel-codes")
         assert resp.status_code == 200

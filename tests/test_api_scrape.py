@@ -13,9 +13,9 @@ AUTH_HEADERS = {"X-API-Key": os.environ["SCRAPE_API_KEY"]}
 def client():
     """Create a test client with mocked database and scheduler."""
     with (
-        patch("database.create_tables"),
-        patch("scheduler.start_scheduler"),
-        patch("scheduler.shutdown_scheduler"),
+        patch("api.create_tables"),
+        patch("api.start_scheduler"),
+        patch("api.shutdown_scheduler"),
     ):
         from api import app
 

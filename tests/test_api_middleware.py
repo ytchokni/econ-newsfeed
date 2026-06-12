@@ -15,10 +15,10 @@ def _noop_connection_scope():
 def client():
     """Create a test client with mocked database and scheduler."""
     with (
-        patch("database.create_tables"),
+        patch("api.create_tables"),
         patch("database.get_connection", return_value=None),
-        patch("scheduler.start_scheduler"),
-        patch("scheduler.shutdown_scheduler"),
+        patch("api.start_scheduler"),
+        patch("api.shutdown_scheduler"),
         patch("api.connection_scope", _noop_connection_scope),
         patch("api.search_feed_events", return_value=([], 0)),
         patch("api.get_authors_for_papers", return_value={}),

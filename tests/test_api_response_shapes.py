@@ -27,9 +27,9 @@ def client():
     reimport api outside patch context, binding the real functions.
     """
     with (
-        patch("database.create_tables"),
-        patch("scheduler.start_scheduler"),
-        patch("scheduler.shutdown_scheduler"),
+        patch("api.create_tables"),
+        patch("api.start_scheduler"),
+        patch("api.shutdown_scheduler"),
         patch("api.start_scheduler"),
         patch("api.shutdown_scheduler"),
         patch("api.connection_scope", _noop_connection_scope),

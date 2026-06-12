@@ -22,12 +22,12 @@ def _noop_connection_scope():
 def client():
     """Test client with mocked database and scheduler."""
     with (
-        patch("database.create_tables"),
+        patch("api.create_tables"),
         patch("database.get_connection", return_value=None),
         patch("database.fetch_all", return_value=[]),
         patch("database.fetch_one", return_value=None),
-        patch("scheduler.start_scheduler"),
-        patch("scheduler.shutdown_scheduler"),
+        patch("api.start_scheduler"),
+        patch("api.shutdown_scheduler"),
         patch("api.connection_scope", _noop_connection_scope),
         patch("api.search_feed_events", return_value=([], 0)),
         patch("api.get_authors_for_papers", return_value={}),
@@ -225,10 +225,10 @@ class TestNoStackTraceLeakage:
     def test_500_no_stack_trace(self):
         """Simulated internal error must return generic 500 with no details."""
         with (
-            patch("database.create_tables"),
+            patch("api.create_tables"),
             patch("database.get_connection", return_value=None),
-            patch("scheduler.start_scheduler"),
-            patch("scheduler.shutdown_scheduler"),
+            patch("api.start_scheduler"),
+            patch("api.shutdown_scheduler"),
             patch("api.get_paper_detail", side_effect=RuntimeError("DB connection failed: password=s3cr3t")),
         ):
             from api import app
@@ -247,10 +247,10 @@ class TestNoStackTraceLeakage:
     def test_unhandled_exception_returns_generic_500(self):
         """Any unhandled exception must produce a generic 500, not a traceback."""
         with (
-            patch("database.create_tables"),
+            patch("api.create_tables"),
             patch("database.get_connection", return_value=None),
-            patch("scheduler.start_scheduler"),
-            patch("scheduler.shutdown_scheduler"),
+            patch("api.start_scheduler"),
+            patch("api.shutdown_scheduler"),
             patch("api.connection_scope", _noop_connection_scope),
             patch("api.search_researchers", side_effect=Exception("internal detail")),
         ):
