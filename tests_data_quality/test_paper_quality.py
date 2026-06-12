@@ -312,3 +312,52 @@ class TestAuthorshipSanity:
                 LIMIT 50"""
         )
         assert not rows, "papers with implausibly many authors:\n" + fmt_violations(rows)
+
+
+class TestSnapshotChurn:
+    """A paper accumulating snapshots every extraction means its content hash
+    is unstable (whitespace/ordering noise) — the flapping class of bugs.
+    """
+
+    MAX_SNAPSHOTS = 15
+
+    def test_no_snapshot_churn(self, db):
+        rows = db.fetch_all(
+            f"""SELECT ps.paper_id, LEFT(MAX(p.title), 50) AS title, COUNT(*) AS n_snapshots
+                FROM paper_snapshots ps JOIN papers p ON p.id = ps.paper_id
+                GROUP BY ps.paper_id
+                HAVING COUNT(*) > {self.MAX_SNAPSHOTS}
+                ORDER BY n_snapshots DESC
+                LIMIT 50"""
+        )
+        assert not rows, "papers with snapshot churn (unstable content hash):\n" + fmt_violations(rows)
+
+    def test_snapshots_have_content_hash(self, db):
+        rows = db.fetch_all(
+            """SELECT id, paper_id, scraped_at FROM paper_snapshots
+               WHERE content_hash IS NULL
+               LIMIT 50"""
+        )
+        assert not rows, "paper_snapshots missing content_hash:\n" + fmt_violations(rows)
+
+
+class TestTextHygiene:
+    """Control characters and embedded newlines are extraction junk that
+    breaks card layout and search."""
+
+    def test_no_newlines_or_tabs_in_titles(self, db):
+        rows = db.fetch_all(
+            """SELECT id, title FROM papers
+               WHERE title LIKE CONCAT('%', CHAR(10), '%')
+                  OR title LIKE CONCAT('%', CHAR(9), '%')
+                  OR title LIKE CONCAT('%', CHAR(13), '%')
+               LIMIT 50"""
+        )
+        assert not rows, "titles with embedded newlines/tabs:\n" + fmt_violations(rows)
+
+    def test_no_untrimmed_titles(self, db):
+        rows = db.fetch_all(
+            "SELECT id, CONCAT('[', title, ']') AS bracketed FROM papers "
+            "WHERE title != TRIM(title) LIMIT 50"
+        )
+        assert not rows, "titles with leading/trailing whitespace:\n" + fmt_violations(rows)

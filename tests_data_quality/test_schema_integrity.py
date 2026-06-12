@@ -120,3 +120,54 @@ class TestSourceUrlTracking:
                LIMIT 50"""
         )
         assert not rows, "papers whose source_url is untracked:\n" + fmt_violations(rows)
+
+
+class TestFetchLifecycle:
+    def test_no_fetches_after_deactivation(self, db):
+        """html_content.timestamp newer than the URL's deactivated_at means
+        the fetcher is still visiting a deactivated URL (PR #137 bypass)."""
+        rows = db.fetch_all(
+            """SELECT hc.url_id, ru.url, hc.timestamp, ru.deactivated_at
+               FROM html_content hc
+               JOIN researcher_urls ru ON ru.id = hc.url_id
+               WHERE ru.is_active = FALSE AND ru.deactivated_at IS NOT NULL
+                 AND hc.timestamp > ru.deactivated_at + INTERVAL 1 HOUR
+               LIMIT 50"""
+        )
+        assert not rows, "URLs fetched after deactivation:\n" + fmt_violations(rows)
+
+    def test_content_respects_max_chars(self, db):
+        """fetch truncates to CONTENT_MAX_CHARS before storing — longer rows
+        mean the truncation guard was bypassed and the LLM gets oversized input."""
+        import os
+        limit = int(os.environ.get("CONTENT_MAX_CHARS", "20000"))
+        rows = db.fetch_all(
+            f"""SELECT url_id, CHAR_LENGTH(content) AS len FROM html_content
+                WHERE CHAR_LENGTH(content) > {limit + 500}
+                LIMIT 50"""
+        )
+        assert not rows, f"html_content rows exceeding CONTENT_MAX_CHARS={limit}:\n" + fmt_violations(rows)
+
+
+class TestLlmUsageAccounting:
+    def test_token_totals_not_less_than_components(self, db):
+        """total >= prompt + completion always; Gemini-style thinking/cached
+        tokens make it strictly greater, which is fine — only total < sum
+        is impossible accounting."""
+        rows = db.fetch_all(
+            """SELECT id, call_type, prompt_tokens, completion_tokens, total_tokens
+               FROM llm_usage
+               WHERE total_tokens < prompt_tokens + completion_tokens
+               LIMIT 50"""
+        )
+        assert not rows, "llm_usage rows where total < prompt+completion:\n" + fmt_violations(rows)
+
+    def test_no_negative_usage_values(self, db):
+        rows = db.fetch_all(
+            """SELECT id, prompt_tokens, completion_tokens, estimated_cost_usd
+               FROM llm_usage
+               WHERE prompt_tokens < 0 OR completion_tokens < 0
+                  OR COALESCE(estimated_cost_usd, 0) < 0
+               LIMIT 50"""
+        )
+        assert not rows, "negative llm_usage values:\n" + fmt_violations(rows)
