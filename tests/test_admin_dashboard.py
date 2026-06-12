@@ -129,7 +129,7 @@ def test_admin_dashboard_endpoint_returns_data(client):
         "scrapes": {"recent": [], "totals": {"total_scrapes": 0, "total_pubs_extracted": 0}},
         "activity": {"events_last_7d": {}, "events_last_30d": {}, "recent_events": []},
     }
-    with patch("api.Database.get_admin_dashboard_stats", return_value=mock_stats):
+    with patch("api.get_admin_dashboard_stats", return_value=mock_stats):
         resp = client.get(
             "/api/admin/dashboard",
             headers={"X-API-Key": "test-secret-key-for-ci-runs"},

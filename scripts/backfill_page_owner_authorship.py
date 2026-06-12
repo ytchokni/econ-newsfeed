@@ -14,7 +14,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Database
+from database import get_connection
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ def main():
     parser.add_argument("--dry-run", action="store_true", help="Show what would be inserted without writing")
     args = parser.parse_args()
 
-    conn = Database.get_connection()
+    conn = get_connection()
     cursor = conn.cursor()
 
     try:

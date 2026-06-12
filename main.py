@@ -2,17 +2,26 @@ import argparse
 import logging
 import os
 
-from database import Database
+from database import (
+    create_tables,
+    execute_query,
+    fetch_all,
+    fetch_one,
+    get_researchers_needing_classification,
+    get_urls_needing_extraction,
+    import_data_from_file,
+    log_llm_usage,
+    save_researcher_jel_codes,
+)
 from researcher import Researcher
-from publication import Publication, reconcile_title_renames, validate_publication, append_snapshots_for_pubs
+from publication import Publication, validate_publication
 from html_fetcher import HTMLFetcher
-from link_extractor import match_and_save_paper_links
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 def import_data(file_path: str) -> None:
     """Import data from a file into the database."""
-    Database.import_data_from_file(file_path)
+    import_data_from_file(file_path)
     logging.info(f"Data imported from {file_path}")
 
 def download_htmls() -> None:
@@ -50,7 +59,7 @@ def classify_jel() -> None:
     """Classify all researchers with descriptions into JEL codes."""
     from jel_classifier import classify_researcher
 
-    researchers = Database.get_researchers_needing_classification()
+    researchers = get_researchers_needing_classification()
     total = len(researchers)
     logging.info("JEL classification: %d researchers to classify", total)
 
@@ -63,7 +72,7 @@ def classify_jel() -> None:
 
         codes = classify_researcher(rid, first_name, last_name, description)
         if codes:
-            Database.save_researcher_jel_codes(rid, codes)
+            save_researcher_jel_codes(rid, codes)
             classified += 1
             logging.info(
                 "Saved JEL codes for %s %s (id=%d): %s",
@@ -101,7 +110,7 @@ def batch_submit(limit: int | None = None) -> None:
         logging.info("Limiting batch to %d URLs (of %d needing extraction)", limit, total_needing)
 
     # Warn if pending batches exist
-    pending = Database.fetch_all(
+    pending = fetch_all(
         """SELECT openai_batch_id FROM batch_jobs
            WHERE status IN ('submitted','validating','in_progress','finalizing')"""
     )
@@ -152,7 +161,7 @@ def batch_submit(limit: int | None = None) -> None:
             completion_window="24h",
         )
 
-        Database.execute_query(
+        execute_query(
             """INSERT INTO batch_jobs
                (openai_batch_id, input_file_id, status, url_count, created_at)
                VALUES (%s, %s, 'submitted', %s, %s)""",
@@ -184,7 +193,7 @@ def batch_check() -> None:
     genai_client = get_genai_client()
     model = get_model()
 
-    pending = Database.fetch_all(
+    pending = fetch_all(
         """SELECT id, openai_batch_id FROM batch_jobs
            WHERE status IN ('submitted','validating','in_progress','finalizing')"""
     )
@@ -200,7 +209,7 @@ def batch_check() -> None:
         batch = batch_index.get(openai_batch_id)
         if not batch:
             logging.warning("Batch %s not found in API — may have expired", openai_batch_id)
-            Database.execute_query(
+            execute_query(
                 "UPDATE batch_jobs SET status = 'expired' WHERE id = %s", (db_id,)
             )
             continue
@@ -223,7 +232,7 @@ def batch_check() -> None:
                 if url_id is None:
                     continue
 
-                url_row = Database.fetch_one(
+                url_row = fetch_one(
                     "SELECT url FROM researcher_urls WHERE id = %s", (url_id,)
                 )
                 if not url_row:
@@ -236,7 +245,7 @@ def batch_check() -> None:
                 total_prompt_tokens += usage.prompt_tokens
                 total_completion_tokens += usage.completion_tokens
 
-                Database.log_llm_usage(
+                log_llm_usage(
                     "publication_extraction", model, usage,
                     context_url=url, is_batch=True, batch_job_id=db_id,
                 )
@@ -281,27 +290,23 @@ def batch_check() -> None:
                         logging.info("Batch validation dropped: %s", d.get("title", "<no title>"))
 
                 if validated:
+                    from extraction import persist_extraction
                     fetch_date = HTMLFetcher.get_fetch_timestamp(url_id)
                     is_seed = HTMLFetcher.is_first_extraction(url_id)
-                    Publication.save_publications(url, validated, is_seed=is_seed, event_date=fetch_date)
-                    reconcile_title_renames(url, validated, event_date=fetch_date)
-                    match_and_save_paper_links(url_id, validated)
-
-                    append_snapshots_for_pubs(validated, url, event_date=fetch_date)
-
+                    persist_extraction(url, url_id, validated, is_seed=is_seed, event_date=fetch_date)
                     saved_pubs += len(validated)
                 HTMLFetcher.mark_extracted(url_id)
                 processed_urls += 1
 
             # Aggregate cost from llm_usage rows logged above
-            cost_row = Database.fetch_one(
+            cost_row = fetch_one(
                 """SELECT SUM(estimated_cost_usd) AS total_cost FROM llm_usage
                    WHERE batch_job_id = %s""",
                 (db_id,),
             )
             batch_cost = cost_row['total_cost'] if cost_row else None
 
-            Database.execute_query(
+            execute_query(
                 """UPDATE batch_jobs
                    SET status = 'completed', output_file_id = %s, completed_at = %s,
                        prompt_tokens_total = %s, completion_tokens_total = %s,
@@ -317,7 +322,7 @@ def batch_check() -> None:
 
         elif status in ("failed", "expired", "cancelled"):
             error_msg = getattr(batch, 'errors', None)
-            Database.execute_query(
+            execute_query(
                 "UPDATE batch_jobs SET status = %s, error_message = %s WHERE id = %s",
                 (status, str(error_msg), db_id),
             )
@@ -336,7 +341,7 @@ def extract_only(limit: int | None = None) -> None:
     )
     from extraction import extract_one_url
 
-    pending = Database.get_urls_needing_extraction()
+    pending = get_urls_needing_extraction()
     if not pending:
         logging.info("No URLs need extraction")
         return
@@ -404,7 +409,7 @@ def discover_domains() -> None:
     from link_extractor import discover_untrusted_domains
 
     # Fetch only url_ids first, then load raw HTML one at a time to avoid OOM
-    url_ids = Database.fetch_all(
+    url_ids = fetch_all(
         "SELECT url_id FROM html_content WHERE raw_html IS NOT NULL"
     )
     if not url_ids:
@@ -413,7 +418,7 @@ def discover_domains() -> None:
 
     totals = Counter()
     for row in url_ids:
-        html_row = Database.fetch_one(
+        html_row = fetch_one(
             "SELECT raw_html FROM html_content WHERE url_id = %s", (row['url_id'],)
         )
         if html_row and html_row['raw_html']:
@@ -457,11 +462,11 @@ def main() -> None:
     elif args.command == 'classify-jel':
         classify_jel()
     elif args.command == 'enrich':
-        Database.create_tables()
+        create_tables()
         from openalex import enrich_new_publications
         enrich_new_publications(limit=500)
     elif args.command == 'enrich-jel':
-        Database.create_tables()
+        create_tables()
         from jel_enrichment import enrich_jel_from_papers
         enrich_jel_from_papers()
     elif args.command == 'extract':

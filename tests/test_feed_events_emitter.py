@@ -16,7 +16,7 @@ class FakeSaveResult:
 class TestEmitNewPaperEvents:
     """FeedEventEmitter.emit_new_paper_events creates new_paper events."""
 
-    @patch("feed_events.Database.get_connection")
+    @patch("feed_events.get_connection")
     def test_skips_seed_publications(self, mock_get_conn):
         from feed_events import FeedEventEmitter
         result = FeedEventEmitter.emit_new_paper_events(
@@ -27,7 +27,7 @@ class TestEmitNewPaperEvents:
         assert result == 0
         mock_get_conn.assert_not_called()
 
-    @patch("feed_events.Database.get_connection")
+    @patch("feed_events.get_connection")
     def test_skips_published_status(self, mock_get_conn):
         from feed_events import FeedEventEmitter
         mock_conn = MagicMock()
@@ -45,7 +45,7 @@ class TestEmitNewPaperEvents:
         assert result == 0
 
     @patch("feed_events._get_previous_snapshot_html", return_value=None)
-    @patch("feed_events.Database.get_connection")
+    @patch("feed_events.get_connection")
     def test_creates_event_for_new_working_paper_with_baseline(self, mock_get_conn, _):
         from feed_events import FeedEventEmitter
         mock_conn = MagicMock()
@@ -65,7 +65,7 @@ class TestEmitNewPaperEvents:
         assert len(insert_calls) == 1
 
     @patch("feed_events._get_previous_snapshot_html", return_value=None)
-    @patch("feed_events.Database.get_connection")
+    @patch("feed_events.get_connection")
     def test_suppresses_event_without_baseline(self, mock_get_conn, _):
         from feed_events import FeedEventEmitter
         mock_conn = MagicMock()
@@ -83,7 +83,7 @@ class TestEmitNewPaperEvents:
         assert result == 0
 
     @patch("feed_events._get_previous_snapshot_html", return_value="<p>paper already here</p>")
-    @patch("feed_events.Database.get_connection")
+    @patch("feed_events.get_connection")
     def test_suppresses_event_when_title_in_previous_snapshot(self, mock_get_conn, _):
         from feed_events import FeedEventEmitter
         mock_conn = MagicMock()
@@ -101,7 +101,7 @@ class TestEmitNewPaperEvents:
         assert result == 0
 
     @patch("feed_events._get_previous_snapshot_html", return_value=None)
-    @patch("feed_events.Database.get_connection")
+    @patch("feed_events.get_connection")
     def test_duplicate_paper_new_to_url_no_prior_event(self, mock_get_conn, _):
         """Duplicate paper appearing on a new URL for the first time gets an event if no prior event exists."""
         from feed_events import FeedEventEmitter
@@ -121,7 +121,7 @@ class TestEmitNewPaperEvents:
 
 
 class TestEmitStatusChange:
-    @patch("feed_events.Database.get_connection")
+    @patch("feed_events.get_connection")
     def test_creates_status_change_event(self, mock_get_conn):
         from feed_events import FeedEventEmitter
         mock_conn = MagicMock()
@@ -137,7 +137,7 @@ class TestEmitStatusChange:
 
 
 class TestEmitTitleChange:
-    @patch("feed_events.Database.get_connection")
+    @patch("feed_events.get_connection")
     def test_creates_title_change_event(self, mock_get_conn):
         from feed_events import FeedEventEmitter
         mock_conn = MagicMock()
@@ -202,7 +202,7 @@ class TestPreviousSnapshotQuery:
     most-recent snapshot already IS the previous page state. The lookup must
     not skip it with OFFSET 1."""
 
-    @patch("feed_events.Database.get_connection")
+    @patch("feed_events.get_connection")
     def test_uses_most_recent_snapshot_not_offset_1(self, mock_get_conn):
         import zlib
         from feed_events import _get_previous_snapshot_html

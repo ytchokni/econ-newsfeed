@@ -6,7 +6,7 @@ Also does fuzzy title matching for papers with identical author sets.
 """
 import logging
 from difflib import SequenceMatcher
-from database import Database
+from database import fetch_all, get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -24,12 +24,12 @@ _CHILD_TABLES = [
 
 def find_duplicate_groups() -> list[list[int]]:
     """Find groups of papers sharing the same DOI or OpenAlex ID."""
-    doi_groups = Database.fetch_all(
+    doi_groups = fetch_all(
         """SELECT doi, GROUP_CONCAT(id ORDER BY discovered_at) AS ids
            FROM papers WHERE doi IS NOT NULL
            GROUP BY doi HAVING COUNT(*) > 1"""
     )
-    oa_groups = Database.fetch_all(
+    oa_groups = fetch_all(
         """SELECT openalex_id, GROUP_CONCAT(id ORDER BY discovered_at) AS ids
            FROM papers WHERE openalex_id IS NOT NULL
            GROUP BY openalex_id HAVING COUNT(*) > 1"""
@@ -59,7 +59,7 @@ def find_duplicate_groups() -> list[list[int]]:
 
 def merge_paper_group(paper_ids: list[int]) -> None:
     """Merge duplicate papers into the earliest-discovered canonical record."""
-    papers = Database.fetch_all(
+    papers = fetch_all(
         f"""SELECT id, discovered_at, abstract, year, venue
             FROM papers WHERE id IN ({','.join(['%s'] * len(paper_ids))})
             ORDER BY discovered_at""",
@@ -74,7 +74,7 @@ def merge_paper_group(paper_ids: list[int]) -> None:
 
     logger.info("Merging papers %s into canonical %s", dup_ids, canonical_id)
 
-    with Database.get_connection() as conn:
+    with get_connection() as conn:
         cursor = conn.cursor()
         try:
             for dup in duplicates:
@@ -129,7 +129,7 @@ def find_fuzzy_duplicate_groups() -> list[list[int]]:
     are similar above _FUZZY_THRESHOLD.
     """
     # Papers with no identifier and at least one author
-    candidates = Database.fetch_all("""
+    candidates = fetch_all("""
         SELECT p.id, p.title,
                GROUP_CONCAT(a.researcher_id ORDER BY a.researcher_id) AS author_ids
         FROM papers p

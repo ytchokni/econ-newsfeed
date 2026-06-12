@@ -12,7 +12,7 @@ import sys
 # Ensure project root is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Database
+from database import execute_query, fetch_one
 
 # All timestamps in the DB are UTC (datetime.now(timezone.utc) used throughout codebase)
 CUTOFF = "2026-03-21 00:00:00"
@@ -20,8 +20,8 @@ CUTOFF = "2026-03-21 00:00:00"
 
 def main():
     # Show current state
-    count = Database.fetch_one("SELECT COUNT(*) AS c FROM feed_events")
-    to_delete = Database.fetch_one(
+    count = fetch_one("SELECT COUNT(*) AS c FROM feed_events")
+    to_delete = fetch_one(
         "SELECT COUNT(*) AS c FROM feed_events WHERE event_type = 'new_paper' AND created_at < %s",
         (CUTOFF,),
     )
@@ -37,12 +37,12 @@ def main():
         print("Aborted.")
         return
 
-    Database.execute_query(
+    execute_query(
         "DELETE FROM feed_events WHERE event_type = 'new_paper' AND created_at < %s",
         (CUTOFF,),
     )
 
-    remaining = Database.fetch_one("SELECT COUNT(*) AS c FROM feed_events")
+    remaining = fetch_one("SELECT COUNT(*) AS c FROM feed_events")
     print(f"Deleted {to_delete['c']} spurious feed events")
     print(f"Feed events remaining: {remaining['c']}")
 

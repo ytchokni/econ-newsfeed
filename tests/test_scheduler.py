@@ -43,7 +43,7 @@ def _base_patches():
         "get_urls": patch("scheduler.Researcher.get_all_researcher_urls", return_value=[]),
         "validate": patch("scheduler._validate_draft_urls"),
         "fetch": patch("scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=False),
-        "fetch_one": patch("scheduler.Database.fetch_one", return_value=None),
+        "fetch_one": patch("scheduler.fetch_one", return_value=None),
     }
 
 
@@ -289,7 +289,7 @@ class TestURLProcessing:
 class TestCreateScrapeLog:
     """Basic coverage for the create_scrape_log helper."""
 
-    @patch("scheduler.Database.execute_query", return_value=7)
+    @patch("scheduler.execute_query", return_value=7)
     def test_returns_inserted_id(self, mock_exec):
         result = create_scrape_log()
         assert result == 7
@@ -301,8 +301,8 @@ class TestCreateScrapeLog:
 class TestUpdateScrapeLog:
     """Basic coverage for the update_scrape_log helper."""
 
-    @patch("scheduler.Database.execute_query")
-    @patch("scheduler.Database.fetch_one", return_value={
+    @patch("scheduler.execute_query")
+    @patch("scheduler.fetch_one", return_value={
         "prompt_total": 1500, "completion_total": 300,
     })
     def test_updates_with_token_totals(self, mock_fetch, mock_exec):
@@ -318,8 +318,8 @@ class TestUpdateScrapeLog:
         assert 300 in params
         assert 42 in params  # log_id
 
-    @patch("scheduler.Database.execute_query")
-    @patch("scheduler.Database.fetch_one", return_value=None)
+    @patch("scheduler.execute_query")
+    @patch("scheduler.fetch_one", return_value=None)
     def test_handles_no_token_row(self, mock_fetch, mock_exec):
         """When fetch_one returns None (no llm_usage rows), totals default to 0."""
         update_scrape_log(42, "failed", error_message="kaboom")
@@ -330,8 +330,8 @@ class TestUpdateScrapeLog:
         assert 0 in params
         assert "kaboom" in params
 
-    @patch("scheduler.Database.execute_query")
-    @patch("scheduler.Database.fetch_one", return_value={
+    @patch("scheduler.execute_query")
+    @patch("scheduler.fetch_one", return_value={
         "prompt_total": 0, "completion_total": 0,
     })
     def test_extraction_errors_parameter(self, mock_fetch, mock_exec):
@@ -372,7 +372,7 @@ class TestStaleLogCleanup:
     """Verify zombie running scrape_log entries get cleaned up."""
 
     @patch("scheduler.is_scrape_running", return_value=False)
-    @patch("scheduler.Database.execute_query")
+    @patch("scheduler.execute_query")
     def test_lock_free_marks_running_entries_as_failed(self, mock_exec, mock_lock):
         mock_exec.return_value = 2
 
@@ -385,7 +385,7 @@ class TestStaleLogCleanup:
         assert "INTERVAL 5 MINUTE" in query
 
     @patch("scheduler.is_scrape_running", return_value=True)
-    @patch("scheduler.Database.execute_query")
+    @patch("scheduler.execute_query")
     def test_lock_held_spares_newest_running_entry(self, mock_exec, mock_lock):
         mock_exec.return_value = 1
 
@@ -397,7 +397,7 @@ class TestStaleLogCleanup:
         assert "status = 'failed'" in query
 
     @patch("scheduler.is_scrape_running", return_value=False)
-    @patch("scheduler.Database.execute_query")
+    @patch("scheduler.execute_query")
     def test_skips_when_none_stale(self, mock_exec, mock_lock):
         mock_exec.return_value = 0
 
@@ -635,7 +635,7 @@ class TestExtractionWorkerLoop:
                 scheduler._extraction_stop_event.set()
             return _outcome("extracted", pubs_count=3)
 
-        with patch("scheduler.Database.get_urls_needing_extraction", return_value=rows), \
+        with patch("scheduler.get_urls_needing_extraction", return_value=rows), \
              patch("extraction.extract_one_url", side_effect=fake_extract), \
              patch.object(scheduler, "_EXTRACTION_DELAY_SECONDS", 0):
             _extraction_worker_loop()
@@ -657,7 +657,7 @@ class TestExtractionWorkerLoop:
             waits.append(timeout)
             return scheduler._extraction_stop_event.is_set()
 
-        with patch("scheduler.Database.get_urls_needing_extraction", side_effect=empty_then_stop), \
+        with patch("scheduler.get_urls_needing_extraction", side_effect=empty_then_stop), \
              patch.object(scheduler._extraction_stop_event, "wait", side_effect=record_wait):
             _extraction_worker_loop()
 
@@ -679,7 +679,7 @@ class TestExtractionWorkerLoop:
                 scheduler._extraction_stop_event.set()
             return rows
 
-        with patch("scheduler.Database.get_urls_needing_extraction", side_effect=get_queue), \
+        with patch("scheduler.get_urls_needing_extraction", side_effect=get_queue), \
              patch("extraction.extract_one_url", side_effect=failing), \
              patch.object(scheduler, "_EXTRACTION_DELAY_SECONDS", 0), \
              patch.object(scheduler, "_EXTRACTION_IDLE_SECONDS", 0), \
@@ -704,7 +704,7 @@ class TestExtractionWorkerLoop:
             waits.append(timeout)
             return scheduler._extraction_stop_event.is_set()
 
-        with patch("scheduler.Database.get_urls_needing_extraction", return_value=rows), \
+        with patch("scheduler.get_urls_needing_extraction", return_value=rows), \
              patch("extraction.extract_one_url", side_effect=failing), \
              patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 3), \
              patch.object(scheduler, "_EXTRACTION_MAX_URL_FAILURES", 99), \
@@ -731,7 +731,7 @@ class TestExtractionWorkerLoop:
             waits.append(timeout)
             return scheduler._extraction_stop_event.is_set()
 
-        with patch("scheduler.Database.get_urls_needing_extraction", return_value=rows), \
+        with patch("scheduler.get_urls_needing_extraction", return_value=rows), \
              patch("extraction.extract_one_url", side_effect=fail_fail_succeed), \
              patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 3), \
              patch.object(scheduler, "_EXTRACTION_MAX_URL_FAILURES", 99), \
@@ -752,7 +752,7 @@ class TestExtractionWorkerLoop:
                 scheduler._extraction_stop_event.set()
             raise RuntimeError("DB down")
 
-        with patch("scheduler.Database.get_urls_needing_extraction", return_value=rows), \
+        with patch("scheduler.get_urls_needing_extraction", return_value=rows), \
              patch("extraction.extract_one_url", side_effect=exploding), \
              patch.object(scheduler, "_EXTRACTION_DELAY_SECONDS", 0), \
              patch.object(scheduler, "_EXTRACTION_IDLE_SECONDS", 0), \

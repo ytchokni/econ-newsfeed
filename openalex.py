@@ -6,7 +6,7 @@ from datetime import date
 
 import requests
 
-from database import Database
+from database import execute_query, fetch_all, get_unenriched_papers, update_openalex_data
 
 logger = logging.getLogger(__name__)
 
@@ -223,7 +223,7 @@ def enrich_publication(paper_id, title, author_name, existing_abstract=None, doi
     # Only use OpenAlex abstract as fallback
     abstract = result["abstract"] if not existing_abstract else None
 
-    Database.update_openalex_data(
+    update_openalex_data(
         paper_id=paper_id,
         doi=result["doi"],
         openalex_id=result["openalex_id"],
@@ -248,7 +248,7 @@ def _backfill_researcher_openalex_ids(paper_id, coauthors):
     if not oa_ids:
         return
     # Get researchers linked to this paper
-    rows = Database.fetch_all(
+    rows = fetch_all(
         """SELECT r.id, r.first_name, r.last_name, r.openalex_author_id
            FROM researchers r
            JOIN authorship a ON a.researcher_id = r.id
@@ -260,7 +260,7 @@ def _backfill_researcher_openalex_ids(paper_id, coauthors):
         for oa_id, display_name in oa_ids.items():
             # Match by last name appearing in OpenAlex display name
             if last_name in display_name.lower().split():
-                Database.execute_query(
+                execute_query(
                     "UPDATE researchers SET openalex_author_id = %s WHERE id = %s",
                     (oa_id, r['id']),
                 )
@@ -277,7 +277,7 @@ def enrich_new_publications(limit=50):
         logger.info("OpenAlex daily budget exhausted (%d/%d), skipping", _daily_counter["count"], DAILY_BUDGET)
         return 0
 
-    papers = Database.get_unenriched_papers(limit=limit)
+    papers = get_unenriched_papers(limit=limit)
     if not papers:
         logger.info("No unenriched papers found")
         return 0

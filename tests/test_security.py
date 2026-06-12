@@ -22,18 +22,18 @@ def _noop_connection_scope():
 def client():
     """Test client with mocked database and scheduler."""
     with (
-        patch("database.Database.create_tables"),
-        patch("database.Database.get_connection", return_value=None),
-        patch("database.Database.fetch_all", return_value=[]),
-        patch("database.Database.fetch_one", return_value=None),
+        patch("database.create_tables"),
+        patch("database.get_connection", return_value=None),
+        patch("database.fetch_all", return_value=[]),
+        patch("database.fetch_one", return_value=None),
         patch("scheduler.start_scheduler"),
         patch("scheduler.shutdown_scheduler"),
         patch("api.connection_scope", _noop_connection_scope),
-        patch("api.Database.search_feed_events", return_value=([], 0)),
-        patch("api.Database.get_authors_for_papers", return_value={}),
-        patch("api.Database.get_coauthors_for_papers", return_value={}),
-        patch("api.Database.get_links_for_papers", return_value={}),
-        patch("api.Database.get_paper_detail", return_value=None),
+        patch("api.search_feed_events", return_value=([], 0)),
+        patch("api.get_authors_for_papers", return_value={}),
+        patch("api.get_coauthors_for_papers", return_value={}),
+        patch("api.get_links_for_papers", return_value={}),
+        patch("api.get_paper_detail", return_value=None),
     ):
         from api import app
 
@@ -225,11 +225,11 @@ class TestNoStackTraceLeakage:
     def test_500_no_stack_trace(self):
         """Simulated internal error must return generic 500 with no details."""
         with (
-            patch("database.Database.create_tables"),
-            patch("database.Database.get_connection", return_value=None),
+            patch("database.create_tables"),
+            patch("database.get_connection", return_value=None),
             patch("scheduler.start_scheduler"),
             patch("scheduler.shutdown_scheduler"),
-            patch("api.Database.get_paper_detail", side_effect=RuntimeError("DB connection failed: password=s3cr3t")),
+            patch("api.get_paper_detail", side_effect=RuntimeError("DB connection failed: password=s3cr3t")),
         ):
             from api import app
 
@@ -247,12 +247,12 @@ class TestNoStackTraceLeakage:
     def test_unhandled_exception_returns_generic_500(self):
         """Any unhandled exception must produce a generic 500, not a traceback."""
         with (
-            patch("database.Database.create_tables"),
-            patch("database.Database.get_connection", return_value=None),
+            patch("database.create_tables"),
+            patch("database.get_connection", return_value=None),
             patch("scheduler.start_scheduler"),
             patch("scheduler.shutdown_scheduler"),
             patch("api.connection_scope", _noop_connection_scope),
-            patch("api.Database.search_researchers", side_effect=Exception("internal detail")),
+            patch("api.search_researchers", side_effect=Exception("internal detail")),
         ):
             from api import app
 
@@ -620,7 +620,7 @@ class TestOperationalEndpointAuth:
 
     def test_metrics_with_valid_key_succeeds(self, client):
         """GET /api/metrics with valid API key must return 200."""
-        with patch("api.Database.fetch_one", return_value={"publications": 0, "researchers": 0, "scrapes": 0}):
+        with patch("api.fetch_one", return_value={"publications": 0, "researchers": 0, "scrapes": 0}):
             resp = client.get("/api/metrics", headers=AUTH_HEADERS)
         assert resp.status_code == 200
 
@@ -631,6 +631,6 @@ class TestOperationalEndpointAuth:
 
     def test_scrape_status_with_valid_key_succeeds(self, client):
         """GET /api/scrape/status with valid API key must return 200."""
-        with patch("api.Database.fetch_one", return_value=None):
+        with patch("api.fetch_one", return_value=None):
             resp = client.get("/api/scrape/status", headers=AUTH_HEADERS)
         assert resp.status_code == 200

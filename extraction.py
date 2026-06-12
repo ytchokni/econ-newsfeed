@@ -15,10 +15,15 @@ import logging
 from dataclasses import dataclass
 from datetime import timezone
 
-from database import Database
+from database import (
+    fetch_one, fetch_all, compute_title_hash, append_paper_snapshot,
+    append_researcher_snapshot,
+)
+from feed_events import FeedEventEmitter
 from html_fetcher import HTMLFetcher
 from link_extractor import match_and_save_paper_links
-from publication import Publication, append_snapshots_for_pubs, reconcile_title_renames
+from paper_saver import PaperSaver
+from publication import Publication
 
 logger = logging.getLogger(__name__)
 
@@ -85,6 +90,58 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
     return outcome
 
 
+def persist_extraction(url: str, url_id: int, pubs: list[dict],
+                       is_seed: bool = False, event_date=None) -> None:
+    """Persist extraction results in one call.
+
+    Absorbs the full post-extraction sequence: save papers, emit feed events,
+    reconcile title renames, match/save links, append snapshots.  Both
+    extract_one_url() and main.batch_check() delegate here.
+    """
+    results = PaperSaver.save_publications(url, pubs, is_seed=is_seed)
+    FeedEventEmitter.emit_new_paper_events(results, url, is_seed=is_seed, event_date=event_date)
+
+    renames = PaperSaver.reconcile_title_renames(url, pubs)
+    for r in renames:
+        FeedEventEmitter.emit_title_change(r.paper_id, r.old_title, r.new_title, event_date=event_date)
+
+    match_and_save_paper_links(url_id, pubs)
+    _append_snapshots(pubs, url, event_date)
+
+
+def _append_snapshots(pubs: list[dict], source_url: str, event_date=None) -> None:
+    """Append paper snapshots and emit status_change events when detected."""
+    hash_to_pub = {}
+    for pub in pubs:
+        title = pub.get('title')
+        if title:
+            hash_to_pub[compute_title_hash(title)] = pub
+    if not hash_to_pub:
+        return
+
+    placeholders = ",".join(["%s"] * len(hash_to_pub))
+    rows = fetch_all(
+        f"SELECT id, title_hash FROM papers WHERE title_hash IN ({placeholders})",
+        list(hash_to_pub.keys()),
+    )
+    for row in rows:
+        pub = hash_to_pub[row['title_hash']]
+        result = append_paper_snapshot(
+            paper_id=row['id'],
+            status=pub.get('status'),
+            venue=pub.get('venue'),
+            abstract=pub.get('abstract'),
+            draft_url=pub.get('draft_url'),
+            year=pub.get('year'),
+            source_url=source_url,
+            title=pub.get('title'),
+        )
+        if result.status_changed:
+            FeedEventEmitter.emit_status_change(
+                row['id'], result.old_status, result.new_status, event_date=event_date,
+            )
+
+
 def _extract_full(url_id: int, url: str, text: str, is_seed: bool,
                   content_hash: str, scrape_log_id: int | None,
                   fetch_date=None) -> ExtractionOutcome:
@@ -94,10 +151,7 @@ def _extract_full(url_id: int, url: str, text: str, is_seed: bool,
         return ExtractionOutcome("failed")
 
     if pubs:
-        Publication.save_publications(url, pubs, is_seed=is_seed, event_date=fetch_date)
-        reconcile_title_renames(url, pubs, event_date=fetch_date)
-        match_and_save_paper_links(url_id, pubs)
-        append_snapshots_for_pubs(pubs, url, event_date=fetch_date)
+        persist_extraction(url, url_id, pubs, is_seed=is_seed, event_date=fetch_date)
 
     HTMLFetcher.mark_extracted(url_id, content_hash)
     return ExtractionOutcome("extracted" if pubs else "empty", pubs_count=len(pubs))
@@ -129,12 +183,13 @@ def _process_diff_changes(changes: list[dict], url: str, url_id: int,
     title_changes = [c for c in changes if c['change_type'] == 'title_change']
 
     if new_pubs:
-        Publication.save_publications(url, new_pubs, is_seed=False, event_date=fetch_date)
+        results = PaperSaver.save_publications(url, new_pubs, is_seed=False)
+        FeedEventEmitter.emit_new_paper_events(results, url, is_seed=False, event_date=fetch_date)
         match_and_save_paper_links(url_id, new_pubs)
-        append_snapshots_for_pubs(new_pubs, url, event_date=fetch_date)
+        _append_snapshots(new_pubs, url, event_date=fetch_date)
 
     if status_changes:
-        append_snapshots_for_pubs(status_changes, url, event_date=fetch_date)
+        _append_snapshots(status_changes, url, event_date=fetch_date)
 
     for tc in title_changes:
         _apply_title_change(tc, url, fetch_date)
@@ -144,16 +199,13 @@ def _process_diff_changes(changes: list[dict], url: str, url_id: int,
 
 def _apply_title_change(change: dict, source_url: str, event_date) -> None:
     """Apply a title change detected by diff extraction."""
-    from feed_events import FeedEventEmitter
-    from paper_saver import PaperSaver
-
     old_title = change.get('old_title')
     new_title = change.get('title')
     if not old_title or not new_title:
         return
 
-    old_hash = Database.compute_title_hash(old_title)
-    row = Database.fetch_one("SELECT id FROM papers WHERE title_hash = %s", (old_hash,))
+    old_hash = compute_title_hash(old_title)
+    row = fetch_one("SELECT id FROM papers WHERE title_hash = %s", (old_hash,))
     if not row:
         logger.warning("Title change for unknown paper: %s -> %s", old_title, new_title)
         return
@@ -170,13 +222,13 @@ def _update_home_description(researcher_id: int, text: str, url: str,
         description = HTMLFetcher.extract_description(text, url, scrape_log_id=scrape_log_id)
         if not description:
             return
-        r_row = Database.fetch_one(
+        r_row = fetch_one(
             "SELECT position, affiliation FROM researchers WHERE id = %s",
             (researcher_id,),
         )
         position = r_row['position'] if r_row else None
         affiliation = r_row['affiliation'] if r_row else None
-        Database.append_researcher_snapshot(
+        append_researcher_snapshot(
             researcher_id, position, affiliation, description, source_url=url,
         )
     except Exception as e:

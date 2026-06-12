@@ -14,16 +14,16 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
-from database import Database
+from database import create_tables, fetch_all
 from database.jel import sync_researcher_fields_from_jel
 
 logger = logging.getLogger(__name__)
 
 
 def backfill() -> int:
-    Database.create_tables()
+    create_tables()
 
-    rows = Database.fetch_all(
+    rows = fetch_all(
         """SELECT r.id, GROUP_CONCAT(rjc.jel_code) AS codes
            FROM researchers r
            JOIN researcher_jel_codes rjc ON rjc.researcher_id = r.id

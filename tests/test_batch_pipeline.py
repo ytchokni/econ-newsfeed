@@ -9,12 +9,13 @@ from publication import validate_publication, PublicationExtraction
 class TestBatchSubmitFileUpload(unittest.TestCase):
     """batch_submit must use genai SDK for file upload, OpenAI SDK for batch create."""
 
-    @patch("main.Database")
+    @patch("main.execute_query")
+    @patch("main.fetch_all", return_value=[])
     @patch("main.Researcher")
     @patch("main.HTMLFetcher")
     @patch("main.Publication")
     def test_uses_genai_for_upload_and_openai_for_batch_create(
-        self, mock_pub, mock_fetcher, mock_researcher, mock_db,
+        self, mock_pub, mock_fetcher, mock_researcher, mock_fetch_all, mock_exec,
     ):
         mock_researcher.get_all_researcher_urls.return_value = [
             {"id": 1, "researcher_id": 10, "url": "http://example.com", "page_type": "RESEARCH"},
@@ -22,7 +23,6 @@ class TestBatchSubmitFileUpload(unittest.TestCase):
         mock_fetcher.needs_extraction.return_value = True
         mock_fetcher.get_latest_text.return_value = "some text"
         mock_pub.build_extraction_prompt.return_value = "extract this"
-        mock_db.fetch_all.return_value = []  # no pending batches
 
         mock_genai = MagicMock()
         mock_uploaded = MagicMock()
@@ -54,17 +54,18 @@ class TestBatchSubmitFileUpload(unittest.TestCase):
 class TestBatchCheckFileDownload(unittest.TestCase):
     """batch_check must use genai SDK for file download."""
 
-    @patch("main.match_and_save_paper_links")
-    @patch("main.append_snapshots_for_pubs")
-    @patch("main.reconcile_title_renames")
-    @patch("main.Publication")
+    @patch("extraction.persist_extraction")
     @patch("main.HTMLFetcher")
-    @patch("main.Database")
+    @patch("main.log_llm_usage")
+    @patch("main.execute_query")
+    @patch("main.fetch_one")
+    @patch("main.fetch_all")
     def test_uses_genai_for_download(
-        self, mock_db, mock_fetcher, mock_pub, mock_reconcile, mock_snapshots, mock_links,
+        self, mock_fetch_all, mock_fetch_one, mock_exec, mock_log,
+        mock_fetcher, mock_persist,
     ):
         # One pending batch
-        mock_db.fetch_all.return_value = [
+        mock_fetch_all.return_value = [
             {"id": 1, "openai_batch_id": "batch_abc"},
         ]
 
@@ -103,7 +104,7 @@ class TestBatchCheckFileDownload(unittest.TestCase):
         mock_genai = MagicMock()
         mock_genai.files.download.return_value = result_line.encode("utf-8")
 
-        mock_db.fetch_one.side_effect = [
+        mock_fetch_one.side_effect = [
             {"url": "http://example.com"},  # url lookup
             {"total_cost": 0.001},          # cost aggregation
         ]

@@ -11,14 +11,14 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Database
+from database import fetch_all
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
 
 
 def main():
-    rows = Database.fetch_all("""
+    rows = fetch_all("""
         SELECT r.id, r.first_name, r.last_name,
                ru.url,
                hc.id AS html_id,

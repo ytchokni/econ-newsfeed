@@ -14,7 +14,7 @@ from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
-from database import Database
+from database import execute_query, fetch_all, fetch_one, log_llm_usage
 from database.researchers import record_url_fetch_failure, record_url_fetch_success
 from bs4 import BeautifulSoup
 import urllib3.util.connection as _urllib3_cn
@@ -427,7 +427,7 @@ class HTMLFetcher:
         with zlib and stores it with integrity hashes. Failures are logged, not raised.
         """
         try:
-            row = Database.fetch_one(
+            row = fetch_one(
                 "SELECT raw_html, content_hash, timestamp FROM html_content WHERE url_id = %s",
                 (url_id,),
             )
@@ -441,7 +441,7 @@ class HTMLFetcher:
             raw_html_hash = hashlib.sha256(old_html.encode("utf-8")).hexdigest()
             compressed = zlib.compress(old_html.encode("utf-8"))
 
-            Database.execute_query(
+            execute_query(
                 """INSERT IGNORE INTO html_snapshots
                    (url_id, text_content_hash, raw_html_hash, raw_html_compressed, snapshot_at)
                    VALUES (%s, %s, %s, %s, %s)""",
@@ -458,7 +458,7 @@ class HTMLFetcher:
         Returns the decompressed HTML string, or None if not found.
         Raises ValueError if integrity check fails.
         """
-        row = Database.fetch_one(
+        row = fetch_one(
             "SELECT raw_html_compressed, raw_html_hash FROM html_snapshots WHERE id = %s AND url_id = %s",
             (snapshot_id, url_id),
         )
@@ -477,7 +477,7 @@ class HTMLFetcher:
     @staticmethod
     def list_snapshots(url_id: int) -> list[dict]:
         """List all snapshots for a URL, ordered by most recent first."""
-        return Database.fetch_all(
+        return fetch_all(
             "SELECT id, text_content_hash, raw_html_hash, snapshot_at "
             "FROM html_snapshots WHERE url_id = %s ORDER BY snapshot_at DESC",
             (url_id,),
@@ -504,7 +504,7 @@ class HTMLFetcher:
                 raw_html = new_row.raw_html
         """
         try:
-            Database.execute_query(query, (url_id, text_content, text_hash, datetime.now(timezone.utc), researcher_id, raw_html))
+            execute_query(query, (url_id, text_content, text_hash, datetime.now(timezone.utc), researcher_id, raw_html))
             logging.info(f"Text content saved for URL ID: {url_id} (Researcher ID: {researcher_id})")
         except Exception as e:
             logging.error("Error saving text content for URL ID %s: %s", url_id, type(e).__name__)
@@ -519,7 +519,7 @@ class HTMLFetcher:
             FROM html_content
             WHERE url_id = %s
         """
-        result = Database.fetch_one(query, (url_id,))
+        result = fetch_one(query, (url_id,))
 
         if result:
             return result['content_hash'] != new_text_hash
@@ -598,7 +598,7 @@ class HTMLFetcher:
         no_content (4,536 prod rows were stuck this way on 2026-06-11).
         """
         from database import Database
-        Database.execute_query(
+        execute_query(
             """UPDATE html_content
                SET timestamp = %s,
                    raw_html = COALESCE(raw_html, %s),
@@ -633,7 +633,7 @@ class HTMLFetcher:
                 model=model,
                 max_tokens=1024,
             )
-            Database.log_llm_usage(
+            log_llm_usage(
                 "description_extraction", model, response.usage,
                 context_url=url, scrape_log_id=scrape_log_id,
             )
@@ -681,7 +681,7 @@ class HTMLFetcher:
     @staticmethod
     def get_fetch_timestamp(url_id: int) -> datetime | None:
         """Return the timestamp of the last HTML fetch for a URL ID."""
-        result = Database.fetch_one(
+        result = fetch_one(
             "SELECT timestamp FROM html_content WHERE url_id = %s", (url_id,)
         )
         if not result or not result['timestamp']:
@@ -700,7 +700,7 @@ class HTMLFetcher:
         and the current html_content.content is meaningful.
         Returns None if no snapshot exists (first extraction).
         """
-        row = Database.fetch_one(
+        row = fetch_one(
             "SELECT raw_html_compressed FROM html_snapshots "
             "WHERE url_id = %s ORDER BY snapshot_at DESC LIMIT 1",
             (url_id,),
@@ -726,13 +726,13 @@ class HTMLFetcher:
             FROM html_content
             WHERE url_id = %s
         """
-        result = Database.fetch_one(query, (url_id,))
+        result = fetch_one(query, (url_id,))
         return result['content'] if result else None
 
     @staticmethod
     def get_raw_html(url_id: int) -> str | None:
         """Retrieve stored raw HTML for a URL ID."""
-        result = Database.fetch_one(
+        result = fetch_one(
             "SELECT raw_html FROM html_content WHERE url_id = %s", (url_id,),
         )
         return result['raw_html'] if result else None
@@ -745,7 +745,7 @@ class HTMLFetcher:
         can record exactly what was extracted. timestamp and extracted_at
         avoid separate round-trips for fetch time and seed detection.
         """
-        return Database.fetch_one(
+        return fetch_one(
             "SELECT content, raw_html, content_hash, timestamp, extracted_at"
             " FROM html_content WHERE url_id = %s",
             (url_id,),
@@ -759,7 +759,7 @@ class HTMLFetcher:
         (content changed since last extraction, or never extracted).
         Returns False if no HTML has been downloaded yet.
         """
-        result = Database.fetch_one(
+        result = fetch_one(
             "SELECT content_hash, extracted_hash FROM html_content WHERE url_id = %s",
             (url_id,),
         )
@@ -774,7 +774,7 @@ class HTMLFetcher:
         Uses extracted_at IS NULL as the signal — mark_extracted() has
         never been called for this URL.
         """
-        result = Database.fetch_one(
+        result = fetch_one(
             "SELECT extracted_at FROM html_content WHERE url_id = %s",
             (url_id,),
         )
@@ -792,12 +792,12 @@ class HTMLFetcher:
         """
         now = datetime.now(timezone.utc)
         if extracted_hash is None:
-            Database.execute_query(
+            execute_query(
                 "UPDATE html_content SET extracted_at = %s, extracted_hash = content_hash WHERE url_id = %s",
                 (now, url_id),
             )
         else:
-            Database.execute_query(
+            execute_query(
                 "UPDATE html_content SET extracted_at = %s, extracted_hash = %s WHERE url_id = %s",
                 (now, extracted_hash, url_id),
             )

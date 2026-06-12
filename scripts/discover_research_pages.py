@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
-from database import Database
+from database import fetch_all, fetch_one
 from database.researchers import add_researcher_url
 
 logging.basicConfig(
@@ -302,7 +302,7 @@ def main():
     # Paginated scan — fetch URL metadata in pages to avoid OOM
     logger.info("Scanning stored HTML for research page links...")
 
-    total_row = Database.fetch_one(
+    total_row = fetch_one(
         "SELECT COUNT(*) AS cnt FROM researcher_urls WHERE is_active = TRUE"
     )
     total = total_row["cnt"]
@@ -312,7 +312,7 @@ def main():
     existing_urls: dict[int, set[str]] = {}
     offset = 0
     while offset < total:
-        chunk = Database.fetch_all(
+        chunk = fetch_all(
             "SELECT researcher_id, url FROM researcher_urls WHERE is_active = TRUE ORDER BY id LIMIT %s OFFSET %s",
             (PAGE_SIZE, offset),
         )
@@ -332,7 +332,7 @@ def main():
     offset = 0
 
     while offset < total:
-        url_rows = Database.fetch_all("""
+        url_rows = fetch_all("""
             SELECT ru.id AS url_id, ru.researcher_id, ru.url,
                    r.first_name, r.last_name
             FROM researcher_urls ru
@@ -344,7 +344,7 @@ def main():
 
         for row in url_rows:
             url_id = row["url_id"]
-            html_row = Database.fetch_one(
+            html_row = fetch_one(
                 "SELECT raw_html FROM html_content WHERE url_id = %s", (url_id,)
             )
             if not html_row or not html_row["raw_html"]:

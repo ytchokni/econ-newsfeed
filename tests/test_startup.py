@@ -30,7 +30,7 @@ class TestScrapeApiKeyValidation:
         with patch.dict(os.environ, {"SCRAPE_API_KEY": "changeme"}, clear=False):
             # Force module-level _SCRAPE_API_KEY to pick up the short value
             with (
-                patch("database.Database.create_tables"),
+                patch("database.create_tables"),
                 patch("scheduler.start_scheduler"),
                 patch("scheduler.shutdown_scheduler"),
             ):
@@ -48,7 +48,7 @@ class TestScrapeApiKeyValidation:
     def test_empty_key_prevents_startup(self):
         """An empty SCRAPE_API_KEY must cause a RuntimeError at startup."""
         with (
-            patch("database.Database.create_tables"),
+            patch("database.create_tables"),
             patch("scheduler.start_scheduler"),
             patch("scheduler.shutdown_scheduler"),
         ):
@@ -62,7 +62,7 @@ class TestScrapeApiKeyValidation:
     def test_valid_key_allows_startup(self):
         """A key of 16+ chars must allow normal startup."""
         with (
-            patch("database.Database.create_tables"),
+            patch("database.create_tables"),
             patch("scheduler.start_scheduler"),
             patch("scheduler.shutdown_scheduler"),
         ):
@@ -73,10 +73,10 @@ class TestScrapeApiKeyValidation:
                     # App started successfully -- verify it responds
                     with (
                         patch("api.connection_scope", _noop_connection_scope),
-                        patch("api.Database.search_feed_events", return_value=([], 0)),
-                        patch("api.Database.get_authors_for_papers", return_value={}),
-                        patch("api.Database.get_coauthors_for_papers", return_value={}),
-                        patch("api.Database.get_links_for_papers", return_value={}),
+                        patch("api.search_feed_events", return_value=([], 0)),
+                        patch("api.get_authors_for_papers", return_value={}),
+                        patch("api.get_coauthors_for_papers", return_value={}),
+                        patch("api.get_links_for_papers", return_value={}),
                     ):
                         resp = c.get("/api/publications")
                     assert resp.status_code == 200
@@ -112,7 +112,7 @@ class TestBioColumnMigration:
                 with patch("database.schema.seed_research_fields"), \
                      patch("database.schema.seed_jel_codes"):
                     # Must not raise
-                    Database.create_tables()
+                    create_tables()
 
     def test_migration_succeeds_when_column_is_new(self):
         """ALTER TABLE ADD COLUMN succeeding must work normally."""
@@ -124,7 +124,7 @@ class TestBioColumnMigration:
                 with patch("database.schema.seed_research_fields"), \
                      patch("database.schema.seed_jel_codes"):
                     # Must not raise
-                    Database.create_tables()
+                    create_tables()
 
 
 # ---------------------------------------------------------------------------
@@ -147,7 +147,7 @@ class TestMigrationAdvisoryLock:
         with patch("database.schema.get_connection", return_value=mock_conn):
             with patch("database.schema.seed_research_fields"), \
                  patch("database.schema.seed_jel_codes"):
-                Database.create_tables()
+                create_tables()
 
         # The cursor must have called fetchone() at least twice:
         # once for GET_LOCK, once for RELEASE_LOCK
@@ -164,7 +164,7 @@ class TestMigrationAdvisoryLock:
         with patch("database.schema.get_connection", return_value=mock_conn):
             with patch("database.schema.seed_research_fields"), \
                  patch("database.schema.seed_jel_codes"):
-                Database.create_tables()
+                create_tables()
 
         executed_sql = [
             str(call.args[0]) for call in mock_cursor.execute.call_args_list
@@ -196,7 +196,7 @@ class TestMigrationAdvisoryLock:
         with patch("database.schema.get_connection", return_value=mock_conn):
             with patch("database.schema.seed_research_fields"), \
                  patch("database.schema.seed_jel_codes"):
-                Database.create_tables()  # Must not raise
+                create_tables()  # Must not raise
 
         executed_sql = [
             str(call.args[0]) for call in mock_cursor.execute.call_args_list
@@ -221,7 +221,7 @@ class TestForwardFlappingCleanupMigration:
         with patch("database.schema.get_connection", return_value=mock_conn):
             with patch("database.schema.seed_research_fields"), \
                  patch("database.schema.seed_jel_codes"):
-                Database.create_tables()
+                create_tables()
 
         executed_sql = [str(c) for c in mock_cursor.execute.call_args_list]
         flap_deletes = [s for s in executed_sql if "DELETE b FROM feed_events b" in s]

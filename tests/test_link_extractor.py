@@ -8,7 +8,7 @@ from html_fetcher import HTMLFetcher
 
 
 class TestSaveTextWithRawHtml:
-    @patch("html_fetcher.Database.execute_query")
+    @patch("html_fetcher.execute_query")
     def test_save_text_stores_raw_html(self, mock_execute):
         HTMLFetcher.save_text(url_id=1, text_content="text", text_hash="abc",
                               researcher_id=10, raw_html="<html>test</html>")
@@ -17,7 +17,7 @@ class TestSaveTextWithRawHtml:
         assert "raw_html" in sql
         assert "<html>test</html>" in params
 
-    @patch("html_fetcher.Database.execute_query")
+    @patch("html_fetcher.execute_query")
     def test_save_text_without_raw_html_passes_none(self, mock_execute):
         HTMLFetcher.save_text(url_id=1, text_content="text", text_hash="abc", researcher_id=10)
         assert mock_execute.call_args[0][1][-1] is None
@@ -94,9 +94,9 @@ class TestMatchLinkToPaper:
 
 
 class TestMatchAndSavePaperLinks:
-    @patch("link_extractor.Database.execute_query")
-    @patch("link_extractor.Database.fetch_all")
-    @patch("link_extractor.Database.compute_title_hash", return_value="abc123")
+    @patch("link_extractor.execute_query")
+    @patch("link_extractor.fetch_all")
+    @patch("link_extractor.compute_title_hash", return_value="abc123")
     @patch("link_extractor.HTMLFetcher.get_raw_html")
     def test_matches_and_saves(self, mock_get_raw, mock_hash, mock_fetch_all, mock_execute):
         html = '<div><a href="https://ssrn.com/1">Trade and Wages</a></div>'
@@ -110,7 +110,7 @@ class TestMatchAndSavePaperLinks:
         assert len(link_calls) == 1
         assert link_calls[0][0][1][0] == 10  # paper_id
 
-    @patch("link_extractor.Database.execute_query")
+    @patch("link_extractor.execute_query")
     @patch("link_extractor.HTMLFetcher.get_raw_html")
     def test_skips_no_raw_html(self, mock_get_raw, mock_execute):
         mock_get_raw.return_value = None
@@ -141,10 +141,10 @@ class TestApiPaperLinks:
             "doi": None,
         }
         with (
-            patch("api.Database.get_paper_detail", return_value=pub_detail),
-            patch("api.Database.get_authors_for_papers", return_value={1: [{"id": 1, "first_name": "J", "last_name": "S"}]}),
-            patch("api.Database.get_coauthors_for_papers", return_value={1: []}),
-            patch("api.Database.get_links_for_papers", return_value={1: [{"url": "https://ssrn.com/1", "link_type": "ssrn"}]}),
+            patch("api.get_paper_detail", return_value=pub_detail),
+            patch("api.get_authors_for_papers", return_value={1: [{"id": 1, "first_name": "J", "last_name": "S"}]}),
+            patch("api.get_coauthors_for_papers", return_value={1: []}),
+            patch("api.get_links_for_papers", return_value={1: [{"url": "https://ssrn.com/1", "link_type": "ssrn"}]}),
         ):
             resp = client.get("/api/publications/1")
         assert resp.status_code == 200
@@ -155,10 +155,10 @@ class TestApiPaperLinks:
 class TestMatchAndSavePaperLinksWithDoi:
     """DOI-based matching: resolve DOI from URL, get canonical title, match to paper."""
 
-    @patch("link_extractor.Database.execute_query")
-    @patch("link_extractor.Database.fetch_all")
-    @patch("link_extractor.Database.fetch_one")
-    @patch("link_extractor.Database.compute_title_hash")
+    @patch("link_extractor.execute_query")
+    @patch("link_extractor.fetch_all")
+    @patch("link_extractor.fetch_one")
+    @patch("link_extractor.compute_title_hash")
     @patch("link_extractor.HTMLFetcher.get_raw_html")
     def test_doi_link_matched_by_canonical_title(self, mock_get_raw, mock_hash,
                                                   mock_fetch_one, mock_fetch_all, mock_execute):
@@ -184,9 +184,9 @@ class TestMatchAndSavePaperLinksWithDoi:
         assert params[0] == 10  # paper_id
         assert "10.1007/s40641-016-0032-z" in params  # doi stored
 
-    @patch("link_extractor.Database.execute_query")
-    @patch("link_extractor.Database.fetch_all")
-    @patch("link_extractor.Database.compute_title_hash")
+    @patch("link_extractor.execute_query")
+    @patch("link_extractor.fetch_all")
+    @patch("link_extractor.compute_title_hash")
     @patch("link_extractor.HTMLFetcher.get_raw_html")
     def test_falls_back_to_anchor_text_when_no_doi(self, mock_get_raw, mock_hash,
                                                      mock_fetch_all, mock_execute):
