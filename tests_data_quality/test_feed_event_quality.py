@@ -182,3 +182,44 @@ class TestRecentNewPaperEventsAgainstSnapshots:
             f"{len(bogus)}/{len(events)} recent new_paper events have titles that were "
             "already on the page in the prior snapshot (bogus events):\n" + fmt_violations(bogus)
         )
+
+
+class TestEventsFromDeadUrls:
+    """Events created after their source URL was deactivated mean a zombie
+    pipeline path kept writing (PR #137 lifecycle violation)."""
+
+    def test_no_events_after_url_deactivation(self, db):
+        rows = db.fetch_all(
+            """SELECT fe.id, fe.event_type, fe.created_at, ru.deactivated_at, ru.url
+               FROM feed_events fe
+               JOIN papers p ON p.id = fe.paper_id
+               JOIN researcher_urls ru ON ru.url = p.source_url
+               WHERE ru.is_active = FALSE AND ru.deactivated_at IS NOT NULL
+                 AND fe.created_at > ru.deactivated_at + INTERVAL 1 HOUR
+               LIMIT 50"""
+        )
+        assert not rows, "events created after URL deactivation:\n" + fmt_violations(rows)
+
+
+class TestEventEvidence:
+    """Events must be backed by observable history."""
+
+    def test_status_change_requires_snapshots(self, db):
+        """A status change can only be OBSERVED between two extractions —
+        a paper with zero snapshots cannot have one."""
+        rows = db.fetch_all(
+            """SELECT fe.id, fe.paper_id, fe.old_status, fe.new_status
+               FROM feed_events fe
+               WHERE fe.event_type = 'status_change'
+                 AND NOT EXISTS (SELECT 1 FROM paper_snapshots ps WHERE ps.paper_id = fe.paper_id)
+               LIMIT 50"""
+        )
+        assert not rows, "status_change events with zero snapshots:\n" + fmt_violations(rows)
+
+    def test_no_noop_title_changes(self, db):
+        rows = db.fetch_all(
+            """SELECT id, paper_id, old_title FROM feed_events
+               WHERE event_type = 'title_change' AND old_title = new_title
+               LIMIT 50"""
+        )
+        assert not rows, "no-op title_change events:\n" + fmt_violations(rows)

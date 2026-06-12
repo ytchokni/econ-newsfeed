@@ -89,6 +89,9 @@ check:
 check-data:  ## Data-quality invariant checks against the real DB (.env); fails on bad rows
 	poetry run pytest tests_data_quality -v
 
+check-data-live:  ## check-data + pipeline-liveness checks (run on the server against the live DB)
+	DATA_QUALITY_LIVE=1 poetry run pytest tests_data_quality -v
+
 sync-prod:  ## DESTRUCTIVE: replace local DB with latest prod backup (scp + fresh volume + migrations)
 	./scripts/sync_prod_db.sh
 

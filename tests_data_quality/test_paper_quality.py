@@ -136,3 +136,179 @@ class TestPaperRelationalIntegrity:
             """
         )
         assert not rows, "papers with no authors (unreachable from any researcher):\n" + fmt_violations(rows)
+
+
+class TestTitleHashIntegrity:
+    """papers.title_hash must equal compute_title_hash(title) for every row.
+
+    Drift means a writer updated one without the other (the #177 rename bug
+    family) — dedup silently breaks for that paper from then on.
+    """
+
+    def test_title_hash_matches_title(self, db):
+        from database.papers import compute_title_hash
+
+        rows = db.fetch_all("SELECT id, title, title_hash FROM papers WHERE title IS NOT NULL")
+        bad = [
+            {"id": r["id"], "title": (r["title"] or "")[:60]}
+            for r in rows
+            if r["title_hash"] != compute_title_hash(r["title"])
+        ]
+        assert not bad, f"papers with stale title_hash ({len(bad)} total):\n" + fmt_violations(bad)
+
+
+class TestNearDuplicatePapers:
+    """Two papers by the same researcher with near-identical titles are the
+    title-variant duplicates of issue #107 / the #177 collision family —
+    merge_duplicate_papers only catches DOI/OpenAlex or 2+-shared-author cases.
+    """
+
+    SIMILARITY = 0.92
+
+    def test_no_near_duplicate_titles_per_researcher(self, db):
+        from difflib import SequenceMatcher
+        from database.papers import normalize_title
+
+        rows = db.fetch_all(
+            """SELECT a.researcher_id, p.id, p.title
+               FROM papers p JOIN authorship a ON a.publication_id = p.id
+               WHERE p.title IS NOT NULL"""
+        )
+        by_researcher: dict[int, list[tuple[int, str, str]]] = {}
+        for r in rows:
+            norm = normalize_title(r["title"])
+            if norm:
+                by_researcher.setdefault(r["researcher_id"], []).append((r["id"], r["title"], norm))
+
+        seen_pairs = set()
+        dupes = []
+        for rid, papers in by_researcher.items():
+            if len(papers) < 2:
+                continue
+            papers.sort(key=lambda x: x[2])
+            for (id1, t1, n1), (id2, t2, n2) in zip(papers, papers[1:]):
+                pair = tuple(sorted((id1, id2)))
+                if id1 == id2 or pair in seen_pairs or n1[:20] != n2[:20]:
+                    continue
+                if SequenceMatcher(None, n1.split(), n2.split()).ratio() >= self.SIMILARITY:
+                    seen_pairs.add(pair)
+                    dupes.append({"paper_ids": pair, "t1": t1[:55], "t2": t2[:55]})
+        assert not dupes, (
+            f"near-duplicate paper titles within a researcher ({len(dupes)} pairs):\n"
+            + fmt_violations(dupes)
+        )
+
+
+class TestExtractionArtifacts:
+    """LLM/HTML residue that should never survive clean_title/save paths."""
+
+    def test_no_raw_html_entities_in_titles(self, db):
+        rows = db.fetch_all(
+            """SELECT id, title FROM papers
+               WHERE title LIKE '%&amp;%' OR title LIKE '%&#%'
+                  OR title LIKE '%&quot;%' OR title LIKE '%&nbsp;%'
+               LIMIT 50"""
+        )
+        assert not rows, "titles with raw HTML entities:\n" + fmt_violations(rows)
+
+    def test_no_html_tags_in_titles(self, db):
+        rows = db.fetch_all(
+            """SELECT id, title FROM papers
+               WHERE title LIKE '%</%' OR title LIKE '%<em>%' OR title LIKE '%<i>%'
+                  OR title LIKE '%<span%' OR title LIKE '%<br%'
+               LIMIT 50"""
+        )
+        assert not rows, "titles with HTML tags:\n" + fmt_violations(rows)
+
+    def test_no_truncated_titles(self, db):
+        """Trailing ellipsis/comma/dash usually means the LLM hit a token cliff."""
+        rows = db.fetch_all(
+            r"""SELECT id, title FROM papers
+                WHERE title REGEXP '(\\.\\.\\.|…|,|;)$'
+                LIMIT 50"""
+        )
+        assert not rows, "titles ending in truncation markers:\n" + fmt_violations(rows)
+
+    def test_no_status_words_as_venue(self, db):
+        """A venue that is ONLY a status phrase belongs in papers.status."""
+        rows = db.fetch_all(
+            """SELECT id, venue, status FROM papers
+               WHERE LOWER(TRIM(venue)) IN
+                 ('working paper', 'draft', 'under review', 'submitted',
+                  'r&r', 'revise and resubmit', 'reject and resubmit',
+                  'work in progress', 'job market paper', 'jmp')
+               LIMIT 50"""
+        )
+        assert not rows, "status phrases stored as venue:\n" + fmt_violations(rows)
+
+    def test_no_mojibake_in_venue_or_abstract(self, db):
+        rows = db.fetch_all(
+            f"""SELECT id, LEFT(COALESCE(venue,''), 40) AS venue,
+                       LEFT(COALESCE(abstract,''), 60) AS abstract_head
+                FROM papers
+                WHERE {mojibake_condition('venue')} OR {mojibake_condition('abstract')}
+                LIMIT 50"""
+        )
+        assert not rows, "mojibake in venue/abstract:\n" + fmt_violations(rows)
+
+    def test_no_junk_abstracts(self, db):
+        """Non-null abstracts under 40 chars are extraction noise, not abstracts."""
+        rows = db.fetch_all(
+            """SELECT id, abstract FROM papers
+               WHERE abstract IS NOT NULL AND TRIM(abstract) != ''
+                 AND CHAR_LENGTH(abstract) < 40
+               LIMIT 50"""
+        )
+        assert not rows, "junk abstracts (<40 chars):\n" + fmt_violations(rows)
+
+
+class TestDraftUrlQuality:
+    def test_draft_urls_use_http_scheme(self, db):
+        rows = db.fetch_all(
+            """SELECT id, draft_url FROM papers
+               WHERE draft_url IS NOT NULL
+                 AND draft_url NOT LIKE 'http://%' AND draft_url NOT LIKE 'https://%'
+               LIMIT 50"""
+        )
+        assert not rows, "draft_urls with bad scheme:\n" + fmt_violations(rows)
+
+    def test_draft_url_is_not_source_url(self, db):
+        """draft_url pointing back at the listing page is an extraction artifact."""
+        rows = db.fetch_all(
+            """SELECT id, draft_url FROM papers
+               WHERE draft_url IS NOT NULL AND draft_url = source_url
+               LIMIT 50"""
+        )
+        assert not rows, "draft_url equals source_url:\n" + fmt_violations(rows)
+
+
+class TestDiscoveredAtSanity:
+    def test_no_future_discovered_at(self, db):
+        rows = db.fetch_all(
+            "SELECT id, discovered_at FROM papers WHERE discovered_at > NOW() + INTERVAL 1 DAY LIMIT 50"
+        )
+        assert not rows, "papers discovered in the future:\n" + fmt_violations(rows)
+
+    def test_no_pre_epoch_discovered_at(self, db):
+        from conftest import PROJECT_EPOCH
+        rows = db.fetch_all(
+            f"SELECT id, discovered_at FROM papers WHERE discovered_at < '{PROJECT_EPOCH}' LIMIT 50"
+        )
+        assert not rows, "papers discovered before the project existed:\n" + fmt_violations(rows)
+
+
+class TestAuthorshipSanity:
+    """Extraction blow-ups create papers with absurd author lists."""
+
+    MAX_PLAUSIBLE_AUTHORS = 100
+
+    def test_no_papers_with_absurd_author_counts(self, db):
+        rows = db.fetch_all(
+            f"""SELECT p.id, LEFT(p.title, 50) AS title, COUNT(*) AS n_authors
+                FROM papers p JOIN authorship a ON a.publication_id = p.id
+                GROUP BY p.id, p.title
+                HAVING COUNT(*) > {self.MAX_PLAUSIBLE_AUTHORS}
+                ORDER BY n_authors DESC
+                LIMIT 50"""
+        )
+        assert not rows, "papers with implausibly many authors:\n" + fmt_violations(rows)
