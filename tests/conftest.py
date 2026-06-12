@@ -46,10 +46,14 @@ def _clear_api_caches():
 @pytest.fixture
 def client():
     """Test client with mocked DB and scheduler."""
+    # Patch the names in api's namespace — api.py imports these directly
+    # (`from scheduler import start_scheduler`), so patching the source
+    # modules would miss them and the REAL scheduler would start against
+    # whatever database .env points at.
     with (
-        patch("database.create_tables"),
-        patch("scheduler.start_scheduler"),
-        patch("scheduler.shutdown_scheduler"),
+        patch("api.create_tables"),
+        patch("api.start_scheduler"),
+        patch("api.shutdown_scheduler"),
         patch("api.connection_scope", _noop_connection_scope),
     ):
         from api import app

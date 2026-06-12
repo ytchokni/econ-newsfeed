@@ -210,9 +210,9 @@ class TestApplyTitleRenameCollision:
         conn.__enter__ = MagicMock(return_value=conn)
         conn.__exit__ = MagicMock(return_value=False)
         with (
-            patch("paper_saver.Database.get_connection", return_value=conn),
-            patch("paper_saver.Database.append_paper_snapshot"),
-            patch("paper_saver.Database.compute_title_hash", return_value="newhash"),
+            patch("paper_saver.get_connection", return_value=conn),
+            patch("paper_saver.append_paper_snapshot"),
+            patch("paper_saver.compute_title_hash", return_value="newhash"),
         ):
             PaperSaver.apply_title_rename(
                 1, "Old Title", "New Title",

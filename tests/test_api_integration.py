@@ -19,9 +19,9 @@ def _noop_connection_scope():
 def client():
     """Create a test client with mocked database and scheduler."""
     with (
-        patch("database.create_tables"),
-        patch("scheduler.start_scheduler"),
-        patch("scheduler.shutdown_scheduler"),
+        patch("api.create_tables"),
+        patch("api.start_scheduler"),
+        patch("api.shutdown_scheduler"),
         patch("api.connection_scope", _noop_connection_scope),
     ):
         from api import app
@@ -266,9 +266,9 @@ class TestPublicationsSmoke:
     @pytest.fixture
     def client(self):
         with (
-            patch("database.create_tables"),
-            patch("scheduler.start_scheduler"),
-            patch("scheduler.shutdown_scheduler"),
+            patch("api.create_tables"),
+            patch("api.start_scheduler"),
+            patch("api.shutdown_scheduler"),
             patch("api.connection_scope", _noop_connection_scope),
         ):
             from api import app

@@ -12,6 +12,8 @@ from unittest.mock import patch, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
+from database import create_tables
+
 
 @contextmanager
 def _noop_connection_scope():
@@ -30,9 +32,9 @@ class TestScrapeApiKeyValidation:
         with patch.dict(os.environ, {"SCRAPE_API_KEY": "changeme"}, clear=False):
             # Force module-level _SCRAPE_API_KEY to pick up the short value
             with (
-                patch("database.create_tables"),
-                patch("scheduler.start_scheduler"),
-                patch("scheduler.shutdown_scheduler"),
+                patch("api.create_tables"),
+                patch("api.start_scheduler"),
+                patch("api.shutdown_scheduler"),
             ):
                 import importlib
                 import api as api_mod
@@ -48,9 +50,9 @@ class TestScrapeApiKeyValidation:
     def test_empty_key_prevents_startup(self):
         """An empty SCRAPE_API_KEY must cause a RuntimeError at startup."""
         with (
-            patch("database.create_tables"),
-            patch("scheduler.start_scheduler"),
-            patch("scheduler.shutdown_scheduler"),
+            patch("api.create_tables"),
+            patch("api.start_scheduler"),
+            patch("api.shutdown_scheduler"),
         ):
             import api as api_mod
 
@@ -62,9 +64,9 @@ class TestScrapeApiKeyValidation:
     def test_valid_key_allows_startup(self):
         """A key of 16+ chars must allow normal startup."""
         with (
-            patch("database.create_tables"),
-            patch("scheduler.start_scheduler"),
-            patch("scheduler.shutdown_scheduler"),
+            patch("api.create_tables"),
+            patch("api.start_scheduler"),
+            patch("api.shutdown_scheduler"),
         ):
             import api as api_mod
 
@@ -104,7 +106,6 @@ class TestBioColumnMigration:
     def test_migration_succeeds_when_column_already_exists(self):
         """ALTER TABLE ADD COLUMN raising a duplicate error must not crash startup."""
         mock_conn, _ = _make_mock_conn()
-        from database import Database
 
         with patch("database.schema.get_connection", return_value=mock_conn):
             with patch("database.schema.execute_query",
@@ -117,7 +118,6 @@ class TestBioColumnMigration:
     def test_migration_succeeds_when_column_is_new(self):
         """ALTER TABLE ADD COLUMN succeeding must work normally."""
         mock_conn, _ = _make_mock_conn()
-        from database import Database
 
         with patch("database.schema.get_connection", return_value=mock_conn):
             with patch("database.schema.execute_query", return_value=None):
@@ -142,7 +142,6 @@ class TestMigrationAdvisoryLock:
     def test_create_tables_consumes_all_cursor_results(self):
         """Verify GET_LOCK result is fetched and RELEASE_LOCK result is fetched."""
         mock_conn, mock_cursor = _make_mock_conn()
-        from database import Database
 
         with patch("database.schema.get_connection", return_value=mock_conn):
             with patch("database.schema.seed_research_fields"), \
@@ -159,7 +158,6 @@ class TestMigrationAdvisoryLock:
     def test_create_tables_acquires_and_releases_lock(self):
         """Verify GET_LOCK and RELEASE_LOCK are both called."""
         mock_conn, mock_cursor = _make_mock_conn()
-        from database import Database
 
         with patch("database.schema.get_connection", return_value=mock_conn):
             with patch("database.schema.seed_research_fields"), \
@@ -176,7 +174,6 @@ class TestMigrationAdvisoryLock:
     def test_release_lock_called_even_on_migration_error(self):
         """RELEASE_LOCK must be called even if ALTER TABLE raises an unexpected error."""
         mock_conn, mock_cursor = _make_mock_conn()
-        from database import Database
 
         # Make ALTER TABLE raise a non-duplicate-column error
         alter_error = Exception("Some unexpected DB error")
@@ -216,7 +213,6 @@ class TestForwardFlappingCleanupMigration:
 
     def test_create_tables_runs_forward_flapping_delete(self):
         mock_conn, mock_cursor = _make_mock_conn()
-        from database import Database
 
         with patch("database.schema.get_connection", return_value=mock_conn):
             with patch("database.schema.seed_research_fields"), \
