@@ -125,3 +125,91 @@ class TestActiveUrlHealth:
             """
         )
         assert not rows, "active URLs carrying deactivation state:\n" + fmt_violations(rows)
+
+
+class TestResearcherDuplicates:
+    """Disambiguation failures create twin researcher rows that split a
+    person's papers across two profiles."""
+
+    def test_no_shared_openalex_author_id(self, db):
+        rows = db.fetch_all(
+            """SELECT openalex_author_id, COUNT(*) AS n,
+                      GROUP_CONCAT(id ORDER BY id) AS researcher_ids
+               FROM researchers
+               WHERE openalex_author_id IS NOT NULL
+               GROUP BY openalex_author_id
+               HAVING COUNT(*) > 1
+               LIMIT 50"""
+        )
+        assert not rows, "openalex_author_id shared by multiple researchers:\n" + fmt_violations(rows)
+
+    def test_no_exact_name_duplicates_with_publications(self, db):
+        """Same (case-insensitive) full name on 2+ researchers who BOTH have
+        papers — almost always a split profile, not a namesake."""
+        rows = db.fetch_all(
+            """SELECT LOWER(first_name) AS fn, LOWER(last_name) AS ln,
+                      COUNT(*) AS n, GROUP_CONCAT(r.id ORDER BY r.id) AS ids
+               FROM researchers r
+               WHERE EXISTS (SELECT 1 FROM authorship a WHERE a.researcher_id = r.id)
+               GROUP BY LOWER(first_name), LOWER(last_name)
+               HAVING COUNT(*) > 1
+               LIMIT 50"""
+        )
+        assert not rows, "exact-name duplicate researchers with publications:\n" + fmt_violations(rows)
+
+
+class TestAffiliationFieldQuality:
+    def test_no_overlong_affiliations(self, db):
+        """Affiliations beyond 250 chars are usually a bio sentence stuffed
+        into the field by the LLM."""
+        rows = db.fetch_all(
+            """SELECT id, CHAR_LENGTH(affiliation) AS len, LEFT(affiliation, 70) AS head
+               FROM researchers
+               WHERE CHAR_LENGTH(affiliation) > 250
+               LIMIT 50"""
+        )
+        assert not rows, "overlong affiliations (bio leakage):\n" + fmt_violations(rows)
+
+    def test_affiliation_not_equal_position(self, db):
+        rows = db.fetch_all(
+            """SELECT id, position FROM researchers
+               WHERE affiliation IS NOT NULL AND position IS NOT NULL
+                 AND LOWER(TRIM(affiliation)) = LOWER(TRIM(position))
+               LIMIT 50"""
+        )
+        assert not rows, "affiliation duplicated into position:\n" + fmt_violations(rows)
+
+
+class TestUrlIntegrity:
+    """researcher_urls hygiene beyond the deactivation-state checks."""
+
+    def test_active_urls_below_failure_threshold(self, db):
+        """_URL_DEACTIVATION_THRESHOLD=3 — an active URL at/over it means the
+        auto-deactivation path was bypassed."""
+        rows = db.fetch_all(
+            """SELECT id, url, consecutive_failures FROM researcher_urls
+               WHERE is_active = TRUE AND consecutive_failures >= 3
+               LIMIT 50"""
+        )
+        assert not rows, "active URLs at/over the deactivation threshold:\n" + fmt_violations(rows)
+
+    def test_urls_use_http_scheme(self, db):
+        rows = db.fetch_all(
+            """SELECT id, url FROM researcher_urls
+               WHERE url NOT LIKE 'http://%' AND url NOT LIKE 'https://%'
+               LIMIT 50"""
+        )
+        assert not rows, "researcher URLs with bad scheme:\n" + fmt_violations(rows)
+
+    def test_no_url_shared_across_researchers(self, db):
+        """The same page tracked under two researchers double-extracts every
+        paper on it and mis-attributes page ownership."""
+        rows = db.fetch_all(
+            """SELECT url, COUNT(DISTINCT researcher_id) AS n,
+                      GROUP_CONCAT(DISTINCT researcher_id) AS researcher_ids
+               FROM researcher_urls
+               GROUP BY url
+               HAVING COUNT(DISTINCT researcher_id) > 1
+               LIMIT 50"""
+        )
+        assert not rows, "URLs tracked under multiple researchers:\n" + fmt_violations(rows)

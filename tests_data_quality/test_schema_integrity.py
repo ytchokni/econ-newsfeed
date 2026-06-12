@@ -90,3 +90,33 @@ class TestHtmlContentConsistency:
             """
         )
         assert not rows, "html_content rows with hash but no content:\n" + fmt_violations(rows)
+
+
+class TestTimestampSanity:
+    def test_no_future_html_snapshots(self, db):
+        rows = db.fetch_all(
+            "SELECT id, url_id, snapshot_at FROM html_snapshots "
+            "WHERE snapshot_at > NOW() + INTERVAL 1 DAY LIMIT 50"
+        )
+        assert not rows, "future-dated html_snapshots:\n" + fmt_violations(rows)
+
+    def test_no_future_paper_snapshots(self, db):
+        rows = db.fetch_all(
+            "SELECT id, paper_id, scraped_at FROM paper_snapshots "
+            "WHERE scraped_at > NOW() + INTERVAL 1 DAY LIMIT 50"
+        )
+        assert not rows, "future-dated paper_snapshots:\n" + fmt_violations(rows)
+
+
+class TestSourceUrlTracking:
+    def test_papers_source_url_is_tracked(self, db):
+        """A paper whose source_url has no researcher_urls row came from a
+        page the system no longer knows — its feed-event guards (snapshot
+        baseline, title-in-prior-snapshot) can never run again."""
+        rows = db.fetch_all(
+            """SELECT p.id, p.source_url FROM papers p
+               WHERE p.source_url IS NOT NULL
+                 AND NOT EXISTS (SELECT 1 FROM researcher_urls ru WHERE ru.url = p.source_url)
+               LIMIT 50"""
+        )
+        assert not rows, "papers whose source_url is untracked:\n" + fmt_violations(rows)
