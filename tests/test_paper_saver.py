@@ -194,3 +194,60 @@ class TestAuthorLookupCache:
 
         PaperSaver.save_publications("http://example.com", pubs)
         assert mock_rid.call_count == 2
+
+
+class TestApplyTitleRenameCollision:
+    """apply_title_rename must absorb an existing paper with the target
+    title_hash BEFORE updating the title — updating first violates
+    uq_title_hash and crashes the extraction worker (#177)."""
+
+    def _run(self, dup_id=None):
+        """Run apply_title_rename with a mocked connection; return executed SQL list."""
+        cursor = MagicMock()
+        cursor.fetchone.return_value = (dup_id,) if dup_id else None
+        conn = MagicMock()
+        conn.cursor.return_value = cursor
+        conn.__enter__ = MagicMock(return_value=conn)
+        conn.__exit__ = MagicMock(return_value=False)
+        with (
+            patch("paper_saver.Database.get_connection", return_value=conn),
+            patch("paper_saver.Database.append_paper_snapshot"),
+            patch("paper_saver.Database.compute_title_hash", return_value="newhash"),
+        ):
+            PaperSaver.apply_title_rename(
+                1, "Old Title", "New Title",
+                {"status": "working_paper"}, "http://example.com",
+            )
+        return [str(c[0][0]) for c in cursor.execute.call_args_list], conn
+
+    def test_collision_absorbed_before_title_update(self):
+        sqls, _ = self._run(dup_id=77)
+        update_idx = next(i for i, s in enumerate(sqls) if "UPDATE papers SET title" in s)
+        delete_idx = next(i for i, s in enumerate(sqls) if "DELETE FROM papers" in s)
+        assert delete_idx < update_idx, (
+            "duplicate paper must be removed BEFORE the title UPDATE, "
+            f"or the UPDATE violates uq_title_hash; order was: {sqls}"
+        )
+
+    def test_collision_moves_authorship_to_survivor(self):
+        sqls, _ = self._run(dup_id=77)
+        assert any("authorship" in s and "UPDATE IGNORE" in s for s in sqls), (
+            "dup paper's authorship rows must be reassigned, not dropped"
+        )
+
+    def test_collision_moves_links_and_snapshots(self):
+        sqls, _ = self._run(dup_id=77)
+        assert any("paper_links" in s for s in sqls)
+        assert any("paper_snapshots" in s for s in sqls)
+
+    def test_collision_deletes_dup_feed_events(self):
+        """Dup's feed events are deleted (not reassigned) to avoid duplicate
+        new_paper events on the surviving paper."""
+        sqls, _ = self._run(dup_id=77)
+        assert any("DELETE FROM feed_events" in s for s in sqls)
+
+    def test_no_collision_single_update_no_deletes(self):
+        sqls, conn = self._run(dup_id=None)
+        assert any("UPDATE papers SET title" in s for s in sqls)
+        assert not any("DELETE FROM papers" in s for s in sqls)
+        conn.commit.assert_called_once()
