@@ -103,6 +103,8 @@ class _KeyedTTLCache:
             if entry is not None and now < entry[1]:
                 return entry[0]
         value = factory()
+        if value is None:
+            return None
         with self._lock:
             self._data[key] = (value, now + self._ttl)
             if len(self._data) > self._max_keys:
