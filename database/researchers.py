@@ -409,6 +409,9 @@ def get_urls_needing_extraction() -> list[dict]:
     A URL needs extraction when its content_hash differs from extracted_hash
     (changed since last LLM run, or never extracted). URLs with no stored
     HTML are excluded (nothing to extract).
+
+    Returns at most 200 rows — the worker processes them one at a time and
+    re-polls when the batch is done.
     """
     query = """
         SELECT ru.id, ru.researcher_id, ru.url, ru.page_type
@@ -418,6 +421,7 @@ def get_urls_needing_extraction() -> list[dict]:
           AND hc.content_hash IS NOT NULL
           AND (hc.extracted_hash IS NULL OR hc.extracted_hash != hc.content_hash)
         ORDER BY ru.id
+        LIMIT 200
     """
     return fetch_all(query)
 
