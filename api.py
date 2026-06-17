@@ -851,24 +851,28 @@ def get_researcher(
     researcher_id: int,
     include_history: bool = Query(False),
 ):
-    row = get_researcher_detail(researcher_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Researcher not found")
+    with connection_scope():
+        row = get_researcher_detail(researcher_id)
+        if not row:
+            raise HTTPException(status_code=404, detail="Researcher not found")
 
-    urls_map = get_urls_for_researchers([researcher_id])
-    urls = urls_map.get(researcher_id, [])
-    pub_counts = get_pub_counts_for_researchers([researcher_id])
-    pub_count = pub_counts.get(researcher_id, 0)
-    fields_map = get_fields_for_researchers([researcher_id])
-    fields = fields_map.get(researcher_id, [])
-    jel_codes = get_jel_codes_for_researcher(researcher_id)
+        urls_map = get_urls_for_researchers([researcher_id])
+        urls = urls_map.get(researcher_id, [])
+        pub_counts = get_pub_counts_for_researchers([researcher_id])
+        pub_count = pub_counts.get(researcher_id, 0)
+        fields_map = get_fields_for_researchers([researcher_id])
+        fields = fields_map.get(researcher_id, [])
+        jel_codes = get_jel_codes_for_researcher(researcher_id)
 
-    # Fetch this researcher's publications
-    pub_rows = get_researcher_papers(researcher_id)
-    pub_ids = [pr['id'] for pr in pub_rows]
-    authors_by_pub = get_authors_for_papers(pub_ids)
-    coauthors_by_pub = get_coauthors_for_papers(pub_ids)
-    links_by_pub = get_links_for_papers(pub_ids)
+        pub_rows = get_researcher_papers(researcher_id)
+        pub_ids = [pr['id'] for pr in pub_rows]
+        authors_by_pub = get_authors_for_papers(pub_ids)
+        coauthors_by_pub = get_coauthors_for_papers(pub_ids)
+        links_by_pub = get_links_for_papers(pub_ids)
+
+        if include_history:
+            snapshots = get_researcher_snapshots(researcher_id)
+
     publications = [
         _format_publication(pr, authors_by_pub.get(pr['id'], []),
                            coauthors_by_pub.get(pr['id'], []),
@@ -892,7 +896,6 @@ def get_researcher(
     }
 
     if include_history:
-        snapshots = get_researcher_snapshots(researcher_id)
         result["history"] = [
             {
                 "position": s['position'],
