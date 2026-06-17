@@ -666,7 +666,222 @@ dashboard. 5-minute TTL matches the existing _filter_options_cache pattern."
 
 ---
 
-### Task 10: Run full test suite and verify
+### Task 10: Replace COUNT(*) OVER() with separate count query
+
+The `search_feed_events()` function uses `COUNT(*) OVER() AS total_count` as a window function. This forces MySQL to materialize the entire filtered result set before returning the LIMIT'd 20 rows. Splitting into two queries — a COUNT query and a data query — lets MySQL stop scanning early on the data query.
+
+**Files:**
+- Modify: `database/papers.py:338-354`
+- Modify: `tests/test_db_papers.py` (if search_feed_events tests exist)
+
+- [ ] **Step 1: Write failing test for the two-query approach**
+
+Add a test that verifies `search_feed_events()` no longer uses `COUNT(*) OVER()`:
+
+```python
+def test_search_feed_events_no_window_function():
+    """search_feed_events should use separate count query, not COUNT(*) OVER()."""
+    with patch("database.papers.fetch_all") as mock_fetch_all, \
+         patch("database.papers.fetch_one", return_value={"cnt": 0}):
+        mock_fetch_all.return_value = []
+        search_feed_events()
+    sql = mock_fetch_all.call_args[0][0]
+    assert "OVER()" not in sql
+    assert "COUNT(*) OVER" not in sql
+```
+
+- [ ] **Step 2: Implement the split**
+
+In `database/papers.py`, replace the single query in `search_feed_events()` (lines 338-354) with two queries:
+
+1. A COUNT query:
+```python
+count_row = fetch_one(
+    f"""
+    SELECT COUNT(*) AS cnt
+    FROM feed_events fe
+    JOIN papers p ON p.id = fe.paper_id
+    {where}
+    """,
+    tuple(params),
+)
+total = count_row['cnt'] if count_row else 0
+```
+
+2. The data query (without the window function):
+```python
+rows = fetch_all(
+    f"""
+    SELECT fe.id AS event_id, fe.event_type, fe.old_status, fe.new_status,
+           fe.old_title, fe.new_title, fe.created_at,
+           p.id AS paper_id, p.title, p.year, p.venue, p.source_url, p.discovered_at,
+           p.status, p.draft_url, p.abstract, p.draft_url_status, p.doi
+    FROM feed_events fe
+    JOIN papers p ON p.id = fe.paper_id
+    {where}
+    ORDER BY fe.created_at DESC
+    LIMIT %s OFFSET %s
+    """,
+    (*params, limit, offset),
+)
+return rows, total
+```
+
+Remove the old `total = rows[0]['total_count'] if rows else 0` line.
+
+- [ ] **Step 3: Update any tests that check `total_count` in mock data**
+
+In `tests/test_api_publications.py`, the SAMPLE_PUBLICATIONS dicts include `"total_count": 3`. These are mock data passed to `search_feed_events` return values — since the total is now returned separately, `total_count` should be removed from the mock rows. Check all mock data that includes this key and remove it.
+
+The mock return value shape is `(rows, total)` — verify the total int matches what's expected.
+
+- [ ] **Step 4: Run all tests**
+
+Run: `poetry run pytest tests/ -x -q`
+Expected: All tests pass
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add database/papers.py tests/
+git commit -m "perf: replace COUNT(*) OVER() with separate count query
+
+The window function forces MySQL to materialize the entire filtered result
+set before returning the LIMIT'd page. Splitting into a COUNT query + data
+query lets MySQL short-circuit the data query at the LIMIT boundary."
+```
+
+---
+
+### Task 11: Add TTL cache to researcher and publication detail endpoints
+
+**Files:**
+- Modify: `api.py` (add caches + connection_scope to publication detail)
+- Modify: `tests/test_api_publications.py` (add cache test)
+
+- [ ] **Step 1: Add TTL caches for detail endpoints**
+
+In `api.py`, add two caches near the existing cache instances (around line 92):
+
+```python
+_researcher_detail_cache = _TTLCache(300)   # 5 minutes
+_publication_detail_cache = _TTLCache(300)  # 5 minutes
+```
+
+- [ ] **Step 2: Wrap the researcher detail endpoint with cache**
+
+Update the `get_researcher` endpoint to use the cache. The cache key should include `researcher_id` and `include_history`. Use a lambda or nested function:
+
+```python
+@app.get("/api/researchers/{researcher_id}")
+@limiter.limit("60/minute")
+def get_researcher(
+    request: Request,
+    researcher_id: int,
+    include_history: bool = Query(False),
+):
+    cache_key = f"researcher:{researcher_id}:{include_history}"
+    cached = _researcher_detail_cache.get_or_set(
+        lambda: _build_researcher_response(researcher_id, include_history),
+    )
+    return cached
+```
+
+BUT: `_TTLCache` doesn't support per-key caching — it caches a single value. For keyed caching, either extend the cache or use a simpler dict-based approach. The simplest approach: don't cache per-key, just skip caching this endpoint (it already has connection_scope from Task 6). Or use a keyed TTL cache.
+
+**Simpler approach:** Use `functools.lru_cache` with a TTL wrapper, or just add a keyed `_KeyedTTLCache`:
+
+```python
+class _KeyedTTLCache:
+    """Thread-safe per-key TTL cache."""
+
+    def __init__(self, ttl: float, max_keys: int = 200):
+        self._data: dict = {}
+        self._lock = threading.Lock()
+        self._ttl = ttl
+        self._max_keys = max_keys
+
+    def get_or_set(self, key: str, factory):
+        now = time.time()
+        with self._lock:
+            entry = self._data.get(key)
+            if entry is not None and now < entry[1]:
+                return entry[0]
+            value = factory()
+            self._data[key] = (value, now + self._ttl)
+            if len(self._data) > self._max_keys:
+                oldest_key = min(self._data, key=lambda k: self._data[k][1])
+                del self._data[oldest_key]
+            return value
+
+    def clear(self):
+        with self._lock:
+            self._data.clear()
+```
+
+Then use it:
+```python
+_researcher_detail_cache = _KeyedTTLCache(300)
+_publication_detail_cache = _KeyedTTLCache(300)
+```
+
+- [ ] **Step 3: Update researcher detail endpoint**
+
+```python
+def get_researcher(...):
+    cache_key = f"{researcher_id}:{include_history}"
+    return _researcher_detail_cache.get_or_set(
+        cache_key,
+        lambda: _build_researcher_detail(researcher_id, include_history),
+    )
+```
+
+Extract the current body into `_build_researcher_detail(researcher_id, include_history)`.
+
+- [ ] **Step 4: Add connection_scope to publication detail endpoint and cache it**
+
+Wrap the publication detail endpoint at `/api/publications/{publication_id}` with `connection_scope()` and cache:
+
+```python
+def get_publication(...):
+    return _publication_detail_cache.get_or_set(
+        str(publication_id),
+        lambda: _build_publication_detail(publication_id),
+    )
+```
+
+Extract the body into `_build_publication_detail(publication_id)`.
+
+- [ ] **Step 5: Write test for cache behavior**
+
+```python
+def test_researcher_detail_caches(client):
+    """Repeated researcher detail requests should hit cache."""
+    with patch("api._build_researcher_detail", return_value={"id": 1}) as mock_fn:
+        client.get("/api/researchers/1")
+        client.get("/api/researchers/1")
+    assert mock_fn.call_count == 1
+```
+
+- [ ] **Step 6: Run all tests**
+
+Run: `poetry run pytest tests/ -x -q`
+Expected: All tests pass
+
+- [ ] **Step 7: Commit**
+
+```bash
+git add api.py tests/
+git commit -m "perf: add 5-minute TTL cache to researcher and publication detail
+
+These are the most-hit endpoints by actual users. Each request fires 8+
+queries fresh. Keyed TTL cache (max 200 entries) makes repeat views
+instant while bounding memory."
+```
+
+---
+
+### Task 12: Run full test suite and verify
 
 - [ ] **Step 1: Run all Python tests**
 
@@ -697,5 +912,7 @@ If no CLAUDE.md changes needed, skip. Otherwise update the deployment section to
 | connection_scope on researcher detail | Reduces pool churn | API + MySQL |
 | Admin dashboard cache | Eliminates 12-query bursts | API + MySQL |
 | Extraction queue LIMIT | ~1-2MB per poll | API |
+| Separate COUNT query | Halves feed query time | MySQL |
+| Detail endpoint caching | Eliminates 8+ queries/hit | API + MySQL |
 
-**Total estimated savings: ~380MB baseline + leak/spike prevention**
+**Total estimated savings: ~380MB baseline + leak/spike prevention + significant latency reduction**
