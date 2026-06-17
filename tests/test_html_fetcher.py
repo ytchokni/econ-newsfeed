@@ -455,7 +455,7 @@ class TestMarkExtractedWithHash:
 
 class TestGetExtractionPayload:
     def test_returns_row(self):
-        row = {"content": "text", "raw_html": "<html>", "content_hash": "h1",
+        row = {"content": "text", "content_hash": "h1",
                "timestamp": None, "extracted_at": None}
         with patch("html_fetcher.fetch_one", return_value=row) as mock_fetch:
             result = HTMLFetcher.get_extraction_payload(7)
@@ -465,6 +465,20 @@ class TestGetExtractionPayload:
     def test_returns_none_when_no_html(self):
         with patch("html_fetcher.fetch_one", return_value=None):
             assert HTMLFetcher.get_extraction_payload(7) is None
+
+
+class TestGetRawHtml:
+    def test_returns_raw_html(self):
+        with patch("html_fetcher.fetch_one", return_value={"raw_html": "<html>body</html>"}):
+            assert HTMLFetcher.get_raw_html(7) == "<html>body</html>"
+
+    def test_returns_none_when_no_row(self):
+        with patch("html_fetcher.fetch_one", return_value=None):
+            assert HTMLFetcher.get_raw_html(7) is None
+
+    def test_returns_none_when_null_raw_html(self):
+        with patch("html_fetcher.fetch_one", return_value={"raw_html": None}):
+            assert HTMLFetcher.get_raw_html(7) is None
 
 
 class TestUnchangedPathBackfill:

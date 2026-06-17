@@ -729,22 +729,20 @@ class HTMLFetcher:
 
     @staticmethod
     def get_raw_html(url_id: int) -> str | None:
-        """Retrieve stored raw HTML for a URL ID."""
-        result = fetch_one(
+        """Fetch raw_html for a URL. Used as fallback when content is NULL."""
+        row = fetch_one(
             "SELECT raw_html FROM html_content WHERE url_id = %s", (url_id,),
         )
-        return result['raw_html'] if result else None
+        return row['raw_html'] if row and row['raw_html'] else None
 
     @staticmethod
     def get_extraction_payload(url_id: int) -> dict | None:
-        """Read content, raw_html, content_hash, timestamp, and extracted_at in one query.
+        """Read content, content_hash, timestamp, and extracted_at in one query.
 
-        Reading the hash together with the text guarantees mark_extracted()
-        can record exactly what was extracted. timestamp and extracted_at
-        avoid separate round-trips for fetch time and seed detection.
+        raw_html is excluded — use get_raw_html() as a fallback when content is NULL.
         """
         return fetch_one(
-            "SELECT content, raw_html, content_hash, timestamp, extracted_at"
+            "SELECT content, content_hash, timestamp, extracted_at"
             " FROM html_content WHERE url_id = %s",
             (url_id,),
         )
