@@ -30,7 +30,7 @@ def _row(url_id=1, researcher_id=10, url="https://example.com/pubs", page_type="
 
 def _payload(content="page text", extracted_at="2026-01-01"):
     return {
-        "content": content, "raw_html": "<html>", "content_hash": "h1",
+        "content": content, "content_hash": "h1",
         "timestamp": None, "extracted_at": extracted_at,
     }
 

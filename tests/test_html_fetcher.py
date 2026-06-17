@@ -47,6 +47,21 @@ class TestRobotsTxtCaching:
             HTMLFetcher._robots_cache.clear()
             assert HTMLFetcher.is_allowed_by_robots("https://example.com/page1") is True
 
+    def test_robots_cache_evicts_oldest_entry(self):
+        """Cache should not grow beyond _ROBOTS_CACHE_MAX entries."""
+        from html_fetcher import _ROBOTS_CACHE_MAX
+        with patch("html_fetcher.requests.get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.text = "User-agent: *\nAllow: /"
+            mock_get.return_value = mock_resp
+
+            HTMLFetcher._robots_cache.clear()
+            for i in range(_ROBOTS_CACHE_MAX + 10):
+                HTMLFetcher.is_allowed_by_robots(f"https://domain{i}.com/page")
+
+        assert len(HTMLFetcher._robots_cache) <= _ROBOTS_CACHE_MAX
+
 
 class TestFetchHtml:
     def test_successful_fetch_returns_content(self):
@@ -455,7 +470,7 @@ class TestMarkExtractedWithHash:
 
 class TestGetExtractionPayload:
     def test_returns_row(self):
-        row = {"content": "text", "raw_html": "<html>", "content_hash": "h1",
+        row = {"content": "text", "content_hash": "h1",
                "timestamp": None, "extracted_at": None}
         with patch("html_fetcher.fetch_one", return_value=row) as mock_fetch:
             result = HTMLFetcher.get_extraction_payload(7)
@@ -465,6 +480,20 @@ class TestGetExtractionPayload:
     def test_returns_none_when_no_html(self):
         with patch("html_fetcher.fetch_one", return_value=None):
             assert HTMLFetcher.get_extraction_payload(7) is None
+
+
+class TestGetRawHtml:
+    def test_returns_raw_html(self):
+        with patch("html_fetcher.fetch_one", return_value={"raw_html": "<html>body</html>"}):
+            assert HTMLFetcher.get_raw_html(7) == "<html>body</html>"
+
+    def test_returns_none_when_no_row(self):
+        with patch("html_fetcher.fetch_one", return_value=None):
+            assert HTMLFetcher.get_raw_html(7) is None
+
+    def test_returns_none_when_null_raw_html(self):
+        with patch("html_fetcher.fetch_one", return_value={"raw_html": None}):
+            assert HTMLFetcher.get_raw_html(7) is None
 
 
 class TestUnchangedPathBackfill:

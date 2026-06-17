@@ -232,55 +232,60 @@ class TestGetPaperHistory:
 class TestSearchFeedEvents:
     """Tests for search_feed_events dynamic SQL builder."""
 
-    def _call(self, mock_rows=None, **kwargs):
-        """Helper: call search_feed_events with mocked fetch_all."""
+    def _call(self, mock_rows=None, mock_count=None, **kwargs):
+        """Helper: call search_feed_events with mocked fetch_one and fetch_all."""
         if mock_rows is None:
             mock_rows = []
-        with patch("database.papers.fetch_all", return_value=mock_rows) as mock_fetch:
+        if mock_count is None:
+            mock_count = {"cnt": len(mock_rows)}
+        with (
+            patch("database.papers.fetch_one", return_value=mock_count) as mock_count_fetch,
+            patch("database.papers.fetch_all", return_value=mock_rows) as mock_fetch,
+        ):
             from database.papers import search_feed_events
             result = search_feed_events(**kwargs)
-        return result, mock_fetch
+        return result, mock_fetch, mock_count_fetch
 
     def test_no_filters_returns_all(self):
-        rows = [{"paper_id": 1, "total_count": 1, "event_id": 1, "event_type": "new_paper",
+        rows = [{"paper_id": 1, "event_id": 1, "event_type": "new_paper",
                  "old_status": None, "new_status": "working_paper", "created_at": None,
                  "title": "T", "year": "2024", "venue": None, "source_url": None,
                  "discovered_at": None, "status": "working_paper", "draft_url": None,
                  "abstract": None, "draft_url_status": None, "doi": None,
                  "old_title": None, "new_title": None}]
-        (result_rows, total), mock_fetch = self._call(mock_rows=rows)
+        (result_rows, total), mock_fetch, _ = self._call(mock_rows=rows)
         assert total == 1
         assert result_rows == rows
         sql, params = mock_fetch.call_args[0]
         assert "WHERE" not in sql
 
     def test_empty_results_returns_zero_total(self):
-        (rows, total), _ = self._call()
+        (rows, total), _, _ = self._call()
         assert rows == []
         assert total == 0
 
     def test_year_filter_adds_condition(self):
-        (_, _), mock_fetch = self._call(year="2023")
+        (_, _), mock_fetch, _ = self._call(year="2023")
         sql, params = mock_fetch.call_args[0]
         assert "p.year = %s" in sql
         assert "2023" in params
 
     def test_researcher_id_filter_uses_exists_subquery(self):
-        (_, _), mock_fetch = self._call(researcher_id=42)
+        (_, _), mock_fetch, _ = self._call(researcher_id=42)
         sql, params = mock_fetch.call_args[0]
         assert "EXISTS" in sql
         assert "authorship" in sql
         assert 42 in params
 
     def test_status_list_single_uses_equals(self):
-        (_, _), mock_fetch = self._call(status_list=["published"])
+        (_, _), mock_fetch, _ = self._call(status_list=["published"])
         sql, params = mock_fetch.call_args[0]
         assert "p.status = %s" in sql
         assert "p.status IN" not in sql
         assert "published" in params
 
     def test_status_list_multiple_uses_in_clause(self):
-        (_, _), mock_fetch = self._call(status_list=["published", "working_paper"])
+        (_, _), mock_fetch, _ = self._call(status_list=["published", "working_paper"])
         sql, params = mock_fetch.call_args[0]
         assert "p.status IN (%s,%s)" in sql
         assert "published" in params
@@ -289,62 +294,62 @@ class TestSearchFeedEvents:
     def test_since_filter_adds_condition(self):
         from datetime import datetime
         since_dt = datetime(2026, 1, 1)
-        (_, _), mock_fetch = self._call(since=since_dt)
+        (_, _), mock_fetch, _ = self._call(since=since_dt)
         sql, params = mock_fetch.call_args[0]
         assert "fe.created_at >= %s" in sql
         assert since_dt in params
 
     def test_institution_single_uses_like(self):
-        (_, _), mock_fetch = self._call(institution_list=["MIT"])
+        (_, _), mock_fetch, _ = self._call(institution_list=["MIT"])
         sql, params = mock_fetch.call_args[0]
         assert "r.affiliation LIKE %s" in sql
         assert any("MIT" in str(p) for p in params)
 
     def test_institution_multiple_uses_or_likes(self):
-        (_, _), mock_fetch = self._call(institution_list=["MIT", "Harvard"])
+        (_, _), mock_fetch, _ = self._call(institution_list=["MIT", "Harvard"])
         sql, params = mock_fetch.call_args[0]
         assert sql.count("r.affiliation LIKE %s") == 2
 
     def test_institution_ignored_when_preset_set(self):
-        (_, _), mock_fetch = self._call(institution_list=["MIT"], preset="top20")
+        (_, _), mock_fetch, _ = self._call(institution_list=["MIT"], preset="top20")
         sql, params = mock_fetch.call_args[0]
         # preset overrides institution_list — MIT keyword appears in _TOP20_DEPT_KEYWORDS
         # but the institution_list branch is skipped; only one EXISTS block for top20
         assert sql.count("EXISTS") == 1
 
     def test_preset_top20_adds_dept_keywords(self):
-        (_, _), mock_fetch = self._call(preset="top20")
+        (_, _), mock_fetch, _ = self._call(preset="top20")
         sql, params = mock_fetch.call_args[0]
         assert "EXISTS" in sql
         # The TOP20 list has 24 keywords; verify a known one appears in params
         assert any("MIT" in str(p) for p in params)
 
     def test_search_fulltext_for_long_terms(self):
-        (_, _), mock_fetch = self._call(search="inflation")
+        (_, _), mock_fetch, _ = self._call(search="inflation")
         sql, params = mock_fetch.call_args[0]
         assert "MATCH" in sql
         assert "BOOLEAN MODE" in sql
 
     def test_search_like_for_short_terms(self):
-        (_, _), mock_fetch = self._call(search="ab")  # 2 chars < default FT_MIN_TOKEN_SIZE=3
+        (_, _), mock_fetch, _ = self._call(search="ab")  # 2 chars < default FT_MIN_TOKEN_SIZE=3
         sql, params = mock_fetch.call_args[0]
         assert "LIKE" in sql
         assert "MATCH" not in sql
 
     def test_event_type_filter_adds_condition(self):
-        (_, _), mock_fetch = self._call(event_type="new_paper")
+        (_, _), mock_fetch, _ = self._call(event_type="new_paper")
         sql, params = mock_fetch.call_args[0]
         assert "fe.event_type = %s" in sql
         assert "new_paper" in params
 
     def test_jel_code_single_uppercased(self):
-        (_, _), mock_fetch = self._call(jel_code="d91")
+        (_, _), mock_fetch, _ = self._call(jel_code="d91")
         sql, params = mock_fetch.call_args[0]
         assert "researcher_jel_codes" in sql
         assert "D91" in params
 
     def test_jel_code_multiple_comma_split(self):
-        (_, _), mock_fetch = self._call(jel_code="E31, f41")
+        (_, _), mock_fetch, _ = self._call(jel_code="E31, f41")
         sql, params = mock_fetch.call_args[0]
         assert "IN (%s,%s)" in sql
         assert "E31" in params
@@ -352,19 +357,26 @@ class TestSearchFeedEvents:
 
     def test_pagination_params_are_last_in_tuple(self):
         """LIMIT and OFFSET must be the final params."""
-        (_, _), mock_fetch = self._call(year="2024", limit=10, offset=20)
+        (_, _), mock_fetch, _ = self._call(year="2024", limit=10, offset=20)
         _, params = mock_fetch.call_args[0]
         # params should end with (limit, offset)
         assert params[-2] == 10
         assert params[-1] == 20
 
-    def test_window_function_in_sql(self):
-        (_, _), mock_fetch = self._call()
-        sql, _ = mock_fetch.call_args[0]
-        assert "COUNT(*) OVER()" in sql
+    def test_separate_count_query_used(self):
+        """Total comes from a separate COUNT(*) query, not a window function."""
+        (_, _), mock_fetch, mock_count_fetch = self._call(mock_count={"cnt": 42})
+        # count query is issued via fetch_one
+        assert mock_count_fetch.called
+        count_sql, _ = mock_count_fetch.call_args[0]
+        assert "COUNT(*) AS cnt" in count_sql
+        assert "COUNT(*) OVER()" not in count_sql
+        # data query has no window function
+        data_sql, _ = mock_fetch.call_args[0]
+        assert "COUNT(*) OVER()" not in data_sql
 
     def test_order_by_created_at_desc(self):
-        (_, _), mock_fetch = self._call()
+        (_, _), mock_fetch, _ = self._call()
         sql, _ = mock_fetch.call_args[0]
         assert "ORDER BY fe.created_at DESC" in sql
 

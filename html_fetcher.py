@@ -10,6 +10,7 @@ import requests
 import charset_normalizer
 import hashlib
 import logging
+from collections import OrderedDict
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
@@ -78,6 +79,7 @@ SCRAPER_USER_AGENT = os.environ.get(
     'SCRAPER_USER_AGENT',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 )
+_ROBOTS_CACHE_MAX = 500
 
 
 # Large CDN/hosting platforms that can handle higher request rates.
@@ -152,7 +154,15 @@ class HTMLFetcher:
 
     # Cache parsed robots.txt per origin (scheme://netloc).
     # Value is a RobotFileParser or None (fetch failed / non-200).
-    _robots_cache: dict = {}
+    # Capped at _ROBOTS_CACHE_MAX entries via LRU eviction (OrderedDict).
+    _robots_cache: OrderedDict = OrderedDict()
+
+    @staticmethod
+    def _set_robots_cache(origin: str, value):
+        """Store a robots parser (or None) and evict the oldest entry if over capacity."""
+        HTMLFetcher._robots_cache[origin] = value
+        if len(HTMLFetcher._robots_cache) > _ROBOTS_CACHE_MAX:
+            HTMLFetcher._robots_cache.popitem(last=False)
 
     @staticmethod
     def _get_robots_parser(url: str) -> "RobotFileParser | None":
@@ -160,6 +170,7 @@ class HTMLFetcher:
         parsed = urlparse(url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
         if origin in HTMLFetcher._robots_cache:
+            HTMLFetcher._robots_cache.move_to_end(origin)
             return HTMLFetcher._robots_cache[origin]
         try:
             robots_url = f"{origin}/robots.txt"
@@ -167,14 +178,14 @@ class HTMLFetcher:
                 'User-Agent': SCRAPER_USER_AGENT,
             })
             if resp.status_code != 200:
-                HTMLFetcher._robots_cache[origin] = None
+                HTMLFetcher._set_robots_cache(origin, None)
                 return None
             rp = RobotFileParser()
             rp.parse(resp.text.splitlines())
-            HTMLFetcher._robots_cache[origin] = rp
+            HTMLFetcher._set_robots_cache(origin, rp)
             return rp
         except Exception:
-            HTMLFetcher._robots_cache[origin] = None
+            HTMLFetcher._set_robots_cache(origin, None)
             return None
 
     @staticmethod
@@ -729,22 +740,20 @@ class HTMLFetcher:
 
     @staticmethod
     def get_raw_html(url_id: int) -> str | None:
-        """Retrieve stored raw HTML for a URL ID."""
-        result = fetch_one(
+        """Fetch raw_html for a URL. Used as fallback when content is NULL."""
+        row = fetch_one(
             "SELECT raw_html FROM html_content WHERE url_id = %s", (url_id,),
         )
-        return result['raw_html'] if result else None
+        return row['raw_html'] if row and row['raw_html'] else None
 
     @staticmethod
     def get_extraction_payload(url_id: int) -> dict | None:
-        """Read content, raw_html, content_hash, timestamp, and extracted_at in one query.
+        """Read content, content_hash, timestamp, and extracted_at in one query.
 
-        Reading the hash together with the text guarantees mark_extracted()
-        can record exactly what was extracted. timestamp and extracted_at
-        avoid separate round-trips for fetch time and seed detection.
+        raw_html is excluded — use get_raw_html() as a fallback when content is NULL.
         """
         return fetch_one(
-            "SELECT content, raw_html, content_hash, timestamp, extracted_at"
+            "SELECT content, content_hash, timestamp, extracted_at"
             " FROM html_content WHERE url_id = %s",
             (url_id,),
         )

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from mysql.connector.pooling import PooledMySQLConnection
 
 _pool: MySQLConnectionPool | None = None
-_DB_POOL_SIZE = int(os.environ.get('DB_POOL_SIZE', '10'))
+_DB_POOL_SIZE = int(os.environ.get('DB_POOL_SIZE', '5'))
 
 # Thread-local storage for connection reuse within a scope
 _local = threading.local()

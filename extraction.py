@@ -63,8 +63,10 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
         return ExtractionOutcome("no_content")
 
     text = payload['content']
-    if not text and payload['raw_html']:
-        text = HTMLFetcher.extract_text_content(payload['raw_html'])
+    if not text:
+        raw_html = HTMLFetcher.get_raw_html(url_id)
+        if raw_html:
+            text = HTMLFetcher.extract_text_content(raw_html)
     if not text:
         return ExtractionOutcome("no_content")
     content_hash = payload['content_hash']
