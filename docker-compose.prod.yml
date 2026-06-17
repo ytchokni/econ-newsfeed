@@ -4,7 +4,7 @@
 # - Removes the frontend service (Vercel handles it)
 # - Sets restart: always (survive reboots)
 # - Passes FRONTEND_URL and OPENALEX env vars through
-# - Sets WEB_CONCURRENCY=2 for Lightsail's 2GB RAM
+# - Sets WEB_CONCURRENCY=1 (single async worker handles the traffic; saves ~150MB)
 
 services:
   db:
@@ -17,7 +17,7 @@ services:
       OPENALEX_API_KEY: ${OPENALEX_API_KEY:-}
       OPENALEX_MAILTO: ${OPENALEX_MAILTO:-}
       OPENALEX_DAILY_BUDGET: ${OPENALEX_DAILY_BUDGET:-1000}
-      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-1}
       ENRICHMENT_WORKER_ENABLED: ${ENRICHMENT_WORKER_ENABLED:-false}
       EXTRACTION_WORKER_ENABLED: ${EXTRACTION_WORKER_ENABLED:-false}
       EXTRACTION_DELAY_SECONDS: ${EXTRACTION_DELAY_SECONDS:-2}
