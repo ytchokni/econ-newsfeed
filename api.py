@@ -8,6 +8,7 @@ import math
 import os
 import threading
 import time
+from collections import OrderedDict
 import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
@@ -88,10 +89,10 @@ class _TTLCache:
 
 
 class _KeyedTTLCache:
-    """Thread-safe per-key TTL cache with bounded size."""
+    """Thread-safe per-key TTL cache with bounded size (LRU eviction)."""
 
     def __init__(self, ttl: float, max_keys: int = 200):
-        self._data: dict = {}
+        self._data: OrderedDict = OrderedDict()
         self._lock = threading.Lock()
         self._ttl = ttl
         self._max_keys = max_keys
@@ -101,15 +102,16 @@ class _KeyedTTLCache:
         with self._lock:
             entry = self._data.get(key)
             if entry is not None and now < entry[1]:
+                self._data.move_to_end(key)
                 return entry[0]
         value = factory()
         if value is None:
             return None
         with self._lock:
-            self._data[key] = (value, now + self._ttl)
-            if len(self._data) > self._max_keys:
-                oldest_key = min(self._data, key=lambda k: self._data[k][1])
-                del self._data[oldest_key]
+            self._data[key] = (value, time.time() + self._ttl)
+            self._data.move_to_end(key)
+            while len(self._data) > self._max_keys:
+                self._data.popitem(last=False)
         return value
 
     def clear(self):

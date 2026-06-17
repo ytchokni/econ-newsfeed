@@ -158,6 +158,13 @@ class HTMLFetcher:
     _robots_cache: OrderedDict = OrderedDict()
 
     @staticmethod
+    def _set_robots_cache(origin: str, value):
+        """Store a robots parser (or None) and evict the oldest entry if over capacity."""
+        HTMLFetcher._robots_cache[origin] = value
+        if len(HTMLFetcher._robots_cache) > _ROBOTS_CACHE_MAX:
+            HTMLFetcher._robots_cache.popitem(last=False)
+
+    @staticmethod
     def _get_robots_parser(url: str) -> "RobotFileParser | None":
         """Get or fetch the RobotFileParser for a URL's domain. Cached per origin."""
         parsed = urlparse(url)
@@ -171,20 +178,14 @@ class HTMLFetcher:
                 'User-Agent': SCRAPER_USER_AGENT,
             })
             if resp.status_code != 200:
-                HTMLFetcher._robots_cache[origin] = None
-                if len(HTMLFetcher._robots_cache) > _ROBOTS_CACHE_MAX:
-                    HTMLFetcher._robots_cache.popitem(last=False)
+                HTMLFetcher._set_robots_cache(origin, None)
                 return None
             rp = RobotFileParser()
             rp.parse(resp.text.splitlines())
-            HTMLFetcher._robots_cache[origin] = rp
-            if len(HTMLFetcher._robots_cache) > _ROBOTS_CACHE_MAX:
-                HTMLFetcher._robots_cache.popitem(last=False)
+            HTMLFetcher._set_robots_cache(origin, rp)
             return rp
         except Exception:
-            HTMLFetcher._robots_cache[origin] = None
-            if len(HTMLFetcher._robots_cache) > _ROBOTS_CACHE_MAX:
-                HTMLFetcher._robots_cache.popitem(last=False)
+            HTMLFetcher._set_robots_cache(origin, None)
             return None
 
     @staticmethod
