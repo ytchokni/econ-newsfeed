@@ -37,10 +37,14 @@ def _clear_api_caches():
     api._filter_options_cache.clear()
     api._fields_cache.clear()
     api._jel_codes_cache.clear()
+    api._researcher_detail_cache.clear()
+    api._publication_detail_cache.clear()
     yield
     api._filter_options_cache.clear()
     api._fields_cache.clear()
     api._jel_codes_cache.clear()
+    api._researcher_detail_cache.clear()
+    api._publication_detail_cache.clear()
 
 
 @pytest.fixture

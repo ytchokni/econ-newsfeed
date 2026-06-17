@@ -87,10 +87,40 @@ class _TTLCache:
             self._expires_at = 0.0
 
 
+class _KeyedTTLCache:
+    """Thread-safe per-key TTL cache with bounded size."""
+
+    def __init__(self, ttl: float, max_keys: int = 200):
+        self._data: dict = {}
+        self._lock = threading.Lock()
+        self._ttl = ttl
+        self._max_keys = max_keys
+
+    def get_or_set(self, key: str, factory):
+        now = time.time()
+        with self._lock:
+            entry = self._data.get(key)
+            if entry is not None and now < entry[1]:
+                return entry[0]
+        value = factory()
+        with self._lock:
+            self._data[key] = (value, now + self._ttl)
+            if len(self._data) > self._max_keys:
+                oldest_key = min(self._data, key=lambda k: self._data[k][1])
+                del self._data[oldest_key]
+        return value
+
+    def clear(self):
+        with self._lock:
+            self._data.clear()
+
+
 _filter_options_cache = _TTLCache(600)   # 10 minutes
 _fields_cache = _TTLCache(3600)          # 1 hour
 _jel_codes_cache = _TTLCache(3600)       # 1 hour
 _admin_dashboard_cache = _TTLCache(300)  # 5 minutes
+_researcher_detail_cache = _KeyedTTLCache(300)   # 5 minutes
+_publication_detail_cache = _KeyedTTLCache(300)  # 5 minutes
 
 
 # ---------------------------------------------------------------------------
@@ -571,28 +601,30 @@ def list_publications(
     }
 
 
-@app.get("/api/publications/{publication_id}")
-@limiter.limit("60/minute")
-def get_publication(
-    request: Request,
-    publication_id: int,
-    include_history: bool = Query(False),
-):
-    row = get_paper_detail(publication_id)
-    if not row:
-        raise HTTPException(status_code=404, detail="Publication not found")
+def _build_publication_detail(publication_id: int, include_history: bool) -> dict | None:
+    """Build full publication detail response (all DB queries). Returns None if not found."""
+    with connection_scope():
+        row = get_paper_detail(publication_id)
+        if not row:
+            return None
 
-    authors_map = get_authors_for_papers([publication_id])
-    coauthors_map = get_coauthors_for_papers([publication_id])
-    links_map = get_links_for_papers([publication_id])
+        authors_map = get_authors_for_papers([publication_id])
+        coauthors_map = get_coauthors_for_papers([publication_id])
+        links_map = get_links_for_papers([publication_id])
+
+        history_snapshots = None
+        history_feed_events = None
+        if include_history:
+            history_snapshots = get_paper_snapshots(publication_id)
+            history_feed_events = get_paper_history(publication_id)
+
     result = _format_publication(
         row, authors_map.get(publication_id, []),
         coauthors_map.get(publication_id, []),
         links_map.get(publication_id, []),
     )
 
-    if include_history:
-        snapshots = get_paper_snapshots(publication_id)
+    if history_snapshots is not None:
         result["history"] = [
             {
                 "status": s['status'],
@@ -604,10 +636,9 @@ def get_publication(
                 "scraped_at": _iso_z(s['scraped_at']),
                 "source_url": s['source_url'],
             }
-            for s in snapshots
+            for s in history_snapshots
         ]
 
-        feed_events = get_paper_history(publication_id)
         result["feed_events"] = [
             {
                 "id": fe['id'],
@@ -616,13 +647,30 @@ def get_publication(
                 "new_status": fe['new_status'],
                 "created_at": _iso_z(fe['created_at']),
             }
-            for fe in feed_events
+            for fe in history_feed_events
         ]
 
         result["is_seed"] = bool(row.get('is_seed'))
         result["title_hash"] = row.get('title_hash')
         result["openalex_id"] = row.get('openalex_id')
 
+    return result
+
+
+@app.get("/api/publications/{publication_id}")
+@limiter.limit("60/minute")
+def get_publication(
+    request: Request,
+    publication_id: int,
+    include_history: bool = Query(False),
+):
+    cache_key = f"{publication_id}:{include_history}"
+    result = _publication_detail_cache.get_or_set(
+        cache_key,
+        lambda: _build_publication_detail(publication_id, include_history),
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Publication not found")
     return result
 
 
@@ -845,17 +893,12 @@ def list_researchers(
     }
 
 
-@app.get("/api/researchers/{researcher_id}")
-@limiter.limit("60/minute")
-def get_researcher(
-    request: Request,
-    researcher_id: int,
-    include_history: bool = Query(False),
-):
+def _build_researcher_detail(researcher_id: int, include_history: bool) -> dict | None:
+    """Build full researcher detail response (all DB queries). Returns None if not found."""
     with connection_scope():
         row = get_researcher_detail(researcher_id)
         if not row:
-            raise HTTPException(status_code=404, detail="Researcher not found")
+            return None
 
         urls_map = get_urls_for_researchers([researcher_id])
         urls = urls_map.get(researcher_id, [])
@@ -871,8 +914,9 @@ def get_researcher(
         coauthors_by_pub = get_coauthors_for_papers(pub_ids)
         links_by_pub = get_links_for_papers(pub_ids)
 
+        history_snapshots = None
         if include_history:
-            snapshots = get_researcher_snapshots(researcher_id)
+            history_snapshots = get_researcher_snapshots(researcher_id)
 
     publications = [
         _format_publication(pr, authors_by_pub.get(pr['id'], []),
@@ -896,7 +940,7 @@ def get_researcher(
         "publications": publications,
     }
 
-    if include_history:
+    if history_snapshots is not None:
         result["history"] = [
             {
                 "position": s['position'],
@@ -905,9 +949,26 @@ def get_researcher(
                 "scraped_at": _iso_z(s['scraped_at']),
                 "source_url": s['source_url'],
             }
-            for s in snapshots
+            for s in history_snapshots
         ]
 
+    return result
+
+
+@app.get("/api/researchers/{researcher_id}")
+@limiter.limit("60/minute")
+def get_researcher(
+    request: Request,
+    researcher_id: int,
+    include_history: bool = Query(False),
+):
+    cache_key = f"{researcher_id}:{include_history}"
+    result = _researcher_detail_cache.get_or_set(
+        cache_key,
+        lambda: _build_researcher_detail(researcher_id, include_history),
+    )
+    if result is None:
+        raise HTTPException(status_code=404, detail="Researcher not found")
     return result
 
 
