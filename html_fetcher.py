@@ -10,6 +10,7 @@ import requests
 import charset_normalizer
 import hashlib
 import logging
+from collections import OrderedDict
 from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
@@ -78,6 +79,7 @@ SCRAPER_USER_AGENT = os.environ.get(
     'SCRAPER_USER_AGENT',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 )
+_ROBOTS_CACHE_MAX = 500
 
 
 # Large CDN/hosting platforms that can handle higher request rates.
@@ -152,7 +154,8 @@ class HTMLFetcher:
 
     # Cache parsed robots.txt per origin (scheme://netloc).
     # Value is a RobotFileParser or None (fetch failed / non-200).
-    _robots_cache: dict = {}
+    # Capped at _ROBOTS_CACHE_MAX entries via LRU eviction (OrderedDict).
+    _robots_cache: OrderedDict = OrderedDict()
 
     @staticmethod
     def _get_robots_parser(url: str) -> "RobotFileParser | None":
@@ -160,6 +163,7 @@ class HTMLFetcher:
         parsed = urlparse(url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
         if origin in HTMLFetcher._robots_cache:
+            HTMLFetcher._robots_cache.move_to_end(origin)
             return HTMLFetcher._robots_cache[origin]
         try:
             robots_url = f"{origin}/robots.txt"
@@ -168,13 +172,19 @@ class HTMLFetcher:
             })
             if resp.status_code != 200:
                 HTMLFetcher._robots_cache[origin] = None
+                if len(HTMLFetcher._robots_cache) > _ROBOTS_CACHE_MAX:
+                    HTMLFetcher._robots_cache.popitem(last=False)
                 return None
             rp = RobotFileParser()
             rp.parse(resp.text.splitlines())
             HTMLFetcher._robots_cache[origin] = rp
+            if len(HTMLFetcher._robots_cache) > _ROBOTS_CACHE_MAX:
+                HTMLFetcher._robots_cache.popitem(last=False)
             return rp
         except Exception:
             HTMLFetcher._robots_cache[origin] = None
+            if len(HTMLFetcher._robots_cache) > _ROBOTS_CACHE_MAX:
+                HTMLFetcher._robots_cache.popitem(last=False)
             return None
 
     @staticmethod

@@ -47,6 +47,21 @@ class TestRobotsTxtCaching:
             HTMLFetcher._robots_cache.clear()
             assert HTMLFetcher.is_allowed_by_robots("https://example.com/page1") is True
 
+    def test_robots_cache_evicts_oldest_entry(self):
+        """Cache should not grow beyond _ROBOTS_CACHE_MAX entries."""
+        from html_fetcher import _ROBOTS_CACHE_MAX
+        with patch("html_fetcher.requests.get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.text = "User-agent: *\nAllow: /"
+            mock_get.return_value = mock_resp
+
+            HTMLFetcher._robots_cache.clear()
+            for i in range(_ROBOTS_CACHE_MAX + 10):
+                HTMLFetcher.is_allowed_by_robots(f"https://domain{i}.com/page")
+
+        assert len(HTMLFetcher._robots_cache) <= _ROBOTS_CACHE_MAX
+
 
 class TestFetchHtml:
     def test_successful_fetch_returns_content(self):
