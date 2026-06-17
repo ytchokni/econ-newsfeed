@@ -56,6 +56,7 @@ class TestResearcherDetailIncludesJel:
     def test_researcher_detail_has_jel_codes(self, client):
         """Researcher detail endpoint should include a jel_codes array."""
         with (
+            patch("api.connection_scope"),
             patch("api.get_researcher_detail", return_value=SAMPLE_RESEARCHER),
             patch("api.get_urls_for_researchers", return_value={1: []}),
             patch("api.get_pub_counts_for_researchers", return_value={1: 0}),
