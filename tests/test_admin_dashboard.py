@@ -141,6 +141,23 @@ def test_admin_dashboard_endpoint_returns_data(client):
     assert data["content"]["total_papers"] == 10
 
 
+def test_admin_dashboard_caches_result(client):
+    """Repeated dashboard requests should hit cache, not re-query."""
+    from api import _admin_dashboard_cache
+    _admin_dashboard_cache.clear()
+    mock_stats = {
+        "health": {}, "content": {}, "quality": {},
+        "costs": {}, "scrapes": {}, "activity": {},
+        "extraction": {},
+    }
+    with patch("api.get_admin_dashboard_stats", return_value=mock_stats) as mock_fn:
+        headers = {"X-API-Key": os.environ.get("SCRAPE_API_KEY", "test-key")}
+        client.get("/api/admin/dashboard", headers=headers)
+        client.get("/api/admin/dashboard", headers=headers)
+    assert mock_fn.call_count == 1
+    _admin_dashboard_cache.clear()
+
+
 def _extraction_fetch_one(queue=None, completions=None, attempts=None, last_extracted=None):
     """Build a fetch_one side_effect for _get_extraction_stats's four queries, in call order."""
     rows = [

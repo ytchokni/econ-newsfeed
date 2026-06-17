@@ -90,6 +90,7 @@ class _TTLCache:
 _filter_options_cache = _TTLCache(600)   # 10 minutes
 _fields_cache = _TTLCache(3600)          # 1 hour
 _jel_codes_cache = _TTLCache(3600)       # 1 hour
+_admin_dashboard_cache = _TTLCache(300)  # 5 minutes
 
 
 # ---------------------------------------------------------------------------
@@ -475,7 +476,7 @@ def metrics(request: Request, response: Response):
 def admin_dashboard(request: Request):
     """Admin dashboard metrics — all stats in one response."""
     _require_api_key(request)
-    return get_admin_dashboard_stats()
+    return _admin_dashboard_cache.get_or_set(get_admin_dashboard_stats)
 
 
 @app.get("/api/admin/deactivated-urls")
