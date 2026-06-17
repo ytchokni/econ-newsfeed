@@ -118,7 +118,7 @@ SAMPLE_PUB = {
     "paper_id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
     "source_url": "https://example.com/p", "discovered_at": datetime(2026, 3, 15, 14, 30),
     "status": "working_paper", "draft_url": None, "abstract": None, "draft_url_status": None,
-    "doi": None, "total_count": 1,
+    "doi": None,
 }
 SAMPLE_AUTHORS_MAP = {1: [{"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]}
 SAMPLE_AUTHORS_SINGLE = [{"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]
@@ -245,7 +245,7 @@ _SMOKE_PUB = {
     "paper_id": 1, "title": "Trade and Wages", "year": "2024", "venue": "JLE",
     "source_url": "https://example.com/p", "discovered_at": datetime(2026, 3, 15, 14, 30),
     "status": "working_paper", "draft_url": None, "abstract": None, "draft_url_status": None,
-    "doi": None, "total_count": 1,
+    "doi": None,
 }
 _SMOKE_AUTHORS_MAP = {1: [{"id": 10, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]}
 

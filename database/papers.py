@@ -335,13 +335,23 @@ def search_feed_events(
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
+    count_row = fetch_one(
+        f"""
+        SELECT COUNT(*) AS cnt
+        FROM feed_events fe
+        JOIN papers p ON p.id = fe.paper_id
+        {where}
+        """,
+        tuple(params),
+    )
+    total = count_row['cnt'] if count_row else 0
+
     rows = fetch_all(
         f"""
         SELECT fe.id AS event_id, fe.event_type, fe.old_status, fe.new_status,
                fe.old_title, fe.new_title, fe.created_at,
                p.id AS paper_id, p.title, p.year, p.venue, p.source_url, p.discovered_at,
-               p.status, p.draft_url, p.abstract, p.draft_url_status, p.doi,
-               COUNT(*) OVER() AS total_count
+               p.status, p.draft_url, p.abstract, p.draft_url_status, p.doi
         FROM feed_events fe
         JOIN papers p ON p.id = fe.paper_id
         {where}
@@ -350,5 +360,4 @@ def search_feed_events(
         """,
         (*params, limit, offset),
     )
-    total = rows[0]['total_count'] if rows else 0
     return rows, total
