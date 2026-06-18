@@ -857,6 +857,10 @@ def list_researchers(
     preset: str | None = Query(None),
     search: str | None = Query(None, max_length=200),
 ):
+    valid_presets = {"top20", "top5_rr_accepted", "has_top5"}
+    if preset and preset not in valid_presets:
+        raise HTTPException(status_code=400, detail=f"Invalid preset value. Must be one of: {', '.join(sorted(valid_presets))}")
+
     offset = (page - 1) * per_page
     with connection_scope():
         rows, total = search_researchers(
