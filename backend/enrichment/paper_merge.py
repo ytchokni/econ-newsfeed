@@ -6,7 +6,7 @@ Also does fuzzy title matching for papers with identical author sets.
 """
 import logging
 from difflib import SequenceMatcher
-from database import fetch_all, get_connection
+from backend.database import fetch_all, get_connection
 
 logger = logging.getLogger(__name__)
 

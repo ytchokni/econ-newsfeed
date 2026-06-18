@@ -7,9 +7,9 @@ merges with existing bio-based JEL classifications.
 import logging
 from collections import Counter
 
-from database import add_researcher_jel_codes, get_all_researcher_topics, get_papers_needing_topics, save_paper_topics
-from openalex import fetch_topics_batch
-from topic_jel_map import map_topic_to_jel
+from backend.database import add_researcher_jel_codes, get_all_researcher_topics, get_papers_needing_topics, save_paper_topics
+from backend.enrichment.openalex import fetch_topics_batch
+from backend.enrichment.topic_jel_map import map_topic_to_jel
 
 logger = logging.getLogger(__name__)
 

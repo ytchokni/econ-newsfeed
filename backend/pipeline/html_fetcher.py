@@ -15,8 +15,8 @@ from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
-from database import execute_query, fetch_all, fetch_one, log_llm_usage
-from database.researchers import record_url_fetch_failure, record_url_fetch_success
+from backend.database import execute_query, fetch_all, fetch_one, log_llm_usage
+from backend.database.researchers import record_url_fetch_failure, record_url_fetch_success
 from bs4 import BeautifulSoup
 import urllib3.util.connection as _urllib3_cn
 
@@ -625,7 +625,7 @@ class HTMLFetcher:
         truncated to 200 words application-side. Returns the description
         string, or None if nothing could be extracted.
         """
-        from llm_client import get_client, get_model
+        from backend.llm.client import get_client, get_model
 
         model = get_model()
         prompt = (

@@ -12,10 +12,10 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup, NavigableString
 
-from database import compute_title_hash, execute_query, fetch_all, fetch_one
-from doi_resolver import resolve_doi
-from html_fetcher import HTMLFetcher
-from openalex import lookup_by_doi
+from backend.database import compute_title_hash, execute_query, fetch_all, fetch_one
+from backend.enrichment.doi_resolver import resolve_doi
+from backend.pipeline.html_fetcher import HTMLFetcher
+from backend.enrichment.openalex import lookup_by_doi
 
 # ---------------------------------------------------------------------------
 # Trusted domains

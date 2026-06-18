@@ -7,12 +7,12 @@ import logging
 import os
 import re
 
-from database.connection import execute_query, fetch_one, fetch_all
-from database.llm import log_llm_usage
-from encoding_guard import fix_encoding
+from backend.database.connection import execute_query, fetch_one, fetch_all
+from backend.database.llm import log_llm_usage
+from backend.config import fix_encoding
 
 
-from database.search_helpers import (
+from backend.database.search_helpers import (
     escape_like as _escape_like,
     escape_fulltext as _escape_fulltext,
     FT_MIN_TOKEN_SIZE as _FT_MIN_TOKEN_SIZE,
@@ -90,7 +90,7 @@ def _disambiguate_researcher(first_name: str, last_name: str, candidates: list[d
         f'Respond with JSON only: {{"match_id": <id or null>}}'
     )
     try:
-        from llm_client import get_client, get_model
+        from backend.llm.client import get_client, get_model
         client = get_client()
         model = get_model()
         response = client.chat.completions.create(

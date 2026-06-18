@@ -3,8 +3,8 @@
 Reads researcher descriptions and classifies them into standard
 JEL (Journal of Economic Literature) codes.
 """
-from database import log_llm_usage
-from llm_client import extract_json, get_model
+from backend.database import log_llm_usage
+from backend.llm.client import extract_json, get_model
 from pydantic import BaseModel, field_validator
 import logging
 

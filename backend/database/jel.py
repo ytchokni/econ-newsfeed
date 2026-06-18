@@ -2,7 +2,7 @@
 import logging
 from datetime import datetime, timezone
 
-from database.connection import execute_query, fetch_all, get_connection
+from backend.database.connection import execute_query, fetch_all, get_connection
 
 # Maps top-level JEL codes to research_fields.slug values.
 # "Migration" has no top-level JEL code — handled via description keywords.

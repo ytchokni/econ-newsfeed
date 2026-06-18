@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone, timedelta
 
-from database.connection import fetch_all, fetch_one
+from backend.database.connection import fetch_all, fetch_one
 
 logger = logging.getLogger(__name__)
 

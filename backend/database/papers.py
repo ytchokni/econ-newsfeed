@@ -5,8 +5,8 @@ import hashlib
 import re
 from datetime import datetime, timezone
 
-from database.connection import execute_query, fetch_all, fetch_one, get_connection
-from encoding_guard import fix_encoding
+from backend.database.connection import execute_query, fetch_all, fetch_one, get_connection
+from backend.config import fix_encoding
 
 
 def normalize_title(title: str | None) -> str:
@@ -101,7 +101,7 @@ def get_unenriched_papers(limit=50):
     )
 
 
-from database.search_helpers import (
+from backend.database.search_helpers import (
     escape_like as _escape_like,
     escape_fulltext as _escape_fulltext,
     FT_MIN_TOKEN_SIZE as _FT_MIN_TOKEN_SIZE,

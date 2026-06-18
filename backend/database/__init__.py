@@ -12,21 +12,21 @@ Submodules:
   jel.py         — JEL code classification and paper topics
 """
 
-from database.connection import (
+from backend.database.connection import (
     get_connection,
     connection_scope,
     execute_query,
     fetch_all,
     fetch_one,
 )
-from database.schema import (
+from backend.database.schema import (
     create_database,
     create_tables,
     seed_research_fields,
     seed_jel_codes,
     backfill_seed_publications,
 )
-from database.researchers import (
+from backend.database.researchers import (
     get_researcher_id,
     update_researcher_bio,
     add_researcher_url,
@@ -43,7 +43,7 @@ from database.researchers import (
     get_urls_needing_extraction,
     reactivate_url,
 )
-from database.papers import (
+from backend.database.papers import (
     normalize_title,
     compute_title_hash,
     update_draft_url_status,
@@ -57,7 +57,7 @@ from database.papers import (
     get_coauthors_for_papers,
     get_links_for_papers,
 )
-from database.snapshots import (
+from backend.database.snapshots import (
     _compute_researcher_content_hash,
     append_researcher_snapshot,
     get_researcher_snapshots,
@@ -66,8 +66,8 @@ from database.snapshots import (
     get_paper_snapshots,
     PaperSnapshotResult,
 )
-from database.llm import log_llm_usage
-from database.jel import (
+from backend.database.llm import log_llm_usage
+from backend.database.jel import (
     get_all_jel_codes,
     get_jel_codes_for_researcher,
     get_jel_codes_for_researchers,
@@ -80,4 +80,4 @@ from database.jel import (
     add_researcher_jel_codes,
     sync_researcher_fields_from_jel,
 )
-from database.admin import get_admin_dashboard_stats
+from backend.database.admin import get_admin_dashboard_stats

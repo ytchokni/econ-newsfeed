@@ -1,7 +1,7 @@
 from dataclasses import dataclass
-from database import log_llm_usage
+from backend.database import log_llm_usage
 from bs4 import BeautifulSoup
-from llm_client import get_model, extract_json
+from backend.llm.client import get_model, extract_json
 from pydantic import BaseModel, field_validator
 from typing import Literal, Optional
 import difflib

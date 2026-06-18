@@ -3,7 +3,7 @@
 Consolidates event logic previously scattered across publication.py
 (save_publications, reconcile_title_renames) and database/snapshots.py.
 """
-from database import get_connection
+from backend.database import get_connection
 from datetime import datetime, timezone
 import html as html_module
 import logging

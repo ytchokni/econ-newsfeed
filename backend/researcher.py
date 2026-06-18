@@ -1,4 +1,4 @@
-from database import fetch_all
+from backend.database import fetch_all
 
 class Researcher:
     @staticmethod

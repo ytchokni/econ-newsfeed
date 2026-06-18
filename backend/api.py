@@ -22,7 +22,7 @@ from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
 
-from database import (
+from backend.database import (
     connection_scope,
     create_tables,
     fetch_all,
@@ -49,9 +49,9 @@ from database import (
     search_feed_events,
     search_researchers,
 )
-from publication import VALID_STATUSES
-import scheduler
-from scheduler import (
+from backend.pipeline.publication import VALID_STATUSES
+import backend.pipeline.scheduler as scheduler
+from backend.pipeline.scheduler import (
     start_scheduler,
     shutdown_scheduler,
     run_scrape_job,

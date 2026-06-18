@@ -9,16 +9,16 @@ import mysql.connector
 import mysql.connector.errors
 from apscheduler.schedulers.background import BackgroundScheduler
 
-from database import (
+from backend.database import (
     execute_query,
     fetch_one,
     get_unchecked_draft_urls,
     get_urls_needing_extraction,
     update_draft_url_status,
 )
-from db_config import db_config
-from researcher import Researcher
-from html_fetcher import HTMLFetcher
+from backend.config import db_config
+from backend.researcher import Researcher
+from backend.pipeline.html_fetcher import HTMLFetcher
 logger = logging.getLogger(__name__)
 
 _LOCK_NAME = 'econ_newsfeed_scrape'
@@ -298,7 +298,7 @@ def run_scrape_job() -> None:
 
     t0 = time.time()
     try:
-        from paper_merge import merge_duplicate_papers
+        from backend.enrichment.paper_merge import merge_duplicate_papers
         merge_duplicate_papers()
     except Exception as e:
         logger.error("Paper merge failed: %s: %s", type(e).__name__, e)
@@ -315,7 +315,7 @@ def _handle_sigterm(signum: int, frame: object) -> None:
 
 def _enrichment_worker_loop() -> None:
     """Continuously enrich unenriched papers until stop event is set."""
-    from openalex import enrich_new_publications
+    from backend.enrichment.openalex import enrich_new_publications
 
     logger.info("Enrichment worker started")
     consecutive_failures = 0
@@ -380,7 +380,7 @@ def _extraction_worker_loop() -> None:
     45-190s on real pages so the worker is latency-bound; the fixed delay
     only guards runs of tiny pages against the 30 RPM cap.
     """
-    from extraction import extract_one_url
+    from backend.pipeline.extraction import extract_one_url
 
     logger.info("Extraction worker started")
     url_failures: dict[int, int] = {}

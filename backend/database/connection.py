@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING
 
 from mysql.connector.pooling import MySQLConnectionPool
 
-from db_config import db_config
+from backend.config import db_config
 
 if TYPE_CHECKING:
     from mysql.connector.pooling import PooledMySQLConnection

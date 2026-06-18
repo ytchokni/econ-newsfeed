@@ -6,9 +6,9 @@ import logging
 import mysql.connector
 from mysql.connector import Error
 
-from db_config import db_config
-from database.connection import get_connection, execute_query
-from database.snapshots import STATUS_ORDER
+from backend.config import db_config
+from backend.database.connection import get_connection, execute_query
+from backend.database.snapshots import STATUS_ORDER
 
 
 def create_database() -> None:

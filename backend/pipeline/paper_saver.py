@@ -4,7 +4,7 @@ Returns SaveResult objects describing what changed.
 Does NOT create feed events — that is FeedEventEmitter's responsibility.
 """
 from dataclasses import dataclass
-from database import (
+from backend.database import (
     append_paper_snapshot,
     compute_title_hash,
     fetch_all,
@@ -12,8 +12,8 @@ from database import (
     get_researcher_id,
     normalize_title,
 )
-from encoding_guard import guard_text_fields
-from publication import clean_title
+from backend.config import guard_text_fields
+from backend.pipeline.publication import clean_title
 from datetime import datetime, timezone
 import logging
 
@@ -227,7 +227,7 @@ class PaperSaver:
                     # cleaned up by ON DELETE CASCADE. feed_events are deleted
                     # instead — reassigning them would give the survivor a
                     # duplicate new_paper event.
-                    from paper_merge import _CHILD_TABLES
+                    from backend.enrichment.paper_merge import _CHILD_TABLES
                     for table, col in _CHILD_TABLES:
                         if table == 'feed_events':
                             continue

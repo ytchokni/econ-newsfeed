@@ -6,7 +6,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
-from database.connection import get_connection, fetch_all
+from backend.database.connection import get_connection, fetch_all
 
 
 # Canonical publication-status progression, lowest to highest rank.

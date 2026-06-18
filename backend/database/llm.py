@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from database.connection import execute_query
+from backend.database.connection import execute_query
 
 # (prompt, completion) cost per 1M tokens — Google AI Studio Gemini 2.5 Flash.
 # Source: https://ai.google.dev/gemini-api/docs/pricing (May 2026).

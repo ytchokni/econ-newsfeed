@@ -6,7 +6,7 @@ from datetime import date
 
 import requests
 
-from database import execute_query, fetch_all, get_unenriched_papers, update_openalex_data
+from backend.database import execute_query, fetch_all, get_unenriched_papers, update_openalex_data
 
 logger = logging.getLogger(__name__)
 

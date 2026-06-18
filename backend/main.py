@@ -2,7 +2,7 @@ import argparse
 import logging
 import os
 
-from database import (
+from backend.database import (
     create_tables,
     execute_query,
     fetch_all,
@@ -13,9 +13,9 @@ from database import (
     log_llm_usage,
     save_researcher_jel_codes,
 )
-from researcher import Researcher
-from publication import Publication, validate_publication
-from html_fetcher import HTMLFetcher
+from backend.researcher import Researcher
+from backend.pipeline.publication import Publication, validate_publication
+from backend.pipeline.html_fetcher import HTMLFetcher
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
@@ -26,7 +26,7 @@ def import_data(file_path: str) -> None:
 
 def download_htmls() -> None:
     """Download HTML content for all URLs in the researcher_urls table."""
-    from scheduler import create_scrape_log, update_scrape_log, _acquire_db_lock, _release_db_lock
+    from backend.pipeline.scheduler import create_scrape_log, update_scrape_log, _acquire_db_lock, _release_db_lock
 
     # Hold the scrape advisory lock: it prevents collisions with a scheduled
     # scrape, and the zombie cleanup treats lock-less 'running' rows as dead.
@@ -57,7 +57,7 @@ def download_htmls() -> None:
 
 def classify_jel() -> None:
     """Classify all researchers with descriptions into JEL codes."""
-    from jel_classifier import classify_researcher
+    from backend.enrichment.jel_classifier import classify_researcher
 
     researchers = get_researchers_needing_classification()
     total = len(researchers)
@@ -84,7 +84,7 @@ def classify_jel() -> None:
 
 def batch_submit(limit: int | None = None) -> None:
     """Submit a batch job to the Gemini Batch API for URLs needing extraction."""
-    from llm_client import get_client, get_genai_client, get_model
+    from backend.llm.client import get_client, get_genai_client, get_model
     from google.genai import types
     import json
     import tempfile
@@ -183,9 +183,9 @@ class _UsageDict:
 
 def batch_check() -> None:
     """Check pending batch jobs and process completed results."""
-    from llm_client import get_client, get_genai_client, get_model
-    from extraction import persist_extraction
-    from publication import PublicationExtraction, validate_publication
+    from backend.llm.client import get_client, get_genai_client, get_model
+    from backend.pipeline.extraction import persist_extraction
+    from backend.pipeline.publication import PublicationExtraction, validate_publication
     from pydantic import ValidationError
     import json
     from datetime import datetime, timezone
@@ -335,11 +335,11 @@ def batch_check() -> None:
 
 def extract_only(limit: int | None = None) -> None:
     """Run LLM extraction for URLs with pending content changes (skips fetching)."""
-    from scheduler import (
+    from backend.pipeline.scheduler import (
         create_scrape_log, update_scrape_log, _update_progress,
         _acquire_db_lock, _release_db_lock,
     )
-    from extraction import extract_one_url
+    from backend.pipeline.extraction import extract_one_url
 
     pending = get_urls_needing_extraction()
     if not pending:
@@ -406,7 +406,7 @@ def extract_only(limit: int | None = None) -> None:
 def discover_domains() -> None:
     """Scan all stored raw HTML to find untrusted domains that may host paper links."""
     from collections import Counter
-    from link_extractor import discover_untrusted_domains
+    from backend.enrichment.link_extractor import discover_untrusted_domains
 
     # Fetch only url_ids first, then load raw HTML one at a time to avoid OOM
     url_ids = fetch_all(
@@ -463,11 +463,11 @@ def main() -> None:
         classify_jel()
     elif args.command == 'enrich':
         create_tables()
-        from openalex import enrich_new_publications
+        from backend.enrichment.openalex import enrich_new_publications
         enrich_new_publications(limit=500)
     elif args.command == 'enrich-jel':
         create_tables()
-        from jel_enrichment import enrich_jel_from_papers
+        from backend.enrichment.jel_enrichment import enrich_jel_from_papers
         enrich_jel_from_papers()
     elif args.command == 'extract':
         extract_only(limit=args.limit)

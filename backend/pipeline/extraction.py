@@ -15,15 +15,15 @@ import logging
 from dataclasses import dataclass
 from datetime import timezone
 
-from database import (
+from backend.database import (
     fetch_one, fetch_all, compute_title_hash, append_paper_snapshot,
     append_researcher_snapshot,
 )
-from feed_events import FeedEventEmitter
-from html_fetcher import HTMLFetcher
-from link_extractor import match_and_save_paper_links
-from paper_saver import PaperSaver
-from publication import Publication
+from backend.pipeline.feed_events import FeedEventEmitter
+from backend.pipeline.html_fetcher import HTMLFetcher
+from backend.enrichment.link_extractor import match_and_save_paper_links
+from backend.pipeline.paper_saver import PaperSaver
+from backend.pipeline.publication import Publication
 
 logger = logging.getLogger(__name__)
 
