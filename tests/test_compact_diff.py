@@ -87,6 +87,44 @@ class TestComputeCompactDiff:
         assert "-Paper entry 199" in result
 
 
+class TestSegmentText:
+    """Tests for Publication._segment_text — splitting single-line pages."""
+
+    def test_single_line_text_is_segmented(self):
+        text = "Working Papers Some Paper Title. Abstract This is the abstract. Published in AER."
+        segs = Publication._segment_text(text)
+        assert len(segs) > 1
+
+    def test_sentence_boundaries_split(self):
+        text = "First sentence about economics. Second sentence about policy. Third one here."
+        segs = Publication._segment_text(text)
+        assert len(segs) == 3
+
+    def test_section_headers_split(self):
+        text = "Some intro text. Publications Paper A. Research interests include macro."
+        segs = Publication._segment_text(text)
+        assert any("Publications" in s for s in segs)
+        assert any("Research" in s for s in segs)
+
+    def test_segmentation_is_consistent(self):
+        """Both old and new text are segmented the same way, so diffs are meaningful."""
+        text = "Title of paper. Abstract goes here. Working Paper draft."
+        segs = Publication._segment_text(text)
+        # All original words appear somewhere in the segments
+        for word in ["Title", "paper", "Abstract", "Working", "Paper", "draft"]:
+            assert any(word in s for s in segs)
+
+    def test_single_line_page_produces_compact_diff(self):
+        """Real-world scenario: entire page as one line with a small change."""
+        base = ". ".join(f"Paper {i} about topic {i}" for i in range(50))
+        old = base + ". Status Revise and Resubmit at AER."
+        new = base + ". Status Conditionally Accepted at AER."
+        result = Publication._compute_compact_diff(old, new)
+        assert result is not None
+        assert result != ""
+        assert len(result) < len(new)
+
+
 class TestBuildDiffExtractionPrompt:
     """Tests for Publication.build_diff_extraction_prompt."""
 

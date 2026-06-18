@@ -284,6 +284,26 @@ Content:
     # Class-level attribute for retry_after signaling (single-threaded worker)
     _last_retry_after: float | None = None
 
+    _SEGMENT_RE = re.compile(
+        r'(?<=[.!?])\s+(?=[A-Z])'   # sentence boundary
+        r'|(?<=\n)'                  # existing newline
+        r'|(?<=\s)(?=(?:'            # before common section headers
+        r'Abstract|Working [Pp]aper|Publications?|Research'
+        r'|Forthcoming|Accepted|References|Slides|Codes'
+        r')\b)',
+    )
+
+    @staticmethod
+    def _segment_text(text: str) -> list[str]:
+        """Split page text into diff-friendly segments.
+
+        Stored page text is often a single long line. Splitting on sentence
+        boundaries produces meaningful chunks so difflib can isolate the
+        actual change instead of replacing the entire line.
+        """
+        parts = Publication._SEGMENT_RE.split(text)
+        return [p + '\n' for p in parts if p]
+
     @staticmethod
     def _compute_compact_diff(old_text: str, new_text: str, context_lines: int = 10) -> str | None:
         """Compute a unified diff between old and new text.
@@ -294,13 +314,18 @@ Content:
 
         Returns "" (empty string) when the texts are identical.
         """
-        old_lines = old_text.splitlines(keepends=True)
-        new_lines = new_text.splitlines(keepends=True)
+        old_lines = Publication._segment_text(old_text)
+        new_lines = Publication._segment_text(new_text)
+
+        # Scale context down for short pages so it doesn't swallow the
+        # whole document. For a 20-segment page, n=10 means 100% context.
+        n_segments = max(len(old_lines), len(new_lines))
+        ctx = min(context_lines, max(3, n_segments // 4))
 
         diff_lines = list(difflib.unified_diff(
             old_lines, new_lines,
             fromfile='OLD', tofile='NEW',
-            n=context_lines,
+            n=ctx,
         ))
 
         if not diff_lines:
