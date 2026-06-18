@@ -13,7 +13,7 @@ Two extraction paths:
 """
 import logging
 from dataclasses import dataclass
-from datetime import timezone
+from datetime import datetime, timezone
 
 from backend.database import (
     fetch_one, fetch_all, compute_title_hash, append_paper_snapshot,
@@ -112,6 +112,9 @@ def persist_extraction(url: str, url_id: int, pubs: list[dict],
     _append_snapshots(pubs, url, event_date)
 
 
+_STALENESS_YEARS = 10
+
+
 def _append_snapshots(pubs: list[dict], source_url: str, event_date=None) -> None:
     """Append paper snapshots and emit status_change events when detected."""
     hash_to_pub = {}
@@ -121,6 +124,8 @@ def _append_snapshots(pubs: list[dict], source_url: str, event_date=None) -> Non
             hash_to_pub[compute_title_hash(title)] = pub
     if not hash_to_pub:
         return
+
+    current_year = datetime.now(timezone.utc).year
 
     placeholders = ",".join(["%s"] * len(hash_to_pub))
     rows = fetch_all(
@@ -140,6 +145,13 @@ def _append_snapshots(pubs: list[dict], source_url: str, event_date=None) -> Non
             title=pub.get('title'),
         )
         if result.status_changed:
+            pub_year = pub.get('year')
+            if pub_year and str(pub_year).isdigit() and (current_year - int(pub_year)) > _STALENESS_YEARS:
+                logger.info(
+                    "Suppressed status_change for old paper (year=%s): %s",
+                    pub_year, pub.get('title', '')[:60],
+                )
+                continue
             FeedEventEmitter.emit_status_change(
                 row['id'], result.old_status, result.new_status, event_date=event_date,
             )
