@@ -435,21 +435,21 @@ class TestTryExtractPublications:
             yield
 
     def test_returns_none_on_llm_failure(self):
-        """parsed=None (API error / validation failure) → None, not []."""
+        """parsed=None (API error / validation failure) → pubs=None, not []."""
         failed = StructuredResponse(parsed=None, usage=None)
         with patch("publication.extract_json", return_value=failed), \
              patch("publication.log_llm_usage"):
             result = Publication.try_extract_publications("some text", "https://x.com")
-        assert result is None
+        assert result.pubs is None
 
     def test_returns_empty_list_when_no_pubs_found(self):
-        """A valid response with zero publications → [] (genuine empty)."""
+        """A valid response with zero publications → pubs=[] (genuine empty)."""
         parsed = PublicationExtractionList(publications=[])
         ok = StructuredResponse(parsed=parsed, usage=MagicMock())
         with patch("publication.extract_json", return_value=ok), \
              patch("publication.log_llm_usage"):
             result = Publication.try_extract_publications("some text", "https://x.com")
-        assert result == []
+        assert result.pubs == []
 
     def test_returns_validated_pubs(self):
         """Valid publications are returned as dicts."""
@@ -463,8 +463,8 @@ class TestTryExtractPublications:
              patch("publication.log_llm_usage"), \
              patch("publication.validate_publication", return_value=True):
             result = Publication.try_extract_publications("text", "https://x.com")
-        assert len(result) == 1
-        assert result[0]["title"] == "A Great Paper"
+        assert len(result.pubs) == 1
+        assert result.pubs[0]["title"] == "A Great Paper"
 
     def test_extract_publications_returns_empty_list_on_failure(self):
         """The legacy wrapper still returns [] (not None) on failure."""

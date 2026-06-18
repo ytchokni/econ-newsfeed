@@ -15,8 +15,8 @@ import pytest
 
 from llm_client import StructuredResponse
 from publication import (
-    Publication, PublicationChange, PublicationChangeList,
-    validate_publication,
+    ExtractionLLMResult, Publication, PublicationChange,
+    PublicationChangeList, validate_publication,
 )
 
 
@@ -190,7 +190,7 @@ class TestTryExtractChanges:
         with patch("publication.extract_json", return_value=failed), \
              patch("publication.log_llm_usage"):
             result = Publication.try_extract_changes("old", "new", "https://x.com")
-        assert result is None
+        assert result.pubs is None
 
     def test_returns_empty_list_when_no_changes(self):
         parsed = PublicationChangeList(changes=[])
@@ -198,7 +198,7 @@ class TestTryExtractChanges:
         with patch("publication.extract_json", return_value=ok), \
              patch("publication.log_llm_usage"):
             result = Publication.try_extract_changes("old", "new", "https://x.com")
-        assert result == []
+        assert result.pubs == []
 
     def test_returns_validated_changes(self):
         parsed = PublicationChangeList(changes=[
@@ -208,9 +208,9 @@ class TestTryExtractChanges:
         with patch("publication.extract_json", return_value=ok), \
              patch("publication.log_llm_usage"):
             result = Publication.try_extract_changes("old", "new", "https://x.com")
-        assert len(result) == 1
-        assert result[0]["change_type"] == "new_paper"
-        assert result[0]["title"] == "A New Discovery"
+        assert len(result.pubs) == 1
+        assert result.pubs[0]["change_type"] == "new_paper"
+        assert result.pubs[0]["title"] == "A New Discovery"
 
     def test_garbage_title_dropped(self):
         parsed = PublicationChangeList(changes=[
@@ -220,7 +220,7 @@ class TestTryExtractChanges:
         with patch("publication.extract_json", return_value=ok), \
              patch("publication.log_llm_usage"):
             result = Publication.try_extract_changes("old", "new", "https://x.com")
-        assert result == []
+        assert result.pubs == []
 
     def test_removed_changes_not_validated(self):
         """Removed papers skip validate_publication (title may look like noise)."""
@@ -231,8 +231,8 @@ class TestTryExtractChanges:
         with patch("publication.extract_json", return_value=ok), \
              patch("publication.log_llm_usage"):
             result = Publication.try_extract_changes("old", "new", "https://x.com")
-        assert len(result) == 1
-        assert result[0]["change_type"] == "removed"
+        assert len(result.pubs) == 1
+        assert result.pubs[0]["change_type"] == "removed"
 
     def test_logs_usage_as_diff_extraction(self):
         parsed = PublicationChangeList(changes=[])
@@ -274,7 +274,7 @@ class TestExtractOneUrlDiffPath:
         from extraction import extract_one_url
         patches = self._base_patches()
         mocks = {k: p.start() for k, p in patches.items()}
-        mocks["try_changes"].return_value = []
+        mocks["try_changes"].return_value = ExtractionLLMResult(pubs=[])
         try:
             outcome = extract_one_url(_row())
         finally:
@@ -292,7 +292,7 @@ class TestExtractOneUrlDiffPath:
         patches["payload"] = patch("extraction.HTMLFetcher.get_extraction_payload",
                                    return_value=_payload(extracted_at=None))
         mocks = {k: p.start() for k, p in patches.items()}
-        mocks["try_extract"].return_value = []
+        mocks["try_extract"].return_value = ExtractionLLMResult(pubs=[])
         try:
             outcome = extract_one_url(_row())
         finally:
@@ -310,7 +310,7 @@ class TestExtractOneUrlDiffPath:
         patches["prev_text"] = patch("extraction.HTMLFetcher.get_previous_text",
                                      return_value=None)
         mocks = {k: p.start() for k, p in patches.items()}
-        mocks["try_extract"].return_value = []
+        mocks["try_extract"].return_value = ExtractionLLMResult(pubs=[])
         try:
             outcome = extract_one_url(_row())
         finally:
@@ -326,7 +326,7 @@ class TestExtractOneUrlDiffPath:
         patches = self._base_patches()
         mocks = {k: p.start() for k, p in patches.items()}
         new_pub = _new_paper_change()
-        mocks["try_changes"].return_value = [new_pub]
+        mocks["try_changes"].return_value = ExtractionLLMResult(pubs=[new_pub])
         try:
             outcome = extract_one_url(_row())
         finally:
@@ -344,7 +344,7 @@ class TestExtractOneUrlDiffPath:
         from extraction import extract_one_url
         patches = self._base_patches()
         mocks = {k: p.start() for k, p in patches.items()}
-        mocks["try_changes"].return_value = None
+        mocks["try_changes"].return_value = ExtractionLLMResult(pubs=None)
         try:
             outcome = extract_one_url(_row())
         finally:
@@ -359,7 +359,7 @@ class TestExtractOneUrlDiffPath:
         from extraction import extract_one_url
         patches = self._base_patches()
         mocks = {k: p.start() for k, p in patches.items()}
-        mocks["try_changes"].return_value = []
+        mocks["try_changes"].return_value = ExtractionLLMResult(pubs=[])
         try:
             outcome = extract_one_url(_row())
         finally:
@@ -376,7 +376,7 @@ class TestExtractOneUrlDiffPath:
         mocks = {k: p.start() for k, p in patches.items()}
 
         sc = _status_change()
-        mocks["try_changes"].return_value = [sc]
+        mocks["try_changes"].return_value = ExtractionLLMResult(pubs=[sc])
 
         try:
             outcome = extract_one_url(_row())
@@ -399,7 +399,7 @@ class TestExtractOneUrlDiffPath:
         mocks = {k: p.start() for k, p in patches.items()}
 
         tc = _title_change()
-        mocks["try_changes"].return_value = [tc]
+        mocks["try_changes"].return_value = ExtractionLLMResult(pubs=[tc])
         mocks["fetch_one"].return_value = {"id": 99}
 
         try:
@@ -430,7 +430,7 @@ class TestExtractOneUrlDiffPath:
             "extraction.fetch_one",
             return_value={"position": "Prof", "affiliation": "MIT"})
         mocks = {k: p.start() for k, p in patches.items()}
-        mocks["try_changes"].return_value = []
+        mocks["try_changes"].return_value = ExtractionLLMResult(pubs=[])
 
         try:
             outcome = extract_one_url(_row(page_type="HOME"))
