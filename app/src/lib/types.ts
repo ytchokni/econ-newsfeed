@@ -58,6 +58,7 @@ export interface PaginatedResponse<T> {
   page: number;
   per_page: number;
   pages: number;
+  researcher_count?: number;
 }
 
 export interface ResearcherUrl {
