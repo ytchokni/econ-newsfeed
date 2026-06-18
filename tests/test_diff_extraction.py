@@ -162,9 +162,9 @@ class TestBuildDiffPrompt:
         original = publication.CONTENT_MAX_CHARS
         try:
             publication.CONTENT_MAX_CHARS = 100
-            long = "X" * 200
-            prompt = Publication.build_diff_extraction_prompt(long, "new", "https://x.com")
-            assert prompt.count("X") == 100
+            long = "æ" * 200
+            prompt = Publication.build_diff_extraction_prompt(long, "new", "https://example.com")
+            assert prompt.count("æ") == 100
         finally:
             publication.CONTENT_MAX_CHARS = original
 
