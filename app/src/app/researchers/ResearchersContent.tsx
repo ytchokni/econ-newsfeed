@@ -123,12 +123,6 @@ export default function ResearchersContent() {
 
   return (
     <div className="space-y-6">
-      <PresetBar
-        presets={RESEARCHER_PRESETS}
-        active={filters.preset}
-        onChange={handlePresetChange}
-      />
-
       {/* Filter bar */}
       <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-4 space-y-3">
         <div className="max-w-md">
@@ -173,6 +167,12 @@ export default function ResearchersContent() {
           )}
         </div>
       </div>
+
+      <PresetBar
+        presets={RESEARCHER_PRESETS}
+        active={filters.preset}
+        onChange={handlePresetChange}
+      />
 
       {/* Result count banner */}
       {!isLoading && researchers && (

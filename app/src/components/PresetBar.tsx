@@ -15,7 +15,7 @@ export default function PresetBar({ presets, active, onChange }: PresetBarProps)
   return (
     <div className="flex items-center gap-2 flex-wrap">
       <span className="font-sans text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mr-1">
-        Quick filters
+        Presets
       </span>
       {presets.map((p) => (
         <button

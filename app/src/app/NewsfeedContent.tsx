@@ -323,19 +323,19 @@ export default function NewsfeedContent() {
 
   return (
     <div className="space-y-6">
+      <FilterBar
+        filters={filters}
+        onChange={handleFilterChange}
+        activeTab={activeTab}
+        onTabChange={handleTabChange}
+      />
+
       <PresetBar
         presets={FEED_PRESETS}
         active={filters.preset}
         onChange={(preset) =>
           handleFilterChange({ ...filters, preset, institution: preset ? undefined : filters.institution })
         }
-      />
-
-      <FilterBar
-        filters={filters}
-        onChange={handleFilterChange}
-        activeTab={activeTab}
-        onTabChange={handleTabChange}
       />
 
       {data && (
