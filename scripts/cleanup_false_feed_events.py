@@ -10,7 +10,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import execute_query, fetch_all, fetch_one
+from backend.database import execute_query, fetch_all, fetch_one
 
 
 def main():

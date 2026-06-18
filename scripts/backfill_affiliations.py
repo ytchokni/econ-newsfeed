@@ -13,8 +13,8 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import execute_query, fetch_all
-from openalex import OPENALEX_BASE_URL, _get_session, _get_with_retry
+from backend.database import execute_query, fetch_all
+from backend.enrichment.openalex import OPENALEX_BASE_URL, _get_session, _get_with_retry
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)

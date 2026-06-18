@@ -12,7 +12,7 @@ import sys
 # Ensure project root is importable
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import execute_query, fetch_one
+from backend.database import execute_query, fetch_one
 
 # All timestamps in the DB are UTC (datetime.now(timezone.utc) used throughout codebase)
 CUTOFF = "2026-03-21 00:00:00"

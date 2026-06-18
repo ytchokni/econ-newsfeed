@@ -69,7 +69,7 @@ def main():
     parser.add_argument("--fix", action="store_true", help="Apply fixes (default: dry-run report only)")
     args = parser.parse_args()
 
-    from database.connection import get_connection
+    from backend.database.connection import get_connection
 
     all_findings = []
 

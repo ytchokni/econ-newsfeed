@@ -202,7 +202,7 @@ def write_csv(rows: list[dict], output_path: str) -> None:
 
 def load_researchers() -> list[dict]:
     """Load all researchers with their URLs from the database."""
-    from database.connection import fetch_all
+    from backend.database.connection import fetch_all
     researchers = fetch_all(
         "SELECT r.id, r.first_name, r.last_name, r.affiliation "
         "FROM researchers r ORDER BY r.id"
@@ -271,7 +271,7 @@ def parse_import_csv(path: str) -> list[dict]:
 
 def import_matches(csv_path: str) -> None:
     """Import approved matches from reviewed CSV into the database."""
-    from database.connection import execute_query
+    from backend.database.connection import execute_query
     rows = parse_import_csv(csv_path)
     urls_added = 0
     affil_updated = 0

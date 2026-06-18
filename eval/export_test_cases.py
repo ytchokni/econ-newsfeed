@@ -11,7 +11,7 @@ import sys
 # Add project root to path so we can import db_config
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from db_config import db_config
+from backend.config import db_config
 import mysql.connector
 
 CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS', '20000'))
