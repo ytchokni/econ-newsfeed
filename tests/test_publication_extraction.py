@@ -144,7 +144,12 @@ class TestExtractPublications:
         pub = _make_pub_dict()
         mock_client.chat.completions.create.return_value = _make_llm_completion([pub])
 
-        result = Publication.extract_publications("some text", "https://example.com/page", scrape_log_id=7)
+        # text_content must include the title for verify_title_in_html to pass
+        result = Publication.extract_publications(
+            "Working Papers\nTrade and Wages\nJohn Smith, Jane Doe, 2024, AER",
+            "https://example.com/page",
+            scrape_log_id=7,
+        )
 
         assert len(result) == 1
         assert result[0]["title"] == "Trade and Wages"
@@ -168,7 +173,11 @@ class TestExtractPublications:
         ]
         mock_client.chat.completions.create.return_value = _make_llm_completion(pubs)
 
-        result = Publication.extract_publications("text", "https://example.com")
+        # text_content must include both titles for verify_title_in_html to pass
+        result = Publication.extract_publications(
+            "Working Papers\nPaper A\nPaper B\nJohn Smith, 2024",
+            "https://example.com",
+        )
 
         assert len(result) == 2
         assert result[0]["title"] == "Paper A"
@@ -461,7 +470,8 @@ class TestTryExtractPublications:
         ok = StructuredResponse(parsed=parsed, usage=MagicMock())
         with patch("backend.pipeline.publication.extract_json", return_value=ok), \
              patch("backend.pipeline.publication.log_llm_usage"), \
-             patch("backend.pipeline.publication.validate_publication", return_value=True):
+             patch("backend.pipeline.publication.validate_publication", return_value=True), \
+             patch("backend.pipeline.publication.verify_title_in_html", return_value=True):
             result = Publication.try_extract_publications("text", "https://x.com")
         assert len(result.pubs) == 1
         assert result.pubs[0]["title"] == "A Great Paper"

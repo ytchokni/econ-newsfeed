@@ -255,6 +255,55 @@ def validate_publication(pub: dict) -> bool:
     return True
 
 
+def _normalize_for_token_match(text: str) -> str:
+    """Collapse text to lowercase alphanumeric tokens separated by single spaces."""
+    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+
+
+def verify_title_in_html(title: str, html_text: str) -> bool:
+    """Return True if the extracted title plausibly appears in the source HTML.
+
+    Uses normalized token-level matching. A title passes if its normalized form
+    appears as a contiguous substring in the normalized HTML, or if >=80% of its
+    content words (4+ chars) appear within a tight sliding window over the HTML.
+
+    Short titles (<=3 content words) require a direct substring match to avoid
+    false positives from incidental word overlap. Longer titles use windowed
+    matching (window = number of content tokens + 1) to prevent abstract/body
+    text from satisfying the check via scattered token presence.
+    """
+    norm_title = _normalize_for_token_match(title)
+    norm_html = _normalize_for_token_match(html_text)
+
+    if not norm_title:
+        return False
+
+    if norm_title in norm_html:
+        return True
+
+    title_tokens = [t for t in norm_title.split() if len(t) >= 4]
+
+    # Short titles: direct substring match only (token fallback too noisy)
+    if len(title_tokens) <= 3:
+        return False
+
+    # Windowed matching: slide a window slightly larger than the content token
+    # count over the HTML. This prevents abstract text that paraphrases the
+    # title from satisfying the check via scattered token presence.
+    html_all_tokens = norm_html.split()
+    window_size = len(title_tokens) + 1
+
+    best_ratio = 0.0
+    for i in range(max(1, len(html_all_tokens) - window_size + 1)):
+        window = set(html_all_tokens[i:i + window_size])
+        matches = sum(1 for t in title_tokens if t in window)
+        ratio = matches / len(title_tokens)
+        if ratio > best_ratio:
+            best_ratio = ratio
+
+    return best_ratio >= 0.80
+
+
 _CHANGE_OUTPUT_FIELDS = """\
 For each change, provide:
 - change_type: one of "new_paper", "status_change", "title_change", "removed"
@@ -468,6 +517,10 @@ If no changes were detected, return an empty changes list."""
             if d['change_type'] == 'removed':
                 validated.append(d)
             elif validate_publication(d):
+                if not verify_title_in_html(d['title'], new_text):
+                    logging.info("HTML verification dropped change: '%s'",
+                                 d.get('title', '<no title>')[:80])
+                    continue
                 validated.append(d)
             else:
                 logging.info("Validation dropped change: %s", d.get('title', '<no title>'))
@@ -499,10 +552,14 @@ If no changes were detected, return an empty changes list."""
         validated = []
         for pub in result.parsed.publications:
             d = pub.model_dump()
-            if validate_publication(d):
-                validated.append(d)
-            else:
+            if not validate_publication(d):
                 logging.info(f"Validation dropped: {d.get('title', '<no title>')}")
+                continue
+            if not verify_title_in_html(d['title'], text_content):
+                logging.info("HTML verification dropped: '%s' (not found in source)",
+                             d.get('title', '<no title>')[:80])
+                continue
+            validated.append(d)
         return ExtractionLLMResult(pubs=validated)
 
     @staticmethod
