@@ -420,6 +420,13 @@ def _extraction_worker_loop() -> None:
                 consecutive_failures = 0
                 url_failures.pop(url_id, None)
                 pubs_total += outcome.pubs_count
+            elif outcome is not None and outcome.retry_after is not None:
+                # Rate limit — sleep for the suggested duration, don't count as failure
+                logger.warning("Extraction worker: rate limited, sleeping %.0fs (retry_after)",
+                               outcome.retry_after)
+                _extraction_stop_event.wait(outcome.retry_after)
+                consecutive_failures = 0
+                continue  # skip the normal delay below
             else:
                 consecutive_failures += 1
                 url_failures[url_id] = url_failures.get(url_id, 0) + 1

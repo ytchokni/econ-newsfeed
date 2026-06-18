@@ -9,11 +9,12 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import threading
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
-from openai import OpenAI, OpenAIError
+from openai import OpenAI, OpenAIError, RateLimitError
 from pydantic import BaseModel, ValidationError
 
 _client: OpenAI | None = None
@@ -65,10 +66,12 @@ class StructuredResponse(Generic[T]):
     `parsed` is None when the model output failed validation after all
     retries, or the API call raised. `usage` is the OpenAI-compat usage
     object from the final successful API response (or None if the API
-    call itself raised).
+    call itself raised). `retry_after` is set when the API returned a
+    rate-limit error with a suggested wait duration.
     """
     parsed: T | None
     usage: object | None
+    retry_after: float | None = None
 
 
 _SCHEMA_METADATA_KEYS = {"$defs", "title", "description", "default"}
@@ -106,6 +109,28 @@ def build_json_schema_format(model_class: type[BaseModel]) -> dict:
             "strict": False,
         },
     }
+
+
+def _parse_retry_after(error: RateLimitError) -> float:
+    """Extract the retry delay from a Google AI Studio RateLimitError.
+
+    The Google API returns retry info in error.body as a dict with
+    'error.details[].retryDelay' as a string like "57s". Falls back
+    to 60s if parsing fails.
+    """
+    try:
+        body = error.body
+        if isinstance(body, dict):
+            details = body.get("error", {}).get("details", [])
+            for detail in details:
+                delay_str = detail.get("retryDelay", "")
+                if delay_str:
+                    match = re.search(r"(\d+(?:\.\d+)?)", delay_str)
+                    if match:
+                        return float(match.group(1))
+    except Exception:
+        pass
+    return 60.0
 
 
 def extract_json(
@@ -150,6 +175,10 @@ def extract_json(
                 max_tokens=max_tokens,
                 temperature=temperature,
             )
+        except RateLimitError as e:
+            retry_delay = _parse_retry_after(e)
+            logging.warning("LLM rate limited, retry after %.0fs: %s", retry_delay, e)
+            return StructuredResponse(parsed=None, usage=None, retry_after=retry_delay)
         except OpenAIError as e:
             logging.error("LLM API call failed: %s: %s", type(e).__name__, e)
             return StructuredResponse(parsed=None, usage=None)

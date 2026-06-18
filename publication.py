@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 from llm_client import get_model, extract_json
 from pydantic import BaseModel, field_validator
 from typing import Literal, Optional
+import difflib
 import re
 import logging
 import os
@@ -280,9 +281,80 @@ If no publications are found in the content, return an empty list. Do not fabric
 Content:
 {text_content[:CONTENT_MAX_CHARS]}"""
 
+    # Class-level attribute for retry_after signaling (single-threaded worker)
+    _last_retry_after: float | None = None
+
     @staticmethod
-    def build_diff_extraction_prompt(old_text: str, new_text: str, url: str) -> str:
-        """Build the LLM prompt for diff-based change detection."""
+    def _compute_compact_diff(old_text: str, new_text: str, context_lines: int = 10) -> str | None:
+        """Compute a unified diff between old and new text.
+
+        Returns the diff string, or None if the diff is larger than the new
+        text alone (meaning the page was substantially rewritten and sending
+        the full texts would be more token-efficient).
+
+        Returns "" (empty string) when the texts are identical.
+        """
+        old_lines = old_text.splitlines(keepends=True)
+        new_lines = new_text.splitlines(keepends=True)
+
+        diff_lines = list(difflib.unified_diff(
+            old_lines, new_lines,
+            fromfile='OLD', tofile='NEW',
+            n=context_lines,
+        ))
+
+        if not diff_lines:
+            return ""
+
+        diff_text = "".join(diff_lines)
+
+        # Fall back to full prompt if the diff is larger than the new text
+        if len(diff_text) > len(new_text):
+            return None
+
+        return diff_text
+
+    @staticmethod
+    def _build_compact_diff_prompt(diff_text: str, url: str) -> str:
+        """Build the LLM prompt using a compact unified diff."""
+        return f"""I have a unified diff of changes to a researcher's publication page at {url}.
+
+The diff is in unified diff format:
+- Lines starting with "---" and "+++" are file headers (OLD and NEW versions)
+- Lines starting with "@@" indicate the position of each change hunk
+- Lines starting with "-" were REMOVED from the old version
+- Lines starting with "+" were ADDED in the new version
+- Lines with no prefix are unchanged context lines
+
+Analyze this diff and identify ALL changes to academic publications:
+
+1. **new_paper**: A publication that appears in added lines but not in removed/context lines.
+2. **status_change**: A publication whose status or section changed (e.g. moved from "Working Papers" to "Publications", or gained "forthcoming"/"accepted"). Set old_status to the previous status.
+3. **title_change**: A publication whose title was modified. Set old_title to the previous title.
+4. **removed**: A publication that appears only in removed lines and is not present in added/context lines.
+
+If a paper moved sections (e.g. "Working Papers" to "Refereed Publications"), that is a status_change, NOT a new_paper.
+
+IMPORTANT: Ignore changes to navigation, dates, layout, boilerplate, or non-publication content. Only report changes that affect academic publications.
+
+Do NOT report publications that are unchanged (appearing only in context lines).
+
+DIFF:
+{diff_text[:CONTENT_MAX_CHARS]}
+
+For each change, provide:
+- change_type: one of "new_paper", "status_change", "title_change", "removed"
+- title: the publication title (current/new version)
+- authors: a list of [first_name, last_name] pairs
+- year, venue, status, draft_url, abstract: from the NEW version (or OLD version for "removed")
+- old_status: previous status (for status_change only)
+- old_title: previous title (for title_change only)
+
+If no publication changes were detected, return an empty changes list."""
+
+    @staticmethod
+    def _build_full_diff_prompt(old_text: str, new_text: str, url: str) -> str:
+        """Build the full old+new LLM prompt (fallback for large rewrites)."""
         return f"""I have two versions of a researcher's publication page at {url}.
 Compare the OLD and NEW versions and identify ALL changes to publications:
 
@@ -312,6 +384,28 @@ For each change, provide:
 If no changes were detected, return an empty changes list."""
 
     @staticmethod
+    def build_diff_extraction_prompt(old_text: str, new_text: str, url: str) -> str:
+        """Build the LLM prompt for diff-based change detection.
+
+        Tries a compact unified diff first (much smaller token footprint).
+        Falls back to the full old+new prompt when the diff is larger than
+        the new text (i.e. the page was substantially rewritten).
+        """
+        diff_text = Publication._compute_compact_diff(old_text, new_text)
+
+        if diff_text is not None:
+            if diff_text == "":
+                # Texts are identical — tell the LLM there are no changes
+                return (
+                    f"The researcher's publication page at {url} has not changed. "
+                    "The old and new versions are identical. "
+                    "Return an empty changes list."
+                )
+            return Publication._build_compact_diff_prompt(diff_text, url)
+
+        return Publication._build_full_diff_prompt(old_text, new_text, url)
+
+    @staticmethod
     def try_extract_changes(old_text: str, new_text: str, url: str,
                             scrape_log_id: int | None = None) -> list[dict] | None:
         """Detect publication changes by comparing old and new page text.
@@ -319,6 +413,7 @@ If no changes were detected, return an empty changes list."""
         Returns None on LLM failure, [] when no changes detected.
         Each dict has a 'change_type' key indicating what happened.
         """
+        Publication._last_retry_after = None
         prompt = Publication.build_diff_extraction_prompt(old_text, new_text, url)
         model = get_model()
         logging.info("Diff-extracting changes from %s using LLM (%s)", url, model)
@@ -332,6 +427,8 @@ If no changes were detected, return an empty changes list."""
             )
 
         if result.parsed is None:
+            if result.retry_after is not None:
+                Publication._last_retry_after = result.retry_after
             logging.warning("Diff extraction returned no parsed result for %s", url)
             return None
 
@@ -354,6 +451,7 @@ If no changes were detected, return an empty changes list."""
         failure after retries) — callers should retry the URL later. Returns
         [] when the call succeeded but the page genuinely has no publications.
         """
+        Publication._last_retry_after = None
         prompt = Publication.build_extraction_prompt(text_content, url)
         model = get_model()
         logging.info(f"Extracting publications from {url} using LLM ({model})")
@@ -367,6 +465,8 @@ If no changes were detected, return an empty changes list."""
             )
 
         if result.parsed is None:
+            if result.retry_after is not None:
+                Publication._last_retry_after = result.retry_after
             logging.warning(f"Publication extraction returned no parsed result for {url}")
             return None
 

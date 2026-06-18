@@ -40,6 +40,7 @@ class ExtractionOutcome:
     """
     status: str
     pubs_count: int = 0
+    retry_after: float | None = None
 
     @property
     def ok(self) -> bool:
@@ -150,7 +151,7 @@ def _extract_full(url_id: int, url: str, text: str, is_seed: bool,
     """Original full-page extraction path."""
     pubs = Publication.try_extract_publications(text, url, scrape_log_id=scrape_log_id)
     if pubs is None:
-        return ExtractionOutcome("failed")
+        return ExtractionOutcome("failed", retry_after=Publication._last_retry_after)
 
     if pubs:
         persist_extraction(url, url_id, pubs, is_seed=is_seed, event_date=fetch_date)
@@ -165,7 +166,7 @@ def _extract_via_diff(url_id: int, url: str, new_text: str, old_text: str,
     """Diff-based extraction: compare old and new page, extract only changes."""
     changes = Publication.try_extract_changes(old_text, new_text, url, scrape_log_id=scrape_log_id)
     if changes is None:
-        return ExtractionOutcome("failed")
+        return ExtractionOutcome("failed", retry_after=Publication._last_retry_after)
 
     count = _process_diff_changes(changes, url, url_id, fetch_date)
 
