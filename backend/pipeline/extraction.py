@@ -204,6 +204,12 @@ def _apply_title_change(change: dict, source_url: str, event_date) -> None:
     if not old_title or not new_title:
         return
 
+    from backend.pipeline.paper_saver import validate_title_change
+    if not validate_title_change(old_title, new_title):
+        logger.info("Suppressed spurious diff title change: '%s' → '%s'",
+                     old_title[:50], new_title[:50])
+        return
+
     old_hash = compute_title_hash(old_title)
     row = fetch_one("SELECT id FROM papers WHERE title_hash = %s", (old_hash,))
     if not row:
