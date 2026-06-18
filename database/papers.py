@@ -106,6 +106,7 @@ from database.search_helpers import (
     escape_fulltext as _escape_fulltext,
     FT_MIN_TOKEN_SIZE as _FT_MIN_TOKEN_SIZE,
     TOP20_DEPT_KEYWORDS as _TOP20_DEPT_KEYWORDS,
+    TOP5_JOURNAL_KEYWORDS as _TOP5_JOURNAL_KEYWORDS,
 )
 
 
@@ -308,6 +309,22 @@ def search_feed_events(
             f"WHERE a.publication_id = p.id AND ({dept_likes}))"
         )
         params.extend(f"%{_escape_like(kw)}%" for kw in _TOP20_DEPT_KEYWORDS)
+
+    if preset == "top5_rr_accepted":
+        conditions.append("p.status IN ('accepted', 'revise_and_resubmit')")
+        venue_likes = " OR ".join(["p.venue LIKE %s"] * len(_TOP5_JOURNAL_KEYWORDS))
+        conditions.append(f"({venue_likes})")
+        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP5_JOURNAL_KEYWORDS)
+
+    if preset == "has_top5":
+        venue_likes = " OR ".join(["p2.venue LIKE %s"] * len(_TOP5_JOURNAL_KEYWORDS))
+        conditions.append(
+            f"EXISTS (SELECT 1 FROM authorship a2 "
+            f"JOIN authorship a3 ON a3.researcher_id = a2.researcher_id "
+            f"JOIN papers p2 ON p2.id = a3.publication_id "
+            f"WHERE a2.publication_id = p.id AND ({venue_likes}))"
+        )
+        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP5_JOURNAL_KEYWORDS)
 
     search_term = search.strip() if search else ""
     if search_term:

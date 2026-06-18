@@ -422,3 +422,66 @@ class TestResponseShape:
 
         item = response.json()["items"][0]
         assert item["abstract"] is None
+
+
+# ---------------------------------------------------------------------------
+# ?preset=top5_rr_accepted filter
+# ---------------------------------------------------------------------------
+
+class TestPresetTop5RRAccepted:
+    """?preset=top5_rr_accepted filters papers R&R/accepted at Top-5 journals."""
+
+    def test_preset_top5_rr_accepted_returns_200(self, client):
+        with (
+            patch("api.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
+        ):
+            response = client.get("/api/publications?preset=top5_rr_accepted")
+
+        assert response.status_code == 200
+
+    def test_preset_top5_rr_accepted_returns_items(self, client):
+        with (
+            patch("api.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
+        ):
+            response = client.get("/api/publications?preset=top5_rr_accepted")
+
+        body = response.json()
+        assert "items" in body
+        assert body["total"] == 1
+
+
+# ---------------------------------------------------------------------------
+# ?preset=has_top5 filter
+# ---------------------------------------------------------------------------
+
+class TestPresetHasTop5:
+    """?preset=has_top5 filters papers by researchers with at least one Top-5 pub."""
+
+    def test_preset_has_top5_returns_200(self, client):
+        with (
+            patch("api.search_feed_events", return_value=([_PUB_MIT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB3),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
+        ):
+            response = client.get("/api/publications?preset=has_top5")
+
+        assert response.status_code == 200
+
+    def test_preset_has_top5_no_results_returns_empty(self, client):
+        with (
+            patch("api.search_feed_events", return_value=([], 0)),
+            patch("api.get_authors_for_papers", return_value={}),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
+        ):
+            response = client.get("/api/publications?preset=has_top5")
+
+        assert response.status_code == 200
+        assert response.json()["items"] == []
