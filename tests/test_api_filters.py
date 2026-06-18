@@ -485,3 +485,47 @@ class TestPresetHasTop5:
 
         assert response.status_code == 200
         assert response.json()["items"] == []
+
+
+# ---------------------------------------------------------------------------
+# researcher_count field in response
+# ---------------------------------------------------------------------------
+
+class TestResearcherCount:
+    """Response includes researcher_count field."""
+
+    def test_response_includes_researcher_count(self, client):
+        with (
+            patch("api.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
+        ):
+            response = client.get("/api/publications")
+
+        body = response.json()
+        assert "researcher_count" in body
+
+    def test_researcher_count_is_integer(self, client):
+        with (
+            patch("api.search_feed_events", return_value=([_PUB_WITH_ABSTRACT], 1)),
+            patch("api.get_authors_for_papers", return_value=_AUTHORS_MAP_PUB1),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
+        ):
+            response = client.get("/api/publications")
+
+        body = response.json()
+        assert isinstance(body["researcher_count"], int)
+
+    def test_researcher_count_empty_results(self, client):
+        with (
+            patch("api.search_feed_events", return_value=([], 0)),
+            patch("api.get_authors_for_papers", return_value={}),
+            patch("api.get_coauthors_for_papers", return_value={}),
+            patch("api.get_links_for_papers", return_value={}),
+        ):
+            response = client.get("/api/publications")
+
+        body = response.json()
+        assert body["researcher_count"] == 0

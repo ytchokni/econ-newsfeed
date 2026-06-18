@@ -185,6 +185,7 @@ class PaginatedPublications(BaseModel):
     page: int
     per_page: int
     pages: int
+    researcher_count: int = 0
 
 class ResearcherUrlResponse(BaseModel):
     id: int
@@ -595,6 +596,12 @@ def list_publications(
         for row in rows
     ]
 
+    researcher_ids_set: set[int] = set()
+    for author_list in authors_by_pub.values():
+        for author in author_list:
+            researcher_ids_set.add(author["id"])
+    researcher_count = len(researcher_ids_set)
+
     response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=600"
     return {
         "items": items,
@@ -602,6 +609,7 @@ def list_publications(
         "page": page,
         "per_page": per_page,
         "pages": pages,
+        "researcher_count": researcher_count,
     }
 
 
