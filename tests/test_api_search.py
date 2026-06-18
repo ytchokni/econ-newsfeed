@@ -23,7 +23,7 @@ class TestPublicationSearch:
     def test_search_returns_200(self, client):
         """Basic search query returns 200."""
         with (
-            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1)) as mock_search,
+            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)) as mock_search,
             patch("api.get_authors_for_papers", return_value=AUTHORS_MAP),
             patch("api.get_coauthors_for_papers", return_value={}),
             patch("api.get_links_for_papers", return_value={}),
@@ -37,7 +37,7 @@ class TestPublicationSearch:
     def test_search_passes_search_to_db(self, client):
         """Search param is passed to search_feed_events."""
         with (
-            patch("api.search_feed_events", return_value=([], 0)) as mock_search,
+            patch("api.search_feed_events", return_value=([], 0, 0)) as mock_search,
             patch("api.get_authors_for_papers", return_value={}),
             patch("api.get_coauthors_for_papers", return_value={}),
             patch("api.get_links_for_papers", return_value={}),
@@ -51,7 +51,7 @@ class TestPublicationSearch:
     def test_search_escapes_special_chars(self, client):
         """Special LIKE chars (%, _) are escaped."""
         with (
-            patch("api.search_feed_events", return_value=([], 0)),
+            patch("api.search_feed_events", return_value=([], 0, 0)),
             patch("api.get_authors_for_papers", return_value={}),
             patch("api.get_coauthors_for_papers", return_value={}),
             patch("api.get_links_for_papers", return_value={}),
@@ -63,7 +63,7 @@ class TestPublicationSearch:
     def test_search_combined_with_year_filter(self, client):
         """Search works alongside existing filters."""
         with (
-            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1)),
+            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)),
             patch("api.get_authors_for_papers", return_value=AUTHORS_MAP),
             patch("api.get_coauthors_for_papers", return_value={}),
             patch("api.get_links_for_papers", return_value={}),
@@ -77,7 +77,7 @@ class TestPublicationSearch:
     def test_empty_search_ignored(self, client):
         """Whitespace-only or empty search is treated as no filter."""
         with (
-            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1)) as mock_search,
+            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)) as mock_search,
             patch("api.get_authors_for_papers", return_value=AUTHORS_MAP),
             patch("api.get_coauthors_for_papers", return_value={}),
             patch("api.get_links_for_papers", return_value={}),

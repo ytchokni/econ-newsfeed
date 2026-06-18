@@ -46,6 +46,5 @@ TOP5_JOURNAL_KEYWORDS = [
     "Quarterly Journal of Economics",
     "QJE",
     "Review of Economic Studies",
-    "RESTUD",
     "REStud",
 ]

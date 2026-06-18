@@ -575,7 +575,7 @@ def list_publications(
 
     offset = (page - 1) * per_page
     with connection_scope():
-        rows, total = search_feed_events(
+        rows, total, researcher_count = search_feed_events(
             year=year, researcher_id=researcher_id,
             status_list=status_list or None,
             since=since_dt, until=until_dt,
@@ -595,12 +595,6 @@ def list_publications(
                            links_by_pub.get(row['paper_id'], []))
         for row in rows
     ]
-
-    researcher_ids_set: set[int] = set()
-    for author_list in authors_by_pub.values():
-        for author in author_list:
-            researcher_ids_set.add(author["id"])
-    researcher_count = len(researcher_ids_set)
 
     response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=600"
     return {
@@ -763,7 +757,7 @@ def atom_feed(
     )
 
     with connection_scope():
-        rows, _ = search_feed_events(
+        rows, _, _ = search_feed_events(
             year=year, status_list=status_list or None,
             since=since_dt, until=until_dt,
             institution_list=institution_list or None,

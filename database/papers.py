@@ -363,6 +363,18 @@ def search_feed_events(
     )
     total = count_row['cnt'] if count_row else 0
 
+    researcher_count_row = fetch_one(
+        f"""
+        SELECT COUNT(DISTINCT a.researcher_id) AS cnt
+        FROM feed_events fe
+        JOIN papers p ON p.id = fe.paper_id
+        JOIN authorship a ON a.publication_id = p.id
+        {where}
+        """,
+        tuple(params),
+    )
+    researcher_count = researcher_count_row['cnt'] if researcher_count_row else 0
+
     rows = fetch_all(
         f"""
         SELECT fe.id AS event_id, fe.event_type, fe.old_status, fe.new_status,
@@ -377,4 +389,4 @@ def search_feed_events(
         """,
         (*params, limit, offset),
     )
-    return rows, total
+    return rows, total, researcher_count

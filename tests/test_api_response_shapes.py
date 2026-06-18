@@ -124,7 +124,7 @@ class TestPublicationShape:
 
     def test_paginated_envelope_keys(self, client):
         with (
-            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1)),
+            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)),
             patch("api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
             patch("api.get_coauthors_for_papers", return_value={}),
             patch("api.get_links_for_papers", return_value={}),
@@ -135,7 +135,7 @@ class TestPublicationShape:
 
     def test_publication_item_keys(self, client):
         with (
-            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1)),
+            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)),
             patch("api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
             patch("api.get_coauthors_for_papers", return_value={}),
             patch("api.get_links_for_papers", return_value={}),
@@ -149,7 +149,7 @@ class TestPublicationShape:
 
     def test_author_sub_object_keys(self, client):
         with (
-            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1)),
+            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)),
             patch("api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
             patch("api.get_coauthors_for_papers", return_value={}),
             patch("api.get_links_for_papers", return_value={}),
