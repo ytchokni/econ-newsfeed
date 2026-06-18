@@ -1,3 +1,4 @@
+from dataclasses import dataclass
 from database import log_llm_usage
 from bs4 import BeautifulSoup
 from llm_client import get_model, extract_json
@@ -10,6 +11,18 @@ import os
 from urllib.parse import urlparse
 
 CONTENT_MAX_CHARS = int(os.environ['CONTENT_MAX_CHARS'])
+
+
+@dataclass
+class ExtractionLLMResult:
+    """Result of an LLM extraction call.
+
+    pubs is None on failure, [] on success with no publications.
+    retry_after is set when the failure was a rate limit.
+    """
+    pubs: list[dict] | None
+    retry_after: float | None = None
+
 
 VALID_STATUSES = frozenset({
     'published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper',
@@ -242,6 +255,16 @@ def validate_publication(pub: dict) -> bool:
     return True
 
 
+_CHANGE_OUTPUT_FIELDS = """\
+For each change, provide:
+- change_type: one of "new_paper", "status_change", "title_change", "removed"
+- title: the publication title (current/new version)
+- authors: a list of [first_name, last_name] pairs
+- year, venue, status, draft_url, abstract: from the NEW version (or OLD version for "removed")
+- old_status: previous status (for status_change only)
+- old_title: previous title (for title_change only)"""
+
+
 class Publication:
     @staticmethod
     def extract_relevant_html(html_content: str) -> str:
@@ -280,9 +303,6 @@ If no publications are found in the content, return an empty list. Do not fabric
 
 Content:
 {text_content[:CONTENT_MAX_CHARS]}"""
-
-    # Class-level attribute for retry_after signaling (single-threaded worker)
-    _last_retry_after: float | None = None
 
     _SEGMENT_RE = re.compile(
         r'(?<=[.!?])\s+(?=[A-Z])'   # sentence boundary
@@ -367,13 +387,7 @@ Do NOT report publications that are unchanged (appearing only in context lines).
 DIFF:
 {diff_text[:CONTENT_MAX_CHARS]}
 
-For each change, provide:
-- change_type: one of "new_paper", "status_change", "title_change", "removed"
-- title: the publication title (current/new version)
-- authors: a list of [first_name, last_name] pairs
-- year, venue, status, draft_url, abstract: from the NEW version (or OLD version for "removed")
-- old_status: previous status (for status_change only)
-- old_title: previous title (for title_change only)
+{_CHANGE_OUTPUT_FIELDS}
 
 If no publication changes were detected, return an empty changes list."""
 
@@ -398,13 +412,7 @@ OLD VERSION:
 NEW VERSION:
 {new_text[:CONTENT_MAX_CHARS]}
 
-For each change, provide:
-- change_type: one of "new_paper", "status_change", "title_change", "removed"
-- title: the publication title (current/new version)
-- authors: a list of [first_name, last_name] pairs
-- year, venue, status, draft_url, abstract: from the NEW version (or OLD version for "removed")
-- old_status: previous status (for status_change only)
-- old_title: previous title (for title_change only)
+{_CHANGE_OUTPUT_FIELDS}
 
 If no changes were detected, return an empty changes list."""
 
@@ -432,13 +440,12 @@ If no changes were detected, return an empty changes list."""
 
     @staticmethod
     def try_extract_changes(old_text: str, new_text: str, url: str,
-                            scrape_log_id: int | None = None) -> list[dict] | None:
+                            scrape_log_id: int | None = None) -> ExtractionLLMResult:
         """Detect publication changes by comparing old and new page text.
 
-        Returns None on LLM failure, [] when no changes detected.
-        Each dict has a 'change_type' key indicating what happened.
+        Returns ExtractionLLMResult with pubs=None on LLM failure, pubs=[]
+        when no changes detected. Each dict has a 'change_type' key.
         """
-        Publication._last_retry_after = None
         prompt = Publication.build_diff_extraction_prompt(old_text, new_text, url)
         model = get_model()
         logging.info("Diff-extracting changes from %s using LLM (%s)", url, model)
@@ -452,10 +459,8 @@ If no changes were detected, return an empty changes list."""
             )
 
         if result.parsed is None:
-            if result.retry_after is not None:
-                Publication._last_retry_after = result.retry_after
             logging.warning("Diff extraction returned no parsed result for %s", url)
-            return None
+            return ExtractionLLMResult(pubs=None, retry_after=result.retry_after)
 
         validated = []
         for change in result.parsed.changes:
@@ -466,17 +471,15 @@ If no changes were detected, return an empty changes list."""
                 validated.append(d)
             else:
                 logging.info("Validation dropped change: %s", d.get('title', '<no title>'))
-        return validated
+        return ExtractionLLMResult(pubs=validated)
 
     @staticmethod
-    def try_extract_publications(text_content: str, url: str, scrape_log_id: int | None = None) -> list[dict] | None:
+    def try_extract_publications(text_content: str, url: str, scrape_log_id: int | None = None) -> ExtractionLLMResult:
         """Extract publications via the LLM.
 
-        Returns None when the LLM call failed (API error, schema validation
-        failure after retries) — callers should retry the URL later. Returns
-        [] when the call succeeded but the page genuinely has no publications.
+        Returns ExtractionLLMResult with pubs=None on LLM failure, pubs=[]
+        when the page genuinely has no publications.
         """
-        Publication._last_retry_after = None
         prompt = Publication.build_extraction_prompt(text_content, url)
         model = get_model()
         logging.info(f"Extracting publications from {url} using LLM ({model})")
@@ -490,10 +493,8 @@ If no changes were detected, return an empty changes list."""
             )
 
         if result.parsed is None:
-            if result.retry_after is not None:
-                Publication._last_retry_after = result.retry_after
             logging.warning(f"Publication extraction returned no parsed result for {url}")
-            return None
+            return ExtractionLLMResult(pubs=None, retry_after=result.retry_after)
 
         validated = []
         for pub in result.parsed.publications:
@@ -502,11 +503,11 @@ If no changes were detected, return an empty changes list."""
                 validated.append(d)
             else:
                 logging.info(f"Validation dropped: {d.get('title', '<no title>')}")
-        return validated
+        return ExtractionLLMResult(pubs=validated)
 
     @staticmethod
     def extract_publications(text_content: str, url: str, scrape_log_id: int | None = None) -> list[dict]:
         """Legacy wrapper: failure collapses to [] (kept for scheduler/batch callers)."""
-        pubs = Publication.try_extract_publications(text_content, url, scrape_log_id=scrape_log_id)
-        return pubs if pubs is not None else []
+        result = Publication.try_extract_publications(text_content, url, scrape_log_id=scrape_log_id)
+        return result.pubs if result.pubs is not None else []
 

@@ -149,26 +149,26 @@ def _extract_full(url_id: int, url: str, text: str, is_seed: bool,
                   content_hash: str, scrape_log_id: int | None,
                   fetch_date=None) -> ExtractionOutcome:
     """Original full-page extraction path."""
-    pubs = Publication.try_extract_publications(text, url, scrape_log_id=scrape_log_id)
-    if pubs is None:
-        return ExtractionOutcome("failed", retry_after=Publication._last_retry_after)
+    result = Publication.try_extract_publications(text, url, scrape_log_id=scrape_log_id)
+    if result.pubs is None:
+        return ExtractionOutcome("failed", retry_after=result.retry_after)
 
-    if pubs:
-        persist_extraction(url, url_id, pubs, is_seed=is_seed, event_date=fetch_date)
+    if result.pubs:
+        persist_extraction(url, url_id, result.pubs, is_seed=is_seed, event_date=fetch_date)
 
     HTMLFetcher.mark_extracted(url_id, content_hash)
-    return ExtractionOutcome("extracted" if pubs else "empty", pubs_count=len(pubs))
+    return ExtractionOutcome("extracted" if result.pubs else "empty", pubs_count=len(result.pubs))
 
 
 def _extract_via_diff(url_id: int, url: str, new_text: str, old_text: str,
                       content_hash: str, scrape_log_id: int | None,
                       fetch_date=None) -> ExtractionOutcome:
     """Diff-based extraction: compare old and new page, extract only changes."""
-    changes = Publication.try_extract_changes(old_text, new_text, url, scrape_log_id=scrape_log_id)
-    if changes is None:
-        return ExtractionOutcome("failed", retry_after=Publication._last_retry_after)
+    result = Publication.try_extract_changes(old_text, new_text, url, scrape_log_id=scrape_log_id)
+    if result.pubs is None:
+        return ExtractionOutcome("failed", retry_after=result.retry_after)
 
-    count = _process_diff_changes(changes, url, url_id, fetch_date)
+    count = _process_diff_changes(result.pubs, url, url_id, fetch_date)
 
     HTMLFetcher.mark_extracted(url_id, content_hash)
     return ExtractionOutcome("extracted" if count > 0 else "empty", pubs_count=count)

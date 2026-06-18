@@ -13,6 +13,8 @@ from unittest.mock import patch
 
 import pytest
 
+from publication import ExtractionLLMResult
+
 
 def _row(url_id=1, researcher_id=10, url="https://example.com/pubs", page_type="PUBLICATIONS"):
     return {"id": url_id, "researcher_id": researcher_id, "url": url, "page_type": page_type}
@@ -32,7 +34,8 @@ def _patches(payload=None, pubs=None, is_seed=False):
         "mark": patch("extraction.HTMLFetcher.mark_extracted"),
         "extract_text": patch("extraction.HTMLFetcher.extract_text_content", return_value="from raw html"),
         "extract_desc": patch("extraction.HTMLFetcher.extract_description", return_value=None),
-        "try_extract": patch("extraction.Publication.try_extract_publications", return_value=pubs),
+        "try_extract": patch("extraction.Publication.try_extract_publications",
+                             return_value=ExtractionLLMResult(pubs=pubs)),
         "persist": patch("extraction.persist_extraction"),
         "fetch_one": patch("extraction.fetch_one", return_value=None),
         "researcher_snap": patch("extraction.append_researcher_snapshot"),
