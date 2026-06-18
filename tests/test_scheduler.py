@@ -1,4 +1,4 @@
-"""Tests for scheduler.run_scrape_job() and related helpers.
+"""Tests for backend.pipeline.scheduler.run_scrape_job() and related helpers.
 
 Covers the scrape orchestration logic: locking, log creation/update,
 URL processing with change detection, error handling, and lock release.
@@ -8,8 +8,9 @@ from unittest.mock import MagicMock, patch, call
 
 import pytest
 
-import scheduler
-from scheduler import (
+import backend.pipeline.scheduler
+scheduler = backend.pipeline.scheduler
+from backend.pipeline.scheduler import (
     run_scrape_job, create_scrape_log, update_scrape_log,
     _cleanup_stale_scrape_logs,
     _enrichment_worker_loop, start_enrichment_worker, stop_enrichment_worker,
@@ -35,15 +36,15 @@ def _make_url_row(url_id=1, researcher_id=10, url="https://example.com/pubs",
 def _base_patches():
     """Return a dict of common patch targets pre-configured with safe defaults."""
     return {
-        "acquire": patch("scheduler._acquire_db_lock", return_value=MagicMock(name="lock_conn")),
-        "release": patch("scheduler._release_db_lock"),
-        "create_log": patch("scheduler.create_scrape_log", return_value=42),
-        "update_log": patch("scheduler.update_scrape_log"),
-        "update_progress": patch("scheduler._update_progress"),
-        "get_urls": patch("scheduler.Researcher.get_all_researcher_urls", return_value=[]),
-        "validate": patch("scheduler._validate_draft_urls"),
-        "fetch": patch("scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=False),
-        "fetch_one": patch("scheduler.fetch_one", return_value=None),
+        "acquire": patch("backend.pipeline.scheduler._acquire_db_lock", return_value=MagicMock(name="lock_conn")),
+        "release": patch("backend.pipeline.scheduler._release_db_lock"),
+        "create_log": patch("backend.pipeline.scheduler.create_scrape_log", return_value=42),
+        "update_log": patch("backend.pipeline.scheduler.update_scrape_log"),
+        "update_progress": patch("backend.pipeline.scheduler._update_progress"),
+        "get_urls": patch("backend.pipeline.scheduler.Researcher.get_all_researcher_urls", return_value=[]),
+        "validate": patch("backend.pipeline.scheduler._validate_draft_urls"),
+        "fetch": patch("backend.pipeline.scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=False),
+        "fetch_one": patch("backend.pipeline.scheduler.fetch_one", return_value=None),
     }
 
 
@@ -75,7 +76,7 @@ class TestRunScrapeJobHappyPath:
         patches = _base_patches()
         mocks = {name: p.start() for name, p in patches.items()}
         try:
-            with patch("openalex.enrich_new_publications") as mock_enrich:
+            with patch("backend.enrichment.openalex.enrich_new_publications") as mock_enrich:
                 run_scrape_job()
                 mock_enrich.assert_not_called()
         finally:
@@ -86,10 +87,10 @@ class TestRunScrapeJobHappyPath:
         """A changed URL increments urls_changed; no extraction happens in the scrape job."""
         patches = _base_patches()
         patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls",
+            "backend.pipeline.scheduler.Researcher.get_all_researcher_urls",
             return_value=[_make_url_row()])
         patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True)
+            "backend.pipeline.scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True)
         mocks = {name: p.start() for name, p in patches.items()}
         try:
             run_scrape_job()
@@ -110,9 +111,9 @@ class TestLockAlreadyHeld:
     """When the advisory lock cannot be acquired, scrape is skipped entirely."""
 
     def test_skips_when_lock_unavailable(self):
-        with patch("scheduler._acquire_db_lock", return_value=None) as mock_acq, \
-             patch("scheduler.create_scrape_log") as mock_log, \
-             patch("scheduler._release_db_lock") as mock_rel:
+        with patch("backend.pipeline.scheduler._acquire_db_lock", return_value=None) as mock_acq, \
+             patch("backend.pipeline.scheduler.create_scrape_log") as mock_log, \
+             patch("backend.pipeline.scheduler._release_db_lock") as mock_rel:
 
             run_scrape_job()
 
@@ -130,12 +131,12 @@ class TestLockConnectionKeepalive:
     8h wait_timeout or the lock drops mid-scrape and the zombie cleanup
     falsely fails the live scrape row."""
 
-    @patch("scheduler.mysql.connector.connect")
+    @patch("backend.pipeline.scheduler.mysql.connector.connect")
     def test_acquire_raises_session_wait_timeout(self, mock_connect):
         cursor = mock_connect.return_value.cursor.return_value
         cursor.fetchone.return_value = (1,)
 
-        conn = scheduler._acquire_db_lock()
+        conn = backend.pipeline.scheduler._acquire_db_lock()
 
         assert conn is mock_connect.return_value
         executed = [c.args[0] for c in cursor.execute.call_args_list]
@@ -155,7 +156,7 @@ class TestErrorPropagation:
     def test_exception_in_get_urls_marks_failed(self):
         patches = _base_patches()
         patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls",
+            "backend.pipeline.scheduler.Researcher.get_all_researcher_urls",
             side_effect=RuntimeError("DB connection lost"),
         )
         mocks = {name: p.start() for name, p in patches.items()}
@@ -174,7 +175,7 @@ class TestErrorPropagation:
         (because log_id is None)."""
         patches = _base_patches()
         patches["create_log"] = patch(
-            "scheduler.create_scrape_log", side_effect=RuntimeError("insert failed"),
+            "backend.pipeline.scheduler.create_scrape_log", side_effect=RuntimeError("insert failed"),
         )
         mocks = {name: p.start() for name, p in patches.items()}
         try:
@@ -198,9 +199,9 @@ class TestLockReleaseOnError:
     def test_lock_released_on_exception(self):
         lock_conn = MagicMock(name="lock_conn")
         patches = _base_patches()
-        patches["acquire"] = patch("scheduler._acquire_db_lock", return_value=lock_conn)
+        patches["acquire"] = patch("backend.pipeline.scheduler._acquire_db_lock", return_value=lock_conn)
         patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls",
+            "backend.pipeline.scheduler.Researcher.get_all_researcher_urls",
             side_effect=RuntimeError("boom"),
         )
         mocks = {name: p.start() for name, p in patches.items()}
@@ -215,7 +216,7 @@ class TestLockReleaseOnError:
     def test_lock_released_on_success(self):
         lock_conn = MagicMock(name="lock_conn")
         patches = _base_patches()
-        patches["acquire"] = patch("scheduler._acquire_db_lock", return_value=lock_conn)
+        patches["acquire"] = patch("backend.pipeline.scheduler._acquire_db_lock", return_value=lock_conn)
         mocks = {name: p.start() for name, p in patches.items()}
         try:
             run_scrape_job()
@@ -229,9 +230,9 @@ class TestLockReleaseOnError:
         """Even if _validate_draft_urls raises, lock is still released."""
         lock_conn = MagicMock(name="lock_conn")
         patches = _base_patches()
-        patches["acquire"] = patch("scheduler._acquire_db_lock", return_value=lock_conn)
+        patches["acquire"] = patch("backend.pipeline.scheduler._acquire_db_lock", return_value=lock_conn)
         patches["validate"] = patch(
-            "scheduler._validate_draft_urls", side_effect=RuntimeError("validation exploded"),
+            "backend.pipeline.scheduler._validate_draft_urls", side_effect=RuntimeError("validation exploded"),
         )
         mocks = {name: p.start() for name, p in patches.items()}
         try:
@@ -261,10 +262,10 @@ class TestURLProcessing:
 
         patches = _base_patches()
         patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls", return_value=[url1, url2]
+            "backend.pipeline.scheduler.Researcher.get_all_researcher_urls", return_value=[url1, url2]
         )
         patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed",
+            "backend.pipeline.scheduler.HTMLFetcher.fetch_and_save_if_changed",
             side_effect=[RuntimeError("timeout"), False],
         )
         mocks = {name: p.start() for name, p in patches.items()}
@@ -289,7 +290,7 @@ class TestURLProcessing:
 class TestCreateScrapeLog:
     """Basic coverage for the create_scrape_log helper."""
 
-    @patch("scheduler.execute_query", return_value=7)
+    @patch("backend.pipeline.scheduler.execute_query", return_value=7)
     def test_returns_inserted_id(self, mock_exec):
         result = create_scrape_log()
         assert result == 7
@@ -301,8 +302,8 @@ class TestCreateScrapeLog:
 class TestUpdateScrapeLog:
     """Basic coverage for the update_scrape_log helper."""
 
-    @patch("scheduler.execute_query")
-    @patch("scheduler.fetch_one", return_value={
+    @patch("backend.pipeline.scheduler.execute_query")
+    @patch("backend.pipeline.scheduler.fetch_one", return_value={
         "prompt_total": 1500, "completion_total": 300,
     })
     def test_updates_with_token_totals(self, mock_fetch, mock_exec):
@@ -318,8 +319,8 @@ class TestUpdateScrapeLog:
         assert 300 in params
         assert 42 in params  # log_id
 
-    @patch("scheduler.execute_query")
-    @patch("scheduler.fetch_one", return_value=None)
+    @patch("backend.pipeline.scheduler.execute_query")
+    @patch("backend.pipeline.scheduler.fetch_one", return_value=None)
     def test_handles_no_token_row(self, mock_fetch, mock_exec):
         """When fetch_one returns None (no llm_usage rows), totals default to 0."""
         update_scrape_log(42, "failed", error_message="kaboom")
@@ -330,8 +331,8 @@ class TestUpdateScrapeLog:
         assert 0 in params
         assert "kaboom" in params
 
-    @patch("scheduler.execute_query")
-    @patch("scheduler.fetch_one", return_value={
+    @patch("backend.pipeline.scheduler.execute_query")
+    @patch("backend.pipeline.scheduler.fetch_one", return_value={
         "prompt_total": 0, "completion_total": 0,
     })
     def test_extraction_errors_parameter(self, mock_fetch, mock_exec):
@@ -350,13 +351,13 @@ class TestScrapeJobIsFetchOnly:
         """run_scrape_job must not extract — the worker owns extraction."""
         patches = _base_patches()
         patches["get_urls"] = patch(
-            "scheduler.Researcher.get_all_researcher_urls",
+            "backend.pipeline.scheduler.Researcher.get_all_researcher_urls",
             return_value=[_make_url_row()])
         patches["fetch"] = patch(
-            "scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True)
+            "backend.pipeline.scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=True)
         mocks = {name: p.start() for name, p in patches.items()}
         try:
-            with patch("publication.Publication.try_extract_publications") as mock_llm:
+            with patch("backend.pipeline.publication.Publication.try_extract_publications") as mock_llm:
                 run_scrape_job()
                 mock_llm.assert_not_called()
         finally:
@@ -371,8 +372,8 @@ class TestScrapeJobIsFetchOnly:
 class TestStaleLogCleanup:
     """Verify zombie running scrape_log entries get cleaned up."""
 
-    @patch("scheduler.is_scrape_running", return_value=False)
-    @patch("scheduler.execute_query")
+    @patch("backend.pipeline.scheduler.is_scrape_running", return_value=False)
+    @patch("backend.pipeline.scheduler.execute_query")
     def test_lock_free_marks_running_entries_as_failed(self, mock_exec, mock_lock):
         mock_exec.return_value = 2
 
@@ -384,8 +385,8 @@ class TestStaleLogCleanup:
         assert "status = 'failed'" in query
         assert "INTERVAL 5 MINUTE" in query
 
-    @patch("scheduler.is_scrape_running", return_value=True)
-    @patch("scheduler.execute_query")
+    @patch("backend.pipeline.scheduler.is_scrape_running", return_value=True)
+    @patch("backend.pipeline.scheduler.execute_query")
     def test_lock_held_spares_newest_running_entry(self, mock_exec, mock_lock):
         mock_exec.return_value = 1
 
@@ -396,8 +397,8 @@ class TestStaleLogCleanup:
         assert "MAX(id)" in query
         assert "status = 'failed'" in query
 
-    @patch("scheduler.is_scrape_running", return_value=False)
-    @patch("scheduler.execute_query")
+    @patch("backend.pipeline.scheduler.is_scrape_running", return_value=False)
+    @patch("backend.pipeline.scheduler.execute_query")
     def test_skips_when_none_stale(self, mock_exec, mock_lock):
         mock_exec.return_value = 0
 
@@ -415,8 +416,8 @@ class TestEnrichmentWorkerLoop:
 
     def setup_method(self):
         """Clear the stop event before each test."""
-        import scheduler
-        scheduler._enrichment_stop_event.clear()
+        import backend.pipeline.scheduler
+        backend.pipeline.scheduler._enrichment_stop_event.clear()
 
     def test_enriches_and_sleeps_when_papers_found(self):
         """Worker calls enrich_new_publications, then sleeps IDLE interval."""
@@ -424,13 +425,13 @@ class TestEnrichmentWorkerLoop:
         def enrich_then_stop(limit):
             call_count[0] += 1
             if call_count[0] >= 2:
-                import scheduler
-                scheduler._enrichment_stop_event.set()
+                import backend.pipeline.scheduler
+                backend.pipeline.scheduler._enrichment_stop_event.set()
             return 5
 
-        with patch("openalex.enrich_new_publications", side_effect=enrich_then_stop) as mock_enrich, \
-             patch("scheduler._ENRICHMENT_IDLE_SECONDS", 0), \
-             patch("scheduler._ENRICHMENT_BACKOFF_SECONDS", 0):
+        with patch("backend.enrichment.openalex.enrich_new_publications", side_effect=enrich_then_stop) as mock_enrich, \
+             patch("backend.pipeline.scheduler._ENRICHMENT_IDLE_SECONDS", 0), \
+             patch("backend.pipeline.scheduler._ENRICHMENT_BACKOFF_SECONDS", 0):
             _enrichment_worker_loop()
 
         assert mock_enrich.call_count == 2
@@ -441,13 +442,13 @@ class TestEnrichmentWorkerLoop:
         def enrich_then_stop(limit):
             call_count[0] += 1
             if call_count[0] >= 1:
-                import scheduler
-                scheduler._enrichment_stop_event.set()
+                import backend.pipeline.scheduler
+                backend.pipeline.scheduler._enrichment_stop_event.set()
             return 0
 
-        with patch("openalex.enrich_new_publications", side_effect=enrich_then_stop), \
-             patch("scheduler._ENRICHMENT_IDLE_SECONDS", 0), \
-             patch("scheduler._ENRICHMENT_BACKOFF_SECONDS", 0):
+        with patch("backend.enrichment.openalex.enrich_new_publications", side_effect=enrich_then_stop), \
+             patch("backend.pipeline.scheduler._ENRICHMENT_IDLE_SECONDS", 0), \
+             patch("backend.pipeline.scheduler._ENRICHMENT_BACKOFF_SECONDS", 0):
             _enrichment_worker_loop()
 
     def test_backs_off_on_consecutive_errors(self):
@@ -456,15 +457,15 @@ class TestEnrichmentWorkerLoop:
         def fail_then_stop(limit):
             call_count[0] += 1
             if call_count[0] >= 6:
-                import scheduler
-                scheduler._enrichment_stop_event.set()
+                import backend.pipeline.scheduler
+                backend.pipeline.scheduler._enrichment_stop_event.set()
                 return 0
             raise RuntimeError("OpenAlex down")
 
-        with patch("openalex.enrich_new_publications", side_effect=fail_then_stop) as mock_enrich, \
-             patch("scheduler._ENRICHMENT_BACKOFF_THRESHOLD", 3), \
-             patch("scheduler._ENRICHMENT_IDLE_SECONDS", 0), \
-             patch("scheduler._ENRICHMENT_BACKOFF_SECONDS", 0):
+        with patch("backend.enrichment.openalex.enrich_new_publications", side_effect=fail_then_stop) as mock_enrich, \
+             patch("backend.pipeline.scheduler._ENRICHMENT_BACKOFF_THRESHOLD", 3), \
+             patch("backend.pipeline.scheduler._ENRICHMENT_IDLE_SECONDS", 0), \
+             patch("backend.pipeline.scheduler._ENRICHMENT_BACKOFF_SECONDS", 0):
             _enrichment_worker_loop()
 
         assert mock_enrich.call_count == 6
@@ -480,13 +481,13 @@ class TestEnrichmentWorkerLoop:
                 return 5
             if call_count[0] <= 5:
                 raise RuntimeError("transient error again")
-            import scheduler
-            scheduler._enrichment_stop_event.set()
+            import backend.pipeline.scheduler
+            backend.pipeline.scheduler._enrichment_stop_event.set()
             return 0
 
-        with patch("openalex.enrich_new_publications", side_effect=fail_succeed_stop), \
-             patch("scheduler._ENRICHMENT_IDLE_SECONDS", 0), \
-             patch("scheduler._ENRICHMENT_BACKOFF_SECONDS", 0):
+        with patch("backend.enrichment.openalex.enrich_new_publications", side_effect=fail_succeed_stop), \
+             patch("backend.pipeline.scheduler._ENRICHMENT_IDLE_SECONDS", 0), \
+             patch("backend.pipeline.scheduler._ENRICHMENT_BACKOFF_SECONDS", 0):
             _enrichment_worker_loop()
 
 
@@ -494,13 +495,13 @@ class TestStartStopEnrichmentWorker:
     """Tests for starting and stopping the enrichment worker thread."""
 
     def teardown_method(self):
-        import scheduler
-        scheduler._enrichment_thread = None
-        scheduler._enrichment_stop_event.clear()
+        import backend.pipeline.scheduler
+        backend.pipeline.scheduler._enrichment_thread = None
+        backend.pipeline.scheduler._enrichment_stop_event.clear()
 
     def test_start_creates_daemon_thread(self):
         """start_enrichment_worker creates a daemon thread."""
-        with patch("scheduler.threading.Thread") as mock_thread_cls:
+        with patch("backend.pipeline.scheduler.threading.Thread") as mock_thread_cls:
             mock_thread = MagicMock()
             mock_thread_cls.return_value = mock_thread
 
@@ -512,28 +513,28 @@ class TestStartStopEnrichmentWorker:
 
     def test_start_is_idempotent(self):
         """Calling start twice doesn't create a second thread."""
-        import scheduler
-        scheduler._enrichment_thread = MagicMock(is_alive=MagicMock(return_value=True))
-        with patch("scheduler.threading.Thread") as mock_thread_cls:
+        import backend.pipeline.scheduler
+        backend.pipeline.scheduler._enrichment_thread = MagicMock(is_alive=MagicMock(return_value=True))
+        with patch("backend.pipeline.scheduler.threading.Thread") as mock_thread_cls:
             start_enrichment_worker()
             mock_thread_cls.assert_not_called()
 
     def test_stop_sets_event_and_joins(self):
         """stop_enrichment_worker signals the thread and waits for it."""
-        import scheduler
+        import backend.pipeline.scheduler
         mock_thread = MagicMock()
-        scheduler._enrichment_thread = mock_thread
+        backend.pipeline.scheduler._enrichment_thread = mock_thread
 
         stop_enrichment_worker()
 
-        assert scheduler._enrichment_stop_event.is_set()
+        assert backend.pipeline.scheduler._enrichment_stop_event.is_set()
         mock_thread.join.assert_called_once_with(timeout=30)
-        assert scheduler._enrichment_thread is None
+        assert backend.pipeline.scheduler._enrichment_thread is None
 
     def test_stop_when_not_running_is_noop(self):
         """stop_enrichment_worker does nothing if no thread is running."""
-        import scheduler
-        scheduler._enrichment_thread = None
+        import backend.pipeline.scheduler
+        backend.pipeline.scheduler._enrichment_thread = None
         stop_enrichment_worker()  # should not raise
 
 
@@ -541,19 +542,18 @@ class TestSchedulerStartsEnrichmentWorker:
     """Enrichment worker starts/stops with the scheduler when enabled."""
 
     def teardown_method(self):
-        import scheduler
-        scheduler._scheduler = None
-        scheduler._scheduler_lock_conn = None
+        import backend.pipeline.scheduler
+        backend.pipeline.scheduler._scheduler = None
+        backend.pipeline.scheduler._scheduler_lock_conn = None
 
     def test_starts_enrichment_worker_when_enabled(self):
         """start_scheduler starts the enrichment worker if ENRICHMENT_WORKER_ENABLED=true."""
-        import scheduler
-
-        with patch("scheduler.mysql.connector.connect") as mock_connect, \
-             patch("scheduler._cleanup_stale_scrape_logs"), \
-             patch("scheduler.BackgroundScheduler") as mock_bg, \
-             patch("scheduler.start_enrichment_worker") as mock_start_worker, \
-             patch("scheduler.signal.signal"), \
+        import backend.pipeline.scheduler
+        with patch("backend.pipeline.scheduler.mysql.connector.connect") as mock_connect, \
+             patch("backend.pipeline.scheduler._cleanup_stale_scrape_logs"), \
+             patch("backend.pipeline.scheduler.BackgroundScheduler") as mock_bg, \
+             patch("backend.pipeline.scheduler.start_enrichment_worker") as mock_start_worker, \
+             patch("backend.pipeline.scheduler.signal.signal"), \
              patch.object(scheduler, 'ENRICHMENT_WORKER_ENABLED', True), \
              patch.object(scheduler, '_scheduler', None), \
              patch.object(scheduler, '_scheduler_lock_conn', None):
@@ -564,20 +564,19 @@ class TestSchedulerStartsEnrichmentWorker:
             mock_conn.cursor.return_value = mock_cursor
             mock_connect.return_value = mock_conn
 
-            from scheduler import start_scheduler
+            from backend.pipeline.scheduler import start_scheduler
             start_scheduler()
 
             mock_start_worker.assert_called_once()
 
     def test_skips_enrichment_worker_when_disabled(self):
         """start_scheduler does NOT start enrichment worker if ENRICHMENT_WORKER_ENABLED=false."""
-        import scheduler
-
-        with patch("scheduler.mysql.connector.connect") as mock_connect, \
-             patch("scheduler._cleanup_stale_scrape_logs"), \
-             patch("scheduler.BackgroundScheduler") as mock_bg, \
-             patch("scheduler.start_enrichment_worker") as mock_start_worker, \
-             patch("scheduler.signal.signal"), \
+        import backend.pipeline.scheduler
+        with patch("backend.pipeline.scheduler.mysql.connector.connect") as mock_connect, \
+             patch("backend.pipeline.scheduler._cleanup_stale_scrape_logs"), \
+             patch("backend.pipeline.scheduler.BackgroundScheduler") as mock_bg, \
+             patch("backend.pipeline.scheduler.start_enrichment_worker") as mock_start_worker, \
+             patch("backend.pipeline.scheduler.signal.signal"), \
              patch.object(scheduler, 'ENRICHMENT_WORKER_ENABLED', False), \
              patch.object(scheduler, '_scheduler', None), \
              patch.object(scheduler, '_scheduler_lock_conn', None):
@@ -588,20 +587,19 @@ class TestSchedulerStartsEnrichmentWorker:
             mock_conn.cursor.return_value = mock_cursor
             mock_connect.return_value = mock_conn
 
-            from scheduler import start_scheduler
+            from backend.pipeline.scheduler import start_scheduler
             start_scheduler()
 
             mock_start_worker.assert_not_called()
 
     def test_shutdown_stops_enrichment_worker(self):
         """shutdown_scheduler also stops the enrichment worker."""
-        import scheduler
+        import backend.pipeline.scheduler
+        with patch("backend.pipeline.scheduler.stop_enrichment_worker") as mock_stop_worker:
+            backend.pipeline.scheduler._scheduler = MagicMock()
+            backend.pipeline.scheduler._scheduler_lock_conn = MagicMock()
 
-        with patch("scheduler.stop_enrichment_worker") as mock_stop_worker:
-            scheduler._scheduler = MagicMock()
-            scheduler._scheduler_lock_conn = MagicMock()
-
-            from scheduler import shutdown_scheduler
+            from backend.pipeline.scheduler import shutdown_scheduler
             shutdown_scheduler()
 
             mock_stop_worker.assert_called_once()
@@ -612,7 +610,7 @@ class TestSchedulerStartsEnrichmentWorker:
 # ---------------------------------------------------------------------------
 
 def _outcome(status, pubs_count=0):
-    from extraction import ExtractionOutcome
+    from backend.pipeline.extraction import ExtractionOutcome
     return ExtractionOutcome(status, pubs_count=pubs_count)
 
 
@@ -620,10 +618,10 @@ class TestExtractionWorkerLoop:
     """Tests for the continuous extraction background worker."""
 
     def setup_method(self):
-        scheduler._extraction_stop_event.clear()
+        backend.pipeline.scheduler._extraction_stop_event.clear()
 
     def teardown_method(self):
-        scheduler._extraction_stop_event.clear()
+        backend.pipeline.scheduler._extraction_stop_event.clear()
 
     def test_processes_pending_urls(self):
         rows = [_make_url_row(url_id=1), _make_url_row(url_id=2)]
@@ -632,11 +630,11 @@ class TestExtractionWorkerLoop:
         def fake_extract(row, scrape_log_id=None):
             processed.append(row["id"])
             if len(processed) >= 2:
-                scheduler._extraction_stop_event.set()
+                backend.pipeline.scheduler._extraction_stop_event.set()
             return _outcome("extracted", pubs_count=3)
 
-        with patch("scheduler.get_urls_needing_extraction", return_value=rows), \
-             patch("extraction.extract_one_url", side_effect=fake_extract), \
+        with patch("backend.pipeline.scheduler.get_urls_needing_extraction", return_value=rows), \
+             patch("backend.pipeline.extraction.extract_one_url", side_effect=fake_extract), \
              patch.object(scheduler, "_EXTRACTION_DELAY_SECONDS", 0):
             _extraction_worker_loop()
 
@@ -648,20 +646,20 @@ class TestExtractionWorkerLoop:
         def empty_then_stop():
             calls[0] += 1
             if calls[0] >= 2:
-                scheduler._extraction_stop_event.set()
+                backend.pipeline.scheduler._extraction_stop_event.set()
             return []
 
         waits = []
 
         def record_wait(timeout=None):
             waits.append(timeout)
-            return scheduler._extraction_stop_event.is_set()
+            return backend.pipeline.scheduler._extraction_stop_event.is_set()
 
-        with patch("scheduler.get_urls_needing_extraction", side_effect=empty_then_stop), \
-             patch.object(scheduler._extraction_stop_event, "wait", side_effect=record_wait):
+        with patch("backend.pipeline.scheduler.get_urls_needing_extraction", side_effect=empty_then_stop), \
+             patch.object(backend.pipeline.scheduler._extraction_stop_event, "wait", side_effect=record_wait):
             _extraction_worker_loop()
 
-        assert scheduler._EXTRACTION_IDLE_SECONDS in waits
+        assert backend.pipeline.scheduler._EXTRACTION_IDLE_SECONDS in waits
 
     def test_skips_url_after_max_failures(self):
         """A URL that fails 3 times is excluded until restart (poison-pill guard)."""
@@ -676,11 +674,11 @@ class TestExtractionWorkerLoop:
         def get_queue():
             scans[0] += 1
             if scans[0] >= 6:
-                scheduler._extraction_stop_event.set()
+                backend.pipeline.scheduler._extraction_stop_event.set()
             return rows
 
-        with patch("scheduler.get_urls_needing_extraction", side_effect=get_queue), \
-             patch("extraction.extract_one_url", side_effect=failing), \
+        with patch("backend.pipeline.scheduler.get_urls_needing_extraction", side_effect=get_queue), \
+             patch("backend.pipeline.extraction.extract_one_url", side_effect=failing), \
              patch.object(scheduler, "_EXTRACTION_DELAY_SECONDS", 0), \
              patch.object(scheduler, "_EXTRACTION_IDLE_SECONDS", 0), \
              patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 99):
@@ -695,23 +693,23 @@ class TestExtractionWorkerLoop:
         def failing(row, scrape_log_id=None):
             count[0] += 1
             if count[0] >= 4:
-                scheduler._extraction_stop_event.set()
+                backend.pipeline.scheduler._extraction_stop_event.set()
             return _outcome("failed")
 
         waits = []
 
         def record_wait(timeout=None):
             waits.append(timeout)
-            return scheduler._extraction_stop_event.is_set()
+            return backend.pipeline.scheduler._extraction_stop_event.is_set()
 
-        with patch("scheduler.get_urls_needing_extraction", return_value=rows), \
-             patch("extraction.extract_one_url", side_effect=failing), \
+        with patch("backend.pipeline.scheduler.get_urls_needing_extraction", return_value=rows), \
+             patch("backend.pipeline.extraction.extract_one_url", side_effect=failing), \
              patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 3), \
              patch.object(scheduler, "_EXTRACTION_MAX_URL_FAILURES", 99), \
-             patch.object(scheduler._extraction_stop_event, "wait", side_effect=record_wait):
+             patch.object(backend.pipeline.scheduler._extraction_stop_event, "wait", side_effect=record_wait):
             _extraction_worker_loop()
 
-        assert scheduler._EXTRACTION_BACKOFF_SECONDS in waits
+        assert backend.pipeline.scheduler._EXTRACTION_BACKOFF_SECONDS in waits
 
     def test_success_resets_consecutive_failures(self):
         rows = [_make_url_row(url_id=i) for i in range(1, 5)]
@@ -720,7 +718,7 @@ class TestExtractionWorkerLoop:
         def fail_fail_succeed(row, scrape_log_id=None):
             count[0] += 1
             if count[0] >= 4:
-                scheduler._extraction_stop_event.set()
+                backend.pipeline.scheduler._extraction_stop_event.set()
             if count[0] == 3:
                 return _outcome("extracted", pubs_count=1)
             return _outcome("failed")
@@ -729,18 +727,18 @@ class TestExtractionWorkerLoop:
 
         def record_wait(timeout=None):
             waits.append(timeout)
-            return scheduler._extraction_stop_event.is_set()
+            return backend.pipeline.scheduler._extraction_stop_event.is_set()
 
-        with patch("scheduler.get_urls_needing_extraction", return_value=rows), \
-             patch("extraction.extract_one_url", side_effect=fail_fail_succeed), \
+        with patch("backend.pipeline.scheduler.get_urls_needing_extraction", return_value=rows), \
+             patch("backend.pipeline.extraction.extract_one_url", side_effect=fail_fail_succeed), \
              patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 3), \
              patch.object(scheduler, "_EXTRACTION_MAX_URL_FAILURES", 99), \
-             patch.object(scheduler._extraction_stop_event, "wait", side_effect=record_wait):
+             patch.object(backend.pipeline.scheduler._extraction_stop_event, "wait", side_effect=record_wait):
             _extraction_worker_loop()
 
         # Success at call 3 reset the counter, so the threshold (3) was never
         # reached and no backoff wait happened.
-        assert scheduler._EXTRACTION_BACKOFF_SECONDS not in waits
+        assert backend.pipeline.scheduler._EXTRACTION_BACKOFF_SECONDS not in waits
 
     def test_unexpected_exception_counts_as_failure(self):
         rows = [_make_url_row(url_id=1)]
@@ -749,11 +747,11 @@ class TestExtractionWorkerLoop:
         def exploding(row, scrape_log_id=None):
             count[0] += 1
             if count[0] >= 2:
-                scheduler._extraction_stop_event.set()
+                backend.pipeline.scheduler._extraction_stop_event.set()
             raise RuntimeError("DB down")
 
-        with patch("scheduler.get_urls_needing_extraction", return_value=rows), \
-             patch("extraction.extract_one_url", side_effect=exploding), \
+        with patch("backend.pipeline.scheduler.get_urls_needing_extraction", return_value=rows), \
+             patch("backend.pipeline.extraction.extract_one_url", side_effect=exploding), \
              patch.object(scheduler, "_EXTRACTION_DELAY_SECONDS", 0), \
              patch.object(scheduler, "_EXTRACTION_IDLE_SECONDS", 0), \
              patch.object(scheduler, "_EXTRACTION_MAX_URL_FAILURES", 99), \
@@ -765,7 +763,7 @@ class TestExtractionWorkerLoop:
 
 class TestStartStopExtractionWorker:
     def test_start_creates_daemon_thread(self):
-        with patch("scheduler.threading.Thread") as mock_thread_cls:
+        with patch("backend.pipeline.scheduler.threading.Thread") as mock_thread_cls:
             mock_thread = MagicMock()
             mock_thread_cls.return_value = mock_thread
 
@@ -776,32 +774,32 @@ class TestStartStopExtractionWorker:
             assert mock_thread_cls.call_args[1]["name"] == "extraction-worker"
             mock_thread.start.assert_called_once()
 
-            scheduler._extraction_thread = None
-            scheduler._extraction_stop_event.clear()
+            backend.pipeline.scheduler._extraction_thread = None
+            backend.pipeline.scheduler._extraction_stop_event.clear()
 
     def test_start_is_idempotent(self):
-        scheduler._extraction_thread = MagicMock(is_alive=MagicMock(return_value=True))
+        backend.pipeline.scheduler._extraction_thread = MagicMock(is_alive=MagicMock(return_value=True))
         try:
-            with patch("scheduler.threading.Thread") as mock_thread_cls:
+            with patch("backend.pipeline.scheduler.threading.Thread") as mock_thread_cls:
                 start_extraction_worker()
                 mock_thread_cls.assert_not_called()
         finally:
-            scheduler._extraction_thread = None
+            backend.pipeline.scheduler._extraction_thread = None
 
     def test_stop_sets_event_and_joins(self):
         mock_thread = MagicMock()
-        scheduler._extraction_thread = mock_thread
-        scheduler._extraction_stop_event.clear()
+        backend.pipeline.scheduler._extraction_thread = mock_thread
+        backend.pipeline.scheduler._extraction_stop_event.clear()
 
         stop_extraction_worker()
 
-        assert scheduler._extraction_stop_event.is_set()
+        assert backend.pipeline.scheduler._extraction_stop_event.is_set()
         mock_thread.join.assert_called_once_with(timeout=30)
-        assert scheduler._extraction_thread is None
-        scheduler._extraction_stop_event.clear()
+        assert backend.pipeline.scheduler._extraction_thread is None
+        backend.pipeline.scheduler._extraction_stop_event.clear()
 
     def test_stop_when_not_running_is_noop(self):
-        scheduler._extraction_thread = None
+        backend.pipeline.scheduler._extraction_thread = None
         stop_extraction_worker()  # should not raise
 
 
@@ -813,16 +811,16 @@ class TestSchedulerStartsExtractionWorker:
     """Extraction worker starts/stops with the scheduler when enabled."""
 
     def teardown_method(self):
-        import scheduler
-        scheduler._scheduler = None
-        scheduler._scheduler_lock_conn = None
+        import backend.pipeline.scheduler
+        backend.pipeline.scheduler._scheduler = None
+        backend.pipeline.scheduler._scheduler_lock_conn = None
 
     def test_starts_extraction_worker_when_enabled(self):
-        with patch("scheduler.mysql.connector.connect") as mock_connect, \
-             patch("scheduler._cleanup_stale_scrape_logs"), \
-             patch("scheduler.BackgroundScheduler"), \
-             patch("scheduler.start_extraction_worker") as mock_start_worker, \
-             patch("scheduler.signal.signal"), \
+        with patch("backend.pipeline.scheduler.mysql.connector.connect") as mock_connect, \
+             patch("backend.pipeline.scheduler._cleanup_stale_scrape_logs"), \
+             patch("backend.pipeline.scheduler.BackgroundScheduler"), \
+             patch("backend.pipeline.scheduler.start_extraction_worker") as mock_start_worker, \
+             patch("backend.pipeline.scheduler.signal.signal"), \
              patch.object(scheduler, 'EXTRACTION_WORKER_ENABLED', True), \
              patch.object(scheduler, 'ENRICHMENT_WORKER_ENABLED', False), \
              patch.object(scheduler, '_scheduler', None), \
@@ -834,20 +832,20 @@ class TestSchedulerStartsExtractionWorker:
             mock_conn.cursor.return_value = mock_cursor
             mock_connect.return_value = mock_conn
 
-            from scheduler import start_scheduler
+            from backend.pipeline.scheduler import start_scheduler
             start_scheduler()
 
             mock_start_worker.assert_called_once()
 
-            scheduler._scheduler = None
-            scheduler._scheduler_lock_conn = None
+            backend.pipeline.scheduler._scheduler = None
+            backend.pipeline.scheduler._scheduler_lock_conn = None
 
     def test_skips_extraction_worker_when_disabled(self):
-        with patch("scheduler.mysql.connector.connect") as mock_connect, \
-             patch("scheduler._cleanup_stale_scrape_logs"), \
-             patch("scheduler.BackgroundScheduler"), \
-             patch("scheduler.start_extraction_worker") as mock_start_worker, \
-             patch("scheduler.signal.signal"), \
+        with patch("backend.pipeline.scheduler.mysql.connector.connect") as mock_connect, \
+             patch("backend.pipeline.scheduler._cleanup_stale_scrape_logs"), \
+             patch("backend.pipeline.scheduler.BackgroundScheduler"), \
+             patch("backend.pipeline.scheduler.start_extraction_worker") as mock_start_worker, \
+             patch("backend.pipeline.scheduler.signal.signal"), \
              patch.object(scheduler, 'EXTRACTION_WORKER_ENABLED', False), \
              patch.object(scheduler, 'ENRICHMENT_WORKER_ENABLED', False), \
              patch.object(scheduler, '_scheduler', None), \
@@ -859,21 +857,21 @@ class TestSchedulerStartsExtractionWorker:
             mock_conn.cursor.return_value = mock_cursor
             mock_connect.return_value = mock_conn
 
-            from scheduler import start_scheduler
+            from backend.pipeline.scheduler import start_scheduler
             start_scheduler()
 
             mock_start_worker.assert_not_called()
 
-            scheduler._scheduler = None
-            scheduler._scheduler_lock_conn = None
+            backend.pipeline.scheduler._scheduler = None
+            backend.pipeline.scheduler._scheduler_lock_conn = None
 
     def test_shutdown_stops_extraction_worker(self):
-        with patch("scheduler.stop_extraction_worker") as mock_stop_worker, \
-             patch("scheduler.stop_enrichment_worker"):
-            scheduler._scheduler = MagicMock()
-            scheduler._scheduler_lock_conn = MagicMock()
+        with patch("backend.pipeline.scheduler.stop_extraction_worker") as mock_stop_worker, \
+             patch("backend.pipeline.scheduler.stop_enrichment_worker"):
+            backend.pipeline.scheduler._scheduler = MagicMock()
+            backend.pipeline.scheduler._scheduler_lock_conn = MagicMock()
 
-            from scheduler import shutdown_scheduler
+            from backend.pipeline.scheduler import shutdown_scheduler
             shutdown_scheduler()
 
             mock_stop_worker.assert_called_once()

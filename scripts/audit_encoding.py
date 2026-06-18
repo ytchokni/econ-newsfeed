@@ -14,7 +14,7 @@ import sys
 # Ensure project root is on the path (script lives in scripts/)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from encoding_guard import fix_encoding
+from backend.config import fix_encoding
 
 logging.basicConfig(level=logging.WARNING, format="%(levelname)s %(name)s: %(message)s")
 logger = logging.getLogger(__name__)

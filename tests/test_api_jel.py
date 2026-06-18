@@ -8,11 +8,11 @@ from fastapi.testclient import TestClient
 @pytest.fixture
 def client():
     with (
-        patch("api.create_tables"),
-        patch("api.start_scheduler"),
-        patch("api.shutdown_scheduler"),
+        patch("backend.api.create_tables"),
+        patch("backend.api.start_scheduler"),
+        patch("backend.api.shutdown_scheduler"),
     ):
-        from api import app
+        from backend.api import app
         with TestClient(app) as c:
             yield c
 
@@ -24,7 +24,7 @@ SAMPLE_JEL_CODES = [
 
 
 class TestGetJelCodes:
-    @patch("api.get_all_jel_codes", return_value=SAMPLE_JEL_CODES)
+    @patch("backend.api.get_all_jel_codes", return_value=SAMPLE_JEL_CODES)
     def test_returns_jel_codes(self, mock_db, client):
         resp = client.get("/api/jel-codes")
         assert resp.status_code == 200
@@ -33,7 +33,7 @@ class TestGetJelCodes:
         assert len(data["items"]) == 2
         assert data["items"][0]["code"] == "J"
 
-    @patch("api.get_all_jel_codes", return_value=[])
+    @patch("backend.api.get_all_jel_codes", return_value=[])
     def test_empty_list(self, mock_db, client):
         resp = client.get("/api/jel-codes")
         assert resp.status_code == 200
@@ -56,16 +56,16 @@ class TestResearcherDetailIncludesJel:
     def test_researcher_detail_has_jel_codes(self, client):
         """Researcher detail endpoint should include a jel_codes array."""
         with (
-            patch("api.connection_scope"),
-            patch("api.get_researcher_detail", return_value=SAMPLE_RESEARCHER),
-            patch("api.get_urls_for_researchers", return_value={1: []}),
-            patch("api.get_pub_counts_for_researchers", return_value={1: 0}),
-            patch("api.get_fields_for_researchers", return_value={1: []}),
-            patch("api.get_jel_codes_for_researcher", return_value=SAMPLE_JEL_FOR_R1),
-            patch("api.get_researcher_papers", return_value=[]),
-            patch("api.get_authors_for_papers", return_value={}),
-            patch("api.get_coauthors_for_papers", return_value={}),
-            patch("api.get_links_for_papers", return_value={}),
+            patch("backend.api.connection_scope"),
+            patch("backend.api.get_researcher_detail", return_value=SAMPLE_RESEARCHER),
+            patch("backend.api.get_urls_for_researchers", return_value={1: []}),
+            patch("backend.api.get_pub_counts_for_researchers", return_value={1: 0}),
+            patch("backend.api.get_fields_for_researchers", return_value={1: []}),
+            patch("backend.api.get_jel_codes_for_researcher", return_value=SAMPLE_JEL_FOR_R1),
+            patch("backend.api.get_researcher_papers", return_value=[]),
+            patch("backend.api.get_authors_for_papers", return_value={}),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             resp = client.get("/api/researchers/1")
 

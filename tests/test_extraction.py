@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 import pytest
 
-from publication import ExtractionLLMResult
+from backend.pipeline.publication import ExtractionLLMResult
 
 
 def _row(url_id=1, researcher_id=10, url="https://example.com/pubs", page_type="PUBLICATIONS"):
@@ -28,23 +28,23 @@ def _patches(payload=None, pubs=None, is_seed=False):
             "timestamp": None, "extracted_at": None if is_seed else "2026-01-01",
         }
     return {
-        "payload": patch("extraction.HTMLFetcher.get_extraction_payload", return_value=payload),
-        "get_raw_html": patch("extraction.HTMLFetcher.get_raw_html", return_value=None),
-        "prev_text": patch("extraction.HTMLFetcher.get_previous_text", return_value=None),
-        "mark": patch("extraction.HTMLFetcher.mark_extracted"),
-        "extract_text": patch("extraction.HTMLFetcher.extract_text_content", return_value="from raw html"),
-        "extract_desc": patch("extraction.HTMLFetcher.extract_description", return_value=None),
-        "try_extract": patch("extraction.Publication.try_extract_publications",
+        "payload": patch("backend.pipeline.extraction.HTMLFetcher.get_extraction_payload", return_value=payload),
+        "get_raw_html": patch("backend.pipeline.extraction.HTMLFetcher.get_raw_html", return_value=None),
+        "prev_text": patch("backend.pipeline.extraction.HTMLFetcher.get_previous_text", return_value=None),
+        "mark": patch("backend.pipeline.extraction.HTMLFetcher.mark_extracted"),
+        "extract_text": patch("backend.pipeline.extraction.HTMLFetcher.extract_text_content", return_value="from raw html"),
+        "extract_desc": patch("backend.pipeline.extraction.HTMLFetcher.extract_description", return_value=None),
+        "try_extract": patch("backend.pipeline.extraction.Publication.try_extract_publications",
                              return_value=ExtractionLLMResult(pubs=pubs)),
-        "persist": patch("extraction.persist_extraction"),
-        "fetch_one": patch("extraction.fetch_one", return_value=None),
-        "researcher_snap": patch("extraction.append_researcher_snapshot"),
+        "persist": patch("backend.pipeline.extraction.persist_extraction"),
+        "fetch_one": patch("backend.pipeline.extraction.fetch_one", return_value=None),
+        "researcher_snap": patch("backend.pipeline.extraction.append_researcher_snapshot"),
     }
 
 
 class TestExtractOneUrl:
     def test_happy_path_saves_and_marks_with_start_hash(self):
-        from extraction import extract_one_url
+        from backend.pipeline.extraction import extract_one_url
         pubs = [{"title": "Paper A"}, {"title": "Paper B"}]
         patches = _patches(pubs=pubs)
         mocks = {k: p.start() for k, p in patches.items()}
@@ -62,7 +62,7 @@ class TestExtractOneUrl:
         mocks["mark"].assert_called_once_with(1, "h1")
 
     def test_llm_failure_returns_failed_and_does_not_mark(self):
-        from extraction import extract_one_url
+        from backend.pipeline.extraction import extract_one_url
         patches = _patches(pubs=None)  # try_extract returns None = LLM failure
         mocks = {k: p.start() for k, p in patches.items()}
         try:
@@ -76,7 +76,7 @@ class TestExtractOneUrl:
         mocks["persist"].assert_not_called()
 
     def test_genuinely_empty_page_marks_extracted(self):
-        from extraction import extract_one_url
+        from backend.pipeline.extraction import extract_one_url
         patches = _patches(pubs=[])
         mocks = {k: p.start() for k, p in patches.items()}
         try:
@@ -90,9 +90,9 @@ class TestExtractOneUrl:
         mocks["persist"].assert_not_called()
 
     def test_no_stored_html_returns_no_content(self):
-        from extraction import extract_one_url
+        from backend.pipeline.extraction import extract_one_url
         patches = _patches(pubs=[])
-        patches["payload"] = patch("extraction.HTMLFetcher.get_extraction_payload", return_value=None)
+        patches["payload"] = patch("backend.pipeline.extraction.HTMLFetcher.get_extraction_payload", return_value=None)
         mocks = {k: p.start() for k, p in patches.items()}
         try:
             outcome = extract_one_url(_row())
@@ -104,12 +104,12 @@ class TestExtractOneUrl:
         mocks["mark"].assert_not_called()
 
     def test_null_content_falls_back_to_raw_html(self):
-        from extraction import extract_one_url
+        from backend.pipeline.extraction import extract_one_url
         payload = {"content": None, "content_hash": "h2",
                    "timestamp": None, "extracted_at": "2026-01-01"}
         patches = _patches(payload=payload, pubs=[])
         patches["get_raw_html"] = patch(
-            "extraction.HTMLFetcher.get_raw_html", return_value="<html>x</html>")
+            "backend.pipeline.extraction.HTMLFetcher.get_raw_html", return_value="<html>x</html>")
         mocks = {k: p.start() for k, p in patches.items()}
         try:
             outcome = extract_one_url(_row())
@@ -122,7 +122,7 @@ class TestExtractOneUrl:
         assert mocks["try_extract"].call_args[0][0] == "from raw html"
 
     def test_seed_flag_passed_through(self):
-        from extraction import extract_one_url
+        from backend.pipeline.extraction import extract_one_url
         payload = {
             "content": "text", "content_hash": "h1",
             "timestamp": None, "extracted_at": None,
@@ -138,12 +138,12 @@ class TestExtractOneUrl:
         assert mocks["persist"].call_args[1]["event_date"] is None
 
     def test_home_page_updates_description(self):
-        from extraction import extract_one_url
+        from backend.pipeline.extraction import extract_one_url
         patches = _patches(pubs=[])
         patches["extract_desc"] = patch(
-            "extraction.HTMLFetcher.extract_description", return_value="An economist.")
+            "backend.pipeline.extraction.HTMLFetcher.extract_description", return_value="An economist.")
         patches["fetch_one"] = patch(
-            "extraction.fetch_one",
+            "backend.pipeline.extraction.fetch_one",
             return_value={"position": "Prof", "affiliation": "MIT"})
         mocks = {k: p.start() for k, p in patches.items()}
         try:
@@ -156,10 +156,10 @@ class TestExtractOneUrl:
             10, "Prof", "MIT", "An economist.", source_url="https://example.com/pubs")
 
     def test_description_failure_does_not_fail_extraction(self):
-        from extraction import extract_one_url
+        from backend.pipeline.extraction import extract_one_url
         patches = _patches(pubs=[])
         patches["extract_desc"] = patch(
-            "extraction.HTMLFetcher.extract_description", side_effect=RuntimeError("boom"))
+            "backend.pipeline.extraction.HTMLFetcher.extract_description", side_effect=RuntimeError("boom"))
         mocks = {k: p.start() for k, p in patches.items()}
         try:
             outcome = extract_one_url(_row(page_type="HOME"))
@@ -170,7 +170,7 @@ class TestExtractOneUrl:
         mocks["mark"].assert_called_once()
 
     def test_non_home_page_skips_description(self):
-        from extraction import extract_one_url
+        from backend.pipeline.extraction import extract_one_url
         patches = _patches(pubs=[])
         mocks = {k: p.start() for k, p in patches.items()}
         try:
@@ -184,10 +184,10 @@ class TestExtractOneUrl:
         """Mid-sequence persistence errors propagate (caller counts a failure);
         the URL stays unmarked so it is retried. Retry is safe: saves dedup
         via INSERT IGNORE + title_hash."""
-        from extraction import extract_one_url
+        from backend.pipeline.extraction import extract_one_url
         patches = _patches(pubs=[{"title": "P"}])
         patches["persist"] = patch(
-            "extraction.persist_extraction", side_effect=RuntimeError("db down"))
+            "backend.pipeline.extraction.persist_extraction", side_effect=RuntimeError("db down"))
         mocks = {k: p.start() for k, p in patches.items()}
         try:
             with pytest.raises(RuntimeError):

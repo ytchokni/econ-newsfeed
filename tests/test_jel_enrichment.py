@@ -42,8 +42,8 @@ class TestSavePaperTopics:
             },
         ]
 
-        with patch("database.jel.get_connection", return_value=mock_conn):
-            from database.jel import save_paper_topics
+        with patch("backend.database.jel.get_connection", return_value=mock_conn):
+            from backend.database.jel import save_paper_topics
             save_paper_topics(paper_id=42, topics=topics)
 
         # Should delete existing + insert each topic
@@ -61,8 +61,8 @@ class TestGetPaperTopicsForResearcher:
             {"topic_name": "Labor market dynamics", "score": 0.99},
             {"topic_name": "Migration and policy", "score": 0.85},
         ]
-        with patch("database.jel.fetch_all", return_value=mock_rows) as mock_fetch:
-            from database.jel import get_paper_topics_for_researcher
+        with patch("backend.database.jel.fetch_all", return_value=mock_rows) as mock_fetch:
+            from backend.database.jel import get_paper_topics_for_researcher
             result = get_paper_topics_for_researcher(researcher_id=1)
 
         assert len(result) == 2
@@ -79,8 +79,8 @@ class TestGetPapersNeedingTopics:
             {"id": 1, "openalex_id": "W123"},
             {"id": 2, "openalex_id": "W456"},
         ]
-        with patch("database.jel.fetch_all", return_value=mock_rows) as mock_fetch:
-            from database.jel import get_papers_needing_topics
+        with patch("backend.database.jel.fetch_all", return_value=mock_rows) as mock_fetch:
+            from backend.database.jel import get_papers_needing_topics
             result = get_papers_needing_topics()
 
         assert len(result) == 2
@@ -101,11 +101,11 @@ class TestAddResearcherJelCodes:
         mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
         with (
-            patch("database.jel.get_connection", return_value=mock_conn),
-            patch("database.jel._get_all_jel_codes_for_researcher", return_value=["J", "F"]),
-            patch("database.jel.sync_researcher_fields_from_jel"),
+            patch("backend.database.jel.get_connection", return_value=mock_conn),
+            patch("backend.database.jel._get_all_jel_codes_for_researcher", return_value=["J", "F"]),
+            patch("backend.database.jel.sync_researcher_fields_from_jel"),
         ):
-            from database.jel import add_researcher_jel_codes
+            from backend.database.jel import add_researcher_jel_codes
             add_researcher_jel_codes(researcher_id=1, jel_codes=["J", "F"])
 
         # Should NOT contain DELETE — non-destructive
@@ -121,7 +121,7 @@ class TestAggregateJelFromTopics:
     """Tests for jel_enrichment.aggregate_jel_from_topics."""
 
     def test_aggregates_jel_from_paper_topics(self):
-        from jel_enrichment import aggregate_jel_from_topics
+        from backend.enrichment.jel_enrichment import aggregate_jel_from_topics
         topics = [
             {"topic_name": "Labor market dynamics", "score": 0.99},
             {"topic_name": "Labor market dynamics", "score": 0.95},
@@ -134,11 +134,11 @@ class TestAggregateJelFromTopics:
         assert len(codes) <= 5
 
     def test_returns_empty_for_no_topics(self):
-        from jel_enrichment import aggregate_jel_from_topics
+        from backend.enrichment.jel_enrichment import aggregate_jel_from_topics
         assert aggregate_jel_from_topics([]) == []
 
     def test_limits_to_top_5(self):
-        from jel_enrichment import aggregate_jel_from_topics
+        from backend.enrichment.jel_enrichment import aggregate_jel_from_topics
         topics = [
             {"topic_name": "Labor market dynamics", "score": 0.99},
             {"topic_name": "International trade flows", "score": 0.95},
@@ -178,13 +178,13 @@ class TestEnrichJelFromPapers:
         }
 
         with (
-            patch("jel_enrichment.get_papers_needing_topics", return_value=papers_needing),
-            patch("jel_enrichment.fetch_topics_batch", return_value=topics_by_id),
-            patch("jel_enrichment.save_paper_topics") as mock_save_topics,
-            patch("jel_enrichment.get_all_researcher_topics", return_value=all_researcher_topics),
-            patch("jel_enrichment.add_researcher_jel_codes") as mock_add_jel,
+            patch("backend.enrichment.jel_enrichment.get_papers_needing_topics", return_value=papers_needing),
+            patch("backend.enrichment.jel_enrichment.fetch_topics_batch", return_value=topics_by_id),
+            patch("backend.enrichment.jel_enrichment.save_paper_topics") as mock_save_topics,
+            patch("backend.enrichment.jel_enrichment.get_all_researcher_topics", return_value=all_researcher_topics),
+            patch("backend.enrichment.jel_enrichment.add_researcher_jel_codes") as mock_add_jel,
         ):
-            from jel_enrichment import enrich_jel_from_papers
+            from backend.enrichment.jel_enrichment import enrich_jel_from_papers
             count = enrich_jel_from_papers()
 
         assert count == 1
@@ -196,10 +196,10 @@ class TestEnrichJelFromPapers:
 
     def test_returns_zero_when_no_papers(self):
         with (
-            patch("jel_enrichment.get_papers_needing_topics", return_value=[]),
-            patch("jel_enrichment.get_all_researcher_topics", return_value={}),
+            patch("backend.enrichment.jel_enrichment.get_papers_needing_topics", return_value=[]),
+            patch("backend.enrichment.jel_enrichment.get_all_researcher_topics", return_value={}),
         ):
-            from jel_enrichment import enrich_jel_from_papers
+            from backend.enrichment.jel_enrichment import enrich_jel_from_papers
             count = enrich_jel_from_papers()
 
         assert count == 0
@@ -211,6 +211,6 @@ class TestCliIntegration:
     def test_enrich_jel_command_registered(self):
         """The 'enrich-jel' subcommand should be in main.py source."""
         import inspect
-        import main as main_mod
+        import backend.main as main_mod
         source = inspect.getsource(main_mod)
         assert "enrich-jel" in source

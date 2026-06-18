@@ -22,7 +22,7 @@ import pytest
 
 class TestGetAuthorsForPapers:
     def test_empty_input_returns_empty_dict(self):
-        from database.papers import get_authors_for_papers
+        from backend.database.papers import get_authors_for_papers
         result = get_authors_for_papers([])
         assert result == {}
 
@@ -32,8 +32,8 @@ class TestGetAuthorsForPapers:
             {"publication_id": 1, "researcher_id": 11, "first_name": "Bob", "last_name": "Jones"},
             {"publication_id": 2, "researcher_id": 12, "first_name": "Carol", "last_name": "Lee"},
         ]
-        with patch("database.papers.fetch_all", return_value=rows) as mock_fetch:
-            from database.papers import get_authors_for_papers
+        with patch("backend.database.papers.fetch_all", return_value=rows) as mock_fetch:
+            from backend.database.papers import get_authors_for_papers
             result = get_authors_for_papers([1, 2])
 
         assert len(result[1]) == 2
@@ -43,8 +43,8 @@ class TestGetAuthorsForPapers:
         assert result[2][0] == {"id": 12, "first_name": "Carol", "last_name": "Lee"}
 
     def test_sql_uses_parameterized_in_clause(self):
-        with patch("database.papers.fetch_all", return_value=[]) as mock_fetch:
-            from database.papers import get_authors_for_papers
+        with patch("backend.database.papers.fetch_all", return_value=[]) as mock_fetch:
+            from backend.database.papers import get_authors_for_papers
             get_authors_for_papers([3, 7, 9])
 
         sql, params = mock_fetch.call_args[0]
@@ -52,8 +52,8 @@ class TestGetAuthorsForPapers:
         assert params == (3, 7, 9)
 
     def test_paper_with_no_authors_returns_empty_list(self):
-        with patch("database.papers.fetch_all", return_value=[]):
-            from database.papers import get_authors_for_papers
+        with patch("backend.database.papers.fetch_all", return_value=[]):
+            from backend.database.papers import get_authors_for_papers
             result = get_authors_for_papers([42])
         assert result == {42: []}
 
@@ -61,8 +61,8 @@ class TestGetAuthorsForPapers:
         rows = [
             {"publication_id": 5, "researcher_id": 99, "first_name": "Dan", "last_name": "Brown"},
         ]
-        with patch("database.papers.fetch_all", return_value=rows):
-            from database.papers import get_authors_for_papers
+        with patch("backend.database.papers.fetch_all", return_value=rows):
+            from backend.database.papers import get_authors_for_papers
             result = get_authors_for_papers([5])
         assert result[5][0]["id"] == 99
 
@@ -73,7 +73,7 @@ class TestGetAuthorsForPapers:
 
 class TestGetCoauthorsForPapers:
     def test_empty_input_returns_empty_dict(self):
-        from database.papers import get_coauthors_for_papers
+        from backend.database.papers import get_coauthors_for_papers
         result = get_coauthors_for_papers([])
         assert result == {}
 
@@ -82,16 +82,16 @@ class TestGetCoauthorsForPapers:
             {"paper_id": 1, "display_name": "Eve White", "openalex_author_id": "A123"},
             {"paper_id": 2, "display_name": "Frank Black", "openalex_author_id": None},
         ]
-        with patch("database.papers.fetch_all", return_value=rows):
-            from database.papers import get_coauthors_for_papers
+        with patch("backend.database.papers.fetch_all", return_value=rows):
+            from backend.database.papers import get_coauthors_for_papers
             result = get_coauthors_for_papers([1, 2])
 
         assert result[1] == [{"display_name": "Eve White", "openalex_author_id": "A123"}]
         assert result[2] == [{"display_name": "Frank Black", "openalex_author_id": None}]
 
     def test_sql_uses_parameterized_in_clause(self):
-        with patch("database.papers.fetch_all", return_value=[]) as mock_fetch:
-            from database.papers import get_coauthors_for_papers
+        with patch("backend.database.papers.fetch_all", return_value=[]) as mock_fetch:
+            from backend.database.papers import get_coauthors_for_papers
             get_coauthors_for_papers([1, 2])
 
         sql, params = mock_fetch.call_args[0]
@@ -99,8 +99,8 @@ class TestGetCoauthorsForPapers:
         assert params == (1, 2)
 
     def test_paper_with_no_coauthors_returns_empty_list(self):
-        with patch("database.papers.fetch_all", return_value=[]):
-            from database.papers import get_coauthors_for_papers
+        with patch("backend.database.papers.fetch_all", return_value=[]):
+            from backend.database.papers import get_coauthors_for_papers
             result = get_coauthors_for_papers([99])
         assert result == {99: []}
 
@@ -111,7 +111,7 @@ class TestGetCoauthorsForPapers:
 
 class TestGetLinksForPapers:
     def test_empty_input_returns_empty_dict(self):
-        from database.papers import get_links_for_papers
+        from backend.database.papers import get_links_for_papers
         result = get_links_for_papers([])
         assert result == {}
 
@@ -121,8 +121,8 @@ class TestGetLinksForPapers:
             {"paper_id": 1, "url": "https://doi.org/10.1/2", "link_type": "doi"},
             {"paper_id": 3, "url": "https://nber.org/3", "link_type": "nber"},
         ]
-        with patch("database.papers.fetch_all", return_value=rows):
-            from database.papers import get_links_for_papers
+        with patch("backend.database.papers.fetch_all", return_value=rows):
+            from backend.database.papers import get_links_for_papers
             result = get_links_for_papers([1, 3])
 
         assert len(result[1]) == 2
@@ -130,8 +130,8 @@ class TestGetLinksForPapers:
         assert result[3][0] == {"url": "https://nber.org/3", "link_type": "nber"}
 
     def test_sql_uses_parameterized_in_clause(self):
-        with patch("database.papers.fetch_all", return_value=[]) as mock_fetch:
-            from database.papers import get_links_for_papers
+        with patch("backend.database.papers.fetch_all", return_value=[]) as mock_fetch:
+            from backend.database.papers import get_links_for_papers
             get_links_for_papers([5, 6, 7])
 
         sql, params = mock_fetch.call_args[0]
@@ -139,8 +139,8 @@ class TestGetLinksForPapers:
         assert params == (5, 6, 7)
 
     def test_paper_with_no_links_returns_empty_list(self):
-        with patch("database.papers.fetch_all", return_value=[]):
-            from database.papers import get_links_for_papers
+        with patch("backend.database.papers.fetch_all", return_value=[]):
+            from backend.database.papers import get_links_for_papers
             result = get_links_for_papers([11])
         assert result == {11: []}
 
@@ -158,20 +158,20 @@ class TestGetPaperDetail:
             "draft_url_status": None, "doi": None, "is_seed": 0,
             "title_hash": "abc123", "openalex_id": None,
         }
-        with patch("database.papers.fetch_one", return_value=expected):
-            from database.papers import get_paper_detail
+        with patch("backend.database.papers.fetch_one", return_value=expected):
+            from backend.database.papers import get_paper_detail
             result = get_paper_detail(1)
         assert result == expected
 
     def test_returns_none_when_not_found(self):
-        with patch("database.papers.fetch_one", return_value=None):
-            from database.papers import get_paper_detail
+        with patch("backend.database.papers.fetch_one", return_value=None):
+            from backend.database.papers import get_paper_detail
             result = get_paper_detail(999)
         assert result is None
 
     def test_sql_selects_all_expected_columns(self):
-        with patch("database.papers.fetch_one", return_value=None) as mock_fetch:
-            from database.papers import get_paper_detail
+        with patch("backend.database.papers.fetch_one", return_value=None) as mock_fetch:
+            from backend.database.papers import get_paper_detail
             get_paper_detail(42)
 
         sql, params = mock_fetch.call_args[0]
@@ -194,20 +194,20 @@ class TestGetPaperHistory:
             {"id": 3, "event_type": "new_paper", "old_status": None,
              "new_status": "working_paper", "created_at": "2026-01-01"},
         ]
-        with patch("database.papers.fetch_all", return_value=rows):
-            from database.papers import get_paper_history
+        with patch("backend.database.papers.fetch_all", return_value=rows):
+            from backend.database.papers import get_paper_history
             result = get_paper_history(1)
         assert result == rows
 
     def test_returns_empty_list_when_no_events(self):
-        with patch("database.papers.fetch_all", return_value=[]):
-            from database.papers import get_paper_history
+        with patch("backend.database.papers.fetch_all", return_value=[]):
+            from backend.database.papers import get_paper_history
             result = get_paper_history(1)
         assert result == []
 
     def test_sql_filters_by_paper_id_and_orders_desc(self):
-        with patch("database.papers.fetch_all", return_value=[]) as mock_fetch:
-            from database.papers import get_paper_history
+        with patch("backend.database.papers.fetch_all", return_value=[]) as mock_fetch:
+            from backend.database.papers import get_paper_history
             get_paper_history(7)
 
         sql, params = mock_fetch.call_args[0]
@@ -216,8 +216,8 @@ class TestGetPaperHistory:
         assert params == (7,)
 
     def test_sql_selects_expected_columns(self):
-        with patch("database.papers.fetch_all", return_value=[]) as mock_fetch:
-            from database.papers import get_paper_history
+        with patch("backend.database.papers.fetch_all", return_value=[]) as mock_fetch:
+            from backend.database.papers import get_paper_history
             get_paper_history(1)
 
         sql, _ = mock_fetch.call_args[0]
@@ -239,10 +239,10 @@ class TestSearchFeedEvents:
         if mock_count is None:
             mock_count = {"cnt": len(mock_rows)}
         with (
-            patch("database.papers.fetch_one", return_value=mock_count) as mock_count_fetch,
-            patch("database.papers.fetch_all", return_value=mock_rows) as mock_fetch,
+            patch("backend.database.papers.fetch_one", return_value=mock_count) as mock_count_fetch,
+            patch("backend.database.papers.fetch_all", return_value=mock_rows) as mock_fetch,
         ):
-            from database.papers import search_feed_events
+            from backend.database.papers import search_feed_events
             result = search_feed_events(**kwargs)
         return result, mock_fetch, mock_count_fetch
 
@@ -381,12 +381,12 @@ class TestSearchFeedEvents:
         assert "ORDER BY fe.created_at DESC" in sql
 
     def test_escape_like_helper(self):
-        from database.papers import _escape_like
+        from backend.database.papers import _escape_like
         assert _escape_like("50% off") == "50\\% off"
         assert _escape_like("a_b") == "a\\_b"
         assert _escape_like("a\\b") == "a\\\\b"
 
     def test_escape_fulltext_helper(self):
-        from database.papers import _escape_fulltext
+        from backend.database.papers import _escape_fulltext
         assert _escape_fulltext("+inflation -recession") == "inflation recession"
         assert _escape_fulltext('"monetary policy"') == "monetary policy"

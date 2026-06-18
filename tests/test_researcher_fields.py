@@ -25,24 +25,24 @@ class TestJelToFieldMapping:
     """Tests for _JEL_TO_FIELD_SLUGS mapping."""
 
     def test_macro_maps_to_macroeconomics(self):
-        from database.jel import _JEL_TO_FIELD_SLUGS
+        from backend.database.jel import _JEL_TO_FIELD_SLUGS
         assert _JEL_TO_FIELD_SLUGS["E"] == "macroeconomics"
 
     def test_labour_maps_to_labour_economics(self):
-        from database.jel import _JEL_TO_FIELD_SLUGS
+        from backend.database.jel import _JEL_TO_FIELD_SLUGS
         assert _JEL_TO_FIELD_SLUGS["J"] == "labour-economics"
 
     def test_finance_maps_to_finance(self):
-        from database.jel import _JEL_TO_FIELD_SLUGS
+        from backend.database.jel import _JEL_TO_FIELD_SLUGS
         assert _JEL_TO_FIELD_SLUGS["G"] == "finance"
 
     def test_all_11_mapped_codes_present(self):
-        from database.jel import _JEL_TO_FIELD_SLUGS
+        from backend.database.jel import _JEL_TO_FIELD_SLUGS
         expected_codes = {"C", "E", "F", "G", "H", "I", "J", "L", "O", "P", "Z"}
         assert set(_JEL_TO_FIELD_SLUGS.keys()) == expected_codes
 
     def test_unmapped_codes_not_present(self):
-        from database.jel import _JEL_TO_FIELD_SLUGS
+        from backend.database.jel import _JEL_TO_FIELD_SLUGS
         for code in ["A", "B", "D", "K", "M", "N", "Q", "R", "Y"]:
             assert code not in _JEL_TO_FIELD_SLUGS
 
@@ -56,8 +56,8 @@ class TestSyncResearcherFieldsFromJel:
         mock_cursor.fetchone.return_value = ("studies labour markets",)
         mock_cursor.fetchall.return_value = [(1,), (2,)]
 
-        with patch("database.jel.get_connection", return_value=mock_conn):
-            from database.jel import sync_researcher_fields_from_jel
+        with patch("backend.database.jel.get_connection", return_value=mock_conn):
+            from backend.database.jel import sync_researcher_fields_from_jel
             sync_researcher_fields_from_jel(researcher_id=1, jel_codes=["J", "E"])
 
         all_sql = [c[0][0] for c in mock_cursor.execute.call_args_list]
@@ -71,8 +71,8 @@ class TestSyncResearcherFieldsFromJel:
         mock_conn, mock_cursor = _make_mock_conn()
         mock_cursor.fetchone.return_value = (None,)
 
-        with patch("database.jel.get_connection", return_value=mock_conn):
-            from database.jel import sync_researcher_fields_from_jel
+        with patch("backend.database.jel.get_connection", return_value=mock_conn):
+            from backend.database.jel import sync_researcher_fields_from_jel
             sync_researcher_fields_from_jel(researcher_id=1, jel_codes=[])
 
         all_sql = [c[0][0] for c in mock_cursor.execute.call_args_list]
@@ -84,8 +84,8 @@ class TestSyncResearcherFieldsFromJel:
         mock_cursor.fetchone.return_value = ("studies international migration patterns",)
         mock_cursor.fetchall.return_value = [(1,), (2,)]
 
-        with patch("database.jel.get_connection", return_value=mock_conn):
-            from database.jel import sync_researcher_fields_from_jel
+        with patch("backend.database.jel.get_connection", return_value=mock_conn):
+            from backend.database.jel import sync_researcher_fields_from_jel
             sync_researcher_fields_from_jel(researcher_id=1, jel_codes=["J"])
 
         select_call = [c for c in mock_cursor.execute.call_args_list if "SELECT id FROM research_fields" in c[0][0]]
@@ -99,8 +99,8 @@ class TestSyncResearcherFieldsFromJel:
         mock_cursor.fetchone.return_value = None
         mock_cursor.fetchall.return_value = [(1,)]
 
-        with patch("database.jel.get_connection", return_value=mock_conn):
-            from database.jel import sync_researcher_fields_from_jel
+        with patch("backend.database.jel.get_connection", return_value=mock_conn):
+            from backend.database.jel import sync_researcher_fields_from_jel
             sync_researcher_fields_from_jel(researcher_id=1, jel_codes=["E"])
 
         select_call = [c for c in mock_cursor.execute.call_args_list if "SELECT id FROM research_fields" in c[0][0]]
@@ -116,10 +116,10 @@ class TestSaveResearcherJelCodesCallsSync:
         mock_conn, mock_cursor = _make_mock_conn()
 
         with (
-            patch("database.jel.get_connection", return_value=mock_conn),
-            patch("database.jel.sync_researcher_fields_from_jel") as mock_sync,
+            patch("backend.database.jel.get_connection", return_value=mock_conn),
+            patch("backend.database.jel.sync_researcher_fields_from_jel") as mock_sync,
         ):
-            from database.jel import save_researcher_jel_codes
+            from backend.database.jel import save_researcher_jel_codes
             save_researcher_jel_codes(researcher_id=1, jel_codes=["J", "E"])
 
         mock_sync.assert_called_once_with(1, ["J", "E"])
@@ -132,11 +132,11 @@ class TestAddResearcherJelCodesCallsSync:
         mock_conn, mock_cursor = _make_mock_conn()
 
         with (
-            patch("database.jel.get_connection", return_value=mock_conn),
-            patch("database.jel._get_all_jel_codes_for_researcher", return_value=["F", "G", "J"]) as mock_get_all,
-            patch("database.jel.sync_researcher_fields_from_jel") as mock_sync,
+            patch("backend.database.jel.get_connection", return_value=mock_conn),
+            patch("backend.database.jel._get_all_jel_codes_for_researcher", return_value=["F", "G", "J"]) as mock_get_all,
+            patch("backend.database.jel.sync_researcher_fields_from_jel") as mock_sync,
         ):
-            from database.jel import add_researcher_jel_codes
+            from backend.database.jel import add_researcher_jel_codes
             add_researcher_jel_codes(researcher_id=1, jel_codes=["F", "G"])
 
         mock_get_all.assert_called_once_with(1)

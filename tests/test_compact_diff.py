@@ -16,8 +16,8 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from llm_client import StructuredResponse, _parse_retry_after
-from publication import Publication
+from backend.llm.client import StructuredResponse, _parse_retry_after
+from backend.pipeline.publication import Publication
 
 
 class TestComputeCompactDiff:

@@ -4,11 +4,11 @@ Env vars are set by conftest.py (auto-loaded by pytest for tests/).
 """
 from unittest.mock import patch, MagicMock
 import pytest
-from html_fetcher import HTMLFetcher
+from backend.pipeline.html_fetcher import HTMLFetcher
 
 
 class TestSaveTextWithRawHtml:
-    @patch("html_fetcher.execute_query")
+    @patch("backend.pipeline.html_fetcher.execute_query")
     def test_save_text_stores_raw_html(self, mock_execute):
         HTMLFetcher.save_text(url_id=1, text_content="text", text_hash="abc",
                               researcher_id=10, raw_html="<html>test</html>")
@@ -17,13 +17,13 @@ class TestSaveTextWithRawHtml:
         assert "raw_html" in sql
         assert "<html>test</html>" in params
 
-    @patch("html_fetcher.execute_query")
+    @patch("backend.pipeline.html_fetcher.execute_query")
     def test_save_text_without_raw_html_passes_none(self, mock_execute):
         HTMLFetcher.save_text(url_id=1, text_content="text", text_hash="abc", researcher_id=10)
         assert mock_execute.call_args[0][1][-1] is None
 
 
-from link_extractor import extract_trusted_links, match_link_to_paper, discover_untrusted_domains, match_and_save_paper_links
+from backend.enrichment.link_extractor import extract_trusted_links, match_link_to_paper, discover_untrusted_domains, match_and_save_paper_links
 
 
 class TestExtractTrustedLinks:
@@ -94,10 +94,10 @@ class TestMatchLinkToPaper:
 
 
 class TestMatchAndSavePaperLinks:
-    @patch("link_extractor.execute_query")
-    @patch("link_extractor.fetch_all")
-    @patch("link_extractor.compute_title_hash", return_value="abc123")
-    @patch("link_extractor.HTMLFetcher.get_raw_html")
+    @patch("backend.enrichment.link_extractor.execute_query")
+    @patch("backend.enrichment.link_extractor.fetch_all")
+    @patch("backend.enrichment.link_extractor.compute_title_hash", return_value="abc123")
+    @patch("backend.enrichment.link_extractor.HTMLFetcher.get_raw_html")
     def test_matches_and_saves(self, mock_get_raw, mock_hash, mock_fetch_all, mock_execute):
         html = '<div><a href="https://ssrn.com/1">Trade and Wages</a></div>'
         mock_get_raw.return_value = html
@@ -110,8 +110,8 @@ class TestMatchAndSavePaperLinks:
         assert len(link_calls) == 1
         assert link_calls[0][0][1][0] == 10  # paper_id
 
-    @patch("link_extractor.execute_query")
-    @patch("link_extractor.HTMLFetcher.get_raw_html")
+    @patch("backend.enrichment.link_extractor.execute_query")
+    @patch("backend.enrichment.link_extractor.HTMLFetcher.get_raw_html")
     def test_skips_no_raw_html(self, mock_get_raw, mock_execute):
         mock_get_raw.return_value = None
         match_and_save_paper_links(url_id=1, publications=[{'title': 'X'}])
@@ -141,10 +141,10 @@ class TestApiPaperLinks:
             "doi": None,
         }
         with (
-            patch("api.get_paper_detail", return_value=pub_detail),
-            patch("api.get_authors_for_papers", return_value={1: [{"id": 1, "first_name": "J", "last_name": "S"}]}),
-            patch("api.get_coauthors_for_papers", return_value={1: []}),
-            patch("api.get_links_for_papers", return_value={1: [{"url": "https://ssrn.com/1", "link_type": "ssrn"}]}),
+            patch("backend.api.get_paper_detail", return_value=pub_detail),
+            patch("backend.api.get_authors_for_papers", return_value={1: [{"id": 1, "first_name": "J", "last_name": "S"}]}),
+            patch("backend.api.get_coauthors_for_papers", return_value={1: []}),
+            patch("backend.api.get_links_for_papers", return_value={1: [{"url": "https://ssrn.com/1", "link_type": "ssrn"}]}),
         ):
             resp = client.get("/api/publications/1")
         assert resp.status_code == 200
@@ -155,19 +155,19 @@ class TestApiPaperLinks:
 class TestMatchAndSavePaperLinksWithDoi:
     """DOI-based matching: resolve DOI from URL, get canonical title, match to paper."""
 
-    @patch("link_extractor.execute_query")
-    @patch("link_extractor.fetch_all")
-    @patch("link_extractor.fetch_one")
-    @patch("link_extractor.compute_title_hash")
-    @patch("link_extractor.HTMLFetcher.get_raw_html")
+    @patch("backend.enrichment.link_extractor.execute_query")
+    @patch("backend.enrichment.link_extractor.fetch_all")
+    @patch("backend.enrichment.link_extractor.fetch_one")
+    @patch("backend.enrichment.link_extractor.compute_title_hash")
+    @patch("backend.enrichment.link_extractor.HTMLFetcher.get_raw_html")
     def test_doi_link_matched_by_canonical_title(self, mock_get_raw, mock_hash,
                                                   mock_fetch_one, mock_fetch_all, mock_execute):
         """Link with DOI in URL -> resolve DOI -> get canonical title -> match to paper."""
         html = '<div><a href="https://link.springer.com/article/10.1007/s40641-016-0032-z">Extreme Air Pollution</a></div>'
         mock_get_raw.return_value = html
 
-        with patch("link_extractor.resolve_doi", return_value="10.1007/s40641-016-0032-z"), \
-             patch("link_extractor.lookup_by_doi", return_value={
+        with patch("backend.enrichment.link_extractor.resolve_doi", return_value="10.1007/s40641-016-0032-z"), \
+             patch("backend.enrichment.link_extractor.lookup_by_doi", return_value={
                  "doi": "10.1007/s40641-016-0032-z",
                  "title": "Extreme Air Pollution in Global Megacities",
                  "openalex_id": "W123", "coauthors": [], "abstract": None,
@@ -184,17 +184,17 @@ class TestMatchAndSavePaperLinksWithDoi:
         assert params[0] == 10  # paper_id
         assert "10.1007/s40641-016-0032-z" in params  # doi stored
 
-    @patch("link_extractor.execute_query")
-    @patch("link_extractor.fetch_all")
-    @patch("link_extractor.compute_title_hash")
-    @patch("link_extractor.HTMLFetcher.get_raw_html")
+    @patch("backend.enrichment.link_extractor.execute_query")
+    @patch("backend.enrichment.link_extractor.fetch_all")
+    @patch("backend.enrichment.link_extractor.compute_title_hash")
+    @patch("backend.enrichment.link_extractor.HTMLFetcher.get_raw_html")
     def test_falls_back_to_anchor_text_when_no_doi(self, mock_get_raw, mock_hash,
                                                      mock_fetch_all, mock_execute):
         """Link without DOI -> falls back to anchor text matching."""
         html = '<div><a href="https://academic.oup.com/restud/article/83/1/87/2461318">Trade and Innovation</a></div>'
         mock_get_raw.return_value = html
 
-        with patch("link_extractor.resolve_doi", return_value=None):
+        with patch("backend.enrichment.link_extractor.resolve_doi", return_value=None):
             mock_hash.return_value = "abc123"
             mock_fetch_all.return_value = [{'id': 10, 'title_hash': 'abc123'}]
 

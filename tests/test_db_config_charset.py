@@ -7,7 +7,7 @@ os.environ.setdefault("DB_PASSWORD", "test")
 os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
 os.environ.setdefault("GOOGLE_API_KEY", "test-google-key")
 
-from db_config import db_config
+from backend.config import db_config
 
 
 class TestDbConfigCharset:

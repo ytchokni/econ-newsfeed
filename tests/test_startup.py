@@ -12,7 +12,7 @@ from unittest.mock import patch, MagicMock
 import pytest
 from fastapi.testclient import TestClient
 
-from database import create_tables
+from backend.database import create_tables
 
 
 @contextmanager
@@ -32,12 +32,12 @@ class TestScrapeApiKeyValidation:
         with patch.dict(os.environ, {"SCRAPE_API_KEY": "changeme"}, clear=False):
             # Force module-level _SCRAPE_API_KEY to pick up the short value
             with (
-                patch("api.create_tables"),
-                patch("api.start_scheduler"),
-                patch("api.shutdown_scheduler"),
+                patch("backend.api.create_tables"),
+                patch("backend.api.start_scheduler"),
+                patch("backend.api.shutdown_scheduler"),
             ):
                 import importlib
-                import api as api_mod
+                import backend.api as api_mod
 
                 # Patch the module-level key to simulate the short key
                 with patch.object(api_mod, "_SCRAPE_API_KEY", "changeme"):
@@ -50,11 +50,11 @@ class TestScrapeApiKeyValidation:
     def test_empty_key_prevents_startup(self):
         """An empty SCRAPE_API_KEY must cause a RuntimeError at startup."""
         with (
-            patch("api.create_tables"),
-            patch("api.start_scheduler"),
-            patch("api.shutdown_scheduler"),
+            patch("backend.api.create_tables"),
+            patch("backend.api.start_scheduler"),
+            patch("backend.api.shutdown_scheduler"),
         ):
-            import api as api_mod
+            import backend.api as api_mod
 
             with patch.object(api_mod, "_SCRAPE_API_KEY", ""):
                 with pytest.raises(RuntimeError, match="too short"):
@@ -64,21 +64,21 @@ class TestScrapeApiKeyValidation:
     def test_valid_key_allows_startup(self):
         """A key of 16+ chars must allow normal startup."""
         with (
-            patch("api.create_tables"),
-            patch("api.start_scheduler"),
-            patch("api.shutdown_scheduler"),
+            patch("backend.api.create_tables"),
+            patch("backend.api.start_scheduler"),
+            patch("backend.api.shutdown_scheduler"),
         ):
-            import api as api_mod
+            import backend.api as api_mod
 
             with patch.object(api_mod, "_SCRAPE_API_KEY", "a-valid-key-that-is-long-enough"):
                 with TestClient(api_mod.app) as c:
                     # App started successfully -- verify it responds
                     with (
-                        patch("api.connection_scope", _noop_connection_scope),
-                        patch("api.search_feed_events", return_value=([], 0)),
-                        patch("api.get_authors_for_papers", return_value={}),
-                        patch("api.get_coauthors_for_papers", return_value={}),
-                        patch("api.get_links_for_papers", return_value={}),
+                        patch("backend.api.connection_scope", _noop_connection_scope),
+                        patch("backend.api.search_feed_events", return_value=([], 0)),
+                        patch("backend.api.get_authors_for_papers", return_value={}),
+                        patch("backend.api.get_coauthors_for_papers", return_value={}),
+                        patch("backend.api.get_links_for_papers", return_value={}),
                     ):
                         resp = c.get("/api/publications")
                     assert resp.status_code == 200
@@ -107,11 +107,11 @@ class TestBioColumnMigration:
         """ALTER TABLE ADD COLUMN raising a duplicate error must not crash startup."""
         mock_conn, _ = _make_mock_conn()
 
-        with patch("database.schema.get_connection", return_value=mock_conn):
-            with patch("database.schema.execute_query",
+        with patch("backend.database.schema.get_connection", return_value=mock_conn):
+            with patch("backend.database.schema.execute_query",
                        side_effect=Exception("Duplicate column name 'bio'")):
-                with patch("database.schema.seed_research_fields"), \
-                     patch("database.schema.seed_jel_codes"):
+                with patch("backend.database.schema.seed_research_fields"), \
+                     patch("backend.database.schema.seed_jel_codes"):
                     # Must not raise
                     create_tables()
 
@@ -119,10 +119,10 @@ class TestBioColumnMigration:
         """ALTER TABLE ADD COLUMN succeeding must work normally."""
         mock_conn, _ = _make_mock_conn()
 
-        with patch("database.schema.get_connection", return_value=mock_conn):
-            with patch("database.schema.execute_query", return_value=None):
-                with patch("database.schema.seed_research_fields"), \
-                     patch("database.schema.seed_jel_codes"):
+        with patch("backend.database.schema.get_connection", return_value=mock_conn):
+            with patch("backend.database.schema.execute_query", return_value=None):
+                with patch("backend.database.schema.seed_research_fields"), \
+                     patch("backend.database.schema.seed_jel_codes"):
                     # Must not raise
                     create_tables()
 
@@ -143,9 +143,9 @@ class TestMigrationAdvisoryLock:
         """Verify GET_LOCK result is fetched and RELEASE_LOCK result is fetched."""
         mock_conn, mock_cursor = _make_mock_conn()
 
-        with patch("database.schema.get_connection", return_value=mock_conn):
-            with patch("database.schema.seed_research_fields"), \
-                 patch("database.schema.seed_jel_codes"):
+        with patch("backend.database.schema.get_connection", return_value=mock_conn):
+            with patch("backend.database.schema.seed_research_fields"), \
+                 patch("backend.database.schema.seed_jel_codes"):
                 create_tables()
 
         # The cursor must have called fetchone() at least twice:
@@ -159,9 +159,9 @@ class TestMigrationAdvisoryLock:
         """Verify GET_LOCK and RELEASE_LOCK are both called."""
         mock_conn, mock_cursor = _make_mock_conn()
 
-        with patch("database.schema.get_connection", return_value=mock_conn):
-            with patch("database.schema.seed_research_fields"), \
-                 patch("database.schema.seed_jel_codes"):
+        with patch("backend.database.schema.get_connection", return_value=mock_conn):
+            with patch("backend.database.schema.seed_research_fields"), \
+                 patch("backend.database.schema.seed_jel_codes"):
                 create_tables()
 
         executed_sql = [
@@ -190,9 +190,9 @@ class TestMigrationAdvisoryLock:
 
         mock_cursor.execute = MagicMock(side_effect=execute_side_effect)
 
-        with patch("database.schema.get_connection", return_value=mock_conn):
-            with patch("database.schema.seed_research_fields"), \
-                 patch("database.schema.seed_jel_codes"):
+        with patch("backend.database.schema.get_connection", return_value=mock_conn):
+            with patch("backend.database.schema.seed_research_fields"), \
+                 patch("backend.database.schema.seed_jel_codes"):
                 create_tables()  # Must not raise
 
         executed_sql = [
@@ -214,9 +214,9 @@ class TestForwardFlappingCleanupMigration:
     def test_create_tables_runs_forward_flapping_delete(self):
         mock_conn, mock_cursor = _make_mock_conn()
 
-        with patch("database.schema.get_connection", return_value=mock_conn):
-            with patch("database.schema.seed_research_fields"), \
-                 patch("database.schema.seed_jel_codes"):
+        with patch("backend.database.schema.get_connection", return_value=mock_conn):
+            with patch("backend.database.schema.seed_research_fields"), \
+                 patch("backend.database.schema.seed_jel_codes"):
                 create_tables()
 
         executed_sql = [str(c) for c in mock_cursor.execute.call_args_list]

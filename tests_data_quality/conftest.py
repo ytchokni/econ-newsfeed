@@ -46,7 +46,7 @@ def _require_database():
     if _MISSING_DB_VARS:
         pytest.skip(f"No database configured: missing {', '.join(_MISSING_DB_VARS)} in .env")
     try:
-        from database.connection import get_connection
+        from backend.database.connection import get_connection
 
         conn = get_connection()
         conn.close()
@@ -59,7 +59,7 @@ def db(_require_database):
     """Thin query interface over the real connection pool."""
     from types import SimpleNamespace
 
-    from database.connection import fetch_all, fetch_one
+    from backend.database.connection import fetch_all, fetch_one
 
     return SimpleNamespace(fetch_all=fetch_all, fetch_one=fetch_one)
 

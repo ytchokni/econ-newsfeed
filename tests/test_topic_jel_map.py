@@ -9,7 +9,7 @@ os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
 os.environ.setdefault("GOOGLE_API_KEY", "test-google-key")
 os.environ.setdefault("SCRAPE_API_KEY", "test-key")
 
-from topic_jel_map import map_topic_to_jel
+from backend.enrichment.topic_jel_map import map_topic_to_jel
 
 
 class TestMapTopicToJel:
@@ -48,7 +48,7 @@ class TestMapTopicToJel:
 
 class TestPaperTopicsSchema:
     def test_table_definition_exists(self):
-        from database.schema import _TABLE_DEFINITIONS
+        from backend.database.schema import _TABLE_DEFINITIONS
         assert "paper_topics" in _TABLE_DEFINITIONS
         ddl = _TABLE_DEFINITIONS["paper_topics"]
         assert "paper_id" in ddl

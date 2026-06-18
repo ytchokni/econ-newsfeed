@@ -142,7 +142,7 @@ class TestRecentNewPaperEventsAgainstSnapshots:
     SAMPLE_SIZE = 25
 
     def test_recent_new_paper_titles_absent_from_prior_snapshot(self, db):
-        from feed_events import _normalize_for_matching, _normalize_html_for_matching
+        from backend.pipeline.feed_events import _normalize_for_matching, _normalize_html_for_matching
 
         events = db.fetch_all(
             f"""
@@ -234,7 +234,7 @@ class TestStatusChainCoherence:
     """
 
     def test_paper_status_not_outranked_by_latest_event(self, db):
-        from database.snapshots import _STATUS_RANK
+        from backend.database.snapshots import _STATUS_RANK
 
         rows = db.fetch_all(
             """SELECT fe.paper_id, fe.new_status AS event_status, p.status AS paper_status

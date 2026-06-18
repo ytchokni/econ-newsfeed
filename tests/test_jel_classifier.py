@@ -20,7 +20,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 from openai import OpenAIError
 
-from jel_classifier import (
+from backend.enrichment.jel_classifier import (
     JelClassification,
     JelClassificationResult,
     classify_researcher,
@@ -106,8 +106,8 @@ def _make_llm_completion(jel_codes: list[dict]):
 
 
 class TestClassifyResearcher:
-    @patch("jel_classifier.log_llm_usage")
-    @patch("llm_client.get_client")
+    @patch("backend.enrichment.jel_classifier.log_llm_usage")
+    @patch("backend.llm.client.get_client")
     def test_returns_codes(self, mock_get_client, mock_log):
         mock_client = mock_get_client.return_value
         mock_client.chat.completions.create.return_value = _make_llm_completion([
@@ -118,23 +118,23 @@ class TestClassifyResearcher:
         assert codes == ["J", "F"]
         mock_log.assert_called_once()
 
-    @patch("jel_classifier.log_llm_usage")
-    @patch("llm_client.get_client")
+    @patch("backend.enrichment.jel_classifier.log_llm_usage")
+    @patch("backend.llm.client.get_client")
     def test_empty_on_api_error(self, mock_get_client, mock_log):
         mock_client = mock_get_client.return_value
         mock_client.chat.completions.create.side_effect = OpenAIError("API down")
         codes = classify_researcher(1, "Jane", "Doe", "I study economics.")
         assert codes == []
 
-    @patch("jel_classifier.log_llm_usage")
-    @patch("llm_client.get_client")
+    @patch("backend.enrichment.jel_classifier.log_llm_usage")
+    @patch("backend.llm.client.get_client")
     def test_logs_llm_usage(self, mock_get_client, mock_log):
         mock_client = mock_get_client.return_value
         mock_client.chat.completions.create.return_value = _make_llm_completion([
             {"code": "E", "reasoning": "macro"},
         ])
         classify_researcher(42, "John", "Smith", "Macro researcher.")
-        from llm_client import get_model
+        from backend.llm.client import get_model
         mock_log.assert_called_once_with(
             "jel_classification",
             get_model(),

@@ -2,7 +2,7 @@
 """Tests for PaperSaver.save_publications edge cases."""
 import pytest
 from unittest.mock import patch, MagicMock, call
-from paper_saver import PaperSaver, _author_id_cache
+from backend.pipeline.paper_saver import PaperSaver, _author_id_cache
 
 
 def _mock_conn():
@@ -28,9 +28,9 @@ def clear_author_cache():
 class TestAuthorNormalization:
     """Author lists with != 2 elements should not crash save_publications."""
 
-    @patch("paper_saver.get_researcher_id", return_value=42)
-    @patch("paper_saver.get_connection")
-    @patch("paper_saver.compute_title_hash", return_value="abc123")
+    @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
     def test_three_element_author_joins_first_names(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -46,9 +46,9 @@ class TestAuthorNormalization:
 
         mock_get_researcher.assert_called_once_with("Jose Luis", "Garcia", conn=conn)
 
-    @patch("paper_saver.get_researcher_id", return_value=42)
-    @patch("paper_saver.get_connection")
-    @patch("paper_saver.compute_title_hash", return_value="abc123")
+    @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
     def test_single_element_author_uses_empty_first_name(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -64,9 +64,9 @@ class TestAuthorNormalization:
 
         mock_get_researcher.assert_called_once_with("", "Garcia", conn=conn)
 
-    @patch("paper_saver.get_researcher_id", return_value=42)
-    @patch("paper_saver.get_connection")
-    @patch("paper_saver.compute_title_hash", return_value="abc123")
+    @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
     def test_empty_author_list_falls_back_to_page_owner(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -91,9 +91,9 @@ class TestAuthorNormalization:
         assert len(authorship_inserts) == 1
         assert authorship_inserts[0][0][1][0] == 42  # owner_id
 
-    @patch("paper_saver.get_researcher_id", return_value=42)
-    @patch("paper_saver.get_connection")
-    @patch("paper_saver.compute_title_hash", return_value="abc123")
+    @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
     def test_normal_two_element_author_unchanged(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -113,9 +113,9 @@ class TestAuthorNormalization:
 class TestCursorCleanup:
     """Cursor must be closed even when an exception occurs mid-save."""
 
-    @patch("paper_saver.get_researcher_id", side_effect=RuntimeError("db error"))
-    @patch("paper_saver.get_connection")
-    @patch("paper_saver.compute_title_hash", return_value="abc123")
+    @patch("backend.pipeline.paper_saver.get_researcher_id", side_effect=RuntimeError("db error"))
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
     def test_cursor_closed_on_author_error(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -132,9 +132,9 @@ class TestCursorCleanup:
 
         cursor.close.assert_called()
 
-    @patch("paper_saver.get_researcher_id", return_value=42)
-    @patch("paper_saver.get_connection")
-    @patch("paper_saver.compute_title_hash", return_value="abc123")
+    @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
     def test_second_pub_succeeds_after_first_pub_fails(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -157,9 +157,9 @@ class TestCursorCleanup:
 class TestAuthorLookupCache:
     """get_researcher_id should be called once per unique author, not per occurrence."""
 
-    @patch("paper_saver.get_researcher_id", return_value=42)
-    @patch("paper_saver.get_connection")
-    @patch("paper_saver.compute_title_hash", return_value="abc123")
+    @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
     def test_same_author_across_pubs_looked_up_once(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -177,9 +177,9 @@ class TestAuthorLookupCache:
         # 2 unique authors x 1 call each = 2 calls total (not 6)
         assert mock_get_researcher.call_count == 2
 
-    @patch("paper_saver.get_researcher_id", return_value=42)
-    @patch("paper_saver.get_connection")
-    @patch("paper_saver.compute_title_hash", return_value="abc123")
+    @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
     def test_cache_persists_across_save_publications_calls(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -199,9 +199,9 @@ class TestAuthorLookupCache:
 class TestAbstractBackfill:
     """When a duplicate paper is found, backfill NULL abstract/year/venue from new extraction."""
 
-    @patch("paper_saver.get_researcher_id", return_value=42)
-    @patch("paper_saver.get_connection")
-    @patch("paper_saver.compute_title_hash", return_value="abc123")
+    @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
     def test_backfills_abstract_when_existing_is_null(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -235,9 +235,9 @@ class TestAbstractBackfill:
         ]
         assert len(update_calls) == 1, f"Expected 1 backfill UPDATE, got {len(update_calls)}"
 
-    @patch("paper_saver.get_researcher_id", return_value=42)
-    @patch("paper_saver.get_connection")
-    @patch("paper_saver.compute_title_hash", return_value="abc123")
+    @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
     def test_skips_backfill_when_existing_has_all_fields(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -270,9 +270,9 @@ class TestAbstractBackfill:
 class TestPageOwnerAuthorship:
     """The page owner should always be added as an author on papers from their page."""
 
-    @patch("paper_saver.get_researcher_id", return_value=42)
-    @patch("paper_saver.get_connection")
-    @patch("paper_saver.compute_title_hash", return_value="abc123")
+    @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
     def test_uses_page_owner_when_no_authors(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -298,9 +298,9 @@ class TestPageOwnerAuthorship:
         # Verify owner_id=55 was inserted
         assert authorship_inserts[0][0][1][0] == 55
 
-    @patch("paper_saver.get_researcher_id", return_value=42)
-    @patch("paper_saver.get_connection")
-    @patch("paper_saver.compute_title_hash", return_value="abc123")
+    @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
     def test_owner_added_alongside_extracted_authors(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -325,9 +325,9 @@ class TestPageOwnerAuthorship:
         ]
         assert len(authorship_inserts) == 2
 
-    @patch("paper_saver.get_researcher_id", return_value=42)
-    @patch("paper_saver.get_connection")
-    @patch("paper_saver.compute_title_hash", return_value="abc123")
+    @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
     def test_no_crash_when_page_owner_not_found(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):
@@ -350,9 +350,9 @@ class TestPageOwnerAuthorship:
         ]
         assert len(authorship_inserts) == 1
 
-    @patch("paper_saver.get_researcher_id", return_value=99)
-    @patch("paper_saver.get_connection")
-    @patch("paper_saver.compute_title_hash", return_value="abc123")
+    @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=99)
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
     def test_page_owner_added_alongside_coauthors(
         self, mock_hash, mock_get_conn, mock_get_researcher
     ):

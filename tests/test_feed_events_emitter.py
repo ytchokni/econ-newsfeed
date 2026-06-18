@@ -16,9 +16,9 @@ class FakeSaveResult:
 class TestEmitNewPaperEvents:
     """FeedEventEmitter.emit_new_paper_events creates new_paper events."""
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_skips_seed_publications(self, mock_get_conn):
-        from feed_events import FeedEventEmitter
+        from backend.pipeline.feed_events import FeedEventEmitter
         result = FeedEventEmitter.emit_new_paper_events(
             [FakeSaveResult(1, "Paper", True, True, "working_paper")],
             url="http://example.com",
@@ -27,9 +27,9 @@ class TestEmitNewPaperEvents:
         assert result == 0
         mock_get_conn.assert_not_called()
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_skips_published_status(self, mock_get_conn):
-        from feed_events import FeedEventEmitter
+        from backend.pipeline.feed_events import FeedEventEmitter
         mock_conn = MagicMock()
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
@@ -44,10 +44,10 @@ class TestEmitNewPaperEvents:
         )
         assert result == 0
 
-    @patch("feed_events._get_previous_snapshot_html", return_value=None)
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events._get_previous_snapshot_html", return_value=None)
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_creates_event_for_new_working_paper_with_baseline(self, mock_get_conn, _):
-        from feed_events import FeedEventEmitter
+        from backend.pipeline.feed_events import FeedEventEmitter
         mock_conn = MagicMock()
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
@@ -64,10 +64,10 @@ class TestEmitNewPaperEvents:
         insert_calls = [c for c in cursor.execute.call_args_list if "INSERT INTO feed_events" in str(c)]
         assert len(insert_calls) == 1
 
-    @patch("feed_events._get_previous_snapshot_html", return_value=None)
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events._get_previous_snapshot_html", return_value=None)
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_suppresses_event_without_baseline(self, mock_get_conn, _):
-        from feed_events import FeedEventEmitter
+        from backend.pipeline.feed_events import FeedEventEmitter
         mock_conn = MagicMock()
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
@@ -82,10 +82,10 @@ class TestEmitNewPaperEvents:
         )
         assert result == 0
 
-    @patch("feed_events._get_previous_snapshot_html", return_value="<p>paper already here</p>")
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events._get_previous_snapshot_html", return_value="<p>paper already here</p>")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_suppresses_event_when_title_in_previous_snapshot(self, mock_get_conn, _):
-        from feed_events import FeedEventEmitter
+        from backend.pipeline.feed_events import FeedEventEmitter
         mock_conn = MagicMock()
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
@@ -100,11 +100,11 @@ class TestEmitNewPaperEvents:
         )
         assert result == 0
 
-    @patch("feed_events._get_previous_snapshot_html", return_value=None)
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events._get_previous_snapshot_html", return_value=None)
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_duplicate_paper_new_to_url_no_prior_event(self, mock_get_conn, _):
         """Duplicate paper appearing on a new URL for the first time gets an event if no prior event exists."""
-        from feed_events import FeedEventEmitter
+        from backend.pipeline.feed_events import FeedEventEmitter
         mock_conn = MagicMock()
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
@@ -121,9 +121,9 @@ class TestEmitNewPaperEvents:
 
 
 class TestEmitStatusChange:
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_creates_status_change_event(self, mock_get_conn):
-        from feed_events import FeedEventEmitter
+        from backend.pipeline.feed_events import FeedEventEmitter
         mock_conn = MagicMock()
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
@@ -137,9 +137,9 @@ class TestEmitStatusChange:
 
 
 class TestEmitTitleChange:
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_creates_title_change_event(self, mock_get_conn):
-        from feed_events import FeedEventEmitter
+        from backend.pipeline.feed_events import FeedEventEmitter
         mock_conn = MagicMock()
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
@@ -160,7 +160,7 @@ class TestTitleMatchingNormalization:
     """
 
     def test_finds_title_despite_html_entity_ampersand(self):
-        from feed_events import _title_in_previous_snapshot, _normalize_html_for_matching
+        from backend.pipeline.feed_events import _title_in_previous_snapshot, _normalize_html_for_matching
         html = "<li>Media Literacy &amp; Perceived Media Bias in the US</li>"
         assert _title_in_previous_snapshot(
             "Media Literacy & Perceived Media Bias in the US",
@@ -168,7 +168,7 @@ class TestTitleMatchingNormalization:
         )
 
     def test_finds_title_despite_unicode_escapes(self):
-        from feed_events import _title_in_previous_snapshot, _normalize_html_for_matching
+        from backend.pipeline.feed_events import _title_in_previous_snapshot, _normalize_html_for_matching
         # Google Sites embeds content in JS with \uXXXX escapes
         html = '{"title":"Should Inequality Factor into Central Banks\\u2019 Decisions?"}'
         assert _title_in_previous_snapshot(
@@ -177,7 +177,7 @@ class TestTitleMatchingNormalization:
         )
 
     def test_finds_title_split_across_inline_tags(self):
-        from feed_events import _title_in_previous_snapshot, _normalize_html_for_matching
+        from backend.pipeline.feed_events import _title_in_previous_snapshot, _normalize_html_for_matching
         html = "<p>Through a Glass, <em>Darkly</em>: Strategic Information</p>"
         assert _title_in_previous_snapshot(
             "Through a Glass, Darkly: Strategic Information",
@@ -185,7 +185,7 @@ class TestTitleMatchingNormalization:
         )
 
     def test_does_not_find_absent_title(self):
-        from feed_events import _title_in_previous_snapshot, _normalize_html_for_matching
+        from backend.pipeline.feed_events import _title_in_previous_snapshot, _normalize_html_for_matching
         html = "<p>Completely unrelated page content</p>"
         assert not _title_in_previous_snapshot(
             "Worldwide Environmental Engel Curves",
@@ -193,7 +193,7 @@ class TestTitleMatchingNormalization:
         )
 
     def test_none_html_returns_false(self):
-        from feed_events import _title_in_previous_snapshot
+        from backend.pipeline.feed_events import _title_in_previous_snapshot
         assert not _title_in_previous_snapshot("Any Title", None)
 
 
@@ -202,10 +202,10 @@ class TestPreviousSnapshotQuery:
     most-recent snapshot already IS the previous page state. The lookup must
     not skip it with OFFSET 1."""
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_uses_most_recent_snapshot_not_offset_1(self, mock_get_conn):
         import zlib
-        from feed_events import _get_previous_snapshot_html
+        from backend.pipeline.feed_events import _get_previous_snapshot_html
         cursor = MagicMock()
         cursor.fetchone.return_value = (zlib.compress(b"<p>Prev State</p>"),)
         _get_previous_snapshot_html(cursor, "http://example.com")

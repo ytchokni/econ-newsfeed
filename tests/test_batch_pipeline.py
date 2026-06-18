@@ -3,17 +3,17 @@ import unittest
 import json as json_module
 from unittest.mock import patch, MagicMock, ANY
 
-from publication import validate_publication, PublicationExtraction
+from backend.pipeline.publication import validate_publication, PublicationExtraction
 
 
 class TestBatchSubmitFileUpload(unittest.TestCase):
     """batch_submit must use genai SDK for file upload, OpenAI SDK for batch create."""
 
-    @patch("main.execute_query")
-    @patch("main.fetch_all", return_value=[])
-    @patch("main.Researcher")
-    @patch("main.HTMLFetcher")
-    @patch("main.Publication")
+    @patch("backend.main.execute_query")
+    @patch("backend.main.fetch_all", return_value=[])
+    @patch("backend.main.Researcher")
+    @patch("backend.main.HTMLFetcher")
+    @patch("backend.main.Publication")
     def test_uses_genai_for_upload_and_openai_for_batch_create(
         self, mock_pub, mock_fetcher, mock_researcher, mock_fetch_all, mock_exec,
     ):
@@ -34,10 +34,10 @@ class TestBatchSubmitFileUpload(unittest.TestCase):
         mock_batch.id = "batch_xyz"
         mock_openai.batches.create.return_value = mock_batch
 
-        with patch("llm_client.get_genai_client", return_value=mock_genai), \
-             patch("llm_client.get_client", return_value=mock_openai), \
-             patch("llm_client.get_model", return_value="gemini-2.5-flash"):
-            from main import batch_submit
+        with patch("backend.llm.client.get_genai_client", return_value=mock_genai), \
+             patch("backend.llm.client.get_client", return_value=mock_openai), \
+             patch("backend.llm.client.get_model", return_value="gemini-2.5-flash"):
+            from backend.main import batch_submit
             batch_submit()
 
         # genai SDK used for file upload
@@ -54,12 +54,12 @@ class TestBatchSubmitFileUpload(unittest.TestCase):
 class TestBatchCheckFileDownload(unittest.TestCase):
     """batch_check must use genai SDK for file download."""
 
-    @patch("extraction.persist_extraction")
-    @patch("main.HTMLFetcher")
-    @patch("main.log_llm_usage")
-    @patch("main.execute_query")
-    @patch("main.fetch_one")
-    @patch("main.fetch_all")
+    @patch("backend.pipeline.extraction.persist_extraction")
+    @patch("backend.main.HTMLFetcher")
+    @patch("backend.main.log_llm_usage")
+    @patch("backend.main.execute_query")
+    @patch("backend.main.fetch_one")
+    @patch("backend.main.fetch_all")
     def test_uses_genai_for_download(
         self, mock_fetch_all, mock_fetch_one, mock_exec, mock_log,
         mock_fetcher, mock_persist,
@@ -110,10 +110,10 @@ class TestBatchCheckFileDownload(unittest.TestCase):
         ]
         mock_fetcher.is_first_extraction.return_value = False
 
-        with patch("llm_client.get_genai_client", return_value=mock_genai), \
-             patch("llm_client.get_client", return_value=mock_openai), \
-             patch("llm_client.get_model", return_value="gemini-2.5-flash"):
-            from main import batch_check
+        with patch("backend.llm.client.get_genai_client", return_value=mock_genai), \
+             patch("backend.llm.client.get_client", return_value=mock_openai), \
+             patch("backend.llm.client.get_model", return_value="gemini-2.5-flash"):
+            from backend.main import batch_check
             batch_check()
 
         # genai SDK used for download

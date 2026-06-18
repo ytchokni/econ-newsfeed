@@ -18,7 +18,7 @@ import pytest
 class TestPublicationEncodingGuard:
     """Verify save_publications passes text through encoding guard."""
 
-    @patch("paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.get_connection")
     def test_mojibake_title_is_fixed_before_insert(self, mock_get_conn):
         """A paper with mojibake in title should be cleaned before DB insert."""
         mock_conn = MagicMock()
@@ -30,7 +30,7 @@ class TestPublicationEncodingGuard:
         mock_conn.__exit__ = MagicMock(return_value=False)
         mock_get_conn.return_value = mock_conn
 
-        from paper_saver import PaperSaver
+        from backend.pipeline.paper_saver import PaperSaver
 
         publications = [{
             "title": "Ergebnisse fÃ¼r die Wirtschaft",

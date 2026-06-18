@@ -4,8 +4,8 @@ PR #151: CSS-styled pages yielded lowercase titles stored as-is.
 PR #146: 65% of new_paper events had NULL year because the LLM returned non-standard formats.
 """
 import pytest
-from publication import clean_title, PublicationExtraction
-from database.papers import normalize_title, compute_title_hash
+from backend.pipeline.publication import clean_title, PublicationExtraction
+from backend.database.papers import normalize_title, compute_title_hash
 
 
 class TestCleanTitleCapitalization:

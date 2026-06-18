@@ -16,7 +16,7 @@ class TestDirectoryServesValidResearchers:
     PAGE_SIZE = 500
 
     def _directory_rows(self):
-        from database.researchers import search_researchers
+        from backend.database.researchers import search_researchers
 
         rows, total = search_researchers(offset=0, limit=self.PAGE_SIZE)
         return rows, total

@@ -20,7 +20,7 @@ def _iso_z(dt: datetime | None) -> str | None:
 
 def _get_health_stats() -> dict:
     """Last scrape info, next run, URL counts."""
-    import scheduler
+    import backend.pipeline.scheduler as scheduler
 
     last_scrape_row = fetch_one(
         """SELECT started_at, status, urls_checked, urls_changed,
@@ -282,7 +282,7 @@ def _get_activity_stats() -> dict:
 
 def _get_extraction_stats() -> dict:
     """Extraction worker surveillance: queue, throughput, ETA, liveness."""
-    import scheduler
+    import backend.pipeline.scheduler as scheduler
 
     def _i(row, key) -> int:
         return int(row[key] or 0) if row else 0
