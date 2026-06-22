@@ -23,14 +23,14 @@ class FakeSnapshotResult:
 class TestStalenessGuard:
     """Status change events should be suppressed for very old papers."""
 
-    @patch("extraction.FeedEventEmitter")
-    @patch("extraction.append_paper_snapshot")
-    @patch("extraction.fetch_all")
-    @patch("extraction.compute_title_hash")
+    @patch("backend.pipeline.extraction.FeedEventEmitter")
+    @patch("backend.pipeline.extraction.append_paper_snapshot")
+    @patch("backend.pipeline.extraction.fetch_all")
+    @patch("backend.pipeline.extraction.compute_title_hash")
     def test_suppresses_status_change_for_old_paper(
         self, mock_hash, mock_fetch_all, mock_snapshot, mock_emitter
     ):
-        from extraction import _append_snapshots
+        from backend.pipeline.extraction import _append_snapshots
 
         mock_hash.side_effect = lambda t: f"hash_{t}"
         mock_fetch_all.return_value = [{"id": 1, "title_hash": "hash_Old Paper"}]
@@ -44,14 +44,14 @@ class TestStalenessGuard:
 
         mock_emitter.emit_status_change.assert_not_called()
 
-    @patch("extraction.FeedEventEmitter")
-    @patch("extraction.append_paper_snapshot")
-    @patch("extraction.fetch_all")
-    @patch("extraction.compute_title_hash")
+    @patch("backend.pipeline.extraction.FeedEventEmitter")
+    @patch("backend.pipeline.extraction.append_paper_snapshot")
+    @patch("backend.pipeline.extraction.fetch_all")
+    @patch("backend.pipeline.extraction.compute_title_hash")
     def test_allows_status_change_for_recent_paper(
         self, mock_hash, mock_fetch_all, mock_snapshot, mock_emitter
     ):
-        from extraction import _append_snapshots
+        from backend.pipeline.extraction import _append_snapshots
 
         mock_hash.side_effect = lambda t: f"hash_{t}"
         mock_fetch_all.return_value = [{"id": 2, "title_hash": "hash_Recent Paper"}]
@@ -65,14 +65,14 @@ class TestStalenessGuard:
 
         mock_emitter.emit_status_change.assert_called_once()
 
-    @patch("extraction.FeedEventEmitter")
-    @patch("extraction.append_paper_snapshot")
-    @patch("extraction.fetch_all")
-    @patch("extraction.compute_title_hash")
+    @patch("backend.pipeline.extraction.FeedEventEmitter")
+    @patch("backend.pipeline.extraction.append_paper_snapshot")
+    @patch("backend.pipeline.extraction.fetch_all")
+    @patch("backend.pipeline.extraction.compute_title_hash")
     def test_allows_status_change_with_no_year(
         self, mock_hash, mock_fetch_all, mock_snapshot, mock_emitter
     ):
-        from extraction import _append_snapshots
+        from backend.pipeline.extraction import _append_snapshots
 
         mock_hash.side_effect = lambda t: f"hash_{t}"
         mock_fetch_all.return_value = [{"id": 3, "title_hash": "hash_No Year Paper"}]
