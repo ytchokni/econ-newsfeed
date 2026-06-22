@@ -72,6 +72,8 @@ class TestScrapeApiKeyValidation:
 
             with patch.object(api_mod, "_SCRAPE_API_KEY", "a-valid-key-that-is-long-enough"):
                 with TestClient(api_mod.app) as c:
+                    # Reset rate limiter to avoid cross-test contamination
+                    api_mod.limiter.reset()
                     # App started successfully -- verify it responds
                     with (
                         patch("backend.api.connection_scope", _noop_connection_scope),
