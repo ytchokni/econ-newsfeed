@@ -1,3 +1,4 @@
+import concurrent.futures
 import ipaddress
 import os
 import re
@@ -19,6 +20,8 @@ from backend.database import execute_query, fetch_all, fetch_one, log_llm_usage
 from backend.database.researchers import record_url_fetch_failure, record_url_fetch_success
 from bs4 import BeautifulSoup
 import urllib3.util.connection as _urllib3_cn
+
+_DNS_RESOLVE_TIMEOUT = 10  # seconds; socket.getaddrinfo has no built-in timeout
 
 
 class ResponseTooLarge(Exception):
@@ -200,6 +203,25 @@ class HTMLFetcher:
         return allowed
 
     @staticmethod
+    def _resolve_hostname(hostname: str, timeout: float = _DNS_RESOLVE_TIMEOUT) -> str | None:
+        """Resolve hostname to IP with a timeout guard.
+
+        socket.getaddrinfo has no timeout parameter and can hang indefinitely
+        on unresponsive DNS servers, which kills the scrape thread while the
+        advisory lock connection survives.
+        """
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(socket.getaddrinfo, hostname, None)
+            try:
+                result = future.result(timeout=timeout)
+                return result[0][4][0]
+            except concurrent.futures.TimeoutError:
+                logging.warning("DNS resolution timed out after %ds for %s", timeout, hostname)
+                return None
+            except socket.gaierror:
+                return None
+
+    @staticmethod
     def validate_url(url: str) -> bool:
         """Validate a URL for SSRF protection. Returns True if safe."""
         safe, _ = HTMLFetcher.validate_url_with_pin(url)
@@ -225,7 +247,10 @@ class HTMLFetcher:
             return False, None
 
         try:
-            resolved_ip = socket.getaddrinfo(hostname, None)[0][4][0]
+            resolved_ip = HTMLFetcher._resolve_hostname(hostname)
+            if resolved_ip is None:
+                logging.warning("DNS resolution failed or timed out for: %s", url)
+                return False, None
             ip = ipaddress.ip_address(resolved_ip)
             if ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local:
                 logging.warning("Rejected URL resolving to private/reserved IP: %s -> [redacted]", url)

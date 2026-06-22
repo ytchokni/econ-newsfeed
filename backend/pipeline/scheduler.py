@@ -32,6 +32,7 @@ _scheduler_lock_conn = None  # connection holding the advisory lock for the sche
 # lock silently drops, the zombie cleanup falsely fails the live scrape row,
 # and concurrent-scrape protection vanishes. A full scrape takes ~12h.
 _LOCK_CONN_WAIT_TIMEOUT = 7 * 24 * 3600  # 7 days
+_MAX_SCRAPE_DURATION_HOURS = 18  # force-release lock if scrape exceeds this
 
 
 def _acquire_db_lock() -> "mysql.connector.connection.MySQLConnection | None":
@@ -154,7 +155,15 @@ def _cleanup_stale_scrape_logs() -> None:
     holder's row is the newest 'running' row — anything older is a zombie.
     The 5-minute grace window avoids racing a scrape that acquired the lock
     just after we checked it.
+
+    Additionally, if ANY running entry exceeds _MAX_SCRAPE_DURATION_HOURS,
+    the scrape thread likely hung (e.g. DNS resolution blocking). Force-
+    release the advisory lock so the next scheduled run can proceed.
     """
+    global _lock_conn
+
+    _force_release_stale_lock()
+
     if is_scrape_running():
         where = """status = 'running'
              AND id < (SELECT mx FROM (SELECT MAX(id) AS mx FROM scrape_log
@@ -170,6 +179,40 @@ def _cleanup_stale_scrape_logs() -> None:
     )
     if affected:
         logger.info("Cleaned up %d zombie scrape_log entries", affected)
+
+
+def _force_release_stale_lock() -> None:
+    """Force-release the scrape advisory lock if the current scrape has exceeded
+    _MAX_SCRAPE_DURATION_HOURS. Covers the case where the scrape thread hangs
+    (e.g. blocking DNS) but the lock connection survives."""
+    global _lock_conn
+    if _lock_conn is None:
+        return
+    row = fetch_one(
+        """SELECT id FROM scrape_log
+           WHERE status = 'running'
+             AND started_at < DATE_SUB(NOW(), INTERVAL %s HOUR)
+           ORDER BY id DESC LIMIT 1""",
+        (_MAX_SCRAPE_DURATION_HOURS,),
+    )
+    if not row:
+        return
+    logger.warning(
+        "Scrape #%d exceeded %dh — force-releasing advisory lock",
+        row['id'], _MAX_SCRAPE_DURATION_HOURS,
+    )
+    try:
+        _release_db_lock(_lock_conn)
+    except Exception as e:
+        logger.error("Error force-releasing lock: %s", e)
+    _lock_conn = None
+    execute_query(
+        """UPDATE scrape_log
+           SET finished_at = NOW(), status = 'failed',
+               error_message = %s
+           WHERE id = %s AND status = 'running'""",
+        (f"Force-killed: scrape exceeded {_MAX_SCRAPE_DURATION_HOURS}h limit", row['id']),
+    )
 
 
 _DRAFT_VALIDATION_BUDGET_SECONDS = 300  # 5-minute time budget
@@ -250,7 +293,13 @@ def run_scrape_job() -> None:
         urls_changed = 0
 
         scrape_start = time.time()
+        scrape_deadline = scrape_start + _MAX_SCRAPE_DURATION_HOURS * 3600
         for url_row in urls:
+            if time.time() > scrape_deadline:
+                logger.warning("Scrape deadline reached (%dh), stopping at %d/%d URLs",
+                               _MAX_SCRAPE_DURATION_HOURS, urls_checked, len(urls))
+                break
+
             url_id = url_row['id']
             researcher_id = url_row['researcher_id']
             url = url_row['url']
