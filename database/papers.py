@@ -241,7 +241,7 @@ def search_feed_events(
 ) -> tuple[list[dict], int]:
     """Search feed_events with dynamic filters.
 
-    Returns (rows, total_count). All filter params are optional.
+    Returns (rows, total_count, researcher_count). All filter params are optional.
 
     Filters:
     - year: match p.year
@@ -268,12 +268,13 @@ def search_feed_events(
         params.append(researcher_id)
 
     if status_list:
+        col = "fe.new_status" if event_type == "status_change" else "p.status"
         if len(status_list) == 1:
-            conditions.append("p.status = %s")
+            conditions.append(f"{col} = %s")
             params.append(status_list[0])
         else:
             placeholders = ",".join(["%s"] * len(status_list))
-            conditions.append(f"p.status IN ({placeholders})")
+            conditions.append(f"{col} IN ({placeholders})")
             params.extend(status_list)
 
     if since:
@@ -339,6 +340,11 @@ def search_feed_events(
     if event_type:
         conditions.append("fe.event_type = %s")
         params.append(event_type)
+
+    if event_type == "status_change":
+        conditions.append(
+            "NOT (fe.old_status = 'accepted' AND fe.new_status = 'published')"
+        )
 
     jel_list = [j.strip().upper() for j in jel_code.split(",") if j.strip()] if jel_code else []
     if jel_list:
