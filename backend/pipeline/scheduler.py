@@ -32,7 +32,11 @@ _scheduler_lock_conn = None  # connection holding the advisory lock for the sche
 # lock silently drops, the zombie cleanup falsely fails the live scrape row,
 # and concurrent-scrape protection vanishes. A full scrape takes ~12h.
 _LOCK_CONN_WAIT_TIMEOUT = 7 * 24 * 3600  # 7 days
+_LOCK_KEEPALIVE_SECONDS = 1800  # ping idle lock connections every 30 min
 _MAX_SCRAPE_DURATION_HOURS = 18  # force-release lock if scrape exceeds this
+
+_keepalive_stop = threading.Event()
+_keepalive_thread = None
 
 
 def _acquire_db_lock() -> "mysql.connector.connection.MySQLConnection | None":
@@ -53,20 +57,22 @@ def _acquire_db_lock() -> "mysql.connector.connection.MySQLConnection | None":
         return None
 
 
-def _ping_lock_conn(conn: "mysql.connector.connection.MySQLConnection") -> None:
-    """Send a lightweight query on the lock connection to keep it alive.
+def _lock_keepalive_loop() -> None:
+    """Ping idle lock connections on a fixed wall-clock interval.
 
-    The lock connection sits idle for the entire scrape. Despite SET SESSION
-    wait_timeout = 7 days, the connection dies at ~8h in production. A periodic
-    SELECT 1 resets the idle timer and keeps TCP alive.
+    Both _lock_conn (scrape) and _scheduler_lock_conn sit idle for hours/days.
+    Despite SET SESSION wait_timeout = 7 days, connections die at ~8h in
+    production. A periodic conn.ping() resets the idle timer and keeps TCP alive.
+    Runs as a daemon thread started alongside the scheduler.
     """
-    try:
-        cursor = conn.cursor()
-        cursor.execute("SELECT 1")
-        cursor.fetchone()
-        cursor.close()
-    except Exception as e:
-        logger.warning("Lock connection ping failed: %s", e)
+    while not _keepalive_stop.wait(_LOCK_KEEPALIVE_SECONDS):
+        for name, conn in [("scrape", _lock_conn), ("scheduler", _scheduler_lock_conn)]:
+            if conn is None:
+                continue
+            try:
+                conn.ping(reconnect=False)
+            except Exception as e:
+                logger.warning("Lock keepalive ping failed (%s): %s", name, e)
 
 
 def _release_db_lock(conn: "mysql.connector.connection.MySQLConnection") -> None:
@@ -334,7 +340,6 @@ def run_scrape_job() -> None:
 
                 if urls_checked % 10 == 0:
                     _with_db_retry(_update_progress, log_id, urls_checked=urls_checked, urls_changed=urls_changed)
-                    _ping_lock_conn(lock_conn)
 
             except _TRANSIENT_MYSQL_ERRORS as e:
                 logger.error("MySQL connection error fetching URL %s (id=%s) after retries: %s", url, url_id, e)
@@ -372,6 +377,27 @@ def run_scrape_job() -> None:
         logger.error("Paper merge failed: %s: %s", type(e).__name__, e)
     merge_s = time.time() - t0
     logger.info(f"Paper merge: {merge_s:.1f}s")
+
+
+def _start_lock_keepalive() -> None:
+    global _keepalive_thread
+    if _keepalive_thread is not None and _keepalive_thread.is_alive():
+        return
+    _keepalive_stop.clear()
+    _keepalive_thread = threading.Thread(
+        target=_lock_keepalive_loop, name="lock-keepalive", daemon=True,
+    )
+    _keepalive_thread.start()
+    logger.info("Lock keepalive thread started (interval=%ds)", _LOCK_KEEPALIVE_SECONDS)
+
+
+def _stop_lock_keepalive() -> None:
+    global _keepalive_thread
+    if _keepalive_thread is None:
+        return
+    _keepalive_stop.set()
+    _keepalive_thread.join(timeout=5)
+    _keepalive_thread = None
 
 
 def _handle_sigterm(signum: int, frame: object) -> None:
@@ -593,6 +619,8 @@ def start_scheduler() -> None:
     _scheduler.start()
     logger.info(f"Scheduler started: scraping every {SCRAPE_INTERVAL_HOURS} hours")
 
+    _start_lock_keepalive()
+
     if SCRAPE_ON_STARTUP:
         logger.info("SCRAPE_ON_STARTUP is true, triggering immediate scrape in background")
         threading.Thread(target=run_scrape_job, name="startup-scrape").start()
@@ -607,6 +635,7 @@ def start_scheduler() -> None:
 def shutdown_scheduler() -> None:
     """Shut down the scheduler gracefully, waiting for any running job to complete."""
     global _scheduler, _scheduler_lock_conn
+    _stop_lock_keepalive()
     stop_enrichment_worker()
     stop_extraction_worker()
     if _scheduler is not None:
