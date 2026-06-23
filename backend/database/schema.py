@@ -791,6 +791,39 @@ def create_tables() -> None:
                     except Exception as e:
                         logging.warning("Migration: feed_events status ENUMs: %s", e)
 
+                    # Backfill: flip working_paper → work_in_progress for papers with no links
+                    try:
+                        cursor.execute("""
+                            UPDATE papers p
+                            SET p.status = 'work_in_progress'
+                            WHERE p.status = 'working_paper'
+                              AND NOT EXISTS (
+                                  SELECT 1 FROM paper_links pl WHERE pl.paper_id = p.id
+                              )
+                              AND (p.draft_url IS NULL OR p.draft_url_status != 'valid')
+                        """)
+                        backfilled = cursor.rowcount
+                        conn.commit()
+                        logging.info("Migration: backfilled %d papers to work_in_progress", backfilled)
+                    except Exception as e:
+                        logging.warning("Migration: work_in_progress backfill: %s", e)
+
+                    # Update feed_events to reflect backfilled statuses
+                    try:
+                        cursor.execute("""
+                            UPDATE feed_events fe
+                            JOIN papers p ON p.id = fe.paper_id
+                            SET fe.new_status = 'work_in_progress'
+                            WHERE fe.event_type = 'new_paper'
+                              AND fe.new_status = 'working_paper'
+                              AND p.status = 'work_in_progress'
+                        """)
+                        events_updated = cursor.rowcount
+                        conn.commit()
+                        logging.info("Migration: updated %d feed_events to work_in_progress", events_updated)
+                    except Exception as e:
+                        logging.warning("Migration: feed_events backfill: %s", e)
+
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                     cursor.fetchone()
