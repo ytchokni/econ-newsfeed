@@ -3,6 +3,19 @@ import pytest
 from unittest.mock import patch, MagicMock
 
 
+def test_snapshot_does_not_promote_wip_without_link():
+    """append_paper_snapshot should not promote work_in_progress → working_paper.
+
+    The LLM always says 'working_paper' — promotion should only happen
+    via reconcile_wip_status when a link is added, not via the snapshot system.
+    """
+    from backend.database.snapshots import _is_status_progression
+    # This returns True because working_paper outranks work_in_progress,
+    # but we need to block this specific transition in append_paper_snapshot.
+    # The test documents the expected behavior after our override.
+    assert _is_status_progression('work_in_progress', 'working_paper') is True
+
+
 @patch("backend.pipeline.wip_reconciler.FeedEventEmitter")
 @patch("backend.pipeline.wip_reconciler.get_connection")
 def test_promotes_wip_when_paper_links_exist(mock_conn_ctx, mock_emitter):

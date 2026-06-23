@@ -140,8 +140,15 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
                 (paper_id, title, status, venue, abstract, draft_url, year, now, source_url, content_hash),
             )
 
-            # Block status regressions on the denormalized papers table
-            effective_status = status if _is_status_progression(old_status, status) or old_status is None else old_status
+            # Block status regressions on the denormalized papers table.
+            # Special case: work_in_progress → working_paper is handled by
+            # reconcile_wip_status (link-based), not by LLM re-extraction.
+            if old_status == 'work_in_progress' and status == 'working_paper':
+                effective_status = old_status
+            elif _is_status_progression(old_status, status) or old_status is None:
+                effective_status = status
+            else:
+                effective_status = old_status
             cursor.execute(
                 """UPDATE papers
                    SET status = %s, venue = %s, abstract = %s, draft_url = %s,

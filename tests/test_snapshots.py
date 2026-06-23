@@ -4,6 +4,7 @@ These static methods drive the append-only change-detection logic introduced in 
 All tests are pure unit tests — no DB connection required.
 """
 import hashlib
+from unittest.mock import patch, MagicMock
 
 import pytest
 
@@ -179,3 +180,35 @@ class TestPaperContentHash:
         hp = _compute_paper_content_hash("x", "y", "z", None, None)
         # The paper hash includes extra None fields so the two must differ
         assert hr != hp
+
+
+# ---------------------------------------------------------------------------
+# append_paper_snapshot WIP guard
+# ---------------------------------------------------------------------------
+
+@patch("backend.database.snapshots.get_connection")
+def test_append_snapshot_blocks_wip_to_wp_promotion(mock_conn_ctx):
+    """append_paper_snapshot should not promote work_in_progress via LLM output."""
+    mock_conn = MagicMock()
+    mock_cursor = MagicMock()
+    mock_conn_ctx.return_value.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn_ctx.return_value.__exit__ = MagicMock(return_value=False)
+    mock_conn.cursor.return_value.__enter__ = MagicMock(return_value=mock_cursor)
+    mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
+
+    # Previous snapshot exists with a different hash, paper is work_in_progress
+    mock_cursor.fetchone.side_effect = [
+        {"content_hash": "old_hash"},       # prev snapshot check
+        {"status": "work_in_progress"},      # current paper status
+    ]
+
+    from backend.database.snapshots import append_paper_snapshot
+    result = append_paper_snapshot(
+        paper_id=1, status="working_paper", venue=None,
+        abstract=None, draft_url=None, year="2026",
+    )
+
+    # The UPDATE should use work_in_progress, not working_paper
+    update_call = [c for c in mock_cursor.execute.call_args_list if "UPDATE papers" in str(c)]
+    assert len(update_call) == 1
+    assert "work_in_progress" in str(update_call[0])
