@@ -202,7 +202,7 @@ def _get_scrape_stats() -> dict:
     """Recent scrape history."""
     recent = fetch_all(
         """SELECT started_at, status, urls_checked, urls_changed,
-                  pubs_extracted, finished_at,
+                  pubs_extracted, finished_at, error_message,
                   COALESCE((SELECT SUM(total_tokens) FROM llm_usage
                             WHERE scrape_log_id = s.id), 0) AS tokens_used
            FROM scrape_log s ORDER BY id DESC LIMIT 30"""
@@ -226,6 +226,7 @@ def _get_scrape_stats() -> dict:
             "pubs_extracted": r["pubs_extracted"] or 0,
             "tokens_used": int(r["tokens_used"]),
             "duration_seconds": duration,
+            "error_message": r["error_message"],
         })
 
     totals = fetch_one(
