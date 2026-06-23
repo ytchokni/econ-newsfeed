@@ -105,3 +105,31 @@ def test_no_op_when_wip_and_no_links(mock_conn_ctx, mock_emitter):
     reconcile_wip_status(42)
 
     mock_emitter.emit_status_change.assert_not_called()
+
+
+@patch("backend.pipeline.wip_reconciler.FeedEventEmitter")
+@patch("backend.pipeline.wip_reconciler.get_connection")
+def test_reconcile_is_idempotent(mock_conn_ctx, mock_emitter):
+    """Calling reconcile_wip_status twice should only emit one event."""
+    mock_conn = MagicMock()
+    mock_cursor = MagicMock()
+    mock_conn_ctx.return_value.__enter__ = MagicMock(return_value=mock_conn)
+    mock_conn_ctx.return_value.__exit__ = MagicMock(return_value=False)
+    mock_conn.cursor.return_value = mock_cursor
+
+    # First call: paper is work_in_progress with a link
+    mock_cursor.fetchone.side_effect = [
+        ("work_in_progress",), (1,),  # status, has links
+    ]
+
+    from backend.pipeline.wip_reconciler import reconcile_wip_status
+    reconcile_wip_status(42)
+    assert mock_emitter.emit_status_change.call_count == 1
+
+    # Second call: paper is now working_paper (already promoted)
+    mock_cursor.fetchone.side_effect = [
+        ("working_paper",),  # status is now working_paper
+    ]
+    reconcile_wip_status(42)
+    # Should still be 1 (no second event)
+    assert mock_emitter.emit_status_change.call_count == 1
