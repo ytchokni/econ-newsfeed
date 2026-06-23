@@ -14,8 +14,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
-from database import create_tables, fetch_all
-from database.jel import sync_researcher_fields_from_jel
+from backend.database import create_tables, fetch_all
+from backend.database.jel import sync_researcher_fields_from_jel
 
 logger = logging.getLogger(__name__)
 

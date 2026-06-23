@@ -23,10 +23,10 @@ class TestPublicationSearch:
     def test_search_returns_200(self, client):
         """Basic search query returns 200."""
         with (
-            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)) as mock_search,
-            patch("api.get_authors_for_papers", return_value=AUTHORS_MAP),
-            patch("api.get_coauthors_for_papers", return_value={}),
-            patch("api.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)) as mock_search,
+            patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?search=Trade")
 
@@ -37,10 +37,10 @@ class TestPublicationSearch:
     def test_search_passes_search_to_db(self, client):
         """Search param is passed to search_feed_events."""
         with (
-            patch("api.search_feed_events", return_value=([], 0, 0)) as mock_search,
-            patch("api.get_authors_for_papers", return_value={}),
-            patch("api.get_coauthors_for_papers", return_value={}),
-            patch("api.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=([], 0, 0)) as mock_search,
+            patch("backend.api.get_authors_for_papers", return_value={}),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             client.get("/api/publications?search=monetary+policy")
 
@@ -51,10 +51,10 @@ class TestPublicationSearch:
     def test_search_escapes_special_chars(self, client):
         """Special LIKE chars (%, _) are escaped."""
         with (
-            patch("api.search_feed_events", return_value=([], 0, 0)),
-            patch("api.get_authors_for_papers", return_value={}),
-            patch("api.get_coauthors_for_papers", return_value={}),
-            patch("api.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=([], 0, 0)),
+            patch("backend.api.get_authors_for_papers", return_value={}),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?search=100%25_increase")
 
@@ -63,10 +63,10 @@ class TestPublicationSearch:
     def test_search_combined_with_year_filter(self, client):
         """Search works alongside existing filters."""
         with (
-            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)),
-            patch("api.get_authors_for_papers", return_value=AUTHORS_MAP),
-            patch("api.get_coauthors_for_papers", return_value={}),
-            patch("api.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)),
+            patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?search=Trade&year=2024")
 
@@ -77,10 +77,10 @@ class TestPublicationSearch:
     def test_empty_search_ignored(self, client):
         """Whitespace-only or empty search is treated as no filter."""
         with (
-            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)) as mock_search,
-            patch("api.get_authors_for_papers", return_value=AUTHORS_MAP),
-            patch("api.get_coauthors_for_papers", return_value={}),
-            patch("api.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)) as mock_search,
+            patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             client.get("/api/publications?search=+")
 
@@ -103,11 +103,11 @@ class TestResearcherSearch:
     def test_search_returns_200(self, client):
         """Basic name search returns 200."""
         with (
-            patch("api.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
-            patch("api.get_urls_for_researchers", return_value={}),
-            patch("api.get_pub_counts_for_researchers", return_value={1: 5}),
-            patch("api.get_fields_for_researchers", return_value={}),
-            patch("api.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
+            patch("backend.api.get_urls_for_researchers", return_value={}),
+            patch("backend.api.get_pub_counts_for_researchers", return_value={1: 5}),
+            patch("backend.api.get_fields_for_researchers", return_value={}),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             response = client.get("/api/researchers?search=Steinhardt")
 
@@ -118,11 +118,11 @@ class TestResearcherSearch:
     def test_search_passes_search_to_db(self, client):
         """Search checks both first_name and last_name (handled by search_researchers)."""
         with (
-            patch("api.search_researchers", return_value=([], 0)) as mock_search,
-            patch("api.get_urls_for_researchers", return_value={}),
-            patch("api.get_pub_counts_for_researchers", return_value={}),
-            patch("api.get_fields_for_researchers", return_value={}),
-            patch("api.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=([], 0)) as mock_search,
+            patch("backend.api.get_urls_for_researchers", return_value={}),
+            patch("backend.api.get_pub_counts_for_researchers", return_value={}),
+            patch("backend.api.get_fields_for_researchers", return_value={}),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             client.get("/api/researchers?search=Max")
 
@@ -132,11 +132,11 @@ class TestResearcherSearch:
     def test_search_combined_with_institution(self, client):
         """Search works alongside institution filter."""
         with (
-            patch("api.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
-            patch("api.get_urls_for_researchers", return_value={}),
-            patch("api.get_pub_counts_for_researchers", return_value={1: 5}),
-            patch("api.get_fields_for_researchers", return_value={}),
-            patch("api.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
+            patch("backend.api.get_urls_for_researchers", return_value={}),
+            patch("backend.api.get_pub_counts_for_researchers", return_value={1: 5}),
+            patch("backend.api.get_fields_for_researchers", return_value={}),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             response = client.get("/api/researchers?search=Max&institution=Berlin")
 

@@ -22,8 +22,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from bs4 import BeautifulSoup, MarkupResemblesLocatorWarning
 warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
-from database import fetch_all, fetch_one
-from database.researchers import add_researcher_url
+from backend.database import fetch_all, fetch_one
+from backend.database.researchers import add_researcher_url
 
 logging.basicConfig(
     level=logging.INFO,

@@ -148,7 +148,7 @@ class TestTitleHashIntegrity:
     """
 
     def test_title_hash_matches_title(self, db):
-        from database.papers import compute_title_hash
+        from backend.database.papers import compute_title_hash
 
         rows = db.fetch_all("SELECT id, title, title_hash FROM papers WHERE title IS NOT NULL")
         bad = [
@@ -180,7 +180,7 @@ class TestNearDuplicatePapers:
 
     def test_no_near_duplicate_titles_per_researcher(self, db):
         from difflib import SequenceMatcher
-        from database.papers import normalize_title
+        from backend.database.papers import normalize_title
 
         rows = db.fetch_all(
             """SELECT a.researcher_id, p.id, p.title

@@ -25,9 +25,9 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 from openai import OpenAIError
 
-from llm_client import StructuredResponse
-from publication import Publication, PublicationExtraction, PublicationExtractionList, clean_title
-from paper_saver import _title_similarity
+from backend.llm.client import StructuredResponse
+from backend.pipeline.publication import Publication, PublicationExtraction, PublicationExtractionList, clean_title
+from backend.pipeline.paper_saver import _title_similarity
 
 
 # ---------------------------------------------------------------------------
@@ -133,11 +133,11 @@ class TestExtractPublications:
     def _patch_content_max(self):
         """CONTENT_MAX_CHARS is read from env as a string at import time.
         Patch it to an int so text_content[:CONTENT_MAX_CHARS] works."""
-        with patch("publication.CONTENT_MAX_CHARS", 20000):
+        with patch("backend.pipeline.publication.CONTENT_MAX_CHARS", 20000):
             yield
 
-    @patch("publication.log_llm_usage")
-    @patch("llm_client.get_client")
+    @patch("backend.pipeline.publication.log_llm_usage")
+    @patch("backend.llm.client.get_client")
     def test_happy_path(self, mock_get_client, mock_log_usage):
         """Valid structured response -> list of publication dicts."""
         mock_client = mock_get_client.return_value
@@ -157,8 +157,8 @@ class TestExtractPublications:
         # Verify the LLM client was called with the correct model
         mock_client.chat.completions.create.assert_called_once()
 
-    @patch("publication.log_llm_usage")
-    @patch("llm_client.get_client")
+    @patch("backend.pipeline.publication.log_llm_usage")
+    @patch("backend.llm.client.get_client")
     def test_multiple_publications(self, mock_get_client, mock_log_usage):
         """Multiple publications in a single response are all returned."""
         mock_client = mock_get_client.return_value
@@ -174,8 +174,8 @@ class TestExtractPublications:
         assert result[0]["title"] == "Paper A"
         assert result[1]["title"] == "Paper B"
 
-    @patch("publication.log_llm_usage")
-    @patch("llm_client.get_client")
+    @patch("backend.pipeline.publication.log_llm_usage")
+    @patch("backend.llm.client.get_client")
     def test_malformed_json_returns_empty(self, mock_get_client, mock_log_usage):
         """Model returns text that fails JSON validation -> empty list after retry."""
         mock_client = mock_get_client.return_value
@@ -193,8 +193,8 @@ class TestExtractPublications:
 
         assert result == []
 
-    @patch("publication.log_llm_usage")
-    @patch("llm_client.get_client")
+    @patch("backend.pipeline.publication.log_llm_usage")
+    @patch("backend.llm.client.get_client")
     def test_api_error_returns_empty_and_logs(self, mock_get_client, mock_log_usage, caplog):
         """OpenAI API exception -> empty list and error is logged."""
         mock_client = mock_get_client.return_value
@@ -206,8 +206,8 @@ class TestExtractPublications:
         assert result == []
         assert any("API down" in record.message for record in caplog.records)
 
-    @patch("publication.log_llm_usage")
-    @patch("llm_client.get_client")
+    @patch("backend.pipeline.publication.log_llm_usage")
+    @patch("backend.llm.client.get_client")
     def test_llm_usage_logged(self, mock_get_client, mock_log_usage):
         """log_llm_usage is called with correct arguments on success."""
         mock_client = mock_get_client.return_value
@@ -225,8 +225,8 @@ class TestExtractPublications:
         assert kwargs.get("context_url") == "https://example.com/page"
         assert kwargs.get("scrape_log_id") == 42
 
-    @patch("publication.log_llm_usage")
-    @patch("llm_client.get_client")
+    @patch("backend.pipeline.publication.log_llm_usage")
+    @patch("backend.llm.client.get_client")
     def test_llm_usage_not_logged_on_api_error(self, mock_get_client, mock_log_usage):
         """If the API call itself throws, log_llm_usage should NOT be called."""
         mock_client = mock_get_client.return_value
@@ -248,7 +248,7 @@ class TestBuildExtractionPrompt:
     def _patch_content_max(self):
         """CONTENT_MAX_CHARS is read from env as a string at import time.
         Patch it to an int so text_content[:CONTENT_MAX_CHARS] works."""
-        with patch("publication.CONTENT_MAX_CHARS", 20000):
+        with patch("backend.pipeline.publication.CONTENT_MAX_CHARS", 20000):
             yield
 
     def test_contains_url(self):
@@ -431,25 +431,25 @@ class TestTryExtractPublications:
     def _patch_content_max(self):
         """CONTENT_MAX_CHARS is read from env as a string at import time.
         Patch it to an int so text_content[:CONTENT_MAX_CHARS] works."""
-        with patch("publication.CONTENT_MAX_CHARS", 20000):
+        with patch("backend.pipeline.publication.CONTENT_MAX_CHARS", 20000):
             yield
 
     def test_returns_none_on_llm_failure(self):
-        """parsed=None (API error / validation failure) → None, not []."""
+        """parsed=None (API error / validation failure) → pubs=None, not []."""
         failed = StructuredResponse(parsed=None, usage=None)
-        with patch("publication.extract_json", return_value=failed), \
-             patch("publication.log_llm_usage"):
+        with patch("backend.pipeline.publication.extract_json", return_value=failed), \
+             patch("backend.pipeline.publication.log_llm_usage"):
             result = Publication.try_extract_publications("some text", "https://x.com")
-        assert result is None
+        assert result.pubs is None
 
     def test_returns_empty_list_when_no_pubs_found(self):
-        """A valid response with zero publications → [] (genuine empty)."""
+        """A valid response with zero publications → pubs=[] (genuine empty)."""
         parsed = PublicationExtractionList(publications=[])
         ok = StructuredResponse(parsed=parsed, usage=MagicMock())
-        with patch("publication.extract_json", return_value=ok), \
-             patch("publication.log_llm_usage"):
+        with patch("backend.pipeline.publication.extract_json", return_value=ok), \
+             patch("backend.pipeline.publication.log_llm_usage"):
             result = Publication.try_extract_publications("some text", "https://x.com")
-        assert result == []
+        assert result.pubs == []
 
     def test_returns_validated_pubs(self):
         """Valid publications are returned as dicts."""
@@ -459,17 +459,17 @@ class TestTryExtractPublications:
                                "draft_url": None, "abstract": None}]}
         )
         ok = StructuredResponse(parsed=parsed, usage=MagicMock())
-        with patch("publication.extract_json", return_value=ok), \
-             patch("publication.log_llm_usage"), \
-             patch("publication.validate_publication", return_value=True):
+        with patch("backend.pipeline.publication.extract_json", return_value=ok), \
+             patch("backend.pipeline.publication.log_llm_usage"), \
+             patch("backend.pipeline.publication.validate_publication", return_value=True):
             result = Publication.try_extract_publications("text", "https://x.com")
-        assert len(result) == 1
-        assert result[0]["title"] == "A Great Paper"
+        assert len(result.pubs) == 1
+        assert result.pubs[0]["title"] == "A Great Paper"
 
     def test_extract_publications_returns_empty_list_on_failure(self):
         """The legacy wrapper still returns [] (not None) on failure."""
         failed = StructuredResponse(parsed=None, usage=None)
-        with patch("publication.extract_json", return_value=failed), \
-             patch("publication.log_llm_usage"):
+        with patch("backend.pipeline.publication.extract_json", return_value=failed), \
+             patch("backend.pipeline.publication.log_llm_usage"):
             result = Publication.extract_publications("some text", "https://x.com")
         assert result == []

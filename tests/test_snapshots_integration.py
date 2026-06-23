@@ -2,7 +2,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from database.snapshots import (
+from backend.database.snapshots import (
     append_paper_snapshot,
     append_researcher_snapshot,
     _compute_paper_content_hash,
@@ -49,7 +49,7 @@ class TestAppendPaperSnapshotFeedEvents:
     def test_new_snapshot_inserts_and_updates(self):
         """First snapshot inserts into paper_snapshots and updates papers."""
         mock_conn, mock_cursor = _make_mock_conn(prev_row=None)
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             result = append_paper_snapshot(1, "accepted", "JLE", "abs", None, "2024")
 
         assert result.changed is True
@@ -63,7 +63,7 @@ class TestAppendPaperSnapshotFeedEvents:
         mock_conn, mock_cursor = _make_mock_conn(
             prev_row={"content_hash": h, "status": "accepted"},
         )
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             result = append_paper_snapshot(1, "accepted", "JLE", "abs", None, "2024")
 
         assert result.changed is False
@@ -76,7 +76,7 @@ class TestAppendPaperSnapshotFeedEvents:
         mock_conn, mock_cursor = _make_mock_conn(
             prev_row={"content_hash": old_hash, "status": "working_paper"},
         )
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             result = append_paper_snapshot(1, "accepted", "JLE", "abs", None, "2024")
 
         assert result.changed is True
@@ -92,7 +92,7 @@ class TestAppendPaperSnapshotFeedEvents:
         mock_conn, mock_cursor = _make_mock_conn(
             prev_row={"content_hash": old_hash, "status": "accepted"},
         )
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             result = append_paper_snapshot(1, "accepted", "JLE", "new abs", None, "2024")
 
         assert result.changed is True
@@ -104,7 +104,7 @@ class TestAppendPaperSnapshotFeedEvents:
     def test_first_snapshot_no_status_change(self):
         """First-ever snapshot (no previous) has no old_status."""
         mock_conn, mock_cursor = _make_mock_conn(prev_row=None)
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             result = append_paper_snapshot(1, "accepted", "JLE", "abs", None, "2024")
 
         assert result.changed is True
@@ -114,7 +114,7 @@ class TestAppendPaperSnapshotFeedEvents:
     def test_commits_transaction(self):
         """A successful insert must call conn.commit()."""
         mock_conn, mock_cursor = _make_mock_conn(prev_row=None)
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             result = append_paper_snapshot(1, "accepted", "JLE", "abs", None, "2024")
 
         assert result.changed is True
@@ -123,7 +123,7 @@ class TestAppendPaperSnapshotFeedEvents:
     def test_title_included_in_snapshot(self):
         """When title is provided, it is included in the INSERT."""
         mock_conn, mock_cursor = _make_mock_conn(prev_row=None)
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             result = append_paper_snapshot(
                 1, "accepted", "JLE", "abs", None, "2024",
                 title="My Paper Title",
@@ -143,7 +143,7 @@ class TestAppendPaperSnapshotFeedEvents:
         mock_conn, mock_cursor = _make_mock_conn(
             prev_row={"content_hash": old_hash, "status": "accepted"},
         )
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             result = append_paper_snapshot(
                 1, "accepted", "JLE", "abs", None, "2024",
                 title="New Title",
@@ -177,7 +177,7 @@ class TestStatusProgression:
         mock_conn, mock_cursor = _make_mock_conn(
             prev_row={"content_hash": old_hash, "status": "published"},
         )
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             result = append_paper_snapshot(1, "working_paper", "AER", "abs", None, "2024")
 
         assert result.changed is True
@@ -189,7 +189,7 @@ class TestStatusProgression:
         mock_conn, mock_cursor = _make_mock_conn(
             prev_row={"content_hash": old_hash, "status": "published"},
         )
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             append_paper_snapshot(1, "working_paper", "AER", "new abs", None, "2024")
 
         update_calls = [
@@ -206,7 +206,7 @@ class TestStatusProgression:
         mock_conn, mock_cursor = _make_mock_conn(
             prev_row={"content_hash": old_hash, "status": "published"},
         )
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             append_paper_snapshot(1, "working_paper", "AER", "new abs", None, "2024")
 
         insert_calls = [
@@ -228,7 +228,7 @@ class TestAppendResearcherSnapshotDenormalization:
     def test_new_snapshot_inserts_and_denormalizes(self):
         """First snapshot inserts into researcher_snapshots and updates researchers."""
         mock_conn, mock_cursor = _make_mock_conn(prev_row=None)
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             result = append_researcher_snapshot(1, "Prof", "MIT", "Bio")
 
         assert result is True
@@ -242,7 +242,7 @@ class TestAppendResearcherSnapshotDenormalization:
         mock_conn, mock_cursor = _make_mock_conn(
             prev_row={"content_hash": h},
         )
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             result = append_researcher_snapshot(1, "Prof", "MIT", "Bio")
 
         assert result is False
@@ -255,7 +255,7 @@ class TestAppendResearcherSnapshotDenormalization:
         mock_conn, mock_cursor = _make_mock_conn(
             prev_row={"content_hash": old_hash},
         )
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             result = append_researcher_snapshot(1, "Prof", "MIT", "New bio")
 
         assert result is True
@@ -266,7 +266,7 @@ class TestAppendResearcherSnapshotDenormalization:
     def test_commits_transaction(self):
         """A successful insert must call conn.commit()."""
         mock_conn, mock_cursor = _make_mock_conn(prev_row=None)
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             append_researcher_snapshot(1, "Prof", "MIT", "Bio")
 
         mock_conn.commit.assert_called_once()
@@ -310,7 +310,7 @@ class TestEffectiveStatusBaseline:
             {"content_hash": old_hash},
             {"status": "published"},
         )
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             result = append_paper_snapshot(1, "published", "AER", "abs", None, "2024")
 
         assert result.changed is True
@@ -324,7 +324,7 @@ class TestEffectiveStatusBaseline:
             {"content_hash": old_hash},
             {"status": "accepted"},
         )
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             result = append_paper_snapshot(1, "published", "AER", "abs", None, "2024")
 
         assert result.status_changed is True
@@ -338,7 +338,7 @@ class TestEffectiveStatusBaseline:
             {"content_hash": old_hash},
             {"status": "published"},
         )
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             result = append_paper_snapshot(1, "working_paper", "AER", "new abs", None, "2024")
 
         assert result.status_changed is False
@@ -351,7 +351,7 @@ class TestEffectiveStatusBaseline:
             {"content_hash": old_hash},
             {"status": None},
         )
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             result = append_paper_snapshot(1, "working_paper", "AER", "abs", None, "2024")
 
         assert result.status_changed is False
@@ -361,7 +361,7 @@ class TestEffectiveStatusBaseline:
         """The papers.status read must lock the row (FOR UPDATE) so concurrent
         extractions of co-author pages cannot both emit for the same rank."""
         mock_conn, mock_cursor = _make_two_read_mock_conn(None, {"status": "accepted"})
-        with patch("database.snapshots.get_connection", return_value=mock_conn):
+        with patch("backend.database.snapshots.get_connection", return_value=mock_conn):
             append_paper_snapshot(1, "published", "AER", "abs", None, "2024")
 
         sqls = _sql_statements(mock_cursor)

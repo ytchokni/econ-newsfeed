@@ -7,7 +7,7 @@ import hashlib
 
 import pytest
 
-from database import _compute_paper_content_hash, _compute_researcher_content_hash
+from backend.database import _compute_paper_content_hash, _compute_researcher_content_hash
 
 
 # ---------------------------------------------------------------------------

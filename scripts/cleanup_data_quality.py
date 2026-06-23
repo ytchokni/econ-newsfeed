@@ -25,11 +25,11 @@ from dotenv import load_dotenv
 
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-from database import fetch_all, fetch_one, get_connection  # noqa: E402
-from database.papers import compute_title_hash, normalize_title  # noqa: E402
-from database.snapshots import _STATUS_RANK  # noqa: E402
-from paper_merge import _CHILD_TABLES, find_duplicate_groups  # noqa: E402
-from publication import clean_title  # noqa: E402
+from backend.database import fetch_all, fetch_one, get_connection  # noqa: E402
+from backend.database.papers import compute_title_hash, normalize_title  # noqa: E402
+from backend.database.snapshots import _STATUS_RANK  # noqa: E402
+from backend.enrichment.paper_merge import _CHILD_TABLES, find_duplicate_groups  # noqa: E402
+from backend.pipeline.publication import clean_title  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("cleanup")

@@ -16,7 +16,7 @@ from unittest.mock import patch, MagicMock
 class TestOpenAlexEncodingGuard:
     """Verify update_openalex_data passes text through encoding guard."""
 
-    @patch("database.papers.get_connection")
+    @patch("backend.database.papers.get_connection")
     def test_mojibake_abstract_is_fixed(self, mock_get_conn):
         mock_conn = MagicMock()
         mock_cursor = MagicMock()
@@ -30,7 +30,7 @@ class TestOpenAlexEncodingGuard:
         mock_conn.cursor.return_value = mock_cursor_ctx
         mock_get_conn.return_value = mock_conn
 
-        from database.papers import update_openalex_data
+        from backend.database.papers import update_openalex_data
 
         update_openalex_data(
             paper_id=1,

@@ -9,7 +9,7 @@ import re
 
 import pytest
 
-from database import compute_title_hash, normalize_title
+from backend.database import compute_title_hash, normalize_title
 
 
 # ---------------------------------------------------------------------------

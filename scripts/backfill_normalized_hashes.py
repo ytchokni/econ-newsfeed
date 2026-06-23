@@ -17,8 +17,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-from database import execute_query, fetch_all
-from html_fetcher import HTMLFetcher
+from backend.database import execute_query, fetch_all
+from backend.pipeline.html_fetcher import HTMLFetcher
 
 
 def backfill_normalized_hashes():

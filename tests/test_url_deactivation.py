@@ -1,9 +1,9 @@
 """Tests for URL deactivation / failure-tracking functions in database.researchers."""
 from unittest.mock import patch, call
 
-from html_fetcher import HTMLFetcher, ResponseTooLarge
+from backend.pipeline.html_fetcher import HTMLFetcher, ResponseTooLarge
 
-from database.researchers import (
+from backend.database.researchers import (
     _URL_DEACTIVATION_THRESHOLD,
     record_url_fetch_failure,
     record_url_fetch_success,
@@ -12,7 +12,7 @@ from database.researchers import (
     reactivate_url,
 )
 
-_MOD = "database.researchers"
+_MOD = "backend.database.researchers"
 
 
 class TestRecordUrlFetchFailure:
@@ -130,49 +130,49 @@ class TestReactivateUrl:
 class TestFetchFailureTracking:
     """Test that fetch_and_save_if_changed records success/failure."""
 
-    @patch("html_fetcher.HTMLFetcher._was_fetched_recently", return_value=False)
-    @patch("html_fetcher.HTMLFetcher.validate_url_with_pin", return_value=(True, "1.2.3.4"))
-    @patch("html_fetcher.HTMLFetcher.is_allowed_by_robots", return_value=True)
-    @patch("html_fetcher.HTMLFetcher.fetch_html", return_value=None)
-    @patch("html_fetcher.record_url_fetch_failure")
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher._was_fetched_recently", return_value=False)
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.validate_url_with_pin", return_value=(True, "1.2.3.4"))
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.is_allowed_by_robots", return_value=True)
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.fetch_html", return_value=None)
+    @patch("backend.pipeline.html_fetcher.record_url_fetch_failure")
     def test_failed_fetch_records_failure(self, mock_record, mock_fetch, mock_robots, mock_validate, mock_recent):
         HTMLFetcher.fetch_and_save_if_changed(1, "https://dead.example.com", 10)
         mock_record.assert_called_once_with(1, "fetch_failed")
 
-    @patch("html_fetcher.HTMLFetcher._was_fetched_recently", return_value=False)
-    @patch("html_fetcher.HTMLFetcher.validate_url_with_pin", return_value=(True, "1.2.3.4"))
-    @patch("html_fetcher.HTMLFetcher.is_allowed_by_robots", return_value=False)
-    @patch("html_fetcher.record_url_fetch_failure")
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher._was_fetched_recently", return_value=False)
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.validate_url_with_pin", return_value=(True, "1.2.3.4"))
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.is_allowed_by_robots", return_value=False)
+    @patch("backend.pipeline.html_fetcher.record_url_fetch_failure")
     def test_robots_blocked_records_failure(self, mock_record, mock_robots, mock_validate, mock_recent):
         HTMLFetcher.fetch_and_save_if_changed(1, "https://blocked.example.com", 10)
         mock_record.assert_called_once_with(1, "robots_blocked")
 
-    @patch("html_fetcher.HTMLFetcher._was_fetched_recently", return_value=False)
-    @patch("html_fetcher.HTMLFetcher.validate_url_with_pin", return_value=(False, None))
-    @patch("html_fetcher.record_url_fetch_failure")
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher._was_fetched_recently", return_value=False)
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.validate_url_with_pin", return_value=(False, None))
+    @patch("backend.pipeline.html_fetcher.record_url_fetch_failure")
     def test_ssrf_failure_records_failure(self, mock_record, mock_validate, mock_recent):
         HTMLFetcher.fetch_and_save_if_changed(1, "https://evil.example.com", 10)
         mock_record.assert_called_once_with(1, "ssrf_blocked")
 
-    @patch("html_fetcher.HTMLFetcher._was_fetched_recently", return_value=False)
-    @patch("html_fetcher.HTMLFetcher.validate_url_with_pin", return_value=(True, "1.2.3.4"))
-    @patch("html_fetcher.HTMLFetcher.is_allowed_by_robots", return_value=True)
-    @patch("html_fetcher.HTMLFetcher.fetch_html", side_effect=ResponseTooLarge("2MB"))
-    @patch("html_fetcher.record_url_fetch_failure")
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher._was_fetched_recently", return_value=False)
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.validate_url_with_pin", return_value=(True, "1.2.3.4"))
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.is_allowed_by_robots", return_value=True)
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.fetch_html", side_effect=ResponseTooLarge("2MB"))
+    @patch("backend.pipeline.html_fetcher.record_url_fetch_failure")
     def test_response_too_large_records_failure(self, mock_record, mock_fetch, mock_robots, mock_validate, mock_recent):
         HTMLFetcher.fetch_and_save_if_changed(1, "https://huge.example.com", 10)
         mock_record.assert_called_once_with(1, "response_too_large")
 
-    @patch("html_fetcher.HTMLFetcher._was_fetched_recently", return_value=False)
-    @patch("html_fetcher.HTMLFetcher.validate_url_with_pin", return_value=(True, "1.2.3.4"))
-    @patch("html_fetcher.HTMLFetcher.is_allowed_by_robots", return_value=True)
-    @patch("html_fetcher.HTMLFetcher.fetch_html", return_value="<html>content</html>")
-    @patch("html_fetcher.HTMLFetcher.extract_text_content", return_value="content")
-    @patch("html_fetcher.HTMLFetcher.normalize_text", return_value="content")
-    @patch("html_fetcher.HTMLFetcher.hash_text_content", return_value="abc123")
-    @patch("html_fetcher.HTMLFetcher.has_text_changed", return_value=True)
-    @patch("html_fetcher.HTMLFetcher.save_text")
-    @patch("html_fetcher.record_url_fetch_success")
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher._was_fetched_recently", return_value=False)
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.validate_url_with_pin", return_value=(True, "1.2.3.4"))
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.is_allowed_by_robots", return_value=True)
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.fetch_html", return_value="<html>content</html>")
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.extract_text_content", return_value="content")
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.normalize_text", return_value="content")
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.hash_text_content", return_value="abc123")
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.has_text_changed", return_value=True)
+    @patch("backend.pipeline.html_fetcher.HTMLFetcher.save_text")
+    @patch("backend.pipeline.html_fetcher.record_url_fetch_success")
     def test_successful_fetch_records_success(self, mock_record, mock_save, mock_changed,
                                                mock_hash, mock_norm, mock_extract,
                                                mock_fetch, mock_robots, mock_validate, mock_recent):

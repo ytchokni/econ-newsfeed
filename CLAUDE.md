@@ -57,7 +57,7 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build  #
 
 ### Pipeline Details
 
-**`make scrape`** runs the scheduler job (`scheduler.run_scrape_job()`), which is **fetch-only**:
+**`make scrape`** runs the scheduler job (`backend.pipeline.scheduler.run_scrape_job()`), which is **fetch-only**:
 1. **Fetch phase** (all URLs): Download HTML for all researcher URLs, skip unchanged (content hash).
 2. **Draft URL validation**: HEAD-request validation of `draft_url` fields
 
@@ -73,7 +73,7 @@ Extraction is owned by the extraction worker (below) — the scrape job only ref
 
 **Zombie scrape_log cleanup:** On scheduler start and hourly thereafter, `scrape_log` entries stuck in `'running'` are marked `'failed'` based on the scrape advisory lock: if no connection holds the lock, all running rows older than 5 minutes are zombies; if the lock is held, all but the newest running row are. Deploys that restart the container mid-scrape are swept on the next boot.
 
-**`make fetch`** runs stage 1 only (download HTML). Extraction is handled by the extraction worker (or `make extract` manually) — both use the shared `extraction.extract_one_url()`, which protects feed event integrity via `_title_in_previous_snapshot()` and the `_url_has_baseline()` check.
+**`make fetch`** runs stage 1 only (download HTML). Extraction is handled by the extraction worker (or `make extract` manually) — both use the shared `backend.pipeline.extraction.extract_one_url()`, which protects feed event integrity via `_title_in_previous_snapshot()` and the `_url_has_baseline()` check.
 
 **Granular batch pipeline** (run stages independently):
 1. `make fetch` — Download HTML, detect changes via content hash. Safe to run anytime.
@@ -94,30 +94,35 @@ Researcher URLs (DB) → HTMLFetcher (fetch + hash-based change detection)
   → FastAPI REST API → Next.js frontend (SWR)
 ```
 
-### Backend (Python — root directory)
+### Backend (Python — `backend/` package)
 
 | File | Role |
 |------|------|
-| `api.py` | FastAPI REST API — 20+ endpoints, CORS, rate limiting (`slowapi`), standardized error envelope |
-| `database/` | Package with facade class (`Database`) — submodules: `connection.py` (pool), `schema.py` (DDL/migrations), `researchers.py`, `papers.py`, `snapshots.py`, `llm.py`, `admin.py` |
-| `main.py` | CLI entry points for scraping pipeline stages |
-| `html_fetcher.py` | Web scraper — per-domain rate limiting, robots.txt compliance, content hashing for change detection |
-| `publication.py` | LLM extraction (Google AI Studio/Gemini) — Pydantic structured outputs, title dedup via SHA-256 hash |
-| `extraction.py` | Per-URL extraction logic shared by worker and CLI — reads stored HTML, runs LLM, persists papers/links/snapshots, marks extracted |
-| `llm_client.py` | Google AI Studio LLM client — OpenAI-compatible SDK, guided JSON via `response_format`, retry with reprompt |
-| `link_extractor.py` | Trusted-domain link extraction from HTML, DOI-based and anchor text matching to papers |
-| `doi_resolver.py` | DOI resolution from publisher URLs — regex extraction + Crossref PII-to-DOI lookup |
-| `openalex.py` | OpenAlex API client — DOI lookup, title search, coauthor/abstract enrichment, researcher ID backfill |
-| `scheduler.py` | APScheduler background jobs with MySQL advisory locks to prevent concurrent scraping |
-| `researcher.py` | Researcher data access layer |
-| `db_config.py` | Env var validation — raises `EnvironmentError` on import if required vars missing |
+| `backend/api.py` | FastAPI REST API — 20+ endpoints, CORS, rate limiting (`slowapi`), standardized error envelope |
+| `backend/database/` | Package with facade class (`Database`) — submodules: `connection.py` (pool), `schema.py` (DDL/migrations), `researchers.py`, `papers.py`, `snapshots.py`, `llm.py`, `admin.py` |
+| `backend/main.py` | CLI entry points for scraping pipeline stages |
+| `backend/pipeline/html_fetcher.py` | Web scraper — per-domain rate limiting, robots.txt compliance, content hashing for change detection |
+| `backend/pipeline/publication.py` | LLM extraction (Google AI Studio/Gemini) — Pydantic structured outputs, title dedup via SHA-256 hash |
+| `backend/pipeline/extraction.py` | Per-URL extraction logic shared by worker and CLI — reads stored HTML, runs LLM, persists papers/links/snapshots, marks extracted |
+| `backend/pipeline/paper_saver.py` | Persists extracted papers and authorship links to the database |
+| `backend/pipeline/feed_events.py` | Emits feed events (new_paper, status_change, etc.) after extraction |
+| `backend/pipeline/scheduler.py` | APScheduler background jobs with MySQL advisory locks to prevent concurrent scraping |
+| `backend/llm/client.py` | Google AI Studio LLM client — OpenAI-compatible SDK, guided JSON via `response_format`, retry with reprompt |
+| `backend/enrichment/link_extractor.py` | Trusted-domain link extraction from HTML, DOI-based and anchor text matching to papers |
+| `backend/enrichment/doi_resolver.py` | DOI resolution from publisher URLs — regex extraction + Crossref PII-to-DOI lookup |
+| `backend/enrichment/openalex.py` | OpenAlex API client — DOI lookup, title search, coauthor/abstract enrichment, researcher ID backfill |
+| `backend/enrichment/jel_classifier.py` | JEL code classification via LLM |
+| `backend/enrichment/jel_enrichment.py` | Applies JEL classifications to researchers |
+| `backend/enrichment/paper_merge.py` | Deduplicates papers post-extraction |
+| `backend/researcher.py` | Researcher data access layer |
+| `backend/config.py` | Env var validation + encoding guard — raises `EnvironmentError` on import if required vars missing |
 | `scripts/check_env.py` | Validates required env vars (used by `make check`) |
 | `scripts/deploy.sh` | Production deploy: git pull + docker-compose rebuild + health check |
 | `scripts/backup.sh` | Daily MySQL backup with gzip + 7-day retention (cron on Lightsail) |
 | `Caddyfile` | Reverse proxy config for auto-SSL on Lightsail |
 | `docker-compose.prod.yml` | Production override: no frontend, `restart: always`, 2 workers |
 
-No ORM — direct parameterized SQL via `mysql-connector-python`. All code imports `from database import Database` — the facade preserves this API while submodules are organized by domain.
+No ORM — direct parameterized SQL via `mysql-connector-python`. All code imports `from backend.database import Database` — the facade preserves this API while submodules are organized by domain.
 
 ### Frontend (Next.js — `app/` directory)
 
@@ -142,20 +147,20 @@ All foreign keys use `ON DELETE CASCADE`. Tables use `utf8mb4` charset.
 
 ## Deployment (Production)
 
-Live MVP: **Vercel** (free frontend) + **AWS Lightsail** ($12/mo backend).
+Live MVP: **Vercel** (free frontend) + **Hetzner** (4GB VPS backend).
 
 | Component | URL / Location |
 |-----------|---------------|
 | Frontend | `https://econ-newsfeed.vercel.app` (Vercel, auto-deploys from `app/` on push) |
-| Backend API | `https://econ-newsfeed.duckdns.org` (Lightsail, manual deploy via SSH) |
-| SSH | `ssh -i ~/.ssh/LightsailDefaultKey-eu-central-1.pem ubuntu@18.195.185.188` |
-| App directory | `/opt/econ-newsfeed` on the Lightsail instance |
-| Backups | `/backups/` on Lightsail, daily at 3am UTC, 7-day retention |
+| Backend API | `https://econ-newsfeed.duckdns.org` (Hetzner, manual deploy via SSH) |
+| SSH | `ssh -i ~/.ssh/hetzner root@167.233.132.217` |
+| App directory | `/opt/econ-newsfeed` on the Hetzner instance |
+| Backups | `/backups/` on Hetzner, daily at 3am UTC, 7-day retention |
 
 **How it works:**
-- Vercel serves Next.js frontend via SSR, rewrites `/api/*` server-side to the Lightsail backend (env var `API_INTERNAL_URL`)
-- Caddy runs on Lightsail host (not Docker), auto-provisions Let's Encrypt SSL, reverse-proxies to `localhost:8000`
-- Docker Compose on Lightsail runs FastAPI API + MySQL (no frontend container)
+- Vercel serves Next.js frontend via SSR, rewrites `/api/*` server-side to the Hetzner backend (env var `API_INTERNAL_URL`)
+- Caddy runs on Hetzner host (not Docker), auto-provisions Let's Encrypt SSL, reverse-proxies to `localhost:8000`
+- Docker Compose on Hetzner runs FastAPI API + MySQL (no frontend container)
 - Scheduler runs inside the API process; MySQL advisory lock prevents duplicate scrapes across workers
 
 **Deploy to production:**
@@ -166,7 +171,7 @@ cd /opt/econ-newsfeed && ./scripts/deploy.sh
 git pull origin main && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
-**Env vars:** Production `.env` lives on the server at `/opt/econ-newsfeed/.env`. Key differences from dev: `DB_HOST=db`, `FRONTEND_URL=https://econ-newsfeed.vercel.app`, `WEB_CONCURRENCY=2`, `EXTRACTION_WORKER_ENABLED=true` (required in prod — the scrape job is fetch-only, so without the worker extraction stops).
+**Env vars:** Production `.env` lives on the server at `/opt/econ-newsfeed/.env`. Key differences from dev: `DB_HOST=db`, `FRONTEND_URL=https://econ-newsfeed.vercel.app`, `WEB_CONCURRENCY=3`, `EXTRACTION_WORKER_ENABLED=true` (required in prod — the scrape job is fetch-only, so without the worker extraction stops).
 
 ## Configuration
 
@@ -174,17 +179,18 @@ Required env vars: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `GOOGLE_API_K
 
 `ADMIN_PASSWORD` enables the `/admin` dashboard (must also be set in `app/.env.local` for local dev and as a Vercel env var for production). Auth uses HMAC-signed cookies with 7-day expiry.
 
-`db_config.py` validates required vars at import time — tests set defaults in `tests/conftest.py` (must be set before any app imports).
+`backend/config.py` validates required vars at import time — tests set defaults in `tests/conftest.py` (must be set before any app imports).
 
 ## Testing Patterns
 
 - Python tests use `httpx.AsyncClient` with FastAPI's `TestClient` — no real database needed for API contract tests
-- `conftest.py` sets env vars *before* importing app modules to avoid `db_config.py`'s `sys.exit()`
+- `conftest.py` sets env vars *before* importing app modules to avoid `backend/config.py`'s `sys.exit()`
 - Frontend tests mock `next/font/google` via `__mocks__/next-font-google.ts`
 
 ## Gotchas
 
-- **`.dockerignore` uses a whitelist**: Every new Python module must be explicitly added to `.dockerignore` with a `!` prefix, or it will be silently excluded from the Docker build and cause `ModuleNotFoundError` in production.
+- **`.dockerignore` uses a directory-based whitelist**: The entire `backend/` directory is whitelisted as a unit (`!backend/`), so new modules added under `backend/` are automatically included. However, any new top-level files or directories outside `backend/` must still be explicitly added to `.dockerignore` with a `!` prefix, or they will be silently excluded from the Docker build and cause `ModuleNotFoundError` in production.
 - **docker-compose env vars are whitelisted too**: The `environment:` blocks in `docker-compose.yml` / `docker-compose.prod.yml` enumerate which `.env` vars reach the api container. A new env var read by the backend must be added there, or it will silently be unset in production (the `.env` file alone is not enough).
 - **DB container has 512MB memory limit**: Large MySQL imports (e.g., restoring a full dump) will OOM. Temporarily increase with `docker update --memory 1500m econ-newsfeed-db-1`, import, then restore.
 - **Vercel env var `API_INTERNAL_URL`** is baked in at build time (used by Next.js rewrites). Changing it requires a Vercel redeploy, not just a restart.
+- **DuckDNS** points `econ-newsfeed.duckdns.org` to the Hetzner IP. Update via: `curl "https://www.duckdns.org/update?domains=econ-newsfeed&token=<DUCKDNS_TOKEN>&ip=<NEW_IP>"`

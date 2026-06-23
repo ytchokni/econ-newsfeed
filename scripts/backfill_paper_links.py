@@ -16,9 +16,9 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-from database import fetch_all, fetch_one
-from html_fetcher import HTMLFetcher
-from link_extractor import match_and_save_paper_links
+from backend.database import fetch_all, fetch_one
+from backend.pipeline.html_fetcher import HTMLFetcher
+from backend.enrichment.link_extractor import match_and_save_paper_links
 
 
 def backfill_links():
@@ -57,7 +57,7 @@ def backfill_links():
 
 def enrich_from_links():
     """Enrich papers that now have DOIs from paper_links."""
-    from openalex import enrich_new_publications
+    from backend.enrichment.openalex import enrich_new_publications
     count = enrich_new_publications(limit=500)
     logger.info("Enriched %d papers from DOI-resolved links", count)
 

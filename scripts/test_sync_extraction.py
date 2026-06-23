@@ -14,10 +14,10 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import fetch_all
-from html_fetcher import HTMLFetcher
-from publication import Publication, PublicationExtractionList
-from llm_client import extract_json, get_model
+from backend.database import fetch_all
+from backend.pipeline.html_fetcher import HTMLFetcher
+from backend.pipeline.publication import Publication, PublicationExtractionList
+from backend.llm.client import extract_json, get_model
 
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s - %(levelname)s - %(message)s")
 

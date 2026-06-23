@@ -11,7 +11,7 @@ import pytest
 from dataclasses import dataclass
 from unittest.mock import patch, MagicMock
 
-from feed_events import (
+from backend.pipeline.feed_events import (
     FeedEventEmitter,
     _title_in_previous_snapshot,
     _get_previous_snapshot_html,
@@ -100,7 +100,7 @@ class TestTitleInPreviousSnapshotEdgeCases:
     def test_title_with_html_entities_in_snapshot(self):
         """PR #158: titles hidden behind HTML entities must match after the
         snapshot is normalized (entity decode + tag strip + collapse)."""
-        from feed_events import _normalize_html_for_matching
+        from backend.pipeline.feed_events import _normalize_html_for_matching
         html = "<p>Trade &amp; Wages: Evidence from Germany</p>"
         normalized = _normalize_html_for_matching(html)
         result = _title_in_previous_snapshot("Trade & Wages: Evidence from Germany", normalized)
@@ -108,7 +108,7 @@ class TestTitleInPreviousSnapshotEdgeCases:
 
     def test_title_split_across_inline_tags(self):
         """PR #158: titles split by <em>/<b> must match after normalization."""
-        from feed_events import _normalize_html_for_matching
+        from backend.pipeline.feed_events import _normalize_html_for_matching
         html = "<p>Trade and <em>Wages</em>: Evidence from <b>Germany</b></p>"
         normalized = _normalize_html_for_matching(html)
         result = _title_in_previous_snapshot("Trade and Wages: Evidence from Germany", normalized)
@@ -116,7 +116,7 @@ class TestTitleInPreviousSnapshotEdgeCases:
 
     def test_title_behind_unicode_escapes(self):
         """PR #158: Google Sites embeds content as \\uXXXX JSON escapes."""
-        from feed_events import _normalize_html_for_matching
+        from backend.pipeline.feed_events import _normalize_html_for_matching
         html = r'{"content":"Trade & Wages: Evidence from Germany"}'
         normalized = _normalize_html_for_matching(html)
         result = _title_in_previous_snapshot("Trade & Wages: Evidence from Germany", normalized)
@@ -193,7 +193,7 @@ class TestGetPreviousSnapshotHtml:
 class TestEmitNewPaperGuardsCombined:
     """All guards must work together — no single guard bypass allows false events."""
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_seed_suppresses_regardless_of_other_conditions(self, mock_get_conn):
         result = FeedEventEmitter.emit_new_paper_events(
             [FakeSaveResult(1, "Paper", True, True, "working_paper")],
@@ -203,7 +203,7 @@ class TestEmitNewPaperGuardsCombined:
         assert result == 0
         mock_get_conn.assert_not_called()
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_published_status_suppressed(self, mock_get_conn):
         conn, cursor = _make_conn_and_cursor(snapshot_count=5, prev_html=None)
         mock_get_conn.return_value = conn
@@ -213,7 +213,7 @@ class TestEmitNewPaperGuardsCombined:
         )
         assert result == 0
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_no_baseline_suppresses_working_paper(self, mock_get_conn):
         conn, cursor = _make_conn_and_cursor(snapshot_count=1, prev_html=None)
         mock_get_conn.return_value = conn
@@ -223,7 +223,7 @@ class TestEmitNewPaperGuardsCombined:
         )
         assert result == 0
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_title_in_prev_snapshot_suppresses(self, mock_get_conn):
         conn, cursor = _make_conn_and_cursor(
             snapshot_count=5,
@@ -236,7 +236,7 @@ class TestEmitNewPaperGuardsCombined:
         )
         assert result == 0
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_all_guards_pass_creates_event(self, mock_get_conn):
         conn, cursor = _make_conn_and_cursor(
             snapshot_count=5,
@@ -254,7 +254,7 @@ class TestEmitNewPaperGuardsCombined:
         ]
         assert len(insert_calls) == 1
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_none_status_suppressed(self, mock_get_conn):
         conn, cursor = _make_conn_and_cursor(snapshot_count=5, prev_html=None)
         mock_get_conn.return_value = conn
@@ -264,7 +264,7 @@ class TestEmitNewPaperGuardsCombined:
         )
         assert result == 0
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_empty_results_list_creates_no_events(self, mock_get_conn):
         result = FeedEventEmitter.emit_new_paper_events(
             [], url="http://example.com",
@@ -272,7 +272,7 @@ class TestEmitNewPaperGuardsCombined:
         assert result == 0
         mock_get_conn.assert_not_called()
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_multiple_papers_mixed_guards(self, mock_get_conn):
         """Mix of valid and invalid papers: only valid ones get events."""
         conn, cursor = _make_conn_and_cursor(
@@ -292,7 +292,7 @@ class TestEmitNewPaperGuardsCombined:
 class TestDuplicatePaperEventGuard:
     """Duplicate papers (existing paper, new to URL) need dedup check."""
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_duplicate_with_prior_event_suppressed(self, mock_get_conn):
         conn, cursor = _make_conn_and_cursor(
             snapshot_count=5,
@@ -306,7 +306,7 @@ class TestDuplicatePaperEventGuard:
         )
         assert result == 0
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_duplicate_without_prior_event_creates(self, mock_get_conn):
         conn, cursor = _make_conn_and_cursor(
             snapshot_count=5,
@@ -324,7 +324,7 @@ class TestDuplicatePaperEventGuard:
 class TestStatusChangeEventIntegrity:
     """Status change events must only fire for forward progressions (PR #153)."""
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_forward_progression_creates_event(self, mock_get_conn):
         conn = MagicMock()
         conn.__enter__ = MagicMock(return_value=conn)
@@ -340,7 +340,7 @@ class TestStatusChangeEventIntegrity:
         ]
         assert len(insert_calls) == 1
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_event_stores_both_statuses(self, mock_get_conn):
         conn = MagicMock()
         conn.__enter__ = MagicMock(return_value=conn)
@@ -358,7 +358,7 @@ class TestStatusChangeEventIntegrity:
 class TestTitleChangeEventIntegrity:
     """Title change events store old and new titles."""
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_title_change_stores_both_titles(self, mock_get_conn):
         conn = MagicMock()
         conn.__enter__ = MagicMock(return_value=conn)
@@ -372,7 +372,7 @@ class TestTitleChangeEventIntegrity:
         assert "Old Title" in args
         assert "New Title" in args
 
-    @patch("feed_events.get_connection")
+    @patch("backend.pipeline.feed_events.get_connection")
     def test_title_change_event_type(self, mock_get_conn):
         conn = MagicMock()
         conn.__enter__ = MagicMock(return_value=conn)

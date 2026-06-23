@@ -3,7 +3,7 @@ from unittest.mock import patch
 import pytest
 from httpx import AsyncClient, ASGITransport
 
-from api import app
+from backend.api import app
 
 
 @pytest.fixture
@@ -13,7 +13,7 @@ def api_key_header():
 
 @pytest.mark.anyio
 async def test_get_deactivated_urls(api_key_header):
-    with patch("api.db_get_deactivated_urls") as mock_fn:
+    with patch("backend.api.db_get_deactivated_urls") as mock_fn:
         mock_fn.return_value = [
             {"id": 1, "url": "https://dead.example.com", "researcher_name": "Smith",
              "deactivation_reason": "consecutive_failures", "deactivated_at": "2026-06-01",
@@ -29,7 +29,7 @@ async def test_get_deactivated_urls(api_key_header):
 
 @pytest.mark.anyio
 async def test_get_at_risk_urls(api_key_header):
-    with patch("api.db_get_at_risk_urls") as mock_fn:
+    with patch("backend.api.db_get_at_risk_urls") as mock_fn:
         mock_fn.return_value = [
             {"id": 5, "url": "https://flaky.example.com", "consecutive_failures": 2,
              "page_type": "PAPERS", "researcher_name": "Jones", "researcher_id": 20}
@@ -43,7 +43,7 @@ async def test_get_at_risk_urls(api_key_header):
 
 @pytest.mark.anyio
 async def test_reactivate_url(api_key_header):
-    with patch("api.db_reactivate_url") as mock_fn:
+    with patch("backend.api.db_reactivate_url") as mock_fn:
         mock_fn.return_value = None
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
             resp = await client.post("/api/admin/reactivate-url/42", headers=api_key_header)

@@ -23,8 +23,8 @@ class TestUpdateOpenalexDataYear:
 
     def test_year_included_in_update_query(self):
         mock_conn, mock_cursor = self._mock_connection()
-        with patch("database.papers.get_connection", return_value=mock_conn):
-            from database.papers import update_openalex_data
+        with patch("backend.database.papers.get_connection", return_value=mock_conn):
+            from backend.database.papers import update_openalex_data
             update_openalex_data(
                 paper_id=1,
                 doi="10.1234/test",
@@ -42,8 +42,8 @@ class TestUpdateOpenalexDataYear:
 
     def test_none_year_does_not_overwrite_existing(self):
         mock_conn, mock_cursor = self._mock_connection()
-        with patch("database.papers.get_connection", return_value=mock_conn):
-            from database.papers import update_openalex_data
+        with patch("backend.database.papers.get_connection", return_value=mock_conn):
+            from backend.database.papers import update_openalex_data
             update_openalex_data(
                 paper_id=1,
                 doi="10.1234/test",

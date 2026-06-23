@@ -13,22 +13,30 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-# All .py files in project root, as module names (no .py suffix).
+# All backend modules, as fully-qualified names.
 # Excludes: __pycache__, tests/, .venv/, scripts/
 ROOT_MODULES = [
-    "api",
-    "database",
-    "db_config",
-    "html_fetcher",
-    "llm_client",
-    "main",
-    "publication",
-    "researcher",
-    "scheduler",
+    "backend.api",
+    "backend.database",
+    "backend.config",
+    "backend.pipeline.html_fetcher",
+    "backend.llm.client",
+    "backend.main",
+    "backend.pipeline.publication",
+    "backend.researcher",
+    "backend.pipeline.scheduler",
 ]
 
 # Modules that create MySQL connection pools at module scope
-_DB_POOL_MODULES = {"database", "html_fetcher", "researcher", "scheduler", "api", "main", "publication"}
+_DB_POOL_MODULES = {
+    "backend.database",
+    "backend.pipeline.html_fetcher",
+    "backend.researcher",
+    "backend.pipeline.scheduler",
+    "backend.api",
+    "backend.main",
+    "backend.pipeline.publication",
+}
 
 
 @pytest.mark.parametrize("module_name", ROOT_MODULES)
@@ -51,6 +59,16 @@ def test_module_imports_cleanly(module_name):
     # stale and patches in other tests target the wrong class object.
     original = sys.modules.get(module_name)
 
+    # Also save the parent package's reference to this submodule attribute.
+    # When Python imports a dotted module like 'backend.llm.client', it also
+    # sets backend.llm.client = <new module> on the parent package object.
+    # If we only restore sys.modules without restoring this attribute, mocks
+    # using patch("backend.llm.client.X") will find the wrong module object
+    # via attribute traversal, causing patches to miss the target function.
+    parent_name, _, attr_name = module_name.rpartition(".")
+    parent_module = sys.modules.get(parent_name) if parent_name else None
+    original_parent_attr = getattr(parent_module, attr_name, None) if parent_module else None
+
     for p in patches:
         p.start()
     try:
@@ -63,3 +81,7 @@ def test_module_imports_cleanly(module_name):
         # Restore original module to avoid breaking other tests
         if original is not None:
             sys.modules[module_name] = original
+            # Also restore the parent package's attribute so patch() traversal
+            # finds the original module via getattr(backend.llm, "client").
+            if parent_module is not None and original_parent_attr is not None:
+                setattr(parent_module, attr_name, original_parent_attr)

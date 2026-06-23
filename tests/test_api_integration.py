@@ -19,12 +19,12 @@ def _noop_connection_scope():
 def client():
     """Create a test client with mocked database and scheduler."""
     with (
-        patch("api.create_tables"),
-        patch("api.start_scheduler"),
-        patch("api.shutdown_scheduler"),
-        patch("api.connection_scope", _noop_connection_scope),
+        patch("backend.api.create_tables"),
+        patch("backend.api.start_scheduler"),
+        patch("backend.api.shutdown_scheduler"),
+        patch("backend.api.connection_scope", _noop_connection_scope),
     ):
-        from api import app
+        from backend.api import app
 
         with TestClient(app) as c:
             yield c
@@ -48,7 +48,7 @@ class TestHealthEndpoint:
 
 class TestMetricsEndpoint:
     def test_metrics_returns_counts(self, client):
-        with patch("api.fetch_one", return_value={
+        with patch("backend.api.fetch_one", return_value={
             "publications": 42, "researchers": 10, "scrapes": 5,
         }):
             response = client.get("/api/metrics", headers=AUTH_HEADERS)
@@ -141,10 +141,10 @@ class TestFullCycle:
     def test_full_api_cycle(self, client):
         # 1. List publications
         with (
-            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)),
-            patch("api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
-            patch("api.get_coauthors_for_papers", return_value={}),
-            patch("api.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)),
+            patch("backend.api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             resp = client.get("/api/publications")
         assert resp.status_code == 200
@@ -152,10 +152,10 @@ class TestFullCycle:
 
         # 2. Get single publication
         with (
-            patch("api.get_paper_detail", return_value=SAMPLE_PUB_DETAIL),
-            patch("api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
-            patch("api.get_coauthors_for_papers", return_value={1: []}),
-            patch("api.get_links_for_papers", return_value={1: []}),
+            patch("backend.api.get_paper_detail", return_value=SAMPLE_PUB_DETAIL),
+            patch("backend.api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
+            patch("backend.api.get_coauthors_for_papers", return_value={1: []}),
+            patch("backend.api.get_links_for_papers", return_value={1: []}),
         ):
             resp = client.get("/api/publications/1")
         assert resp.status_code == 200
@@ -163,11 +163,11 @@ class TestFullCycle:
 
         # 3. List researchers
         with (
-            patch("api.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
-            patch("api.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
-            patch("api.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
-            patch("api.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
-            patch("api.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
+            patch("backend.api.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
+            patch("backend.api.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
+            patch("backend.api.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             resp = client.get("/api/researchers")
         assert resp.status_code == 200
@@ -175,15 +175,15 @@ class TestFullCycle:
 
         # 4. Get single researcher
         with (
-            patch("api.get_researcher_detail", return_value=SAMPLE_RESEARCHER),
-            patch("api.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
-            patch("api.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
-            patch("api.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
-            patch("api.get_jel_codes_for_researcher", return_value=[]),
-            patch("api.get_researcher_papers", return_value=[SAMPLE_PUB_DETAIL]),
-            patch("api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
-            patch("api.get_coauthors_for_papers", return_value={}),
-            patch("api.get_links_for_papers", return_value={}),
+            patch("backend.api.get_researcher_detail", return_value=SAMPLE_RESEARCHER),
+            patch("backend.api.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
+            patch("backend.api.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
+            patch("backend.api.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
+            patch("backend.api.get_jel_codes_for_researcher", return_value=[]),
+            patch("backend.api.get_researcher_papers", return_value=[SAMPLE_PUB_DETAIL]),
+            patch("backend.api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             resp = client.get("/api/researchers/10")
         assert resp.status_code == 200
@@ -191,8 +191,8 @@ class TestFullCycle:
 
         # 5. Scrape status
         with (
-            patch("api.fetch_one", return_value=SAMPLE_SCRAPE),
-            patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
+            patch("backend.api.fetch_one", return_value=SAMPLE_SCRAPE),
+            patch("backend.pipeline.scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
             resp = client.get("/api/scrape/status", headers=AUTH_HEADERS)
         assert resp.status_code == 200
@@ -204,8 +204,8 @@ class TestFullCycle:
 
         # 7. Trigger scrape (authenticated)
         with (
-            patch("api.scheduler.is_scrape_running", return_value=False),
-            patch("api.threading.Thread"),
+            patch("backend.api.scheduler.is_scrape_running", return_value=False),
+            patch("backend.api.threading.Thread"),
         ):
             resp = client.post("/api/scrape", headers=AUTH_HEADERS)
         assert resp.status_code == 201
@@ -219,12 +219,12 @@ class TestLifespan:
     """Verify lifespan handler calls create_tables and starts scheduler."""
 
     def test_lifespan_calls_create_tables_and_start_scheduler(self):
-        from api import app
+        from backend.api import app
 
         with (
-            patch("api.create_tables") as mock_tables,
-            patch("api.start_scheduler") as mock_start,
-            patch("api.shutdown_scheduler") as mock_stop,
+            patch("backend.api.create_tables") as mock_tables,
+            patch("backend.api.start_scheduler") as mock_start,
+            patch("backend.api.shutdown_scheduler") as mock_stop,
         ):
             with TestClient(app):
                 mock_tables.assert_called_once()
@@ -266,12 +266,12 @@ class TestPublicationsSmoke:
     @pytest.fixture
     def client(self):
         with (
-            patch("api.create_tables"),
-            patch("api.start_scheduler"),
-            patch("api.shutdown_scheduler"),
-            patch("api.connection_scope", _noop_connection_scope),
+            patch("backend.api.create_tables"),
+            patch("backend.api.start_scheduler"),
+            patch("backend.api.shutdown_scheduler"),
+            patch("backend.api.connection_scope", _noop_connection_scope),
         ):
-            from api import app
+            from backend.api import app
 
             with TestClient(app) as c:
                 yield c
@@ -280,10 +280,10 @@ class TestPublicationsSmoke:
     def test_publications_endpoint_responds_with_data(self, client):
         """GET /api/publications must return 200 with the expected shape -- not hang."""
         with (
-            patch("api.search_feed_events", return_value=([_SMOKE_PUB], 1, 1)),
-            patch("api.get_authors_for_papers", return_value=_SMOKE_AUTHORS_MAP),
-            patch("api.get_coauthors_for_papers", return_value={}),
-            patch("api.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=([_SMOKE_PUB], 1, 1)),
+            patch("backend.api.get_authors_for_papers", return_value=_SMOKE_AUTHORS_MAP),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             resp = client.get("/api/publications")
 
@@ -305,11 +305,11 @@ class TestPublicationsSmoke:
     def test_researchers_endpoint_responds_with_data(self, client):
         """GET /api/researchers must return 200 with the expected shape -- not hang."""
         with (
-            patch("api.search_researchers", return_value=([_SMOKE_RESEARCHER], 1)),
-            patch("api.get_urls_for_researchers", return_value=_SMOKE_URLS_MAP),
-            patch("api.get_pub_counts_for_researchers", return_value=_SMOKE_PUB_COUNTS_MAP),
-            patch("api.get_fields_for_researchers", return_value=_SMOKE_FIELDS_MAP),
-            patch("api.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=([_SMOKE_RESEARCHER], 1)),
+            patch("backend.api.get_urls_for_researchers", return_value=_SMOKE_URLS_MAP),
+            patch("backend.api.get_pub_counts_for_researchers", return_value=_SMOKE_PUB_COUNTS_MAP),
+            patch("backend.api.get_fields_for_researchers", return_value=_SMOKE_FIELDS_MAP),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             resp = client.get("/api/researchers")
 

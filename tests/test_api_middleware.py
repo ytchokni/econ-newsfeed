@@ -15,18 +15,18 @@ def _noop_connection_scope():
 def client():
     """Create a test client with mocked database and scheduler."""
     with (
-        patch("api.create_tables"),
-        patch("database.get_connection", return_value=None),
-        patch("api.start_scheduler"),
-        patch("api.shutdown_scheduler"),
-        patch("api.connection_scope", _noop_connection_scope),
-        patch("api.search_feed_events", return_value=([], 0, 0)),
-        patch("api.get_authors_for_papers", return_value={}),
-        patch("api.get_coauthors_for_papers", return_value={}),
-        patch("api.get_links_for_papers", return_value={}),
-        patch("api.get_paper_detail", return_value=None),
+        patch("backend.api.create_tables"),
+        patch("backend.database.get_connection", return_value=None),
+        patch("backend.api.start_scheduler"),
+        patch("backend.api.shutdown_scheduler"),
+        patch("backend.api.connection_scope", _noop_connection_scope),
+        patch("backend.api.search_feed_events", return_value=([], 0, 0)),
+        patch("backend.api.get_authors_for_papers", return_value={}),
+        patch("backend.api.get_coauthors_for_papers", return_value={}),
+        patch("backend.api.get_links_for_papers", return_value={}),
+        patch("backend.api.get_paper_detail", return_value=None),
     ):
-        from api import app
+        from backend.api import app
 
         with TestClient(app) as c:
             yield c

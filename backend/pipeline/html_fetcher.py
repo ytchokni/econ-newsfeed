@@ -1,0 +1,837 @@
+import concurrent.futures
+import ipaddress
+import os
+import re
+import subprocess
+import threading
+import time
+import socket
+import zlib
+import requests
+import charset_normalizer
+import hashlib
+import logging
+from collections import OrderedDict
+from contextlib import contextmanager, nullcontext
+from datetime import datetime, timezone
+from urllib.parse import urljoin, urlparse
+from urllib.robotparser import RobotFileParser
+from backend.database import execute_query, fetch_all, fetch_one, log_llm_usage
+from backend.database.researchers import record_url_fetch_failure, record_url_fetch_success
+from bs4 import BeautifulSoup
+import urllib3.util.connection as _urllib3_cn
+
+_DNS_RESOLVE_TIMEOUT = 10  # seconds; socket.getaddrinfo has no built-in timeout
+
+
+class ResponseTooLarge(Exception):
+    """Raised when a response exceeds CONTENT_MAX_BYTES."""
+    pass
+
+
+# Serialises access to the urllib3 create_connection monkey-patch so
+# concurrent threads (e.g. parse-fast via ThreadPoolExecutor) don't race.
+# Per-hostname locking allows concurrent fetches to different hosts.
+_pin_dns_lock = threading.Lock()
+_pin_dns_pins: dict[str, str] = {}  # hostname -> resolved_ip
+_pin_dns_refcount = 0
+_original_create_connection = None
+
+
+@contextmanager
+def _pin_dns(hostname: str, resolved_ip: str):
+    """Pin DNS resolution for a hostname to a specific IP.
+
+    Prevents DNS rebinding between SSRF validation and the actual HTTP request
+    by monkey-patching urllib3's connection creation to use the pre-resolved IP.
+    Thread-safe: uses a pin registry so multiple hostnames can be pinned
+    concurrently without serialising all fetches.
+    """
+    global _pin_dns_refcount, _original_create_connection
+
+    with _pin_dns_lock:
+        _pin_dns_pins[hostname] = resolved_ip
+        _pin_dns_refcount += 1
+        if _pin_dns_refcount == 1:
+            _original_create_connection = _urllib3_cn.create_connection
+
+            def _pinned_create_connection(address, *args, **kwargs):
+                host, port = address
+                pinned_ip = _pin_dns_pins.get(host)
+                if pinned_ip:
+                    return _original_create_connection((pinned_ip, port), *args, **kwargs)
+                return _original_create_connection(address, *args, **kwargs)
+
+            _urllib3_cn.create_connection = _pinned_create_connection
+    try:
+        yield
+    finally:
+        with _pin_dns_lock:
+            _pin_dns_pins.pop(hostname, None)
+            _pin_dns_refcount -= 1
+            if _pin_dns_refcount == 0:
+                _urllib3_cn.create_connection = _original_create_connection
+                _original_create_connection = None
+
+
+RATE_LIMIT_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_SECONDS', '2'))
+RATE_LIMIT_FAST_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_FAST_SECONDS', '0.5'))
+CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS'))
+CONTENT_MAX_BYTES = 1_000_000  # 1 MB response size limit
+SCRAPER_USER_AGENT = os.environ.get(
+    'SCRAPER_USER_AGENT',
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
+)
+_ROBOTS_CACHE_MAX = 500
+
+
+# Large CDN/hosting platforms that can handle higher request rates.
+# Matched by suffix so subdomains work (e.g. user.github.io matches github.io).
+FAST_DOMAINS = (
+    'sites.google.com',
+    'github.io',
+    'github.com',
+    'scholar.google.com',
+    'academia.edu',
+    'researchgate.net',
+    'ssrn.com',
+)
+
+
+def _is_fast_domain(hostname: str) -> bool:
+    """Check if hostname matches a FAST_DOMAINS entry (exact or subdomain)."""
+    for domain in FAST_DOMAINS:
+        if hostname == domain or hostname.endswith('.' + domain):
+            return True
+    return False
+
+
+# Boilerplate substrings to strip before hashing (case-insensitive).
+# Keep this list short and conservative — only patterns confirmed as noise.
+_BOILERPLATE_NOISE = [
+    "search this site",
+    "embedded files",
+    "skip to main content",
+    "skip to navigation",
+    "report abuse",
+    "page details",
+    "page updated",
+    "this site uses cookies from google to deliver its services and to analyze traffic",
+    "learn more got it",
+    "accept all cookies",
+    "reject all cookies",
+]
+
+# Unicode quote characters to normalize to ASCII equivalents
+_QUOTE_MAP = str.maketrans({
+    '\u201c': '"',   # left double curly quote
+    '\u201d': '"',   # right double curly quote
+    '\u2018': "'",   # left single curly quote
+    '\u2019': "'",   # right single curly quote
+})
+
+# Pre-compiled regex patterns used by normalize_text()
+_RE_WHITESPACE = re.compile(r'[\s\u00a0]+')
+_RE_CLOSING_PUNCT = re.compile(r' +([)\],;])')
+_RE_DIGIT_SPLIT = re.compile(r'(\d) (\d)')
+
+
+class HTMLFetcher:
+    _thread_local = threading.local()
+
+    @staticmethod
+    def _get_session() -> requests.Session:
+        """Get or create a thread-local requests.Session."""
+        if not hasattr(HTMLFetcher._thread_local, 'session'):
+            s = requests.Session()
+            s.headers.update({'User-Agent': SCRAPER_USER_AGENT})
+            HTMLFetcher._thread_local.session = s
+        return HTMLFetcher._thread_local.session
+
+    # Per-domain rate limiting: domain -> last request timestamp
+    _domain_last_request = {}
+    # Protects creation of per-domain locks
+    _domain_locks_global = threading.Lock()
+    # Per-domain locks to make the rate-limit check-and-update atomic
+    _domain_locks: dict = {}
+
+    # Cache parsed robots.txt per origin (scheme://netloc).
+    # Value is a RobotFileParser or None (fetch failed / non-200).
+    # Capped at _ROBOTS_CACHE_MAX entries via LRU eviction (OrderedDict).
+    _robots_cache: OrderedDict = OrderedDict()
+
+    @staticmethod
+    def _set_robots_cache(origin: str, value):
+        """Store a robots parser (or None) and evict the oldest entry if over capacity."""
+        HTMLFetcher._robots_cache[origin] = value
+        if len(HTMLFetcher._robots_cache) > _ROBOTS_CACHE_MAX:
+            HTMLFetcher._robots_cache.popitem(last=False)
+
+    @staticmethod
+    def _get_robots_parser(url: str) -> "RobotFileParser | None":
+        """Get or fetch the RobotFileParser for a URL's domain. Cached per origin."""
+        parsed = urlparse(url)
+        origin = f"{parsed.scheme}://{parsed.netloc}"
+        if origin in HTMLFetcher._robots_cache:
+            HTMLFetcher._robots_cache.move_to_end(origin)
+            return HTMLFetcher._robots_cache[origin]
+        try:
+            robots_url = f"{origin}/robots.txt"
+            resp = requests.get(robots_url, timeout=10, headers={
+                'User-Agent': SCRAPER_USER_AGENT,
+            })
+            if resp.status_code != 200:
+                HTMLFetcher._set_robots_cache(origin, None)
+                return None
+            rp = RobotFileParser()
+            rp.parse(resp.text.splitlines())
+            HTMLFetcher._set_robots_cache(origin, rp)
+            return rp
+        except Exception:
+            HTMLFetcher._set_robots_cache(origin, None)
+            return None
+
+    @staticmethod
+    def is_allowed_by_robots(url: str) -> bool:
+        """Check if the URL is allowed by the site's robots.txt. Cached per domain."""
+        rp = HTMLFetcher._get_robots_parser(url)
+        if rp is None:
+            return True
+        allowed = rp.can_fetch('HTMLFetcher/1.0', url)
+        if not allowed:
+            logging.info(f"URL disallowed by robots.txt: {url}")
+        return allowed
+
+    @staticmethod
+    def _resolve_hostname(hostname: str, timeout: float = _DNS_RESOLVE_TIMEOUT) -> str | None:
+        """Resolve hostname to IP with a timeout guard.
+
+        socket.getaddrinfo has no timeout parameter and can hang indefinitely
+        on unresponsive DNS servers, which kills the scrape thread while the
+        advisory lock connection survives.
+        """
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(socket.getaddrinfo, hostname, None)
+            try:
+                result = future.result(timeout=timeout)
+                return result[0][4][0]
+            except concurrent.futures.TimeoutError:
+                logging.warning("DNS resolution timed out after %ds for %s", timeout, hostname)
+                return None
+            except socket.gaierror:
+                return None
+
+    @staticmethod
+    def validate_url(url: str) -> bool:
+        """Validate a URL for SSRF protection. Returns True if safe."""
+        safe, _ = HTMLFetcher.validate_url_with_pin(url)
+        return safe
+
+    @staticmethod
+    def validate_url_with_pin(url: str) -> tuple[bool, str | None]:
+        """Validate URL for SSRF and return (is_safe, resolved_ip).
+        The resolved IP should be used for the actual HTTP request to prevent DNS rebinding."""
+        try:
+            parsed = urlparse(url)
+        except Exception:
+            return False, None
+
+        if parsed.scheme not in ('http', 'https'):
+            return False, None
+
+        hostname = parsed.hostname
+        if not hostname:
+            return False, None
+
+        if hostname in ('169.254.169.254', 'metadata.google.internal'):
+            return False, None
+
+        try:
+            resolved_ip = HTMLFetcher._resolve_hostname(hostname)
+            if resolved_ip is None:
+                logging.warning("DNS resolution failed or timed out for: %s", url)
+                return False, None
+            ip = ipaddress.ip_address(resolved_ip)
+            if ip.is_private or ip.is_reserved or ip.is_loopback or ip.is_link_local:
+                logging.warning("Rejected URL resolving to private/reserved IP: %s -> [redacted]", url)
+                return False, None
+        except (socket.gaierror, ValueError):
+            logging.warning(f"Could not resolve hostname for URL: {url}")
+            return False, None
+
+        return True, resolved_ip
+
+    @staticmethod
+    def _rate_limit(url: str) -> None:
+        """Enforce per-domain rate limiting (thread-safe)."""
+        domain = urlparse(url).hostname
+        limit = RATE_LIMIT_FAST_SECONDS if _is_fast_domain(domain) else RATE_LIMIT_SECONDS
+        with HTMLFetcher._domain_locks_global:
+            if domain not in HTMLFetcher._domain_locks:
+                HTMLFetcher._domain_locks[domain] = threading.Lock()
+            domain_lock = HTMLFetcher._domain_locks[domain]
+        with domain_lock:
+            if domain in HTMLFetcher._domain_last_request:
+                elapsed = time.time() - HTMLFetcher._domain_last_request[domain]
+                if elapsed < limit:
+                    wait = limit - elapsed
+                    logging.info(f"Rate limiting: waiting {wait:.1f}s for {domain}")
+                    time.sleep(wait)
+            HTMLFetcher._domain_last_request[domain] = time.time()
+
+    @staticmethod
+    def fetch_html(url: str, timeout: int = 10, max_retries: int = 3, max_redirects: int = 5, resolved_ip: str | None = None) -> str | None:
+        """
+        Fetch HTML content from a given URL with exponential backoff.
+        Retries on timeouts and 5xx server errors.
+        Follows redirects manually with SSRF validation on each hop.
+
+        Returns the HTML content as a string, or None on failure.
+        """
+        session = HTMLFetcher._get_session()
+        redirects_remaining = max_redirects
+        current_url = url
+
+        # DNS pinning: force urllib3 to connect to the validated IP,
+        # preserving the original hostname for TLS SNI and cert verification.
+        # Pin registry supports multiple hostnames for redirect chains.
+        if resolved_ip:
+            pin_ctx = _pin_dns(urlparse(url).hostname, resolved_ip)
+        else:
+            pin_ctx = nullcontext()
+
+        # Track extra pin contexts from redirect hops so we can clean them up.
+        redirect_pin_ctxs = []
+
+        with pin_ctx:
+          try:
+            while True:
+                HTMLFetcher._rate_limit(current_url)
+                for attempt in range(max_retries):
+                    try:
+                        response = session.get(current_url, timeout=timeout, allow_redirects=False)
+                        if response.status_code >= 500:
+                            backoff = 2 ** attempt
+                            logging.warning(f"Server error {response.status_code} for {current_url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
+                            time.sleep(backoff)
+                            continue
+                        if response.status_code == 403:
+                            logging.info("403 from requests for %s, falling back to curl", current_url)
+                            # Re-validate to get a fresh resolved IP for curl
+                            safe, curl_ip = HTMLFetcher.validate_url_with_pin(current_url)
+                            if not safe:
+                                logging.warning("curl fallback blocked: URL failed SSRF check: %s", current_url)
+                                return None
+                            return HTMLFetcher._fetch_with_curl(current_url, timeout, resolved_ip=curl_ip)
+                        if response.status_code in (301, 302, 303, 307, 308):
+                            if redirects_remaining <= 0:
+                                logging.warning(f"Redirect limit exceeded for {current_url}")
+                                return None
+                            location = response.headers.get('Location')
+                            if not location:
+                                logging.warning("Redirect with no Location header from %s", current_url)
+                                return None
+                            redirect_url = urljoin(current_url, location)
+                            safe, redirect_ip = HTMLFetcher.validate_url_with_pin(redirect_url)
+                            if not safe:
+                                logging.warning(f"Blocked redirect to unsafe URL from {current_url}: {redirect_url}")
+                                return None
+                            # Pin DNS for the redirect target hostname too
+                            if redirect_ip:
+                                redir_ctx = _pin_dns(urlparse(redirect_url).hostname, redirect_ip)
+                                redir_ctx.__enter__()
+                                redirect_pin_ctxs.append(redir_ctx)
+                            redirects_remaining -= 1
+                            current_url = redirect_url
+                            break
+                        response.raise_for_status()
+                        if len(response.content) > CONTENT_MAX_BYTES:
+                            logging.warning(f"Response too large ({len(response.content)} bytes) for {current_url}, rejecting")
+                            raise ResponseTooLarge(f"{len(response.content)} bytes")
+                        logging.info(f"Successfully fetched HTML content from {current_url}")
+                        response.encoding = response.apparent_encoding
+                        return response.text
+                    except requests.exceptions.Timeout:
+                        backoff = 2 ** attempt
+                        logging.warning(f"Timeout for {current_url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
+                        time.sleep(backoff)
+                    except requests.exceptions.RequestException as e:
+                        logging.error("Request exception for %s: %s", current_url, type(e).__name__)
+                        logging.error(f"Failed to fetch HTML content from {current_url} after {max_retries} attempts")
+                        return None  # Non-retryable error
+                else:
+                    logging.error(f"Failed to fetch HTML content from {current_url} after {max_retries} attempts")
+                    return None
+          finally:
+            for ctx in reversed(redirect_pin_ctxs):
+                ctx.__exit__(None, None, None)
+
+    @staticmethod
+    def _fetch_with_curl(url: str, timeout: int = 10, resolved_ip: str | None = None) -> str | None:
+        """Fallback fetcher using curl subprocess to bypass TLS fingerprint blocking."""
+        if not url.startswith(("http://", "https://")):
+            logging.warning("curl fallback rejected non-HTTP URL: %s", url)
+            return None
+        try:
+            cmd = ["curl", "-sS", "--max-time", str(timeout),
+                   "--max-filesize", str(CONTENT_MAX_BYTES)]
+            # Pin DNS in curl to prevent rebinding between validation and fetch
+            if resolved_ip:
+                parsed = urlparse(url)
+                port = parsed.port or (443 if parsed.scheme == "https" else 80)
+                cmd.extend(["--resolve", f"{parsed.hostname}:{port}:{resolved_ip}"])
+            cmd.extend(["--", url])
+            # Capture bytes (no text=True): a non-UTF-8 or binary body (e.g. a PDF)
+            # would otherwise make subprocess's strict decoder raise UnicodeDecodeError,
+            # which is not an OSError and would abort the whole fetch run. We decode
+            # the bytes ourselves below, mirroring the requests path's charset detection.
+            result = subprocess.run(
+                cmd,
+                capture_output=True, timeout=timeout + 5,
+            )
+            if result.returncode != 0:
+                stderr = result.stderr.decode("utf-8", errors="replace").strip()
+                logging.error("curl failed for %s (exit %d): %s", url, result.returncode, stderr)
+                return None
+            logging.info("Successfully fetched %s via curl fallback", url)
+            return HTMLFetcher._decode_bytes(result.stdout)
+        except (subprocess.TimeoutExpired, OSError) as e:
+            logging.error("curl fallback error for %s: %s", url, e)
+            return None
+
+    @staticmethod
+    def _decode_bytes(raw: bytes) -> str:
+        """Decode fetched bytes to text, detecting the charset the way requests'
+        apparent_encoding does, with a UTF-8/replace fallback so non-UTF-8 or
+        binary bodies never raise UnicodeDecodeError."""
+        if not raw:
+            return ""
+        match = charset_normalizer.from_bytes(raw).best()
+        if match is not None:
+            return str(match)
+        return raw.decode("utf-8", errors="replace")
+
+    @staticmethod
+    def extract_text_content(html_content: str) -> str:
+        """
+        Extract only the text content from HTML, ignoring scripts, styles, and HTML tags.
+        """
+        soup = BeautifulSoup(html_content, 'html.parser')
+        for script in soup(["script", "style"]):
+            script.decompose()
+        return soup.get_text()
+
+    @staticmethod
+    def hash_text_content(text_content: str) -> str:
+        """
+        Hash the text content using SHA-256.
+        """
+        return hashlib.sha256(text_content.encode('utf-8')).hexdigest()
+
+    @staticmethod
+    def normalize_text(text: str) -> str:
+        """Normalize extracted text to reduce false-positive change detection.
+
+        Applied transformations (in order):
+        1. Curly/smart quotes → straight quotes
+        2. All whitespace runs → single space
+        3. Strip spaces before closing punctuation (e.g. "word )" → "word)")
+        4. Remove spaces between digits to collapse Google Sites digit-split rendering
+           (e.g. "202 6" → "2026")
+        5. Known boilerplate substrings removed
+        6. Final trim
+        """
+        text = text.translate(_QUOTE_MAP)
+        text = _RE_WHITESPACE.sub(' ', text)
+        text = _RE_CLOSING_PUNCT.sub(r'\1', text)
+        text = _RE_DIGIT_SPLIT.sub(r'\1\2', text)
+        text_lower = text.lower()
+        for phrase in _BOILERPLATE_NOISE:
+            idx = text_lower.find(phrase)
+            while idx != -1:
+                text = text[:idx] + text[idx + len(phrase):]
+                text_lower = text.lower()
+                idx = text_lower.find(phrase)
+        text = _RE_WHITESPACE.sub(' ', text).strip()
+        return text
+
+    @staticmethod
+    def archive_snapshot(url_id: int) -> None:
+        """Archive the current raw_html for a URL into html_snapshots before overwriting.
+
+        Called before save_text() upserts new content. Compresses the old raw_html
+        with zlib and stores it with integrity hashes. Failures are logged, not raised.
+        """
+        try:
+            row = fetch_one(
+                "SELECT raw_html, content_hash, timestamp FROM html_content WHERE url_id = %s",
+                (url_id,),
+            )
+            if not row:
+                return
+            if row["raw_html"] is None:
+                logging.warning("Skipping snapshot archive for URL ID %s: raw_html is NULL", url_id)
+                return
+
+            old_html = row["raw_html"]
+            raw_html_hash = hashlib.sha256(old_html.encode("utf-8")).hexdigest()
+            compressed = zlib.compress(old_html.encode("utf-8"))
+
+            execute_query(
+                """INSERT IGNORE INTO html_snapshots
+                   (url_id, text_content_hash, raw_html_hash, raw_html_compressed, snapshot_at)
+                   VALUES (%s, %s, %s, %s, %s)""",
+                (url_id, row["content_hash"], raw_html_hash, compressed, row["timestamp"]),
+            )
+            logging.info("Archived snapshot for URL ID %s (hash: %s)", url_id, row["content_hash"])
+        except Exception as e:
+            logging.warning("Failed to archive snapshot for URL ID %s: %s", url_id, e)
+
+    @staticmethod
+    def get_snapshot(url_id: int, snapshot_id: int) -> str | None:
+        """Retrieve and decompress a historical raw_html snapshot.
+
+        Returns the decompressed HTML string, or None if not found.
+        Raises ValueError if integrity check fails.
+        """
+        row = fetch_one(
+            "SELECT raw_html_compressed, raw_html_hash FROM html_snapshots WHERE id = %s AND url_id = %s",
+            (snapshot_id, url_id),
+        )
+        if not row:
+            return None
+
+        raw_bytes = zlib.decompress(row["raw_html_compressed"])
+        actual_hash = hashlib.sha256(raw_bytes).hexdigest()
+        if actual_hash != row["raw_html_hash"]:
+            raise ValueError(
+                f"Integrity check failed for snapshot {snapshot_id}: "
+                f"expected {row['raw_html_hash']}, got {actual_hash}"
+            )
+        return raw_bytes.decode("utf-8")
+
+    @staticmethod
+    def list_snapshots(url_id: int) -> list[dict]:
+        """List all snapshots for a URL, ordered by most recent first."""
+        return fetch_all(
+            "SELECT id, text_content_hash, raw_html_hash, snapshot_at "
+            "FROM html_snapshots WHERE url_id = %s ORDER BY snapshot_at DESC",
+            (url_id,),
+        )
+
+    @staticmethod
+    def save_text(url_id: int, text_content: str, text_hash: str, researcher_id: int, raw_html=None) -> None:
+        """
+        Save pre-extracted text content and hash to the database using upsert.
+        Also stores raw_html if provided. Archives the old version before overwriting.
+        """
+        try:
+            HTMLFetcher.archive_snapshot(url_id)
+        except Exception as e:
+            logging.warning("Unexpected error in archive_snapshot for URL ID %s: %s", url_id, e)
+
+        query = """
+            INSERT INTO html_content (url_id, content, content_hash, timestamp, researcher_id, raw_html)
+            VALUES (%s, %s, %s, %s, %s, %s) AS new_row
+            ON DUPLICATE KEY UPDATE
+                content = new_row.content,
+                content_hash = new_row.content_hash,
+                timestamp = new_row.timestamp,
+                raw_html = new_row.raw_html
+        """
+        try:
+            execute_query(query, (url_id, text_content, text_hash, datetime.now(timezone.utc), researcher_id, raw_html))
+            logging.info(f"Text content saved for URL ID: {url_id} (Researcher ID: {researcher_id})")
+        except Exception as e:
+            logging.error("Error saving text content for URL ID %s: %s", url_id, type(e).__name__)
+
+    @staticmethod
+    def has_text_changed(url_id: int, new_text_hash: str) -> bool:
+        """
+        Compare the hash of the new text content to the stored hash to check for changes.
+        """
+        query = """
+            SELECT content_hash
+            FROM html_content
+            WHERE url_id = %s
+        """
+        result = fetch_one(query, (url_id,))
+
+        if result:
+            return result['content_hash'] != new_text_hash
+        return True  # No previous record — treat as changed
+
+    @staticmethod
+    def _was_fetched_recently(url_id: int) -> bool:
+        """Return True if this URL was successfully fetched within SCRAPE_INTERVAL_HOURS."""
+        hours = int(os.environ.get('SCRAPE_INTERVAL_HOURS', '24'))
+        ts = HTMLFetcher.get_fetch_timestamp(url_id)
+        if not ts:
+            return False
+        age = datetime.now(timezone.utc) - ts
+        return age.total_seconds() < hours * 3600
+
+    @staticmethod
+    def fetch_and_save_if_changed(url_id: int, url: str, researcher_id: int) -> bool:
+        """
+        Fetch HTML content from the given URL and save its text content if it has changed.
+        Skips fetching if the URL was successfully fetched within the last 24 hours.
+        Returns True if content changed, False otherwise.
+        """
+        if HTMLFetcher._was_fetched_recently(url_id):
+            logging.info(f"Skipping URL ID {url_id} (fetched recently): {url}")
+            return False
+
+        is_safe, resolved_ip = HTMLFetcher.validate_url_with_pin(url)
+        if not is_safe:
+            logging.warning(f"URL failed SSRF validation, skipping: {url}")
+            record_url_fetch_failure(url_id, "ssrf_blocked")
+            return False
+
+        if not HTMLFetcher.is_allowed_by_robots(url):
+            record_url_fetch_failure(url_id, "robots_blocked")
+            return False
+
+        logging.info(f"Fetching URL ID {url_id}: {url}")
+        try:
+            raw_html = HTMLFetcher.fetch_html(url, resolved_ip=resolved_ip)
+        except ResponseTooLarge:
+            record_url_fetch_failure(url_id, "response_too_large")
+            return False
+        if not raw_html:
+            logging.warning(f"Failed to fetch HTML content for URL ID: {url_id}, URL: {url}")
+            record_url_fetch_failure(url_id, "fetch_failed")
+            return False
+
+        record_url_fetch_success(url_id)
+
+        # Parse HTML once, reuse for both comparison and storage
+        text_content = HTMLFetcher.extract_text_content(raw_html)
+        if len(text_content) > CONTENT_MAX_CHARS:
+            dropped = len(text_content) - CONTENT_MAX_CHARS
+            logging.info(f"Truncating content for URL ID {url_id}: {len(text_content)} -> {CONTENT_MAX_CHARS} chars ({dropped} dropped)")
+            text_content = text_content[:CONTENT_MAX_CHARS]
+        text_content = HTMLFetcher.normalize_text(text_content)
+        text_hash = HTMLFetcher.hash_text_content(text_content)
+
+        if HTMLFetcher.has_text_changed(url_id, text_hash):
+            HTMLFetcher.save_text(url_id, text_content, text_hash, researcher_id, raw_html=raw_html)
+            logging.info(f"New version of text content saved for URL ID: {url_id}, URL: {url}")
+            return True
+
+        HTMLFetcher._touch_unchanged(url_id, raw_html, text_content)
+
+        logging.info(f"No text changes detected for URL ID: {url_id}, URL: {url}")
+        return False
+
+    @staticmethod
+    def _touch_unchanged(url_id: int, raw_html: str | None, text_content: str) -> None:
+        """Update the cooldown timestamp and backfill missing bodies when the hash is unchanged.
+
+        Rows restored from a metadata-only dump carry content_hash but NULL
+        content; the matching hash means the save path never runs, so without
+        this backfill the body stays missing forever and extraction loops on
+        no_content (4,536 prod rows were stuck this way on 2026-06-11).
+        """
+        execute_query(
+            """UPDATE html_content
+               SET timestamp = %s,
+                   raw_html = COALESCE(raw_html, %s),
+                   content = IF(content IS NULL OR content = '', %s, content)
+               WHERE url_id = %s""",
+            (datetime.now(timezone.utc), raw_html, text_content, url_id),
+        )
+
+    @staticmethod
+    def extract_description(text_content: str, url: str, scrape_log_id=None) -> str | None:
+        """Extract a researcher description (up to 200 words) from plain text.
+
+        Single LLM call on text content, output capped with max_tokens and
+        truncated to 200 words application-side. Returns the description
+        string, or None if nothing could be extracted.
+        """
+        from backend.llm.client import get_client, get_model
+
+        model = get_model()
+        prompt = (
+            f"From the following text from a researcher's homepage at {url}, "
+            "extract a professional description (up to 200 words) describing who this person is, "
+            "their research interests, and their current position/affiliation. "
+            "Return only the description text, nothing else. "
+            "If no clear description can be extracted, reply with exactly: null\n\n"
+            f"Content:\n{text_content[:CONTENT_MAX_CHARS]}"
+        )
+        try:
+            response = get_client().chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=model,
+                max_tokens=1024,
+            )
+            log_llm_usage(
+                "description_extraction", model, response.usage,
+                context_url=url, scrape_log_id=scrape_log_id,
+            )
+            desc = (response.choices[0].message.content or "").strip()
+            if desc.lower() in ("null", "none", ""):
+                return None
+            words = desc.split()
+            if len(words) > 200:
+                desc = ' '.join(words[:200])
+            return desc
+        except Exception as e:
+            logging.error(f"Error extracting description from {url}: {e}")
+            return None
+
+    @staticmethod
+    def validate_draft_url(url: str, max_redirects: int = 5) -> str:
+        """Validate a draft URL via HTTP HEAD with SSRF protection.
+
+        Follows up to max_redirects hops manually to prevent SSRF via redirect chains.
+        Returns 'valid', 'invalid', or 'timeout'.
+        """
+        if not HTMLFetcher.validate_url(url):
+            return 'invalid'
+
+        try:
+            # Disable auto-redirects to prevent SSRF via redirect to internal IPs
+            response = HTMLFetcher._get_session().head(url, timeout=10, allow_redirects=False)
+            if response.status_code < 400:
+                return 'valid'
+            # Follow redirects manually with SSRF validation
+            if response.status_code in (301, 302, 303, 307, 308):
+                if max_redirects <= 0:
+                    logging.warning(f"Redirect limit reached for URL: {url}")
+                    return 'invalid'
+                redirect_url = urljoin(url, response.headers.get('Location', ''))
+                if redirect_url and HTMLFetcher.validate_url(redirect_url):
+                    return HTMLFetcher.validate_draft_url(redirect_url, max_redirects=max_redirects - 1)
+                return 'invalid'
+            return 'invalid'
+        except requests.exceptions.Timeout:
+            return 'timeout'
+        except requests.exceptions.RequestException:
+            return 'invalid'
+
+    @staticmethod
+    def get_fetch_timestamp(url_id: int) -> datetime | None:
+        """Return the timestamp of the last HTML fetch for a URL ID."""
+        result = fetch_one(
+            "SELECT timestamp FROM html_content WHERE url_id = %s", (url_id,)
+        )
+        if not result or not result['timestamp']:
+            return None
+        ts = result['timestamp']
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        return ts
+
+    @staticmethod
+    def get_previous_text(url_id: int) -> str | None:
+        """Retrieve the previous version's normalized text from the most recent snapshot.
+
+        Decompresses the archived raw_html, extracts text, and normalizes it
+        the same way fetch_and_save_if_changed does — so the diff between this
+        and the current html_content.content is meaningful.
+        Returns None if no snapshot exists (first extraction).
+        """
+        row = fetch_one(
+            "SELECT raw_html_compressed FROM html_snapshots "
+            "WHERE url_id = %s ORDER BY snapshot_at DESC LIMIT 1",
+            (url_id,),
+        )
+        if not row or not row["raw_html_compressed"]:
+            return None
+        try:
+            raw_bytes = zlib.decompress(row["raw_html_compressed"])
+            raw_html = raw_bytes.decode("utf-8", errors="replace")
+            text = HTMLFetcher.extract_text_content(raw_html)
+            if len(text) > CONTENT_MAX_CHARS:
+                text = text[:CONTENT_MAX_CHARS]
+            return HTMLFetcher.normalize_text(text)
+        except Exception as e:
+            logging.warning("Failed to reconstruct previous text for url_id %s: %s", url_id, e)
+            return None
+
+    @staticmethod
+    def get_latest_text(url_id: int) -> str | None:
+        """Retrieve the latest text content for a given URL ID."""
+        query = """
+            SELECT content
+            FROM html_content
+            WHERE url_id = %s
+        """
+        result = fetch_one(query, (url_id,))
+        return result['content'] if result else None
+
+    @staticmethod
+    def get_raw_html(url_id: int) -> str | None:
+        """Fetch raw_html for a URL. Used as fallback when content is NULL."""
+        row = fetch_one(
+            "SELECT raw_html FROM html_content WHERE url_id = %s", (url_id,),
+        )
+        return row['raw_html'] if row and row['raw_html'] else None
+
+    @staticmethod
+    def get_extraction_payload(url_id: int) -> dict | None:
+        """Read content, content_hash, timestamp, and extracted_at in one query.
+
+        raw_html is excluded — use get_raw_html() as a fallback when content is NULL.
+        """
+        return fetch_one(
+            "SELECT content, content_hash, timestamp, extracted_at"
+            " FROM html_content WHERE url_id = %s",
+            (url_id,),
+        )
+
+    @staticmethod
+    def needs_extraction(url_id: int) -> bool:
+        """
+        Return True if LLM extraction is needed for this URL.
+        Extraction is needed when content_hash differs from extracted_hash
+        (content changed since last extraction, or never extracted).
+        Returns False if no HTML has been downloaded yet.
+        """
+        result = fetch_one(
+            "SELECT content_hash, extracted_hash FROM html_content WHERE url_id = %s",
+            (url_id,),
+        )
+        if not result:
+            return False
+        return result['content_hash'] != result['extracted_hash']
+
+    @staticmethod
+    def is_first_extraction(url_id: int) -> bool:
+        """Return True if this URL has never been extracted before.
+
+        Uses extracted_at IS NULL as the signal — mark_extracted() has
+        never been called for this URL.
+        """
+        result = fetch_one(
+            "SELECT extracted_at FROM html_content WHERE url_id = %s",
+            (url_id,),
+        )
+        return result is not None and result['extracted_at'] is None
+
+    @staticmethod
+    def mark_extracted(url_id: int, extracted_hash: str | None = None) -> None:
+        """Record that extraction has run.
+
+        Pass the content_hash that was read at extraction *start* so a fetch
+        landing mid-extraction is not silently marked as extracted (the URL
+        stays in the needs-extraction queue). When extracted_hash is None,
+        falls back to copying the current content_hash (legacy callers where
+        fetch and extraction cannot overlap).
+        """
+        now = datetime.now(timezone.utc)
+        if extracted_hash is None:
+            execute_query(
+                "UPDATE html_content SET extracted_at = %s, extracted_hash = content_hash WHERE url_id = %s",
+                (now, url_id),
+            )
+        else:
+            execute_query(
+                "UPDATE html_content SET extracted_at = %s, extracted_hash = %s WHERE url_id = %s",
+                (now, extracted_hash, url_id),
+            )
+
+

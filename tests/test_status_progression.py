@@ -7,7 +7,7 @@ Tests every pairwise status transition to ensure:
 - PaperSnapshotResult.status_changed is correct for all combinations
 """
 import pytest
-from database.snapshots import _is_status_progression, _STATUS_RANK, PaperSnapshotResult
+from backend.database.snapshots import _is_status_progression, _STATUS_RANK, PaperSnapshotResult
 
 
 ALL_STATUSES = list(_STATUS_RANK.keys())

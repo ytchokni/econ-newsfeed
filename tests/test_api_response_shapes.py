@@ -27,14 +27,14 @@ def client():
     reimport api outside patch context, binding the real functions.
     """
     with (
-        patch("api.create_tables"),
-        patch("api.start_scheduler"),
-        patch("api.shutdown_scheduler"),
-        patch("api.start_scheduler"),
-        patch("api.shutdown_scheduler"),
-        patch("api.connection_scope", _noop_connection_scope),
+        patch("backend.api.create_tables"),
+        patch("backend.api.start_scheduler"),
+        patch("backend.api.shutdown_scheduler"),
+        patch("backend.api.start_scheduler"),
+        patch("backend.api.shutdown_scheduler"),
+        patch("backend.api.connection_scope", _noop_connection_scope),
     ):
-        from api import app
+        from backend.api import app
         with TestClient(app) as c:
             yield c
 
@@ -124,10 +124,10 @@ class TestPublicationShape:
 
     def test_paginated_envelope_keys(self, client):
         with (
-            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)),
-            patch("api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
-            patch("api.get_coauthors_for_papers", return_value={}),
-            patch("api.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)),
+            patch("backend.api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             body = client.get("/api/publications").json()
 
@@ -135,10 +135,10 @@ class TestPublicationShape:
 
     def test_publication_item_keys(self, client):
         with (
-            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)),
-            patch("api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
-            patch("api.get_coauthors_for_papers", return_value={}),
-            patch("api.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)),
+            patch("backend.api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             body = client.get("/api/publications").json()
 
@@ -149,10 +149,10 @@ class TestPublicationShape:
 
     def test_author_sub_object_keys(self, client):
         with (
-            patch("api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)),
-            patch("api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
-            patch("api.get_coauthors_for_papers", return_value={}),
-            patch("api.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)),
+            patch("backend.api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             body = client.get("/api/publications").json()
 
@@ -171,11 +171,11 @@ class TestResearcherShape:
 
     def test_researcher_list_item_keys(self, client):
         with (
-            patch("api.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
-            patch("api.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
-            patch("api.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
-            patch("api.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
-            patch("api.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
+            patch("backend.api.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
+            patch("backend.api.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
+            patch("backend.api.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             body = client.get("/api/researchers").json()
 
@@ -187,11 +187,11 @@ class TestResearcherShape:
 
     def test_researcher_url_sub_object_keys(self, client):
         with (
-            patch("api.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
-            patch("api.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
-            patch("api.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
-            patch("api.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
-            patch("api.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
+            patch("backend.api.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
+            patch("backend.api.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
+            patch("backend.api.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             body = client.get("/api/researchers").json()
 
@@ -202,11 +202,11 @@ class TestResearcherShape:
 
     def test_research_field_sub_object_keys(self, client):
         with (
-            patch("api.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
-            patch("api.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
-            patch("api.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
-            patch("api.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
-            patch("api.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=([SAMPLE_RESEARCHER], 1)),
+            patch("backend.api.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
+            patch("backend.api.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
+            patch("backend.api.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             body = client.get("/api/researchers").json()
 
@@ -225,15 +225,15 @@ class TestResearcherDetailShape:
 
     def test_detail_has_publications_key(self, client):
         with (
-            patch("api.get_researcher_detail", return_value=SAMPLE_RESEARCHER),
-            patch("api.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
-            patch("api.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
-            patch("api.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
-            patch("api.get_jel_codes_for_researcher", return_value=[]),
-            patch("api.get_researcher_papers", return_value=[SAMPLE_PUB_DETAIL]),
-            patch("api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
-            patch("api.get_coauthors_for_papers", return_value={}),
-            patch("api.get_links_for_papers", return_value={}),
+            patch("backend.api.get_researcher_detail", return_value=SAMPLE_RESEARCHER),
+            patch("backend.api.get_urls_for_researchers", return_value=SAMPLE_URLS_MAP),
+            patch("backend.api.get_pub_counts_for_researchers", return_value=SAMPLE_PUB_COUNTS_MAP),
+            patch("backend.api.get_fields_for_researchers", return_value=SAMPLE_FIELDS_MAP),
+            patch("backend.api.get_jel_codes_for_researcher", return_value=[]),
+            patch("backend.api.get_researcher_papers", return_value=[SAMPLE_PUB_DETAIL]),
+            patch("backend.api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             body = client.get("/api/researchers/10").json()
 
@@ -253,8 +253,8 @@ class TestScrapeStatusShape:
 
     def test_scrape_status_top_level_keys(self, client):
         with (
-            patch("api.fetch_one", return_value=SAMPLE_SCRAPE),
-            patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
+            patch("backend.api.fetch_one", return_value=SAMPLE_SCRAPE),
+            patch("backend.pipeline.scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
             body = client.get("/api/scrape/status", headers=AUTH_HEADERS).json()
 
@@ -264,8 +264,8 @@ class TestScrapeStatusShape:
 
     def test_scrape_last_sub_object_keys(self, client):
         with (
-            patch("api.fetch_one", return_value=SAMPLE_SCRAPE),
-            patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
+            patch("backend.api.fetch_one", return_value=SAMPLE_SCRAPE),
+            patch("backend.pipeline.scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
             body = client.get("/api/scrape/status", headers=AUTH_HEADERS).json()
 

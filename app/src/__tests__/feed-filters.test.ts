@@ -232,29 +232,7 @@ describe("buildPublicationsUrl", () => {
 });
 
 // ---------------------------------------------------------------------------
-// buildPublicationsUrl with new presets
-// ---------------------------------------------------------------------------
-
-describe("buildPublicationsUrl with new presets", () => {
-  it("appends preset=top5_rr_accepted", () => {
-    const url = buildPublicationsUrl(1, 20, { preset: "top5_rr_accepted" });
-    expect(url).toContain("preset=top5_rr_accepted");
-  });
-
-  it("appends preset=has_top5", () => {
-    const url = buildPublicationsUrl(1, 20, { preset: "has_top5" });
-    expect(url).toContain("preset=has_top5");
-  });
-
-  it("preset=top5_rr_accepted combined with year", () => {
-    const url = buildPublicationsUrl(1, 20, { preset: "top5_rr_accepted", year: "2025" });
-    expect(url).toContain("preset=top5_rr_accepted");
-    expect(url).toContain("year=2025");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// PaginatedResponse researcher_count field
+// PaginatedResponse researcher_count
 // ---------------------------------------------------------------------------
 
 describe("PaginatedResponse researcher_count", () => {
