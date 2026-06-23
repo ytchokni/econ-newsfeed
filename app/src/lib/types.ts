@@ -146,4 +146,5 @@ export interface ResearcherFilters {
   field?: string;
   position?: string;
   search?: string;
+  preset?: string;
 }

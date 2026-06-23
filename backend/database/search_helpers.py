@@ -36,3 +36,15 @@ TOP20_DEPT_KEYWORDS = [
     "Boston University",
     "Carnegie Mellon",
 ]
+
+TOP5_JOURNAL_KEYWORDS = [
+    "American Economic Review",
+    "AER",
+    "Econometrica",
+    "Journal of Political Economy",
+    "JPE",
+    "Quarterly Journal of Economics",
+    "QJE",
+    "Review of Economic Studies",
+    "REStud",
+]

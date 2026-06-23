@@ -17,6 +17,7 @@ from backend.database.search_helpers import (
     escape_fulltext as _escape_fulltext,
     FT_MIN_TOKEN_SIZE as _FT_MIN_TOKEN_SIZE,
     TOP20_DEPT_KEYWORDS as _TOP20_DEPT_KEYWORDS,
+    TOP5_JOURNAL_KEYWORDS as _TOP5_JOURNAL_KEYWORDS,
 )
 
 
@@ -632,6 +633,26 @@ def search_researchers(
         dept_conditions = " OR ".join(["r.affiliation LIKE %s"] * len(_TOP20_DEPT_KEYWORDS))
         conditions.append(f"({dept_conditions})")
         params.extend(f"%{_escape_like(kw)}%" for kw in _TOP20_DEPT_KEYWORDS)
+
+    if preset == "top5_rr_accepted":
+        venue_likes = " OR ".join(["p.venue LIKE %s"] * len(_TOP5_JOURNAL_KEYWORDS))
+        conditions.append(
+            f"EXISTS (SELECT 1 FROM authorship a "
+            f"JOIN papers p ON p.id = a.publication_id "
+            f"WHERE a.researcher_id = r.id "
+            f"AND p.status IN ('accepted', 'revise_and_resubmit') "
+            f"AND ({venue_likes}))"
+        )
+        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP5_JOURNAL_KEYWORDS)
+
+    if preset == "has_top5":
+        venue_likes = " OR ".join(["p.venue LIKE %s"] * len(_TOP5_JOURNAL_KEYWORDS))
+        conditions.append(
+            f"EXISTS (SELECT 1 FROM authorship a "
+            f"JOIN papers p ON p.id = a.publication_id "
+            f"WHERE a.researcher_id = r.id AND ({venue_likes}))"
+        )
+        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP5_JOURNAL_KEYWORDS)
 
     if field_slug:
         field_slugs = [f.strip() for f in field_slug.split(",") if f.strip()]

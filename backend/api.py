@@ -564,7 +564,7 @@ def list_publications(
     non-published papers with known status generate events, so no
     include_seed parameter is needed.
     """
-    valid_presets = {"top20"}
+    valid_presets = {"top20", "top5_rr_accepted", "has_top5"}
     if preset and preset not in valid_presets:
         raise HTTPException(status_code=400, detail=f"Invalid preset value. Must be one of: {', '.join(sorted(valid_presets))}")
 
@@ -575,7 +575,7 @@ def list_publications(
 
     offset = (page - 1) * per_page
     with connection_scope():
-        rows, total = search_feed_events(
+        rows, total, researcher_count = search_feed_events(
             year=year, researcher_id=researcher_id,
             status_list=status_list or None,
             since=since_dt, until=until_dt,
@@ -763,7 +763,7 @@ def atom_feed(
     )
 
     with connection_scope():
-        rows, _ = search_feed_events(
+        rows, _, _ = search_feed_events(
             year=year, status_list=status_list or None,
             since=since_dt, until=until_dt,
             institution_list=institution_list or None,
@@ -865,6 +865,10 @@ def list_researchers(
     preset: str | None = Query(None),
     search: str | None = Query(None, max_length=200),
 ):
+    valid_presets = {"top20", "top5_rr_accepted", "has_top5"}
+    if preset and preset not in valid_presets:
+        raise HTTPException(status_code=400, detail=f"Invalid preset value. Must be one of: {', '.join(sorted(valid_presets))}")
+
     offset = (page - 1) * per_page
     with connection_scope():
         rows, total = search_researchers(

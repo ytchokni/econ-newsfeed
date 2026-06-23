@@ -106,6 +106,7 @@ from backend.database.search_helpers import (
     escape_fulltext as _escape_fulltext,
     FT_MIN_TOKEN_SIZE as _FT_MIN_TOKEN_SIZE,
     TOP20_DEPT_KEYWORDS as _TOP20_DEPT_KEYWORDS,
+    TOP5_JOURNAL_KEYWORDS as _TOP5_JOURNAL_KEYWORDS,
 )
 
 
@@ -240,7 +241,7 @@ def search_feed_events(
 ) -> tuple[list[dict], int]:
     """Search feed_events with dynamic filters.
 
-    Returns (rows, total_count). All filter params are optional.
+    Returns (rows, total_count, researcher_count). All filter params are optional.
 
     Filters:
     - year: match p.year
@@ -267,12 +268,13 @@ def search_feed_events(
         params.append(researcher_id)
 
     if status_list:
+        col = "fe.new_status" if event_type == "status_change" else "p.status"
         if len(status_list) == 1:
-            conditions.append("p.status = %s")
+            conditions.append(f"{col} = %s")
             params.append(status_list[0])
         else:
             placeholders = ",".join(["%s"] * len(status_list))
-            conditions.append(f"p.status IN ({placeholders})")
+            conditions.append(f"{col} IN ({placeholders})")
             params.extend(status_list)
 
     if since:
@@ -309,6 +311,22 @@ def search_feed_events(
         )
         params.extend(f"%{_escape_like(kw)}%" for kw in _TOP20_DEPT_KEYWORDS)
 
+    if preset == "top5_rr_accepted":
+        conditions.append("p.status IN ('accepted', 'revise_and_resubmit')")
+        venue_likes = " OR ".join(["p.venue LIKE %s"] * len(_TOP5_JOURNAL_KEYWORDS))
+        conditions.append(f"({venue_likes})")
+        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP5_JOURNAL_KEYWORDS)
+
+    if preset == "has_top5":
+        venue_likes = " OR ".join(["p2.venue LIKE %s"] * len(_TOP5_JOURNAL_KEYWORDS))
+        conditions.append(
+            f"EXISTS (SELECT 1 FROM authorship a2 "
+            f"JOIN authorship a3 ON a3.researcher_id = a2.researcher_id "
+            f"JOIN papers p2 ON p2.id = a3.publication_id "
+            f"WHERE a2.publication_id = p.id AND ({venue_likes}))"
+        )
+        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP5_JOURNAL_KEYWORDS)
+
     search_term = search.strip() if search else ""
     if search_term:
         if len(search_term) >= _FT_MIN_TOKEN_SIZE:
@@ -322,6 +340,11 @@ def search_feed_events(
     if event_type:
         conditions.append("fe.event_type = %s")
         params.append(event_type)
+
+    if event_type == "status_change":
+        conditions.append(
+            "NOT (fe.old_status = 'accepted' AND fe.new_status = 'published')"
+        )
 
     jel_list = [j.strip().upper() for j in jel_code.split(",") if j.strip()] if jel_code else []
     if jel_list:
@@ -346,6 +369,18 @@ def search_feed_events(
     )
     total = count_row['cnt'] if count_row else 0
 
+    researcher_count_row = fetch_one(
+        f"""
+        SELECT COUNT(DISTINCT a.researcher_id) AS cnt
+        FROM feed_events fe
+        JOIN papers p ON p.id = fe.paper_id
+        JOIN authorship a ON a.publication_id = p.id
+        {where}
+        """,
+        tuple(params),
+    )
+    researcher_count = researcher_count_row['cnt'] if researcher_count_row else 0
+
     rows = fetch_all(
         f"""
         SELECT fe.id AS event_id, fe.event_type, fe.old_status, fe.new_status,
@@ -360,4 +395,4 @@ def search_feed_events(
         """,
         (*params, limit, offset),
     )
-    return rows, total
+    return rows, total, researcher_count

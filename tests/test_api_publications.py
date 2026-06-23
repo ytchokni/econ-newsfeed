@@ -101,7 +101,7 @@ class TestListPublications:
     def test_default_pagination(self, client):
         """Default page=1, per_page=20."""
         with (
-            patch("backend.api.search_feed_events", return_value=(SAMPLE_PUBLICATIONS, 3)),
+            patch("backend.api.search_feed_events", return_value=(SAMPLE_PUBLICATIONS, 3, 3)),
             patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUBS_1_2_3),
             patch("backend.api.get_coauthors_for_papers", return_value={}),
             patch("backend.api.get_links_for_papers", return_value={}),
@@ -119,7 +119,7 @@ class TestListPublications:
     def test_custom_pagination(self, client):
         """Custom page and per_page values."""
         with (
-            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[1]], 3)),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[1]], 3, 3)),
             patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUB2),
             patch("backend.api.get_coauthors_for_papers", return_value={}),
             patch("backend.api.get_links_for_papers", return_value={}),
@@ -140,7 +140,7 @@ class TestListPublications:
     def test_year_filter(self, client):
         """Filter publications by year."""
         with (
-            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1)),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1, 1)),
             patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
             patch("backend.api.get_coauthors_for_papers", return_value={}),
             patch("backend.api.get_links_for_papers", return_value={}),
@@ -154,7 +154,7 @@ class TestListPublications:
     def test_researcher_id_filter(self, client):
         """Filter publications by researcher_id."""
         with (
-            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1)),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1, 1)),
             patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
             patch("backend.api.get_coauthors_for_papers", return_value={}),
             patch("backend.api.get_links_for_papers", return_value={}),
@@ -170,7 +170,7 @@ class TestListPublications:
     def test_since_filter(self, client):
         """?since= filters publications discovered after the given timestamp."""
         with (
-            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1)),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1, 1)),
             patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
             patch("backend.api.get_coauthors_for_papers", return_value={}),
             patch("backend.api.get_links_for_papers", return_value={}),
@@ -189,7 +189,7 @@ class TestListPublications:
     def test_publication_item_shape(self, client):
         """Each item must have id, title, authors, year, venue, source_url, discovered_at."""
         with (
-            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1)),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1, 1)),
             patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
             patch("backend.api.get_coauthors_for_papers", return_value={}),
             patch("backend.api.get_links_for_papers", return_value={}),
@@ -214,7 +214,7 @@ class TestListPublications:
     def test_event_type_filter_new_paper(self, client):
         """?event_type=new_paper returns only new_paper events."""
         with (
-            patch("backend.api.search_feed_events", return_value=(SAMPLE_PUBLICATIONS[:2], 2)) as mock_search,
+            patch("backend.api.search_feed_events", return_value=(SAMPLE_PUBLICATIONS[:2], 2, 2)) as mock_search,
             patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUBS_1_2_3),
             patch("backend.api.get_coauthors_for_papers", return_value={}),
             patch("backend.api.get_links_for_papers", return_value={}),
@@ -236,7 +236,7 @@ class TestListPublications:
             "new_status": "accepted",
         }
         with (
-            patch("backend.api.search_feed_events", return_value=([status_change_pub], 1)) as mock_search,
+            patch("backend.api.search_feed_events", return_value=([status_change_pub], 1, 1)) as mock_search,
             patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
             patch("backend.api.get_coauthors_for_papers", return_value={}),
             patch("backend.api.get_links_for_papers", return_value={}),
@@ -250,7 +250,7 @@ class TestListPublications:
     def test_event_type_omitted_returns_both(self, client):
         """Omitting event_type returns all events (backward compatible)."""
         with (
-            patch("backend.api.search_feed_events", return_value=(SAMPLE_PUBLICATIONS, 3)) as mock_search,
+            patch("backend.api.search_feed_events", return_value=(SAMPLE_PUBLICATIONS, 3, 3)) as mock_search,
             patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUBS_1_2_3),
             patch("backend.api.get_coauthors_for_papers", return_value={}),
             patch("backend.api.get_links_for_papers", return_value={}),
@@ -319,7 +319,7 @@ class TestPublicationOpenAlexFields:
             ],
         }
         with (
-            patch("backend.api.search_feed_events", return_value=(sample_pubs, 1)),
+            patch("backend.api.search_feed_events", return_value=(sample_pubs, 1, 1)),
             patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
             patch("backend.api.get_coauthors_for_papers", return_value=coauthors_map),
             patch("backend.api.get_links_for_papers", return_value={}),

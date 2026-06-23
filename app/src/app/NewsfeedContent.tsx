@@ -11,6 +11,7 @@ import ErrorMessage from "@/components/ErrorMessage";
 import EmptyState from "@/components/EmptyState";
 import SearchInput from "@/components/SearchInput";
 import SearchableCheckboxDropdown from "@/components/SearchableCheckboxDropdown";
+import PresetBar from "@/components/PresetBar";
 
 /* ---------- helpers ---------- */
 
@@ -63,6 +64,12 @@ const STATUS_OPTIONS = [
   { label: "Revise & Resubmit", value: "revise_and_resubmit" },
   { label: "Reject & Resubmit", value: "reject_and_resubmit" },
   { label: "Working Paper", value: "working_paper" },
+];
+
+const FEED_PRESETS = [
+  { label: "R&R / Accepted at Top-5", value: "top5_rr_accepted" },
+  { label: "Top-20 Departments", value: "top20" },
+  { label: "Researchers with a Top-5", value: "has_top5" },
 ];
 
 function getYearOptions(): string[] {
@@ -315,13 +322,32 @@ export default function NewsfeedContent() {
   }, []);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <FilterBar
         filters={filters}
         onChange={handleFilterChange}
         activeTab={activeTab}
         onTabChange={handleTabChange}
       />
+
+      <PresetBar
+        presets={FEED_PRESETS}
+        active={filters.preset}
+        onChange={(preset) =>
+          handleFilterChange({ ...filters, preset, institution: preset ? undefined : filters.institution })
+        }
+      />
+
+      {data && (
+        <p className="font-sans text-sm text-[var(--text-muted)]">
+          {data.total === 0
+            ? "No results"
+            : `Showing ${data.items.length.toLocaleString()} of ${data.total.toLocaleString()} results`}
+          {data.researcher_count != null && data.researcher_count > 0
+            ? ` from ${data.researcher_count.toLocaleString()} researcher${data.researcher_count === 1 ? "" : "s"}`
+            : ""}
+        </p>
+      )}
 
       {isLoading && !data && (
         <div className="space-y-4">

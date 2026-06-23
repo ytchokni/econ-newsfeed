@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useFilterOptions, useResearchersFiltered } from "@/lib/api";
 import type { ResearcherFilters } from "@/lib/types";
 import ResearcherCard from "@/components/ResearcherCard";
@@ -9,16 +10,65 @@ import ErrorMessage from "@/components/ErrorMessage";
 import EmptyState from "@/components/EmptyState";
 import SearchableCheckboxDropdown from "@/components/SearchableCheckboxDropdown";
 import SearchInput from "@/components/SearchInput";
+import PresetBar from "@/components/PresetBar";
+
+const FILTER_PARAM_KEYS = ["institution", "field", "position", "search", "preset"] as const satisfies readonly (keyof ResearcherFilters)[];
+
+const RESEARCHER_PRESETS = [
+  { label: "R&R / Accepted at Top-5", value: "top5_rr_accepted" },
+  { label: "Top-20 Departments", value: "top20" },
+  { label: "Researchers with a Top-5", value: "has_top5" },
+];
+
+function filtersFromParams(params: URLSearchParams): ResearcherFilters {
+  const filters: ResearcherFilters = {};
+  for (const key of FILTER_PARAM_KEYS) {
+    const val = params.get(key);
+    if (val) (filters as Record<string, string>)[key] = val;
+  }
+  return filters;
+}
+
+function filtersToParams(filters: ResearcherFilters): URLSearchParams {
+  const params = new URLSearchParams();
+  for (const key of FILTER_PARAM_KEYS) {
+    const val = (filters as Record<string, string | undefined>)[key];
+    if (val) params.set(key, val);
+  }
+  return params;
+}
 
 export default function ResearchersContent() {
-  const [filters, setFilters] = useState<ResearcherFilters>({});
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
+
+  const [filters, setFilters] = useState<ResearcherFilters>(() =>
+    filtersFromParams(searchParams)
+  );
   const { data: filterOptions } = useFilterOptions();
   const { data: researchers, error, isLoading } = useResearchersFiltered(filters);
 
-  const institutionOptions = (filterOptions?.institutions ?? []).map((i) => ({
-    label: i,
-    value: i,
-  }));
+  const isInitialMount = useRef(true);
+  useEffect(() => {
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
+    }
+    const params = filtersToParams(filters);
+    const qs = params.toString();
+    const next = qs ? `${pathname}?${qs}` : pathname;
+    router.replace(next, { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, pathname]);
+
+  const institutionOptions = [
+    { label: "Top 20", value: "top20" },
+    ...(filterOptions?.institutions ?? []).map((i) => ({
+      label: i,
+      value: i,
+    })),
+  ];
   const positionOptions = (filterOptions?.positions ?? []).map((p) => ({
     label: p,
     value: p,
@@ -28,12 +78,22 @@ export default function ResearchersContent() {
     value: f.slug,
   }));
 
-  const selectedInstitutions = filters.institution ? filters.institution.split(",") : [];
+  const selectedInstitutions = (() => {
+    if (filters.preset === "top20") return ["top20"];
+    if (filters.institution) return filters.institution.split(",");
+    return [];
+  })();
   const selectedPositions = filters.position ? filters.position.split(",") : [];
   const selectedFields = filters.field ? filters.field.split(",") : [];
 
   const handleInstitutionChange = useCallback((selected: string[]) => {
-    setFilters((prev) => ({ ...prev, institution: selected.join(",") || undefined }));
+    const hasTop20 = selected.includes("top20");
+    const institutions = selected.filter((v) => v !== "top20");
+    setFilters((prev) => ({
+      ...prev,
+      preset: hasTop20 ? "top20" : undefined,
+      institution: institutions.length > 0 ? institutions.join(",") : undefined,
+    }));
   }, []);
 
   const handlePositionChange = useCallback((selected: string[]) => {
@@ -48,22 +108,18 @@ export default function ResearchersContent() {
     setFilters((prev) => ({ ...prev, search: value || undefined }));
   }, []);
 
-  const hasActiveFilters = !!(filters.institution || filters.field || filters.position || filters.search);
+  const handlePresetChange = useCallback((preset: string | undefined) => {
+    setFilters((prev) => ({
+      ...prev,
+      preset,
+      institution: preset ? undefined : prev.institution,
+    }));
+  }, []);
 
-  if (isLoading) {
-    return (
-      <div className="space-y-4">
-        <p className="font-sans text-sm text-[var(--text-muted)]">Loading researchers...</p>
-        {Array.from({ length: 3 }).map((_, i) => (
-          <ResearcherCardSkeleton key={i} />
-        ))}
-      </div>
-    );
-  }
-
-  if (error) {
-    return <ErrorMessage message="Failed to load researchers." />;
-  }
+  const hasActiveFilters = !!(
+    filters.institution || filters.field || filters.position ||
+    filters.search || filters.preset
+  );
 
   return (
     <div className="space-y-6">
@@ -112,9 +168,39 @@ export default function ResearchersContent() {
         </div>
       </div>
 
-      {!researchers || researchers.length === 0 ? (
+      <PresetBar
+        presets={RESEARCHER_PRESETS}
+        active={filters.preset}
+        onChange={handlePresetChange}
+      />
+
+      {/* Result count banner */}
+      {!isLoading && researchers && (
+        <p className="font-sans text-sm text-[var(--text-muted)]">
+          {researchers.length === 0
+            ? "No researchers match the current filters"
+            : `Showing ${researchers.length.toLocaleString()} researcher${researchers.length === 1 ? "" : "s"}`}
+        </p>
+      )}
+
+      {isLoading && (
+        <div className="space-y-4">
+          <p className="font-sans text-sm text-[var(--text-muted)]">Loading researchers...</p>
+          {Array.from({ length: 3 }).map((_, i) => (
+            <ResearcherCardSkeleton key={i} />
+          ))}
+        </div>
+      )}
+
+      {error && !researchers && (
+        <ErrorMessage message="Failed to load researchers." />
+      )}
+
+      {!isLoading && researchers && researchers.length === 0 && (
         <EmptyState message="No researchers match the current filters." />
-      ) : (
+      )}
+
+      {researchers && researchers.length > 0 && (
         <div className="space-y-4 animate-stagger">
           {researchers.map((r) => (
             <ResearcherCard key={r.id} researcher={r} />

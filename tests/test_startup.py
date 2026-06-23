@@ -77,7 +77,7 @@ class TestScrapeApiKeyValidation:
                     # App started successfully -- verify it responds
                     with (
                         patch("backend.api.connection_scope", _noop_connection_scope),
-                        patch("backend.api.search_feed_events", return_value=([], 0)),
+                        patch("backend.api.search_feed_events", return_value=([], 0, 0)),
                         patch("backend.api.get_authors_for_papers", return_value={}),
                         patch("backend.api.get_coauthors_for_papers", return_value={}),
                         patch("backend.api.get_links_for_papers", return_value={}),

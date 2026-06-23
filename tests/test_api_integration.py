@@ -141,7 +141,7 @@ class TestFullCycle:
     def test_full_api_cycle(self, client):
         # 1. List publications
         with (
-            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUB], 1)),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUB], 1, 1)),
             patch("backend.api.get_authors_for_papers", return_value=SAMPLE_AUTHORS_MAP),
             patch("backend.api.get_coauthors_for_papers", return_value={}),
             patch("backend.api.get_links_for_papers", return_value={}),
@@ -280,7 +280,7 @@ class TestPublicationsSmoke:
     def test_publications_endpoint_responds_with_data(self, client):
         """GET /api/publications must return 200 with the expected shape -- not hang."""
         with (
-            patch("backend.api.search_feed_events", return_value=([_SMOKE_PUB], 1)),
+            patch("backend.api.search_feed_events", return_value=([_SMOKE_PUB], 1, 1)),
             patch("backend.api.get_authors_for_papers", return_value=_SMOKE_AUTHORS_MAP),
             patch("backend.api.get_coauthors_for_papers", return_value={}),
             patch("backend.api.get_links_for_papers", return_value={}),

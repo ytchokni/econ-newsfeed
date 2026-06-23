@@ -3,6 +3,12 @@ import { SWRConfig } from "swr";
 import ResearchersContent from "../ResearchersContent";
 import type { Researcher } from "@/lib/types";
 
+jest.mock("next/navigation", () => ({
+  useRouter: () => ({ push: jest.fn(), back: jest.fn(), replace: jest.fn() }),
+  useSearchParams: () => new URLSearchParams(window.location.search),
+  usePathname: () => "/researchers",
+}));
+
 const researchers: Researcher[] = [
   {
     id: 1,
