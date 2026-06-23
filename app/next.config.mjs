@@ -7,7 +7,7 @@ const nextConfig = {
   async rewrites() {
     return [
       {
-        source: "/api/:path*",
+        source: "/api/:path((?!auth).*)",
         destination: `${process.env.API_INTERNAL_URL || "http://localhost:8000"}/api/:path*`,
       },
     ];
@@ -33,7 +33,7 @@ const nextConfig = {
               "style-src 'self' 'unsafe-inline'",
               "img-src 'self' data: https:",
               "font-src 'self'",
-              "connect-src 'self'",
+              "connect-src 'self' https://accounts.google.com",
               "frame-ancestors 'none'",
             ].join("; "),
           },

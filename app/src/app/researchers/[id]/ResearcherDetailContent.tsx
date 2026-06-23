@@ -8,6 +8,7 @@ import ErrorMessage from "@/components/ErrorMessage";
 import EmptyState from "@/components/EmptyState";
 import AffiliationLine from "@/components/AffiliationLine";
 import type { ResearcherDetail } from "@/lib/types";
+import FollowButton from "@/components/FollowButton";
 
 export default function ResearcherDetailContent({ id, initialData }: { id: number; initialData?: ResearcherDetail }) {
   const { data: researcher, error, isLoading } = useResearcher(id, initialData);
@@ -55,15 +56,18 @@ export default function ResearcherDetailContent({ id, initialData }: { id: numbe
           <h1 className="font-serif text-2xl font-bold text-[var(--text-primary)]">
             {researcher.first_name} {researcher.last_name}
           </h1>
-          {researcher.website_url && (
-            <a href={researcher.website_url} target="_blank" rel="noopener noreferrer"
-              className="shrink-0 inline-flex items-center gap-1.5 font-sans text-sm text-[var(--link)] hover:text-[var(--accent)] transition-colors">
-              Personal website
-              <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" />
-              </svg>
-            </a>
-          )}
+          <div className="flex items-center gap-3 shrink-0">
+            <FollowButton researcherId={id} size="md" />
+            {researcher.website_url && (
+              <a href={researcher.website_url} target="_blank" rel="noopener noreferrer"
+                className="inline-flex items-center gap-1.5 font-sans text-sm text-[var(--link)] hover:text-[var(--accent)] transition-colors">
+                Personal website
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" />
+                </svg>
+              </a>
+            )}
+          </div>
         </div>
         <AffiliationLine
           position={researcher.position}
