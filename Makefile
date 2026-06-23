@@ -1,4 +1,4 @@
-.PHONY: setup dev kill seed reset-db scrape fetch extract batch-submit batch-check classify-jel enrich enrich-jel discover-domains backfill-normalize populate-fields backfill-affiliations audit-zero-pubs check
+.PHONY: setup dev kill seed reset-db scrape fetch extract batch-submit batch-check classify-jel enrich enrich-jel discover-domains discover-research-pages backfill-normalize populate-fields backfill-affiliations audit-zero-pubs check
 
 setup:
 	poetry install
@@ -6,7 +6,7 @@ setup:
 
 dev:
 	@trap 'kill 0' INT TERM; \
-	poetry run uvicorn api:app --reload --port 8001 & \
+	poetry run uvicorn backend.api:app --reload --port 8001 & \
 	cd app && API_INTERNAL_URL=http://localhost:8001 npm run dev & \
 	wait
 
@@ -15,45 +15,48 @@ kill:
 	@echo "Killed processes on ports 8000, 8001, 3000, and 3001"
 
 seed:
-	poetry run python -c "from database import Database; Database.create_database(); Database.create_tables(); print('Database seeded')"
+	poetry run python -c "from backend.database import create_database, create_tables; create_database(); create_tables(); print('Database seeded')"
 
 reset-db:
-	poetry run python -c "from database import Database; from db_config import db_config; \
+	poetry run python -c "from backend.database import create_database, create_tables; from backend.config import db_config; \
 		import mysql.connector; \
 		conn = mysql.connector.connect(host=db_config['host'], user=db_config['user'], password=db_config['password']); \
 		cursor = conn.cursor(); \
 		cursor.execute('DROP DATABASE IF EXISTS \`' + db_config['database'] + '\`'); \
 		conn.close(); \
-		Database.create_database(); \
-		Database.create_tables(); \
+		create_database(); \
+		create_tables(); \
 		print('Database reset complete')"
 
 scrape:
-	poetry run python -c "from scheduler import run_scrape_job; run_scrape_job()"
+	poetry run python -c "from backend.pipeline.scheduler import run_scrape_job; run_scrape_job()"
 
 fetch:
-	poetry run python -c "from main import download_htmls; download_htmls()"
+	poetry run python -c "from backend.main import download_htmls; download_htmls()"
 
 extract:  ## Run LLM extraction for URLs with pending changes (no fetching)
-	poetry run python main.py extract
+	poetry run python -m backend.main extract
 
 batch-submit:
-	poetry run python main.py batch-submit
+	poetry run python -m backend.main batch-submit
 
 batch-check:
-	poetry run python main.py batch-check
+	poetry run python -m backend.main batch-check
 
 classify-jel:
-	poetry run python -c "from main import classify_jel; classify_jel()"
+	poetry run python -c "from backend.main import classify_jel; classify_jel()"
 
 enrich:
-	poetry run python main.py enrich
+	poetry run python -m backend.main enrich
 
 enrich-jel:  ## Enrich researcher JEL codes from paper topics
-	poetry run python main.py enrich-jel
+	poetry run python -m backend.main enrich-jel
 
 discover-domains:  ## Scan for untrusted domains that may host paper links
-	poetry run python main.py discover-domains
+	poetry run python -m backend.main discover-domains
+
+discover-research-pages:  ## Find research/publications pages from stored homepage HTML
+	poetry run python scripts/discover_research_pages.py
 
 backfill-normalize:  ## Re-normalize html_content hashes (one-time, after deploying text normalization)
 	poetry run python scripts/backfill_normalized_hashes.py
@@ -82,6 +85,15 @@ check:
 	@echo "=== Step 5: Frontend tests ==="
 	cd app && npx jest
 	@echo "=== All checks passed ==="
+
+check-data:  ## Data-quality invariant checks against the real DB (.env); fails on bad rows
+	poetry run pytest tests_data_quality -v
+
+check-data-live:  ## check-data + pipeline-liveness checks (run on the server against the live DB)
+	DATA_QUALITY_LIVE=1 poetry run pytest tests_data_quality -v
+
+sync-prod:  ## DESTRUCTIVE: replace local DB with latest prod backup (scp + fresh volume + migrations)
+	./scripts/sync_prod_db.sh
 
 # Eval
 eval-export:

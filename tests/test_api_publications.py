@@ -16,18 +16,18 @@ def _noop_connection_scope():
 def client():
     """Create a test client with mocked database and scheduler."""
     with (
-        patch("database.Database.create_tables"),
-        patch("scheduler.start_scheduler"),
-        patch("scheduler.shutdown_scheduler"),
-        patch("api.connection_scope", _noop_connection_scope),
+        patch("backend.api.create_tables"),
+        patch("backend.api.start_scheduler"),
+        patch("backend.api.shutdown_scheduler"),
+        patch("backend.api.connection_scope", _noop_connection_scope),
     ):
-        from api import app
+        from backend.api import app
 
         with TestClient(app) as c:
             yield c
 
 
-# Sample data that mimics Database.search_feed_events return shapes (dicts)
+# Sample data that mimics search_feed_events return shapes (dicts)
 # Feed events row shape: event_id, event_type, old_status, new_status, created_at,
 #   paper_id, title, year, venue, url, discovered_at, status, draft_url, abstract, draft_url_status
 SAMPLE_PUBLICATIONS = [
@@ -37,21 +37,21 @@ SAMPLE_PUBLICATIONS = [
      "year": "2024", "venue": "JLE", "source_url": "https://example.com/pub",
      "discovered_at": datetime(2026, 3, 15, 14, 30), "status": "working_paper",
      "draft_url": "https://ssrn.com/abstract=1", "abstract": None, "draft_url_status": "valid",
-     "doi": None, "total_count": 3},
+     "doi": None},
     {"event_id": 101, "event_type": "new_paper", "old_status": None, "new_status": "accepted",
      "old_title": None, "new_title": None,
      "created_at": datetime(2026, 3, 14, 10, 0), "paper_id": 2, "title": "Immigration Effects",
      "year": "2023", "venue": "QJE", "source_url": "https://example.com/pub2",
      "discovered_at": datetime(2026, 3, 14, 10, 0), "status": "accepted",
      "draft_url": None, "abstract": None, "draft_url_status": None,
-     "doi": None, "total_count": 3},
+     "doi": None},
     {"event_id": 102, "event_type": "new_paper", "old_status": None, "new_status": "working_paper",
      "old_title": None, "new_title": None,
      "created_at": datetime(2026, 3, 13, 9, 0), "paper_id": 3, "title": "Labor Markets",
      "year": "2024", "venue": "AER", "source_url": "https://example.com/pub3",
      "discovered_at": datetime(2026, 3, 13, 9, 0), "status": "working_paper",
      "draft_url": None, "abstract": None, "draft_url_status": None,
-     "doi": None, "total_count": 3},
+     "doi": None},
 ]
 
 # 14-key papers dict for single publication detail endpoint
@@ -101,10 +101,10 @@ class TestListPublications:
     def test_default_pagination(self, client):
         """Default page=1, per_page=20."""
         with (
-            patch("api.Database.search_feed_events", return_value=(SAMPLE_PUBLICATIONS, 3)),
-            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUBS_1_2_3),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=(SAMPLE_PUBLICATIONS, 3, 3)),
+            patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUBS_1_2_3),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications")
 
@@ -119,10 +119,10 @@ class TestListPublications:
     def test_custom_pagination(self, client):
         """Custom page and per_page values."""
         with (
-            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[1]], 3)),
-            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUB2),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[1]], 3, 3)),
+            patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUB2),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?page=2&per_page=1")
 
@@ -140,10 +140,10 @@ class TestListPublications:
     def test_year_filter(self, client):
         """Filter publications by year."""
         with (
-            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1, 1)),
+            patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?year=2024")
 
@@ -154,10 +154,10 @@ class TestListPublications:
     def test_researcher_id_filter(self, client):
         """Filter publications by researcher_id."""
         with (
-            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1, 1)),
+            patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?researcher_id=10")
 
@@ -170,10 +170,10 @@ class TestListPublications:
     def test_since_filter(self, client):
         """?since= filters publications discovered after the given timestamp."""
         with (
-            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1, 1)),
+            patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?since=2026-03-15T00:00:00Z")
 
@@ -189,10 +189,10 @@ class TestListPublications:
     def test_publication_item_shape(self, client):
         """Each item must have id, title, authors, year, venue, source_url, discovered_at."""
         with (
-            patch("api.Database.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1)),
-            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=([SAMPLE_PUBLICATIONS[0]], 1, 1)),
+            patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications")
 
@@ -214,10 +214,10 @@ class TestListPublications:
     def test_event_type_filter_new_paper(self, client):
         """?event_type=new_paper returns only new_paper events."""
         with (
-            patch("api.Database.search_feed_events", return_value=(SAMPLE_PUBLICATIONS[:2], 2)) as mock_search,
-            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUBS_1_2_3),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=(SAMPLE_PUBLICATIONS[:2], 2, 2)) as mock_search,
+            patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUBS_1_2_3),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?event_type=new_paper")
 
@@ -236,10 +236,10 @@ class TestListPublications:
             "new_status": "accepted",
         }
         with (
-            patch("api.Database.search_feed_events", return_value=([status_change_pub], 1)) as mock_search,
-            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=([status_change_pub], 1, 1)) as mock_search,
+            patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications?event_type=status_change")
 
@@ -250,10 +250,10 @@ class TestListPublications:
     def test_event_type_omitted_returns_both(self, client):
         """Omitting event_type returns all events (backward compatible)."""
         with (
-            patch("api.Database.search_feed_events", return_value=(SAMPLE_PUBLICATIONS, 3)) as mock_search,
-            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUBS_1_2_3),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=(SAMPLE_PUBLICATIONS, 3, 3)) as mock_search,
+            patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUBS_1_2_3),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications")
 
@@ -277,10 +277,10 @@ class TestGetPublication:
     def test_found_with_authors(self, client):
         """Returns publication with nested authors."""
         with (
-            patch("api.Database.get_paper_detail", return_value=SAMPLE_PUB_DETAIL),
-            patch("api.Database.get_authors_for_papers", return_value={1: SAMPLE_AUTHORS_PUB1}),
-            patch("api.Database.get_coauthors_for_papers", return_value={1: []}),
-            patch("api.Database.get_links_for_papers", return_value={1: []}),
+            patch("backend.api.get_paper_detail", return_value=SAMPLE_PUB_DETAIL),
+            patch("backend.api.get_authors_for_papers", return_value={1: SAMPLE_AUTHORS_PUB1}),
+            patch("backend.api.get_coauthors_for_papers", return_value={1: []}),
+            patch("backend.api.get_links_for_papers", return_value={1: []}),
         ):
             response = client.get("/api/publications/1")
 
@@ -292,7 +292,7 @@ class TestGetPublication:
 
     def test_not_found_returns_404(self, client):
         """Non-existent publication returns 404 with error envelope."""
-        with patch("api.Database.get_paper_detail", return_value=None):
+        with patch("backend.api.get_paper_detail", return_value=None):
             response = client.get("/api/publications/999999")
 
         assert response.status_code == 404
@@ -319,10 +319,10 @@ class TestPublicationOpenAlexFields:
             ],
         }
         with (
-            patch("api.Database.search_feed_events", return_value=(sample_pubs, 1)),
-            patch("api.Database.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
-            patch("api.Database.get_coauthors_for_papers", return_value=coauthors_map),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("backend.api.search_feed_events", return_value=(sample_pubs, 1, 1)),
+            patch("backend.api.get_authors_for_papers", return_value=AUTHORS_MAP_PUB1),
+            patch("backend.api.get_coauthors_for_papers", return_value=coauthors_map),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/publications")
 
@@ -339,10 +339,10 @@ class TestPublicationOpenAlexFields:
             1: [{"display_name": "Max Steinhardt", "openalex_author_id": "A111"}],
         }
         with (
-            patch("api.Database.get_paper_detail", return_value=pub_with_doi),
-            patch("api.Database.get_authors_for_papers", return_value={1: SAMPLE_AUTHORS_PUB1}),
-            patch("api.Database.get_coauthors_for_papers", return_value=coauthors_map),
-            patch("api.Database.get_links_for_papers", return_value={1: []}),
+            patch("backend.api.get_paper_detail", return_value=pub_with_doi),
+            patch("backend.api.get_authors_for_papers", return_value={1: SAMPLE_AUTHORS_PUB1}),
+            patch("backend.api.get_coauthors_for_papers", return_value=coauthors_map),
+            patch("backend.api.get_links_for_papers", return_value={1: []}),
         ):
             response = client.get("/api/publications/1")
 
@@ -381,12 +381,12 @@ class TestGetPublicationHistory:
         pub_detail = {**SAMPLE_PUB_DETAIL, "is_seed": False,
                       "title_hash": "abc123", "openalex_id": "W12345"}
         with (
-            patch("api.Database.get_paper_detail", return_value=pub_detail),
-            patch("api.Database.get_authors_for_papers", return_value={1: SAMPLE_AUTHORS_PUB1}),
-            patch("api.Database.get_coauthors_for_papers", return_value={1: []}),
-            patch("api.Database.get_links_for_papers", return_value={1: []}),
-            patch("api.Database.get_paper_snapshots", return_value=SAMPLE_SNAPSHOTS),
-            patch("api.Database.get_paper_history", return_value=SAMPLE_FEED_EVENTS),
+            patch("backend.api.get_paper_detail", return_value=pub_detail),
+            patch("backend.api.get_authors_for_papers", return_value={1: SAMPLE_AUTHORS_PUB1}),
+            patch("backend.api.get_coauthors_for_papers", return_value={1: []}),
+            patch("backend.api.get_links_for_papers", return_value={1: []}),
+            patch("backend.api.get_paper_snapshots", return_value=SAMPLE_SNAPSHOTS),
+            patch("backend.api.get_paper_history", return_value=SAMPLE_FEED_EVENTS),
         ):
             response = client.get("/api/publications/1?include_history=true")
 
@@ -405,12 +405,12 @@ class TestGetPublicationHistory:
         pub_detail = {**SAMPLE_PUB_DETAIL, "is_seed": False,
                       "title_hash": "abc123", "openalex_id": "W12345"}
         with (
-            patch("api.Database.get_paper_detail", return_value=pub_detail),
-            patch("api.Database.get_authors_for_papers", return_value={1: SAMPLE_AUTHORS_PUB1}),
-            patch("api.Database.get_coauthors_for_papers", return_value={1: []}),
-            patch("api.Database.get_links_for_papers", return_value={1: []}),
-            patch("api.Database.get_paper_snapshots", return_value=[]),
-            patch("api.Database.get_paper_history", return_value=[]),
+            patch("backend.api.get_paper_detail", return_value=pub_detail),
+            patch("backend.api.get_authors_for_papers", return_value={1: SAMPLE_AUTHORS_PUB1}),
+            patch("backend.api.get_coauthors_for_papers", return_value={1: []}),
+            patch("backend.api.get_links_for_papers", return_value={1: []}),
+            patch("backend.api.get_paper_snapshots", return_value=[]),
+            patch("backend.api.get_paper_history", return_value=[]),
         ):
             response = client.get("/api/publications/1?include_history=true")
 
@@ -423,10 +423,10 @@ class TestGetPublicationHistory:
     def test_no_history_without_flag(self, client):
         """feed_events and history are not included without include_history=true."""
         with (
-            patch("api.Database.get_paper_detail", return_value=SAMPLE_PUB_DETAIL),
-            patch("api.Database.get_authors_for_papers", return_value={1: SAMPLE_AUTHORS_PUB1}),
-            patch("api.Database.get_coauthors_for_papers", return_value={1: []}),
-            patch("api.Database.get_links_for_papers", return_value={1: []}),
+            patch("backend.api.get_paper_detail", return_value=SAMPLE_PUB_DETAIL),
+            patch("backend.api.get_authors_for_papers", return_value={1: SAMPLE_AUTHORS_PUB1}),
+            patch("backend.api.get_coauthors_for_papers", return_value={1: []}),
+            patch("backend.api.get_links_for_papers", return_value={1: []}),
         ):
             response = client.get("/api/publications/1")
 

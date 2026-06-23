@@ -15,9 +15,9 @@ from unittest.mock import MagicMock, patch
 
 
 class TestLlmPricing:
-    @patch("database.llm.execute_query")
+    @patch("backend.database.llm.execute_query")
     def test_gemini_flash_cost_computed(self, mock_exec):
-        from database.llm import log_llm_usage
+        from backend.database.llm import log_llm_usage
         usage = MagicMock()
         usage.prompt_tokens = 1_000_000
         usage.completion_tokens = 1_000_000
@@ -32,9 +32,9 @@ class TestLlmPricing:
         # $0.30/M prompt + $2.50/M completion = $2.80 total
         assert abs(float(cost) - 2.80) < 1e-6
 
-    @patch("database.llm.execute_query")
+    @patch("backend.database.llm.execute_query")
     def test_batch_multiplier_is_half(self, mock_exec):
-        from database.llm import log_llm_usage
+        from backend.database.llm import log_llm_usage
         usage = MagicMock()
         usage.prompt_tokens = 1_000_000
         usage.completion_tokens = 0

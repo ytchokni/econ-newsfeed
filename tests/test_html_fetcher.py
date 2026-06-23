@@ -5,13 +5,13 @@ import zlib
 import pytest
 from unittest.mock import patch, MagicMock
 
-from html_fetcher import HTMLFetcher, ResponseTooLarge
+from backend.pipeline.html_fetcher import HTMLFetcher, ResponseTooLarge
 
 
 class TestRobotsTxtCaching:
     def test_robots_txt_cached_per_domain(self):
         """robots.txt should be fetched once per domain, not per URL."""
-        with patch("html_fetcher.requests.get") as mock_get:
+        with patch("backend.pipeline.html_fetcher.requests.get") as mock_get:
             mock_resp = MagicMock()
             mock_resp.status_code = 200
             mock_resp.text = "User-agent: *\nAllow: /"
@@ -25,7 +25,7 @@ class TestRobotsTxtCaching:
 
     def test_different_domains_fetched_separately(self):
         """Different domains should each get their own robots.txt fetch."""
-        with patch("html_fetcher.requests.get") as mock_get:
+        with patch("backend.pipeline.html_fetcher.requests.get") as mock_get:
             mock_resp = MagicMock()
             mock_resp.status_code = 200
             mock_resp.text = "User-agent: *\nAllow: /"
@@ -39,13 +39,28 @@ class TestRobotsTxtCaching:
 
     def test_robots_txt_404_allows_access(self):
         """If robots.txt returns 404, all URLs should be allowed."""
-        with patch("html_fetcher.requests.get") as mock_get:
+        with patch("backend.pipeline.html_fetcher.requests.get") as mock_get:
             mock_resp = MagicMock()
             mock_resp.status_code = 404
             mock_get.return_value = mock_resp
 
             HTMLFetcher._robots_cache.clear()
             assert HTMLFetcher.is_allowed_by_robots("https://example.com/page1") is True
+
+    def test_robots_cache_evicts_oldest_entry(self):
+        """Cache should not grow beyond _ROBOTS_CACHE_MAX entries."""
+        from backend.pipeline.html_fetcher import _ROBOTS_CACHE_MAX
+        with patch("backend.pipeline.html_fetcher.requests.get") as mock_get:
+            mock_resp = MagicMock()
+            mock_resp.status_code = 200
+            mock_resp.text = "User-agent: *\nAllow: /"
+            mock_get.return_value = mock_resp
+
+            HTMLFetcher._robots_cache.clear()
+            for i in range(_ROBOTS_CACHE_MAX + 10):
+                HTMLFetcher.is_allowed_by_robots(f"https://domain{i}.com/page")
+
+        assert len(HTMLFetcher._robots_cache) <= _ROBOTS_CACHE_MAX
 
 
 class TestFetchHtml:
@@ -110,15 +125,15 @@ class TestFetchHtml:
 
 class TestChangeDetection:
     def test_has_text_changed_returns_true_for_new_content(self):
-        with patch("html_fetcher.Database.fetch_one", return_value=None):
+        with patch("backend.pipeline.html_fetcher.fetch_one", return_value=None):
             assert HTMLFetcher.has_text_changed(1, "abc") is True
 
     def test_has_text_changed_returns_false_for_same_hash(self):
-        with patch("html_fetcher.Database.fetch_one", return_value={"content_hash": "abc"}):
+        with patch("backend.pipeline.html_fetcher.fetch_one", return_value={"content_hash": "abc"}):
             assert HTMLFetcher.has_text_changed(1, "abc") is False
 
     def test_has_text_changed_returns_true_for_different_hash(self):
-        with patch("html_fetcher.Database.fetch_one", return_value={"content_hash": "old"}):
+        with patch("backend.pipeline.html_fetcher.fetch_one", return_value={"content_hash": "old"}):
             assert HTMLFetcher.has_text_changed(1, "new") is True
 
 
@@ -142,19 +157,19 @@ class TestThreadSafety:
 class TestIsFirstExtraction:
     """Tests for HTMLFetcher.is_first_extraction()."""
 
-    @patch("html_fetcher.Database.fetch_one")
+    @patch("backend.pipeline.html_fetcher.fetch_one")
     def test_returns_true_when_never_extracted(self, mock_fetch):
         """extracted_at IS NULL means first extraction."""
         mock_fetch.return_value = {"extracted_at": None}
         assert HTMLFetcher.is_first_extraction(1) is True
 
-    @patch("html_fetcher.Database.fetch_one")
+    @patch("backend.pipeline.html_fetcher.fetch_one")
     def test_returns_false_when_previously_extracted(self, mock_fetch):
         """extracted_at is set means already extracted before."""
         mock_fetch.return_value = {"extracted_at": "2026-03-19 12:00:00"}
         assert HTMLFetcher.is_first_extraction(1) is False
 
-    @patch("html_fetcher.Database.fetch_one")
+    @patch("backend.pipeline.html_fetcher.fetch_one")
     def test_returns_false_when_no_html_content(self, mock_fetch):
         """No html_content row at all — nothing to extract."""
         mock_fetch.return_value = None
@@ -164,8 +179,8 @@ class TestIsFirstExtraction:
 class TestArchiveSnapshot:
     """Tests for HTMLFetcher.archive_snapshot()."""
 
-    @patch("html_fetcher.Database.fetch_one")
-    @patch("html_fetcher.Database.execute_query")
+    @patch("backend.pipeline.html_fetcher.fetch_one")
+    @patch("backend.pipeline.html_fetcher.execute_query")
     def test_archives_when_prior_row_exists(self, mock_execute, mock_fetch):
         """Should compress and store old raw_html when a prior row exists."""
         old_html = "<html>old content</html>"
@@ -188,8 +203,8 @@ class TestArchiveSnapshot:
         assert zlib.decompress(params[3]).decode("utf-8") == old_html  # compressed blob
         assert params[4] == "2026-03-01 12:00:00"  # snapshot_at
 
-    @patch("html_fetcher.Database.fetch_one")
-    @patch("html_fetcher.Database.execute_query")
+    @patch("backend.pipeline.html_fetcher.fetch_one")
+    @patch("backend.pipeline.html_fetcher.execute_query")
     def test_no_archive_on_first_fetch(self, mock_execute, mock_fetch):
         """No prior row means no snapshot to archive."""
         mock_fetch.return_value = None
@@ -198,8 +213,8 @@ class TestArchiveSnapshot:
 
         mock_execute.assert_not_called()
 
-    @patch("html_fetcher.Database.fetch_one")
-    @patch("html_fetcher.Database.execute_query")
+    @patch("backend.pipeline.html_fetcher.fetch_one")
+    @patch("backend.pipeline.html_fetcher.execute_query")
     def test_no_archive_when_raw_html_null(self, mock_execute, mock_fetch):
         """Legacy rows with raw_html=NULL should be skipped with a warning."""
         mock_fetch.return_value = {
@@ -208,15 +223,15 @@ class TestArchiveSnapshot:
             "timestamp": "2026-03-01 12:00:00",
         }
 
-        with patch("html_fetcher.logging.warning") as mock_warn:
+        with patch("backend.pipeline.html_fetcher.logging.warning") as mock_warn:
             HTMLFetcher.archive_snapshot(url_id=1)
 
         mock_execute.assert_not_called()
         mock_warn.assert_called_once()
         assert "NULL" in mock_warn.call_args[0][0] or "null" in str(mock_warn.call_args).lower()
 
-    @patch("html_fetcher.Database.fetch_one")
-    @patch("html_fetcher.Database.execute_query", side_effect=Exception("DB error"))
+    @patch("backend.pipeline.html_fetcher.fetch_one")
+    @patch("backend.pipeline.html_fetcher.execute_query", side_effect=Exception("DB error"))
     def test_archive_failure_doesnt_raise(self, mock_execute, mock_fetch):
         """Archive errors should be logged, not raised."""
         mock_fetch.return_value = {
@@ -228,8 +243,8 @@ class TestArchiveSnapshot:
         # Should not raise
         HTMLFetcher.archive_snapshot(url_id=1)
 
-    @patch("html_fetcher.Database.fetch_one")
-    @patch("html_fetcher.Database.execute_query")
+    @patch("backend.pipeline.html_fetcher.fetch_one")
+    @patch("backend.pipeline.html_fetcher.execute_query")
     def test_duplicate_archive_ignored(self, mock_execute, mock_fetch):
         """Calling archive twice with same content should not error (INSERT IGNORE)."""
         mock_fetch.return_value = {
@@ -246,7 +261,7 @@ class TestArchiveSnapshot:
         for call in mock_execute.call_args_list:
             assert "INSERT IGNORE" in call[0][0]
 
-    @patch("html_fetcher.Database.execute_query")
+    @patch("backend.pipeline.html_fetcher.execute_query")
     def test_save_text_calls_archive_before_upsert(self, mock_execute):
         """save_text() should call archive_snapshot() before the upsert."""
         call_order = []
@@ -267,7 +282,7 @@ class TestArchiveSnapshot:
         mock_archive.assert_called_once_with(1)
         assert call_order == ["archive", "upsert"]
 
-    @patch("html_fetcher.Database.execute_query")
+    @patch("backend.pipeline.html_fetcher.execute_query")
     def test_save_text_still_saves_when_archive_fails(self, mock_execute):
         """save_text() should still upsert html_content even if archive_snapshot() fails internally."""
         with patch.object(HTMLFetcher, "archive_snapshot", side_effect=Exception("archive boom")):
@@ -281,7 +296,7 @@ class TestArchiveSnapshot:
 class TestSnapshotRetrieval:
     """Tests for HTMLFetcher.get_snapshot() and list_snapshots()."""
 
-    @patch("html_fetcher.Database.fetch_one")
+    @patch("backend.pipeline.html_fetcher.fetch_one")
     def test_get_snapshot_decompresses_and_verifies(self, mock_fetch):
         """Should decompress and return raw HTML after integrity check."""
         original_html = "<html><body>Test page</body></html>"
@@ -296,7 +311,7 @@ class TestSnapshotRetrieval:
         result = HTMLFetcher.get_snapshot(url_id=1, snapshot_id=42)
         assert result == original_html
 
-    @patch("html_fetcher.Database.fetch_one")
+    @patch("backend.pipeline.html_fetcher.fetch_one")
     def test_get_snapshot_integrity_failure(self, mock_fetch):
         """Should raise ValueError when decompressed HTML doesn't match hash."""
         original_html = "<html>original</html>"
@@ -310,14 +325,14 @@ class TestSnapshotRetrieval:
         with pytest.raises(ValueError, match="[Ii]ntegrity"):
             HTMLFetcher.get_snapshot(url_id=1, snapshot_id=42)
 
-    @patch("html_fetcher.Database.fetch_one")
+    @patch("backend.pipeline.html_fetcher.fetch_one")
     def test_get_snapshot_not_found(self, mock_fetch):
         """Should return None when snapshot doesn't exist."""
         mock_fetch.return_value = None
         result = HTMLFetcher.get_snapshot(url_id=1, snapshot_id=999)
         assert result is None
 
-    @patch("html_fetcher.Database.fetch_all")
+    @patch("backend.pipeline.html_fetcher.fetch_all")
     def test_list_snapshots(self, mock_fetch):
         """Should return snapshots ordered by snapshot_at DESC."""
         mock_fetch.return_value = [
@@ -329,7 +344,7 @@ class TestSnapshotRetrieval:
         assert len(result) == 2
         assert result[0]["id"] == 2
 
-    @patch("html_fetcher.Database.fetch_all")
+    @patch("backend.pipeline.html_fetcher.fetch_all")
     def test_list_snapshots_empty(self, mock_fetch):
         """Should return empty list when no snapshots exist."""
         mock_fetch.return_value = []
@@ -437,7 +452,7 @@ class TestMarkExtractedWithHash:
     """mark_extracted records the hash read at extraction start, not mark time."""
 
     def test_explicit_hash_is_written(self):
-        with patch("html_fetcher.Database.execute_query") as mock_exec:
+        with patch("backend.pipeline.html_fetcher.execute_query") as mock_exec:
             HTMLFetcher.mark_extracted(7, "abc123")
         query, params = mock_exec.call_args[0]
         assert "extracted_hash = %s" in query
@@ -446,7 +461,7 @@ class TestMarkExtractedWithHash:
 
     def test_no_hash_falls_back_to_content_hash(self):
         """Legacy callers (batch_check) keep the old copy-current-hash behavior."""
-        with patch("html_fetcher.Database.execute_query") as mock_exec:
+        with patch("backend.pipeline.html_fetcher.execute_query") as mock_exec:
             HTMLFetcher.mark_extracted(7)
         query, params = mock_exec.call_args[0]
         assert "extracted_hash = content_hash" in query
@@ -455,12 +470,53 @@ class TestMarkExtractedWithHash:
 
 class TestGetExtractionPayload:
     def test_returns_row(self):
-        row = {"content": "text", "raw_html": "<html>", "content_hash": "h1"}
-        with patch("html_fetcher.Database.fetch_one", return_value=row) as mock_fetch:
+        row = {"content": "text", "content_hash": "h1",
+               "timestamp": None, "extracted_at": None}
+        with patch("backend.pipeline.html_fetcher.fetch_one", return_value=row) as mock_fetch:
             result = HTMLFetcher.get_extraction_payload(7)
         assert result == row
         assert mock_fetch.call_args[0][1] == (7,)
 
     def test_returns_none_when_no_html(self):
-        with patch("html_fetcher.Database.fetch_one", return_value=None):
+        with patch("backend.pipeline.html_fetcher.fetch_one", return_value=None):
             assert HTMLFetcher.get_extraction_payload(7) is None
+
+
+class TestGetRawHtml:
+    def test_returns_raw_html(self):
+        with patch("backend.pipeline.html_fetcher.fetch_one", return_value={"raw_html": "<html>body</html>"}):
+            assert HTMLFetcher.get_raw_html(7) == "<html>body</html>"
+
+    def test_returns_none_when_no_row(self):
+        with patch("backend.pipeline.html_fetcher.fetch_one", return_value=None):
+            assert HTMLFetcher.get_raw_html(7) is None
+
+    def test_returns_none_when_null_raw_html(self):
+        with patch("backend.pipeline.html_fetcher.fetch_one", return_value={"raw_html": None}):
+            assert HTMLFetcher.get_raw_html(7) is None
+
+
+class TestUnchangedPathBackfill:
+    """The unchanged-hash path must backfill missing bodies (data-quality finding
+    2026-06-11: 4,536 prod rows had content_hash but NULL content — restored from
+    a metadata-only dump — and extraction looped on no_content forever because
+    the matching hash meant the save path never ran)."""
+
+    @patch("backend.pipeline.html_fetcher.execute_query")
+    def test_touch_unchanged_backfills_content_and_raw_html(self, mock_execute):
+        HTMLFetcher._touch_unchanged(42, "<html>raw</html>", "page text")
+        sql, params = mock_execute.call_args[0]
+        assert "COALESCE(raw_html" in sql
+        assert "content IS NULL OR content = ''" in sql
+        assert "timestamp" in sql
+        assert params[-1] == 42  # url_id is the WHERE param
+        assert "<html>raw</html>" in params
+        assert "page text" in params
+
+    @patch("backend.pipeline.html_fetcher.execute_query")
+    def test_touch_unchanged_preserves_existing_content(self, mock_execute):
+        """Backfill must be conditional (IF/COALESCE), never an unconditional overwrite."""
+        HTMLFetcher._touch_unchanged(42, "<html/>", "text")
+        sql, _ = mock_execute.call_args[0]
+        assert "SET timestamp" in sql
+        assert "content = IF(content IS NULL OR content = ''" in sql

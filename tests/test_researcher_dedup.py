@@ -1,7 +1,7 @@
 """Tests for researcher deduplication: initial matching and merge logic."""
 import pytest
 from unittest.mock import patch, MagicMock
-from database.researchers import first_name_is_initial_match, get_researcher_id, merge_researchers
+from backend.database.researchers import first_name_is_initial_match, get_researcher_id, merge_researchers
 
 
 class TestFirstNameIsInitialMatch:
@@ -45,9 +45,9 @@ class TestFirstNameIsInitialMatch:
 class TestGetResearcherIdInitialTier:
     """Tier 1.5: initial matching in get_researcher_id()."""
 
-    @patch("database.researchers.fetch_all")
-    @patch("database.researchers.fetch_one")
-    @patch("database.researchers.execute_query")
+    @patch("backend.database.researchers.fetch_all")
+    @patch("backend.database.researchers.fetch_one")
+    @patch("backend.database.researchers.execute_query")
     def test_initial_matches_single_candidate(self, mock_exec, mock_one, mock_all):
         """'L.' + existing 'Liam' with same last name -> returns existing id."""
         # Tier 1 exact match fails
@@ -64,9 +64,9 @@ class TestGetResearcherIdInitialTier:
         assert "UPDATE researchers SET first_name" in update_call[0][0]
         assert "Liam" in update_call[0][1]
 
-    @patch("database.researchers._disambiguate_researcher")
-    @patch("database.researchers.fetch_all")
-    @patch("database.researchers.fetch_one")
+    @patch("backend.database.researchers._disambiguate_researcher")
+    @patch("backend.database.researchers.fetch_all")
+    @patch("backend.database.researchers.fetch_one")
     def test_multiple_initial_matches_falls_through(self, mock_one, mock_all, mock_disamb):
         """Multiple initial matches -> skip Tier 1.5, fall through to LLM."""
         mock_one.side_effect = [None, None]  # Tier 1 + Tier 2 fail
@@ -80,10 +80,10 @@ class TestGetResearcherIdInitialTier:
         assert result == 10
         mock_disamb.assert_called_once()
 
-    @patch("database.researchers._disambiguate_researcher", return_value=None)
-    @patch("database.researchers.fetch_all")
-    @patch("database.researchers.fetch_one")
-    @patch("database.researchers.execute_query")
+    @patch("backend.database.researchers._disambiguate_researcher", return_value=None)
+    @patch("backend.database.researchers.fetch_all")
+    @patch("backend.database.researchers.fetch_one")
+    @patch("backend.database.researchers.execute_query")
     def test_no_initial_match_falls_through_to_insert(self, mock_exec, mock_one, mock_all, mock_disamb):
         """No initial match and no LLM match -> inserts new researcher."""
         mock_one.side_effect = [None, None]  # Tier 1 + Tier 2 fail
@@ -161,67 +161,67 @@ class TestIsBadResearcherName:
     """is_bad_researcher_name rejects empty first names and initial-only last names."""
 
     def test_empty_first_name(self):
-        from database.researchers import is_bad_researcher_name
+        from backend.database.researchers import is_bad_researcher_name
         assert is_bad_researcher_name("", "Smith") is True
 
     def test_whitespace_first_name(self):
-        from database.researchers import is_bad_researcher_name
+        from backend.database.researchers import is_bad_researcher_name
         assert is_bad_researcher_name("  ", "Smith") is True
 
     def test_initial_only_last_name_with_period(self):
-        from database.researchers import is_bad_researcher_name
+        from backend.database.researchers import is_bad_researcher_name
         assert is_bad_researcher_name("Eric", "A.") is True
 
     def test_initial_only_last_name_without_period(self):
-        from database.researchers import is_bad_researcher_name
+        from backend.database.researchers import is_bad_researcher_name
         assert is_bad_researcher_name("David", "K") is True
 
     def test_empty_last_name(self):
-        from database.researchers import is_bad_researcher_name
+        from backend.database.researchers import is_bad_researcher_name
         assert is_bad_researcher_name("John", "") is True
 
     def test_whitespace_last_name(self):
-        from database.researchers import is_bad_researcher_name
+        from backend.database.researchers import is_bad_researcher_name
         assert is_bad_researcher_name("John", "  ") is True
 
     def test_valid_name(self):
-        from database.researchers import is_bad_researcher_name
+        from backend.database.researchers import is_bad_researcher_name
         assert is_bad_researcher_name("John", "Smith") is False
 
     def test_short_but_valid_last_name(self):
-        from database.researchers import is_bad_researcher_name
+        from backend.database.researchers import is_bad_researcher_name
         assert is_bad_researcher_name("Yi", "Li") is False
 
     def test_initial_first_name_is_ok(self):
         """Single-letter first names like 'J.' are fine — it's last names we reject."""
-        from database.researchers import is_bad_researcher_name
+        from backend.database.researchers import is_bad_researcher_name
         assert is_bad_researcher_name("J.", "Smith") is False
 
 
 class TestGetResearcherIdNameGuard:
     """get_researcher_id returns None for bad names instead of inserting."""
 
-    @patch("database.researchers._disambiguate_researcher", return_value=None)
-    @patch("database.researchers.fetch_all", return_value=[])
-    @patch("database.researchers.fetch_one", return_value=None)
-    @patch("database.researchers.execute_query")
+    @patch("backend.database.researchers._disambiguate_researcher", return_value=None)
+    @patch("backend.database.researchers.fetch_all", return_value=[])
+    @patch("backend.database.researchers.fetch_one", return_value=None)
+    @patch("backend.database.researchers.execute_query")
     def test_rejects_empty_first_name(self, mock_exec, mock_one, mock_all, mock_disamb):
         result = get_researcher_id("", "Anastakis")
         assert result is None
         mock_exec.assert_not_called()
 
-    @patch("database.researchers._disambiguate_researcher", return_value=None)
-    @patch("database.researchers.fetch_all", return_value=[])
-    @patch("database.researchers.fetch_one", return_value=None)
-    @patch("database.researchers.execute_query")
+    @patch("backend.database.researchers._disambiguate_researcher", return_value=None)
+    @patch("backend.database.researchers.fetch_all", return_value=[])
+    @patch("backend.database.researchers.fetch_one", return_value=None)
+    @patch("backend.database.researchers.execute_query")
     def test_rejects_initial_last_name(self, mock_exec, mock_one, mock_all, mock_disamb):
         result = get_researcher_id("Eric", "A.")
         assert result is None
         mock_exec.assert_not_called()
 
-    @patch("database.researchers.fetch_all", return_value=[])
-    @patch("database.researchers.fetch_one", return_value=None)
-    @patch("database.researchers.execute_query", return_value=99)
+    @patch("backend.database.researchers.fetch_all", return_value=[])
+    @patch("backend.database.researchers.fetch_one", return_value=None)
+    @patch("backend.database.researchers.execute_query", return_value=99)
     def test_allows_valid_name(self, mock_exec, mock_one, mock_all):
         result = get_researcher_id("John", "Smith")
         assert result == 99

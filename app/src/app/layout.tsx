@@ -31,6 +31,9 @@ export default function RootLayout({
 }>) {
   return (
     <html lang="en" className={`${sourceSerif.variable} ${dmSans.variable}`}>
+      <head>
+        <link rel="alternate" type="application/atom+xml" title="Econ Newsfeed" href="/api/feed.xml" />
+      </head>
       <body className="antialiased">
         <AuthProvider>
           <Header />

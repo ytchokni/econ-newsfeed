@@ -16,12 +16,12 @@ def _noop_connection_scope():
 def client():
     """Create a test client with mocked database and scheduler."""
     with (
-        patch("database.Database.create_tables"),
-        patch("scheduler.start_scheduler"),
-        patch("scheduler.shutdown_scheduler"),
-        patch("api.connection_scope", _noop_connection_scope),
+        patch("backend.api.create_tables"),
+        patch("backend.api.start_scheduler"),
+        patch("backend.api.shutdown_scheduler"),
+        patch("backend.api.connection_scope", _noop_connection_scope),
     ):
-        from api import app
+        from backend.api import app
 
         with TestClient(app) as c:
             yield c
@@ -95,11 +95,11 @@ class TestListResearchers:
 
     def test_returns_all_researchers(self, client):
         with (
-            patch("api.Database.search_researchers", return_value=(SAMPLE_RESEARCHERS, 2)),
-            patch("api.Database.get_urls_for_researchers", return_value=URLS_MAP_ALL),
-            patch("api.Database.get_pub_counts_for_researchers", return_value=PUB_COUNTS_ALL),
-            patch("api.Database.get_fields_for_researchers", return_value=FIELDS_MAP_ALL),
-            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=(SAMPLE_RESEARCHERS, 2)),
+            patch("backend.api.get_urls_for_researchers", return_value=URLS_MAP_ALL),
+            patch("backend.api.get_pub_counts_for_researchers", return_value=PUB_COUNTS_ALL),
+            patch("backend.api.get_fields_for_researchers", return_value=FIELDS_MAP_ALL),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             response = client.get("/api/researchers")
 
@@ -114,11 +114,11 @@ class TestListResearchers:
     def test_researcher_item_shape(self, client):
         """Each researcher must have id, first_name, last_name, position, affiliation, bio, urls, website_url, publication_count, fields."""
         with (
-            patch("api.Database.search_researchers", return_value=([SAMPLE_RESEARCHERS[0]], 1)),
-            patch("api.Database.get_urls_for_researchers", return_value=URLS_MAP_R1),
-            patch("api.Database.get_pub_counts_for_researchers", return_value=PUB_COUNTS_R1),
-            patch("api.Database.get_fields_for_researchers", return_value=FIELDS_MAP_R1),
-            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=([SAMPLE_RESEARCHERS[0]], 1)),
+            patch("backend.api.get_urls_for_researchers", return_value=URLS_MAP_R1),
+            patch("backend.api.get_pub_counts_for_researchers", return_value=PUB_COUNTS_R1),
+            patch("backend.api.get_fields_for_researchers", return_value=FIELDS_MAP_R1),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             response = client.get("/api/researchers")
 
@@ -141,11 +141,11 @@ class TestListResearchers:
     def test_default_pagination(self, client):
         """Default page=1, per_page=20; response includes pagination metadata."""
         with (
-            patch("api.Database.search_researchers", return_value=(SAMPLE_RESEARCHERS, 2)),
-            patch("api.Database.get_urls_for_researchers", return_value=URLS_MAP_ALL),
-            patch("api.Database.get_pub_counts_for_researchers", return_value=PUB_COUNTS_ALL),
-            patch("api.Database.get_fields_for_researchers", return_value=FIELDS_MAP_ALL),
-            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=(SAMPLE_RESEARCHERS, 2)),
+            patch("backend.api.get_urls_for_researchers", return_value=URLS_MAP_ALL),
+            patch("backend.api.get_pub_counts_for_researchers", return_value=PUB_COUNTS_ALL),
+            patch("backend.api.get_fields_for_researchers", return_value=FIELDS_MAP_ALL),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             response = client.get("/api/researchers")
 
@@ -159,11 +159,11 @@ class TestListResearchers:
     def test_custom_pagination(self, client):
         """Custom page and per_page values."""
         with (
-            patch("api.Database.search_researchers", return_value=([SAMPLE_RESEARCHERS[1]], 2)),
-            patch("api.Database.get_urls_for_researchers", return_value=URLS_MAP_R2),
-            patch("api.Database.get_pub_counts_for_researchers", return_value=PUB_COUNTS_R2),
-            patch("api.Database.get_fields_for_researchers", return_value=FIELDS_MAP_R2),
-            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=([SAMPLE_RESEARCHERS[1]], 2)),
+            patch("backend.api.get_urls_for_researchers", return_value=URLS_MAP_R2),
+            patch("backend.api.get_pub_counts_for_researchers", return_value=PUB_COUNTS_R2),
+            patch("backend.api.get_fields_for_researchers", return_value=FIELDS_MAP_R2),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             response = client.get("/api/researchers?page=2&per_page=1")
 
@@ -185,11 +185,11 @@ class TestListResearchers:
     def test_institution_filter(self, client):
         """?institution= performs partial match on affiliation."""
         with (
-            patch("api.Database.search_researchers", return_value=([SAMPLE_RESEARCHERS[1]], 1)),
-            patch("api.Database.get_urls_for_researchers", return_value=URLS_MAP_R2),
-            patch("api.Database.get_pub_counts_for_researchers", return_value=PUB_COUNTS_R2),
-            patch("api.Database.get_fields_for_researchers", return_value=FIELDS_MAP_R2),
-            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=([SAMPLE_RESEARCHERS[1]], 1)),
+            patch("backend.api.get_urls_for_researchers", return_value=URLS_MAP_R2),
+            patch("backend.api.get_pub_counts_for_researchers", return_value=PUB_COUNTS_R2),
+            patch("backend.api.get_fields_for_researchers", return_value=FIELDS_MAP_R2),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             response = client.get("/api/researchers?institution=MIT")
 
@@ -199,11 +199,11 @@ class TestListResearchers:
     def test_position_filter(self, client):
         """?position= performs partial match on position."""
         with (
-            patch("api.Database.search_researchers", return_value=([SAMPLE_RESEARCHERS[0]], 1)),
-            patch("api.Database.get_urls_for_researchers", return_value=URLS_MAP_R1),
-            patch("api.Database.get_pub_counts_for_researchers", return_value=PUB_COUNTS_R1),
-            patch("api.Database.get_fields_for_researchers", return_value=FIELDS_MAP_R1),
-            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=([SAMPLE_RESEARCHERS[0]], 1)),
+            patch("backend.api.get_urls_for_researchers", return_value=URLS_MAP_R1),
+            patch("backend.api.get_pub_counts_for_researchers", return_value=PUB_COUNTS_R1),
+            patch("backend.api.get_fields_for_researchers", return_value=FIELDS_MAP_R1),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             response = client.get("/api/researchers?position=Professor")
 
@@ -213,11 +213,11 @@ class TestListResearchers:
     def test_preset_top20_accepted(self, client):
         """?preset=top20 is accepted and returns 200."""
         with (
-            patch("api.Database.search_researchers", return_value=([SAMPLE_RESEARCHERS[1]], 1)),
-            patch("api.Database.get_urls_for_researchers", return_value=URLS_MAP_R2),
-            patch("api.Database.get_pub_counts_for_researchers", return_value=PUB_COUNTS_R2),
-            patch("api.Database.get_fields_for_researchers", return_value=FIELDS_MAP_R2),
-            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=([SAMPLE_RESEARCHERS[1]], 1)),
+            patch("backend.api.get_urls_for_researchers", return_value=URLS_MAP_R2),
+            patch("backend.api.get_pub_counts_for_researchers", return_value=PUB_COUNTS_R2),
+            patch("backend.api.get_fields_for_researchers", return_value=FIELDS_MAP_R2),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             response = client.get("/api/researchers?preset=top20")
 
@@ -226,11 +226,11 @@ class TestListResearchers:
     def test_field_filter_stubbed(self, client):
         """?field= is accepted without error (stubbed until taxonomy table lands)."""
         with (
-            patch("api.Database.search_researchers", return_value=(SAMPLE_RESEARCHERS, 2)),
-            patch("api.Database.get_urls_for_researchers", return_value=URLS_MAP_ALL),
-            patch("api.Database.get_pub_counts_for_researchers", return_value=PUB_COUNTS_ALL),
-            patch("api.Database.get_fields_for_researchers", return_value=FIELDS_MAP_ALL),
-            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=(SAMPLE_RESEARCHERS, 2)),
+            patch("backend.api.get_urls_for_researchers", return_value=URLS_MAP_ALL),
+            patch("backend.api.get_pub_counts_for_researchers", return_value=PUB_COUNTS_ALL),
+            patch("backend.api.get_fields_for_researchers", return_value=FIELDS_MAP_ALL),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             response = client.get("/api/researchers?field=labor")
 
@@ -246,15 +246,15 @@ class TestGetResearcher:
 
     def test_found_with_publications(self, client):
         with (
-            patch("api.Database.get_researcher_detail", return_value=SAMPLE_RESEARCHER_DETAIL),
-            patch("api.Database.get_urls_for_researchers", return_value=URLS_MAP_R1),
-            patch("api.Database.get_pub_counts_for_researchers", return_value=PUB_COUNTS_R1),
-            patch("api.Database.get_fields_for_researchers", return_value=FIELDS_MAP_R1),
-            patch("api.Database.get_jel_codes_for_researcher", return_value=[]),
-            patch("api.Database.get_researcher_papers", return_value=SAMPLE_PUBLICATIONS_R1),
-            patch("api.Database.get_authors_for_papers", return_value={1: [{"id": 1, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]}),
-            patch("api.Database.get_coauthors_for_papers", return_value={}),
-            patch("api.Database.get_links_for_papers", return_value={}),
+            patch("backend.api.get_researcher_detail", return_value=SAMPLE_RESEARCHER_DETAIL),
+            patch("backend.api.get_urls_for_researchers", return_value=URLS_MAP_R1),
+            patch("backend.api.get_pub_counts_for_researchers", return_value=PUB_COUNTS_R1),
+            patch("backend.api.get_fields_for_researchers", return_value=FIELDS_MAP_R1),
+            patch("backend.api.get_jel_codes_for_researcher", return_value=[]),
+            patch("backend.api.get_researcher_papers", return_value=SAMPLE_PUBLICATIONS_R1),
+            patch("backend.api.get_authors_for_papers", return_value={1: [{"id": 1, "first_name": "Max Friedrich", "last_name": "Steinhardt"}]}),
+            patch("backend.api.get_coauthors_for_papers", return_value={}),
+            patch("backend.api.get_links_for_papers", return_value={}),
         ):
             response = client.get("/api/researchers/1")
 
@@ -269,7 +269,7 @@ class TestGetResearcher:
         assert len(body["fields"]) == 1
 
     def test_not_found_returns_404(self, client):
-        with patch("api.Database.get_researcher_detail", return_value=None):
+        with patch("backend.api.get_researcher_detail", return_value=None):
             response = client.get("/api/researchers/999999")
 
         assert response.status_code == 404
@@ -283,11 +283,11 @@ class TestResearcherValidationFilter:
     def test_researchers_endpoint_filters_unvalidated(self, client):
         """The search_researchers function must include a validation filter condition."""
         with (
-            patch("api.Database.search_researchers", return_value=([], 0)) as mock_search,
-            patch("api.Database.get_urls_for_researchers", return_value={}),
-            patch("api.Database.get_pub_counts_for_researchers", return_value={}),
-            patch("api.Database.get_fields_for_researchers", return_value={}),
-            patch("api.Database.get_jel_codes_for_researchers", return_value={}),
+            patch("backend.api.search_researchers", return_value=([], 0)) as mock_search,
+            patch("backend.api.get_urls_for_researchers", return_value={}),
+            patch("backend.api.get_pub_counts_for_researchers", return_value={}),
+            patch("backend.api.get_fields_for_researchers", return_value={}),
+            patch("backend.api.get_jel_codes_for_researchers", return_value={}),
         ):
             resp = client.get("/api/researchers")
             assert resp.status_code == 200

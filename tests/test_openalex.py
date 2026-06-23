@@ -21,8 +21,8 @@ class TestUpdateOpenalexData:
         mock_conn.cursor.return_value.__enter__ = lambda s: mock_cursor
         mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch("database.papers.get_connection", return_value=mock_conn):
-            from database.papers import update_openalex_data
+        with patch("backend.database.papers.get_connection", return_value=mock_conn):
+            from backend.database.papers import update_openalex_data
             update_openalex_data(
                 paper_id=1,
                 doi="10.1257/aer.20181234",
@@ -52,8 +52,8 @@ class TestUpdateOpenalexData:
         mock_conn.cursor.return_value.__enter__ = lambda s: mock_cursor
         mock_conn.cursor.return_value.__exit__ = MagicMock(return_value=False)
 
-        with patch("database.papers.get_connection", return_value=mock_conn):
-            from database.papers import update_openalex_data
+        with patch("backend.database.papers.get_connection", return_value=mock_conn):
+            from backend.database.papers import update_openalex_data
             update_openalex_data(
                 paper_id=1,
                 doi="10.1234/test",
@@ -77,8 +77,8 @@ class TestGetUnenrichedPapers:
             {"id": 2, "title": "Immigration Effects", "abstract": "Existing abstract",
              "author_name": "Jane Doe"},
         ]
-        with patch("database.papers.fetch_all", return_value=mock_rows) as mock_fetch:
-            from database.papers import get_unenriched_papers
+        with patch("backend.database.papers.fetch_all", return_value=mock_rows) as mock_fetch:
+            from backend.database.papers import get_unenriched_papers
             result = get_unenriched_papers(limit=50)
 
         assert len(result) == 2
@@ -129,9 +129,9 @@ class TestSearchWork:
         mock_resp.json.return_value = SAMPLE_OPENALEX_RESPONSE
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("openalex._get_session") as mock_session:
+        with patch("backend.enrichment.openalex._get_session") as mock_session:
             mock_session.return_value.get.return_value = mock_resp
-            from openalex import search_work
+            from backend.enrichment.openalex import search_work
             result = search_work("Trade and Wages", "Steinhardt")
 
         assert result is not None
@@ -147,9 +147,9 @@ class TestSearchWork:
         mock_resp.json.return_value = {"results": []}
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("openalex._get_session") as mock_session:
+        with patch("backend.enrichment.openalex._get_session") as mock_session:
             mock_session.return_value.get.return_value = mock_resp
-            from openalex import search_work
+            from backend.enrichment.openalex import search_work
             result = search_work("Nonexistent Paper", "Nobody")
 
         assert result is None
@@ -173,18 +173,18 @@ class TestSearchWork:
         mock_resp.json.return_value = response
         mock_resp.raise_for_status = MagicMock()
 
-        with patch("openalex._get_session") as mock_session:
+        with patch("backend.enrichment.openalex._get_session") as mock_session:
             mock_session.return_value.get.return_value = mock_resp
-            from openalex import search_work
+            from backend.enrichment.openalex import search_work
             result = search_work("Similar Title", "Steinhardt")
 
         assert result is None
 
     def test_returns_none_on_request_error(self):
         import requests as req
-        with patch("openalex._get_session") as mock_session:
+        with patch("backend.enrichment.openalex._get_session") as mock_session:
             mock_session.return_value.get.side_effect = req.RequestException("timeout")
-            from openalex import search_work
+            from backend.enrichment.openalex import search_work
             result = search_work("Any Paper", "Anyone")
 
         assert result is None
@@ -194,7 +194,7 @@ class TestReconstructAbstract:
     """Tests for openalex.reconstruct_abstract."""
 
     def test_reconstructs_from_inverted_index(self):
-        from openalex import reconstruct_abstract
+        from backend.enrichment.openalex import reconstruct_abstract
         inverted_index = {
             "This": [0],
             "paper": [1],
@@ -208,7 +208,7 @@ class TestReconstructAbstract:
         assert result == "This paper studies the effect of the trade."
 
     def test_empty_index_returns_empty_string(self):
-        from openalex import reconstruct_abstract
+        from backend.enrichment.openalex import reconstruct_abstract
         assert reconstruct_abstract({}) == ""
 
 
@@ -227,11 +227,11 @@ class TestEnrichPublication:
             "year": None,
         }
         with (
-            patch("openalex.search_work", return_value=openalex_result),
-            patch("openalex.Database.update_openalex_data") as mock_update,
-            patch("openalex._backfill_researcher_openalex_ids"),
+            patch("backend.enrichment.openalex.search_work", return_value=openalex_result),
+            patch("backend.enrichment.openalex.update_openalex_data") as mock_update,
+            patch("backend.enrichment.openalex._backfill_researcher_openalex_ids"),
         ):
-            from openalex import enrich_publication
+            from backend.enrichment.openalex import enrich_publication
             result = enrich_publication(
                 paper_id=1,
                 title="Trade and Wages",
@@ -259,11 +259,11 @@ class TestEnrichPublication:
             "year": None,
         }
         with (
-            patch("openalex.search_work", return_value=openalex_result),
-            patch("openalex.Database.update_openalex_data") as mock_update,
-            patch("openalex._backfill_researcher_openalex_ids"),
+            patch("backend.enrichment.openalex.search_work", return_value=openalex_result),
+            patch("backend.enrichment.openalex.update_openalex_data") as mock_update,
+            patch("backend.enrichment.openalex._backfill_researcher_openalex_ids"),
         ):
-            from openalex import enrich_publication
+            from backend.enrichment.openalex import enrich_publication
             enrich_publication(
                 paper_id=1,
                 title="Test Paper",
@@ -277,8 +277,8 @@ class TestEnrichPublication:
 
     def test_returns_false_on_no_match(self):
         """Graceful handling when OpenAlex has no match."""
-        with patch("openalex.search_work", return_value=None):
-            from openalex import enrich_publication
+        with patch("backend.enrichment.openalex.search_work", return_value=None):
+            from backend.enrichment.openalex import enrich_publication
             result = enrich_publication(
                 paper_id=1,
                 title="Obscure Paper",
@@ -305,20 +305,20 @@ class TestEnrichNewPublications:
             "year": None,
         }
         with (
-            patch("openalex.Database.get_unenriched_papers", return_value=unenriched),
-            patch("openalex.search_work", return_value=openalex_result),
-            patch("openalex.Database.update_openalex_data"),
-            patch("openalex._backfill_researcher_openalex_ids"),
-            patch("openalex.time.sleep"),  # skip rate-limit delay in tests
+            patch("backend.enrichment.openalex.get_unenriched_papers", return_value=unenriched),
+            patch("backend.enrichment.openalex.search_work", return_value=openalex_result),
+            patch("backend.enrichment.openalex.update_openalex_data"),
+            patch("backend.enrichment.openalex._backfill_researcher_openalex_ids"),
+            patch("backend.enrichment.openalex.time.sleep"),  # skip rate-limit delay in tests
         ):
-            from openalex import enrich_new_publications
+            from backend.enrichment.openalex import enrich_new_publications
             count = enrich_new_publications()
 
         assert count == 2
 
     def test_returns_zero_when_nothing_to_enrich(self):
-        with patch("openalex.Database.get_unenriched_papers", return_value=[]):
-            from openalex import enrich_new_publications
+        with patch("backend.enrichment.openalex.get_unenriched_papers", return_value=[]):
+            from backend.enrichment.openalex import enrich_new_publications
             count = enrich_new_publications()
 
         assert count == 0
@@ -349,9 +349,9 @@ class TestLookupByDoi:
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json.return_value = SAMPLE_OPENALEX_WORK
 
-        with patch("openalex._get_session") as mock_session:
+        with patch("backend.enrichment.openalex._get_session") as mock_session:
             mock_session.return_value.get.return_value = mock_resp
-            from openalex import lookup_by_doi
+            from backend.enrichment.openalex import lookup_by_doi
             result = lookup_by_doi("10.1257/aer.20181234")
 
         assert result is not None
@@ -364,18 +364,18 @@ class TestLookupByDoi:
         mock_resp = MagicMock()
         mock_resp.status_code = 404
 
-        with patch("openalex._get_session") as mock_session:
+        with patch("backend.enrichment.openalex._get_session") as mock_session:
             mock_session.return_value.get.return_value = mock_resp
-            from openalex import lookup_by_doi
+            from backend.enrichment.openalex import lookup_by_doi
             result = lookup_by_doi("10.9999/nonexistent")
 
         assert result is None
 
     def test_returns_none_on_network_error(self):
         import requests as req
-        with patch("openalex._get_session") as mock_session:
+        with patch("backend.enrichment.openalex._get_session") as mock_session:
             mock_session.return_value.get.side_effect = req.RequestException("timeout")
-            from openalex import lookup_by_doi
+            from backend.enrichment.openalex import lookup_by_doi
             result = lookup_by_doi("10.1257/aer.20181234")
 
         assert result is None
@@ -395,12 +395,12 @@ class TestEnrichWithDoiFirst:
             "year": "2016",
         }
         with (
-            patch("openalex.lookup_by_doi", return_value=openalex_result) as mock_lookup,
-            patch("openalex.search_work") as mock_search,
-            patch("openalex.Database.update_openalex_data") as mock_update,
-            patch("openalex._backfill_researcher_openalex_ids"),
+            patch("backend.enrichment.openalex.lookup_by_doi", return_value=openalex_result) as mock_lookup,
+            patch("backend.enrichment.openalex.search_work") as mock_search,
+            patch("backend.enrichment.openalex.update_openalex_data") as mock_update,
+            patch("backend.enrichment.openalex._backfill_researcher_openalex_ids"),
         ):
-            from openalex import enrich_publication
+            from backend.enrichment.openalex import enrich_publication
             result = enrich_publication(
                 paper_id=1,
                 title="Extreme Air Pollution",
@@ -423,12 +423,12 @@ class TestBackfillResearcherOpenalexIds:
             {"display_name": "Jane Doe", "openalex_author_id": "A5000000001"},
         ]
         with (
-            patch("openalex.Database.fetch_all", return_value=[
+            patch("backend.enrichment.openalex.fetch_all", return_value=[
                 {"id": 1, "first_name": "Max", "last_name": "Steinhardt", "openalex_author_id": None},
             ]),
-            patch("openalex.Database.execute_query") as mock_exec,
+            patch("backend.enrichment.openalex.execute_query") as mock_exec,
         ):
-            from openalex import _backfill_researcher_openalex_ids
+            from backend.enrichment.openalex import _backfill_researcher_openalex_ids
             _backfill_researcher_openalex_ids(paper_id=10, coauthors=coauthors)
 
         mock_exec.assert_called_once()
@@ -436,8 +436,8 @@ class TestBackfillResearcherOpenalexIds:
 
     def test_skips_when_no_openalex_ids(self):
         coauthors = [{"display_name": "Author", "openalex_author_id": None}]
-        with patch("openalex.Database.fetch_all") as mock_fetch:
-            from openalex import _backfill_researcher_openalex_ids
+        with patch("backend.enrichment.openalex.fetch_all") as mock_fetch:
+            from backend.enrichment.openalex import _backfill_researcher_openalex_ids
             _backfill_researcher_openalex_ids(paper_id=10, coauthors=coauthors)
         mock_fetch.assert_not_called()
 
@@ -470,7 +470,7 @@ class TestParseWorkTopics:
             **SAMPLE_OPENALEX_RESPONSE["results"][0],
             "topics": SAMPLE_TOPICS,
         }
-        from openalex import _parse_work
+        from backend.enrichment.openalex import _parse_work
         result = _parse_work(work)
         assert "topics" in result
         assert len(result["topics"]) == 2
@@ -481,7 +481,7 @@ class TestParseWorkTopics:
 
     def test_parse_work_handles_no_topics(self):
         work = SAMPLE_OPENALEX_RESPONSE["results"][0]  # No topics key
-        from openalex import _parse_work
+        from backend.enrichment.openalex import _parse_work
         result = _parse_work(work)
         assert result["topics"] == []
 
@@ -501,10 +501,10 @@ class TestFetchTopicsBatch:
         mock_resp.raise_for_status = MagicMock()
         mock_resp.status_code = 200
 
-        with patch("openalex._get_session") as mock_session, \
-             patch("openalex._check_budget", return_value=True):
+        with patch("backend.enrichment.openalex._get_session") as mock_session, \
+             patch("backend.enrichment.openalex._check_budget", return_value=True):
             mock_session.return_value.get.return_value = mock_resp
-            from openalex import fetch_topics_batch
+            from backend.enrichment.openalex import fetch_topics_batch
             result = fetch_topics_batch(["W123", "W456"])
 
         assert "W123" in result
@@ -514,16 +514,16 @@ class TestFetchTopicsBatch:
 
     def test_returns_empty_on_api_error(self):
         import requests as req
-        with patch("openalex._get_session") as mock_session, \
-             patch("openalex._check_budget", return_value=True):
+        with patch("backend.enrichment.openalex._get_session") as mock_session, \
+             patch("backend.enrichment.openalex._check_budget", return_value=True):
             mock_session.return_value.get.side_effect = req.RequestException("timeout")
-            from openalex import fetch_topics_batch
+            from backend.enrichment.openalex import fetch_topics_batch
             result = fetch_topics_batch(["W123"])
 
         assert result == {}
 
     def test_handles_empty_input(self):
-        from openalex import fetch_topics_batch
+        from backend.enrichment.openalex import fetch_topics_batch
         result = fetch_topics_batch([])
         assert result == {}
 
@@ -532,7 +532,7 @@ class TestParseWorkCoauthorFiltering:
     """_parse_work skips coauthors with bad display_names."""
 
     def test_skips_empty_display_name(self):
-        from openalex import _parse_work
+        from backend.enrichment.openalex import _parse_work
         work = {
             "doi": "https://doi.org/10.1234/test",
             "id": "https://openalex.org/W123",
@@ -548,7 +548,7 @@ class TestParseWorkCoauthorFiltering:
         assert result["coauthors"][0]["display_name"] == "John Smith"
 
     def test_skips_initial_only_first_name(self):
-        from openalex import _parse_work
+        from backend.enrichment.openalex import _parse_work
         work = {
             "doi": "https://doi.org/10.1234/test",
             "id": "https://openalex.org/W123",
@@ -564,7 +564,7 @@ class TestParseWorkCoauthorFiltering:
         assert result["coauthors"][0]["display_name"] == "John Doe"
 
     def test_keeps_valid_coauthors(self):
-        from openalex import _parse_work
+        from backend.enrichment.openalex import _parse_work
         work = {
             "doi": "https://doi.org/10.1234/test",
             "id": "https://openalex.org/W123",
@@ -579,7 +579,7 @@ class TestParseWorkCoauthorFiltering:
         assert len(result["coauthors"]) == 2
 
     def test_skips_whitespace_only_name(self):
-        from openalex import _parse_work
+        from backend.enrichment.openalex import _parse_work
         work = {
             "doi": "https://doi.org/10.1234/test",
             "id": "https://openalex.org/W123",
@@ -594,7 +594,7 @@ class TestParseWorkCoauthorFiltering:
 
     def test_keeps_single_word_name(self):
         """Some authors have mononyms (e.g. 'Sukarno'). These are valid."""
-        from openalex import _parse_work
+        from backend.enrichment.openalex import _parse_work
         work = {
             "doi": "https://doi.org/10.1234/test",
             "id": "https://openalex.org/W123",
@@ -612,7 +612,7 @@ class TestParseWorkYearExtraction:
     """_parse_work extracts publication_year from OpenAlex work objects."""
 
     def test_extracts_year_as_string(self):
-        from openalex import _parse_work
+        from backend.enrichment.openalex import _parse_work
         work = {
             "doi": "https://doi.org/10.1234/test",
             "id": "https://openalex.org/W123",
@@ -625,7 +625,7 @@ class TestParseWorkYearExtraction:
         assert result["year"] == "2024"
 
     def test_missing_year_returns_none(self):
-        from openalex import _parse_work
+        from backend.enrichment.openalex import _parse_work
         work = {
             "doi": "https://doi.org/10.1234/test",
             "id": "https://openalex.org/W123",
@@ -637,7 +637,7 @@ class TestParseWorkYearExtraction:
         assert result["year"] is None
 
     def test_null_year_returns_none(self):
-        from openalex import _parse_work
+        from backend.enrichment.openalex import _parse_work
         work = {
             "doi": "https://doi.org/10.1234/test",
             "id": "https://openalex.org/W123",
@@ -653,9 +653,9 @@ class TestParseWorkYearExtraction:
 class TestEnrichPublicationYear:
     """enrich_publication passes year from OpenAlex to update_openalex_data."""
 
-    @patch("openalex.lookup_by_doi")
-    @patch("openalex.Database")
-    def test_passes_year_to_update(self, mock_db, mock_lookup):
+    @patch("backend.enrichment.openalex.lookup_by_doi")
+    @patch("backend.enrichment.openalex.update_openalex_data")
+    def test_passes_year_to_update(self, mock_update, mock_lookup):
         mock_lookup.return_value = {
             "doi": "10.1234/test",
             "openalex_id": "W123",
@@ -665,7 +665,7 @@ class TestEnrichPublicationYear:
             "year": "2024",
         }
 
-        from openalex import enrich_publication
+        from backend.enrichment.openalex import enrich_publication
         enrich_publication(
             paper_id=1,
             title="Test Paper",
@@ -673,6 +673,6 @@ class TestEnrichPublicationYear:
             doi="10.1234/test",
         )
 
-        mock_db.update_openalex_data.assert_called_once()
-        call_kwargs = mock_db.update_openalex_data.call_args
+        mock_update.assert_called_once()
+        call_kwargs = mock_update.call_args
         assert call_kwargs.kwargs.get("year") == "2024"

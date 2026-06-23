@@ -1,4 +1,5 @@
 import Link from "next/link";
+import AffiliationLine from "@/components/AffiliationLine";
 import type { Researcher } from "@/lib/types";
 import FollowButton from "@/components/FollowButton";
 
@@ -25,13 +26,11 @@ export default function ResearcherCard({
         </h3>
         <FollowButton researcherId={researcher.id} size="sm" />
       </div>
-      {(researcher.position || researcher.affiliation) && (
-        <p className="mt-1 font-sans text-sm text-[var(--text-secondary)]">
-          {researcher.position}
-          {researcher.position && researcher.affiliation && ", "}
-          {researcher.affiliation}
-        </p>
-      )}
+      <AffiliationLine
+        position={researcher.position}
+        affiliation={researcher.affiliation}
+        className="mt-1 font-sans text-sm text-[var(--text-secondary)]"
+      />
       <p className="mt-1.5 font-sans text-sm text-[var(--text-muted)]">
         {researcher.publication_count} publications tracked
       </p>

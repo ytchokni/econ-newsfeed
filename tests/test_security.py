@@ -22,20 +22,20 @@ def _noop_connection_scope():
 def client():
     """Test client with mocked database and scheduler."""
     with (
-        patch("database.Database.create_tables"),
-        patch("database.Database.get_connection", return_value=None),
-        patch("database.Database.fetch_all", return_value=[]),
-        patch("database.Database.fetch_one", return_value=None),
-        patch("scheduler.start_scheduler"),
-        patch("scheduler.shutdown_scheduler"),
-        patch("api.connection_scope", _noop_connection_scope),
-        patch("api.Database.search_feed_events", return_value=([], 0)),
-        patch("api.Database.get_authors_for_papers", return_value={}),
-        patch("api.Database.get_coauthors_for_papers", return_value={}),
-        patch("api.Database.get_links_for_papers", return_value={}),
-        patch("api.Database.get_paper_detail", return_value=None),
+        patch("backend.api.create_tables"),
+        patch("backend.database.get_connection", return_value=None),
+        patch("backend.database.fetch_all", return_value=[]),
+        patch("backend.database.fetch_one", return_value=None),
+        patch("backend.api.start_scheduler"),
+        patch("backend.api.shutdown_scheduler"),
+        patch("backend.api.connection_scope", _noop_connection_scope),
+        patch("backend.api.search_feed_events", return_value=([], 0, 0)),
+        patch("backend.api.get_authors_for_papers", return_value={}),
+        patch("backend.api.get_coauthors_for_papers", return_value={}),
+        patch("backend.api.get_links_for_papers", return_value={}),
+        patch("backend.api.get_paper_detail", return_value=None),
     ):
-        from api import app
+        from backend.api import app
 
         with TestClient(app) as c:
             yield c
@@ -91,7 +91,7 @@ class TestSSRFValidation:
     """validate_url must reject all known SSRF bypass patterns."""
 
     def _validate(self, url):
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
         return HTMLFetcher.validate_url(url)
 
     def test_rejects_file_scheme(self):
@@ -145,13 +145,13 @@ class TestSSRFValidation:
 
     def test_validate_url_returns_true_on_public_ip(self):
         """validate_url must return True for a public IP."""
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
         with patch("socket.getaddrinfo", return_value=[(None, None, None, None, ("1.2.3.4", 0))]):
             assert HTMLFetcher.validate_url("https://example.com/page") is True
 
     def test_validate_url_returns_false_on_private_ip(self):
         """validate_url must return False when IP is private."""
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
         with patch("socket.getaddrinfo", return_value=[(None, None, None, None, ("192.168.1.1", 0))]):
             assert HTMLFetcher.validate_url("https://example.com/page") is False
 
@@ -225,13 +225,13 @@ class TestNoStackTraceLeakage:
     def test_500_no_stack_trace(self):
         """Simulated internal error must return generic 500 with no details."""
         with (
-            patch("database.Database.create_tables"),
-            patch("database.Database.get_connection", return_value=None),
-            patch("scheduler.start_scheduler"),
-            patch("scheduler.shutdown_scheduler"),
-            patch("api.Database.get_paper_detail", side_effect=RuntimeError("DB connection failed: password=s3cr3t")),
+            patch("backend.api.create_tables"),
+            patch("backend.database.get_connection", return_value=None),
+            patch("backend.api.start_scheduler"),
+            patch("backend.api.shutdown_scheduler"),
+            patch("backend.api.get_paper_detail", side_effect=RuntimeError("DB connection failed: password=s3cr3t")),
         ):
-            from api import app
+            from backend.api import app
 
             with TestClient(app, raise_server_exceptions=False) as c:
                 resp = c.get("/api/publications/1")
@@ -247,14 +247,14 @@ class TestNoStackTraceLeakage:
     def test_unhandled_exception_returns_generic_500(self):
         """Any unhandled exception must produce a generic 500, not a traceback."""
         with (
-            patch("database.Database.create_tables"),
-            patch("database.Database.get_connection", return_value=None),
-            patch("scheduler.start_scheduler"),
-            patch("scheduler.shutdown_scheduler"),
-            patch("api.connection_scope", _noop_connection_scope),
-            patch("api.Database.search_researchers", side_effect=Exception("internal detail")),
+            patch("backend.api.create_tables"),
+            patch("backend.database.get_connection", return_value=None),
+            patch("backend.api.start_scheduler"),
+            patch("backend.api.shutdown_scheduler"),
+            patch("backend.api.connection_scope", _noop_connection_scope),
+            patch("backend.api.search_researchers", side_effect=Exception("internal detail")),
         ):
-            from api import app
+            from backend.api import app
 
             with TestClient(app, raise_server_exceptions=False) as c:
                 resp = c.get("/api/researchers")
@@ -278,7 +278,7 @@ class TestRateLimitErrorEnvelope:
 
         # Directly invoke the custom handler to verify its shape
         import asyncio
-        from api import _rate_limit_handler
+        from backend.api import _rate_limit_handler
 
         scope = {
             "type": "http",
@@ -312,26 +312,26 @@ class TestDNSPinning:
     """validate_url_with_pin must return resolved IP for SSRF prevention."""
 
     def test_returns_resolved_ip_for_public_address(self):
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
         with patch("socket.getaddrinfo", return_value=[(None, None, None, None, ("93.184.216.34", 0))]):
             safe, resolved_ip = HTMLFetcher.validate_url_with_pin("https://example.com/page")
             assert safe is True
             assert resolved_ip == "93.184.216.34"
 
     def test_rejects_private_ip(self):
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
         with patch("socket.getaddrinfo", return_value=[(None, None, None, None, ("192.168.1.1", 0))]):
             safe, resolved_ip = HTMLFetcher.validate_url_with_pin("https://evil.com/page")
             assert safe is False
             assert resolved_ip is None
 
     def test_rejects_metadata_endpoint(self):
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
         safe, resolved_ip = HTMLFetcher.validate_url_with_pin("http://169.254.169.254/latest/meta-data/")
         assert safe is False
 
     def test_rejects_non_http_scheme(self):
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
         safe, _ = HTMLFetcher.validate_url_with_pin("file:///etc/passwd")
         assert safe is False
 
@@ -345,7 +345,7 @@ class TestSSRFRedirectBypass:
 
     def test_redirect_to_private_ip_is_blocked(self):
         """A 302 redirect to 169.254.169.254 must return None."""
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
 
         # First request returns 302 pointing to AWS metadata endpoint
         redirect_response = MagicMock()
@@ -363,7 +363,7 @@ class TestSSRFRedirectBypass:
 
     def test_redirect_without_location_header_returns_none(self):
         """A redirect response with no Location header must return None."""
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
 
         redirect_response = MagicMock()
         redirect_response.status_code = 302
@@ -381,7 +381,7 @@ class TestSSRFRedirectBypass:
 
     def test_redirect_to_public_ip_is_followed(self):
         """A 302 redirect to a public IP should follow and return content."""
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
 
         # First request returns 302 to a public URL
         redirect_response = MagicMock()
@@ -408,7 +408,7 @@ class TestSSRFRedirectBypass:
 
     def test_redirect_chain_limit(self):
         """More than 5 redirects must return None."""
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
 
         # Create a redirect response that always redirects
         def make_redirect():
@@ -437,13 +437,13 @@ class TestDNSRebindingPrevention:
 
     def test_fetch_and_save_passes_resolved_ip(self):
         """fetch_and_save_if_changed must pass the pinned IP to fetch_html."""
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
 
         with patch.object(HTMLFetcher, "_was_fetched_recently", return_value=False), \
              patch.object(HTMLFetcher, "validate_url_with_pin", return_value=(True, "93.184.216.34")), \
              patch.object(HTMLFetcher, "is_allowed_by_robots", return_value=True), \
              patch.object(HTMLFetcher, "fetch_html", return_value=None) as mock_fetch, \
-             patch("html_fetcher.record_url_fetch_failure"):
+             patch("backend.pipeline.html_fetcher.record_url_fetch_failure"):
             HTMLFetcher.fetch_and_save_if_changed(1, "https://example.com/page", 1)
 
         mock_fetch.assert_called_once()
@@ -452,10 +452,10 @@ class TestDNSRebindingPrevention:
 
     def test_fetch_html_uses_dns_pinning(self):
         """When resolved_ip is provided, DNS pinning must be active during fetch."""
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
 
         with patch.object(HTMLFetcher, "_rate_limit"), \
-             patch("html_fetcher._pin_dns") as mock_pin_dns, \
+             patch("backend.pipeline.html_fetcher._pin_dns") as mock_pin_dns, \
              patch.object(HTMLFetcher, "_get_session") as mock_session_fn:
             # Set up the context manager mock
             mock_ctx = MagicMock()
@@ -483,7 +483,7 @@ class TestDNSRebindingPrevention:
 
     def test_pin_dns_routes_to_resolved_ip(self):
         """_pin_dns must make urllib3 connect to the pinned IP."""
-        from html_fetcher import _pin_dns
+        from backend.pipeline.html_fetcher import _pin_dns
         import urllib3.util.connection as urllib3_cn
 
         original_fn = urllib3_cn.create_connection
@@ -497,7 +497,7 @@ class TestDNSRebindingPrevention:
 
     def test_pin_dns_only_affects_target_hostname(self):
         """_pin_dns must not affect connections to other hostnames."""
-        from html_fetcher import _pin_dns
+        from backend.pipeline.html_fetcher import _pin_dns
         import urllib3.util.connection as urllib3_cn
 
         original_fn = urllib3_cn.create_connection
@@ -538,7 +538,7 @@ class TestCurlOptionInjection:
 
     def test_curl_uses_end_of_options_marker(self):
         """The curl command must include '--' before the URL argument."""
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=b"<html></html>", stderr=b"")
@@ -550,7 +550,7 @@ class TestCurlOptionInjection:
 
     def test_curl_rejects_non_http_url(self):
         """_fetch_with_curl must reject URLs without http(s) scheme."""
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
 
         with patch("subprocess.run") as mock_run:
             result = HTMLFetcher._fetch_with_curl("-o /tmp/evil http://attacker.com")
@@ -560,7 +560,7 @@ class TestCurlOptionInjection:
 
     def test_curl_does_not_follow_redirects(self):
         """curl must not use -L flag (redirects handled at application level)."""
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=b"<html></html>", stderr=b"")
@@ -582,7 +582,7 @@ class TestCurlBinaryDecoding:
     def test_curl_captures_bytes_not_text(self):
         """subprocess.run must NOT use text=True; we decode the bytes ourselves
         so a non-UTF-8 body cannot crash inside subprocess's strict decoder."""
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
 
         with patch("subprocess.run") as mock_run:
             mock_run.return_value = MagicMock(returncode=0, stdout=b"<html></html>", stderr=b"")
@@ -594,7 +594,7 @@ class TestCurlBinaryDecoding:
 
     def test_curl_decodes_non_utf8_without_crashing(self):
         """A binary/Latin-1 body (invalid UTF-8) must decode to a str, not raise."""
-        from html_fetcher import HTMLFetcher
+        from backend.pipeline.html_fetcher import HTMLFetcher
 
         # 0xe2 standing alone is the exact invalid continuation byte from the
         # production crash (a PDF body served to the curl fallback).
@@ -620,7 +620,7 @@ class TestOperationalEndpointAuth:
 
     def test_metrics_with_valid_key_succeeds(self, client):
         """GET /api/metrics with valid API key must return 200."""
-        with patch("api.Database.fetch_one", return_value={"publications": 0, "researchers": 0, "scrapes": 0}):
+        with patch("backend.api.fetch_one", return_value={"publications": 0, "researchers": 0, "scrapes": 0}):
             resp = client.get("/api/metrics", headers=AUTH_HEADERS)
         assert resp.status_code == 200
 
@@ -631,6 +631,6 @@ class TestOperationalEndpointAuth:
 
     def test_scrape_status_with_valid_key_succeeds(self, client):
         """GET /api/scrape/status with valid API key must return 200."""
-        with patch("api.Database.fetch_one", return_value=None):
+        with patch("backend.api.fetch_one", return_value=None):
             resp = client.get("/api/scrape/status", headers=AUTH_HEADERS)
         assert resp.status_code == 200

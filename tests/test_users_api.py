@@ -24,13 +24,13 @@ def _noop_connection_scope():
 @pytest.fixture
 def client():
     with (
-        patch("database.Database.create_tables"),
-        patch("scheduler.start_scheduler"),
-        patch("scheduler.shutdown_scheduler"),
-        patch("api.connection_scope", _noop_connection_scope),
-        patch("auth.connection_scope", _noop_connection_scope),
+        patch("backend.api.create_tables"),
+        patch("backend.api.start_scheduler"),
+        patch("backend.api.shutdown_scheduler"),
+        patch("backend.api.connection_scope", _noop_connection_scope),
+        patch("backend.auth.connection_scope", _noop_connection_scope),
     ):
-        from api import app
+        from backend.api import app
         from fastapi.testclient import TestClient
         with TestClient(app) as c:
             yield c
@@ -50,7 +50,7 @@ def test_me_unauthenticated(client):
 
 
 def test_me_authenticated(client):
-    with patch("auth.Database") as mock_db:
+    with patch("backend.auth.Database") as mock_db:
         mock_db.get_or_create_user.return_value = FAKE_USER
         resp = client.get("/api/users/me", headers=_auth_header())
     assert resp.status_code == 200
@@ -58,8 +58,8 @@ def test_me_authenticated(client):
 
 
 def test_follow_researcher(client):
-    with patch("auth.Database") as auth_db, \
-         patch("api.Database") as api_db:
+    with patch("backend.auth.Database") as auth_db, \
+         patch("backend.api.Database") as api_db:
         auth_db.get_or_create_user.return_value = FAKE_USER
         api_db.researcher_exists.return_value = True
         resp = client.post("/api/users/follow/42", headers=_auth_header())
@@ -67,8 +67,8 @@ def test_follow_researcher(client):
 
 
 def test_follow_nonexistent_researcher(client):
-    with patch("auth.Database") as auth_db, \
-         patch("api.Database") as api_db:
+    with patch("backend.auth.Database") as auth_db, \
+         patch("backend.api.Database") as api_db:
         auth_db.get_or_create_user.return_value = FAKE_USER
         api_db.researcher_exists.return_value = False
         resp = client.post("/api/users/follow/999", headers=_auth_header())
@@ -76,16 +76,16 @@ def test_follow_nonexistent_researcher(client):
 
 
 def test_unfollow_researcher(client):
-    with patch("auth.Database") as auth_db, \
-         patch("api.Database") as api_db:
+    with patch("backend.auth.Database") as auth_db, \
+         patch("backend.api.Database") as api_db:
         auth_db.get_or_create_user.return_value = FAKE_USER
         resp = client.delete("/api/users/follow/42", headers=_auth_header())
     assert resp.status_code == 204
 
 
 def test_get_following(client):
-    with patch("auth.Database") as auth_db, \
-         patch("api.Database") as api_db:
+    with patch("backend.auth.Database") as auth_db, \
+         patch("backend.api.Database") as api_db:
         auth_db.get_or_create_user.return_value = FAKE_USER
         api_db.get_followed_researcher_ids.return_value = [1, 5, 12]
         resp = client.get("/api/users/following", headers=_auth_header())
@@ -94,8 +94,8 @@ def test_get_following(client):
 
 
 def test_get_notifications(client):
-    with patch("auth.Database") as auth_db, \
-         patch("api.Database") as api_db:
+    with patch("backend.auth.Database") as auth_db, \
+         patch("backend.api.Database") as api_db:
         auth_db.get_or_create_user.return_value = FAKE_USER
         api_db.get_notification_prefs.return_value = {
             "digest_enabled": True, "last_digest_sent": None
@@ -106,8 +106,8 @@ def test_get_notifications(client):
 
 
 def test_update_notifications(client):
-    with patch("auth.Database") as auth_db, \
-         patch("api.Database") as api_db:
+    with patch("backend.auth.Database") as auth_db, \
+         patch("backend.api.Database") as api_db:
         auth_db.get_or_create_user.return_value = FAKE_USER
         resp = client.patch(
             "/api/users/notifications",
@@ -119,16 +119,16 @@ def test_update_notifications(client):
 
 
 def test_unsubscribe_valid(client):
-    import database.users as users_mod
+    import backend.database.users as users_mod
     token = users_mod.generate_unsubscribe_token(1, NEXTAUTH_SECRET)
-    with patch("api.Database") as api_db:
+    with patch("backend.api.Database") as api_db:
         api_db.verify_unsubscribe_token.return_value = 1
         resp = client.get(f"/api/users/unsubscribe?token={token}")
     assert resp.status_code == 200
 
 
 def test_unsubscribe_invalid(client):
-    with patch("api.Database") as api_db:
+    with patch("backend.api.Database") as api_db:
         api_db.verify_unsubscribe_token.return_value = None
         resp = client.get("/api/users/unsubscribe?token=bad.token")
     assert resp.status_code == 400

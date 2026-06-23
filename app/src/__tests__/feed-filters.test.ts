@@ -230,3 +230,32 @@ describe("buildPublicationsUrl", () => {
     expect(parsed.get("status")).toBe("working_paper");
   });
 });
+
+// ---------------------------------------------------------------------------
+// PaginatedResponse researcher_count
+// ---------------------------------------------------------------------------
+
+describe("PaginatedResponse researcher_count", () => {
+  it("accepts researcher_count as an optional field", () => {
+    const response: import("@/lib/types").PaginatedResponse<import("@/lib/types").Publication> = {
+      items: [],
+      total: 0,
+      page: 1,
+      per_page: 20,
+      pages: 0,
+      researcher_count: 5,
+    };
+    expect(response.researcher_count).toBe(5);
+  });
+
+  it("allows omitting researcher_count", () => {
+    const response: import("@/lib/types").PaginatedResponse<import("@/lib/types").Publication> = {
+      items: [],
+      total: 0,
+      page: 1,
+      per_page: 20,
+      pages: 0,
+    };
+    expect(response.researcher_count).toBeUndefined();
+  });
+});

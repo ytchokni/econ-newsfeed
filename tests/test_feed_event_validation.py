@@ -3,7 +3,7 @@ import unittest
 import zlib
 from unittest.mock import MagicMock, patch
 
-from feed_events import _title_in_previous_snapshot, _get_previous_snapshot_html
+from backend.pipeline.feed_events import _title_in_previous_snapshot, _get_previous_snapshot_html
 
 
 class TestTitleInPreviousSnapshot(unittest.TestCase):
@@ -66,14 +66,14 @@ class TestGetPreviousSnapshotHtml(unittest.TestCase):
         cursor.fetchone.return_value = row
         return cursor
 
-    def test_returns_lowered_html(self):
-        """Returns decompressed, lowercased HTML text."""
+    def test_returns_normalized_html(self):
+        """Returns decompressed HTML normalized for matching (tags stripped, lowercased)."""
         html = "<h2>Some Title</h2>"
         compressed = zlib.compress(html.encode("utf-8"))
         cursor = self._make_cursor((compressed,))
 
         result = _get_previous_snapshot_html(cursor, "https://example.com/")
-        assert result == "<h2>some title</h2>"
+        assert result == "some title"
 
     def test_returns_none_when_no_snapshot(self):
         """No previous snapshot → returns None."""

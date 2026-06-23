@@ -12,7 +12,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Database
+from backend.database import execute_query, fetch_all
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 def find_garbage_papers() -> list[dict]:
     """Find papers matching garbage patterns."""
-    return Database.fetch_all("""
+    return fetch_all("""
         SELECT p.id, p.title, p.source_url, p.venue
         FROM papers p
         WHERE
@@ -70,7 +70,7 @@ def main():
 
     ids = [g["id"] for g in garbage]
     placeholders = ",".join(["%s"] * len(ids))
-    Database.execute_query(
+    execute_query(
         f"DELETE FROM papers WHERE id IN ({placeholders})",
         tuple(ids),
     )

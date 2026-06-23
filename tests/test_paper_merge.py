@@ -1,13 +1,13 @@
 """Tests for post-enrichment duplicate paper merging."""
 import pytest
 from unittest.mock import patch, MagicMock, call
-from paper_merge import find_duplicate_groups, find_fuzzy_duplicate_groups, merge_paper_group, _title_similarity
+from backend.enrichment.paper_merge import find_duplicate_groups, find_fuzzy_duplicate_groups, merge_paper_group, _title_similarity
 
 
 class TestFindDuplicateGroups:
     """find_duplicate_groups returns groups of paper IDs sharing doi or openalex_id."""
 
-    @patch("paper_merge.Database.fetch_all")
+    @patch("backend.enrichment.paper_merge.fetch_all")
     def test_finds_papers_sharing_doi(self, mock_fetch):
         mock_fetch.side_effect = [
             [{"doi": "10.1234/test", "ids": "1,2"}],
@@ -17,7 +17,7 @@ class TestFindDuplicateGroups:
         assert len(groups) == 1
         assert set(groups[0]) == {1, 2}
 
-    @patch("paper_merge.Database.fetch_all")
+    @patch("backend.enrichment.paper_merge.fetch_all")
     def test_finds_papers_sharing_openalex_id(self, mock_fetch):
         mock_fetch.side_effect = [
             [],
@@ -27,13 +27,13 @@ class TestFindDuplicateGroups:
         assert len(groups) == 1
         assert set(groups[0]) == {3, 4}
 
-    @patch("paper_merge.Database.fetch_all")
+    @patch("backend.enrichment.paper_merge.fetch_all")
     def test_returns_empty_when_no_duplicates(self, mock_fetch):
         mock_fetch.side_effect = [[], []]
         groups = find_duplicate_groups()
         assert groups == []
 
-    @patch("paper_merge.Database.fetch_all")
+    @patch("backend.enrichment.paper_merge.fetch_all")
     def test_deduplicates_across_doi_and_openalex(self, mock_fetch):
         """If papers 1,2 share a DOI and papers 1,3 share an openalex_id, merge all."""
         mock_fetch.side_effect = [
@@ -48,8 +48,8 @@ class TestFindDuplicateGroups:
 class TestMergePaperGroup:
     """merge_paper_group reassigns child rows and deletes duplicates."""
 
-    @patch("paper_merge.Database.get_connection")
-    @patch("paper_merge.Database.fetch_all")
+    @patch("backend.enrichment.paper_merge.get_connection")
+    @patch("backend.enrichment.paper_merge.fetch_all")
     def test_picks_earliest_as_canonical(self, mock_fetch_all, mock_get_conn):
         """Canonical paper is the one with earliest discovered_at."""
         mock_conn = MagicMock()
@@ -74,8 +74,8 @@ class TestMergePaperGroup:
         assert len(delete_calls) == 1
         assert delete_calls[0] == call("DELETE FROM papers WHERE id = %s", (5,))
 
-    @patch("paper_merge.Database.get_connection")
-    @patch("paper_merge.Database.fetch_all")
+    @patch("backend.enrichment.paper_merge.get_connection")
+    @patch("backend.enrichment.paper_merge.fetch_all")
     def test_backfills_null_fields_from_duplicate(self, mock_fetch_all, mock_get_conn):
         """Canonical paper gets NULL fields filled from duplicate before deletion."""
         mock_conn = MagicMock()
@@ -125,7 +125,7 @@ class TestTitleSimilarity:
 class TestFindFuzzyDuplicateGroups:
     """Fuzzy matching: same authors + similar titles."""
 
-    @patch("paper_merge.Database.fetch_all")
+    @patch("backend.enrichment.paper_merge.fetch_all")
     def test_finds_fuzzy_duplicates_with_same_authors(self, mock_fetch):
         mock_fetch.return_value = [
             {"id": 1, "title": "Ideas Have Consequences: The Impact of Law and Economics on American Justice", "author_ids": "2,6,141"},
@@ -135,7 +135,7 @@ class TestFindFuzzyDuplicateGroups:
         assert len(groups) == 1
         assert set(groups[0]) == {1, 2}
 
-    @patch("paper_merge.Database.fetch_all")
+    @patch("backend.enrichment.paper_merge.fetch_all")
     def test_no_match_when_titles_too_different(self, mock_fetch):
         mock_fetch.return_value = [
             {"id": 1, "title": "Levels and Drivers of Lifetime Earnings", "author_ids": "2,6,141"},
@@ -144,7 +144,7 @@ class TestFindFuzzyDuplicateGroups:
         groups = find_fuzzy_duplicate_groups()
         assert groups == []
 
-    @patch("paper_merge.Database.fetch_all")
+    @patch("backend.enrichment.paper_merge.fetch_all")
     def test_no_match_when_different_authors(self, mock_fetch):
         mock_fetch.return_value = [
             {"id": 1, "title": "Levels and Drivers of Lifetime Earnings", "author_ids": "2,6,141"},
@@ -153,7 +153,7 @@ class TestFindFuzzyDuplicateGroups:
         groups = find_fuzzy_duplicate_groups()
         assert groups == []
 
-    @patch("paper_merge.Database.fetch_all")
+    @patch("backend.enrichment.paper_merge.fetch_all")
     def test_skips_single_author_papers(self, mock_fetch):
         """Only considers papers with 2+ authors to avoid false positives."""
         mock_fetch.return_value = []  # SQL HAVING COUNT >= 2 filters these out

@@ -58,6 +58,7 @@ export interface PaginatedResponse<T> {
   page: number;
   per_page: number;
   pages: number;
+  researcher_count?: number;
 }
 
 export interface ResearcherUrl {
@@ -126,6 +127,8 @@ export interface FeedFilters {
   search?: string;
   event_type?: "new_paper" | "status_change";
   jel_code?: string;
+  since?: string;
+  until?: string;
 }
 
 export interface ResearcherDetail extends Researcher {
@@ -143,6 +146,7 @@ export interface ResearcherFilters {
   field?: string;
   position?: string;
   search?: string;
+  preset?: string;
 }
 
 export interface UserFollowing {

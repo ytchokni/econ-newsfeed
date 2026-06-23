@@ -1,6 +1,7 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { usePublications, useJelCodes, useFilterOptions } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { formatDate } from "@/lib/publication-utils";
@@ -11,6 +12,7 @@ import ErrorMessage from "@/components/ErrorMessage";
 import EmptyState from "@/components/EmptyState";
 import SearchInput from "@/components/SearchInput";
 import SearchableCheckboxDropdown from "@/components/SearchableCheckboxDropdown";
+import PresetBar from "@/components/PresetBar";
 
 /* ---------- helpers ---------- */
 
@@ -29,6 +31,32 @@ function groupByDate(publications: Publication[]) {
   return groups;
 }
 
+const FILTER_PARAM_KEYS = ["status", "institution", "preset", "year", "search", "jel_code", "since", "until"] as const satisfies readonly (keyof Omit<FeedFilters, "event_type">)[];
+
+function filtersFromParams(params: URLSearchParams): FeedFilters {
+  const filters: FeedFilters = {};
+  for (const key of FILTER_PARAM_KEYS) {
+    const val = params.get(key);
+    if (val) (filters as Record<string, string>)[key] = val;
+  }
+  return filters;
+}
+
+function filtersToParams(
+  filters: FeedFilters,
+  tab: TabValue,
+  page: number
+): URLSearchParams {
+  const params = new URLSearchParams();
+  if (tab !== "new_paper") params.set("tab", tab);
+  if (page > 1) params.set("page", String(page));
+  for (const key of FILTER_PARAM_KEYS) {
+    const val = (filters as Record<string, string | undefined>)[key];
+    if (val) params.set(key, val);
+  }
+  return params;
+}
+
 /* ---------- constants ---------- */
 
 const STATUS_OPTIONS = [
@@ -37,6 +65,12 @@ const STATUS_OPTIONS = [
   { label: "Revise & Resubmit", value: "revise_and_resubmit" },
   { label: "Reject & Resubmit", value: "reject_and_resubmit" },
   { label: "Working Paper", value: "working_paper" },
+];
+
+const FEED_PRESETS = [
+  { label: "R&R / Accepted at Top-5", value: "top5_rr_accepted" },
+  { label: "Top-20 Departments", value: "top20" },
+  { label: "Researchers with a Top-5", value: "has_top5" },
 ];
 
 function getYearOptions(): string[] {
@@ -92,7 +126,11 @@ function FilterBar({
 
   const yearOptions = getYearOptions();
 
-  const hasActiveFilters = !!(filters.status || filters.institution || filters.preset || filters.year || filters.search || filters.jel_code);
+  const hasActiveFilters = !!(
+    filters.status || filters.institution || filters.preset ||
+    filters.year || filters.search || filters.jel_code ||
+    filters.since || filters.until
+  );
 
   const handleJelChange = useCallback(
     (selected: string[]) => {
@@ -127,6 +165,9 @@ function FilterBar({
     },
     [filters, onChange]
   );
+
+  const dateInputClass =
+    "px-3 py-1.5 font-sans text-sm border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card focus:outline-none focus:ring-1 focus:ring-[var(--link)]";
 
   return (
     <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-4 mb-8 space-y-3">
@@ -222,6 +263,27 @@ function FilterBar({
           onChange={handleJelChange}
         />
 
+        <div className="flex items-center gap-1.5">
+          <label className="font-sans text-xs text-[var(--text-muted)]">From</label>
+          <input
+            type="date"
+            value={filters.since ?? ""}
+            onChange={(e) =>
+              onChange({ ...filters, since: e.target.value || undefined })
+            }
+            className={dateInputClass}
+          />
+          <label className="font-sans text-xs text-[var(--text-muted)]">to</label>
+          <input
+            type="date"
+            value={filters.until ?? ""}
+            onChange={(e) =>
+              onChange({ ...filters, until: e.target.value || undefined })
+            }
+            className={dateInputClass}
+          />
+        </div>
+
         {hasActiveFilters && (
           <>
             <span className="w-px h-5 bg-[var(--border)]" />
@@ -242,22 +304,35 @@ function FilterBar({
 
 export default function NewsfeedContent() {
   const { isAuthenticated } = useAuth();
-  const [activeTab, setActiveTab] = useState<TabValue>("new_paper");
-  const [page, setPage] = useState(1);
+  const searchParams = useSearchParams();
+  const router = useRouter();
+  const pathname = usePathname();
 
-  /* Sync tab from URL on mount (avoids SSR hydration mismatch) */
+  const [activeTab, setActiveTab] = useState<TabValue>(
+    searchParams.get("tab") === "status_change" ? "status_change" : "new_paper"
+  );
+  const [page, setPage] = useState(Math.max(1, Number(searchParams.get("page")) || 1));
+  const [filters, setFilters] = useState<FeedFilters>(() => filtersFromParams(searchParams));
+
+  const isInitialMount = useRef(true);
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const tab = params.get("tab");
-    if (tab === "status_change") {
-      setActiveTab("status_change");
+    if (isInitialMount.current) {
+      isInitialMount.current = false;
+      return;
     }
-  }, []);
-  const [filters, setFilters] = useState<FeedFilters>({});
-  const mergedFilters = { ...filters, event_type: activeTab };
+    const params = filtersToParams(filters, activeTab, page);
+    const qs = params.toString();
+    const next = qs ? `${pathname}?${qs}` : pathname;
+    router.replace(next, { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filters, activeTab, page, pathname]);
+
+  const mergedFilters = useMemo<FeedFilters>(
+    () => ({ ...filters, event_type: activeTab }),
+    [filters, activeTab]
+  );
   const { data, error, isLoading, isValidating } = usePublications(page, 20, mergedFilters);
 
-  /* Reset page to 1 whenever filters change */
   const handleFilterChange = useCallback((next: FeedFilters) => {
     setFilters(next);
     setPage(1);
@@ -267,15 +342,10 @@ export default function NewsfeedContent() {
     setActiveTab(tab);
     setFilters({});
     setPage(1);
-    if (typeof window !== "undefined") {
-      const url = new URL(window.location.href);
-      url.searchParams.set("tab", tab);
-      window.history.replaceState({}, "", url.toString());
-    }
   }, []);
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-6">
       <FilterBar
         filters={filters}
         onChange={handleFilterChange}
@@ -283,6 +353,25 @@ export default function NewsfeedContent() {
         onTabChange={handleTabChange}
         showMyFeed={isAuthenticated}
       />
+
+      <PresetBar
+        presets={FEED_PRESETS}
+        active={filters.preset}
+        onChange={(preset) =>
+          handleFilterChange({ ...filters, preset, institution: preset ? undefined : filters.institution })
+        }
+      />
+
+      {data && (
+        <p className="font-sans text-sm text-[var(--text-muted)]">
+          {data.total === 0
+            ? "No results"
+            : `Showing ${data.items.length.toLocaleString()} of ${data.total.toLocaleString()} results`}
+          {data.researcher_count != null && data.researcher_count > 0
+            ? ` from ${data.researcher_count.toLocaleString()} researcher${data.researcher_count === 1 ? "" : "s"}`
+            : ""}
+        </p>
+      )}
 
       {isLoading && !data && (
         <div className="space-y-4">

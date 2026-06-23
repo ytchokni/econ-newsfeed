@@ -2,7 +2,7 @@
 from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 
-from digest import _render_digest_html, run_weekly_digest
+from backend.digest import _render_digest_html, run_weekly_digest
 
 
 def _sample_events():
@@ -65,7 +65,7 @@ def test_render_digest_html_empty_events():
 
 
 def test_run_weekly_digest_no_recipients():
-    with patch("digest.Database") as mock_db:
+    with patch("backend.digest.Database") as mock_db:
         mock_db.get_digest_recipients.return_value = []
         sent = run_weekly_digest()
     assert sent == 0
@@ -80,8 +80,8 @@ def test_run_weekly_digest_sends_email():
         "created_at": datetime(2026, 5, 1, tzinfo=timezone.utc),
         "researcher_ids": [1, 2],
     }
-    with patch("digest.Database") as mock_db, \
-         patch("digest._send_email", return_value=True) as mock_send:
+    with patch("backend.digest.Database") as mock_db, \
+         patch("backend.digest._send_email", return_value=True) as mock_send:
         mock_db.get_digest_recipients.return_value = [recipient]
         mock_db.get_feed_events_for_researchers.return_value = _sample_events()
         mock_db.generate_unsubscribe_token.return_value = "1.abc123"
@@ -104,7 +104,7 @@ def test_run_weekly_digest_skips_empty_events():
         "created_at": datetime(2026, 5, 1, tzinfo=timezone.utc),
         "researcher_ids": [1],
     }
-    with patch("digest.Database") as mock_db:
+    with patch("backend.digest.Database") as mock_db:
         mock_db.get_digest_recipients.return_value = [recipient]
         mock_db.get_feed_events_for_researchers.return_value = []
         sent = run_weekly_digest()

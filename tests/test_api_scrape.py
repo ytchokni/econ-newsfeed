@@ -13,11 +13,11 @@ AUTH_HEADERS = {"X-API-Key": os.environ["SCRAPE_API_KEY"]}
 def client():
     """Create a test client with mocked database and scheduler."""
     with (
-        patch("database.Database.create_tables"),
-        patch("scheduler.start_scheduler"),
-        patch("scheduler.shutdown_scheduler"),
+        patch("backend.api.create_tables"),
+        patch("backend.api.start_scheduler"),
+        patch("backend.api.shutdown_scheduler"),
     ):
-        from api import app
+        from backend.api import app
 
         with TestClient(app) as c:
             yield c
@@ -44,9 +44,8 @@ class TestTriggerScrape:
 
     def test_valid_key_returns_201(self, client):
         with (
-            patch("api.scheduler.is_scrape_running", return_value=False),
-            patch("api.create_scrape_log", return_value=15),
-            patch("api.threading.Thread") as mock_thread,
+            patch("backend.api.scheduler.is_scrape_running", return_value=False),
+            patch("backend.api.threading.Thread") as mock_thread,
         ):
             response = client.post(
                 "/api/scrape",
@@ -55,16 +54,14 @@ class TestTriggerScrape:
 
         assert response.status_code == 201
         body = response.json()
-        assert body["scrape_id"] == 15
         assert body["status"] == "running"
         assert "started_at" in body
 
     def test_scrape_thread_is_not_daemon(self, client):
         """Scrape thread must be non-daemon so it completes on shutdown."""
         with (
-            patch("api.scheduler.is_scrape_running", return_value=False),
-            patch("api.create_scrape_log", return_value=1),
-            patch("api.threading.Thread") as mock_thread_cls,
+            patch("backend.api.scheduler.is_scrape_running", return_value=False),
+            patch("backend.api.threading.Thread") as mock_thread_cls,
         ):
             client.post("/api/scrape", headers=AUTH_HEADERS)
 
@@ -73,7 +70,7 @@ class TestTriggerScrape:
         assert call_kwargs.kwargs.get("daemon", False) is False
 
     def test_already_running_returns_409(self, client):
-        with patch("api.scheduler.is_scrape_running", return_value=True):
+        with patch("backend.api.scheduler.is_scrape_running", return_value=True):
             response = client.post(
                 "/api/scrape",
                 headers=AUTH_HEADERS,
@@ -102,8 +99,8 @@ class TestScrapeStatus:
             "pubs_extracted": 7,
         }
         with (
-            patch("api.Database.fetch_one", return_value=last_scrape_row),
-            patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
+            patch("backend.api.fetch_one", return_value=last_scrape_row),
+            patch("backend.pipeline.scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
             response = client.get("/api/scrape/status", headers=AUTH_HEADERS)
 
@@ -119,8 +116,8 @@ class TestScrapeStatus:
 
     def test_returns_null_when_no_scrapes(self, client):
         with (
-            patch("api.Database.fetch_one", return_value=None),
-            patch("scheduler.SCRAPE_INTERVAL_HOURS", 24),
+            patch("backend.api.fetch_one", return_value=None),
+            patch("backend.pipeline.scheduler.SCRAPE_INTERVAL_HOURS", 24),
         ):
             response = client.get("/api/scrape/status", headers=AUTH_HEADERS)
 

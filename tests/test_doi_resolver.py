@@ -9,7 +9,7 @@ os.environ.setdefault("SCRAPE_API_KEY", "test-key")
 
 from unittest.mock import patch, MagicMock
 
-from doi_resolver import extract_doi_from_url, extract_pii_from_url, resolve_pii_via_crossref, resolve_doi
+from backend.enrichment.doi_resolver import extract_doi_from_url, extract_pii_from_url, resolve_pii_via_crossref, resolve_doi
 
 
 class TestExtractDoiFromUrl:
@@ -120,7 +120,7 @@ class TestResolvePiiViaCrossref:
                 "items": [{"DOI": "10.1016/j.gloenvcha.2013.12.011", "title": ["Smallholder farmer"]}]
             }
         }
-        with patch("doi_resolver._get_session") as mock_session:
+        with patch("backend.enrichment.doi_resolver._get_session") as mock_session:
             mock_session.return_value.get.return_value = mock_resp
             result = resolve_pii_via_crossref("S0959378013002410")
 
@@ -132,26 +132,26 @@ class TestResolvePiiViaCrossref:
         mock_resp = MagicMock()
         mock_resp.raise_for_status = MagicMock()
         mock_resp.json.return_value = {"message": {"items": []}}
-        with patch("doi_resolver._get_session") as mock_session:
+        with patch("backend.enrichment.doi_resolver._get_session") as mock_session:
             mock_session.return_value.get.return_value = mock_resp
             assert resolve_pii_via_crossref("S0000000000000000") is None
 
     def test_returns_none_on_network_error(self):
         import requests as req
-        with patch("doi_resolver._get_session") as mock_session:
+        with patch("backend.enrichment.doi_resolver._get_session") as mock_session:
             mock_session.return_value.get.side_effect = req.RequestException("timeout")
             assert resolve_pii_via_crossref("S0959378013002410") is None
 
 
 class TestResolveDoi:
     def test_returns_doi_from_regex(self):
-        with patch("doi_resolver.resolve_pii_via_crossref") as mock_cr:
+        with patch("backend.enrichment.doi_resolver.resolve_pii_via_crossref") as mock_cr:
             result = resolve_doi("https://link.springer.com/article/10.1007/s40641-016-0032-z")
         assert result == "10.1007/s40641-016-0032-z"
         mock_cr.assert_not_called()
 
     def test_resolves_pii_via_crossref(self):
-        with patch("doi_resolver.resolve_pii_via_crossref", return_value="10.1016/j.gloenvcha.2013.12.011"):
+        with patch("backend.enrichment.doi_resolver.resolve_pii_via_crossref", return_value="10.1016/j.gloenvcha.2013.12.011"):
             result = resolve_doi("https://www.sciencedirect.com/science/article/pii/S0959378013002410")
         assert result == "10.1016/j.gloenvcha.2013.12.011"
 

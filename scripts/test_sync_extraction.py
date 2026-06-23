@@ -14,10 +14,10 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Database
-from html_fetcher import HTMLFetcher
-from publication import Publication, PublicationExtractionList
-from llm_client import extract_json, get_model
+from backend.database import fetch_all
+from backend.pipeline.html_fetcher import HTMLFetcher
+from backend.pipeline.publication import Publication, PublicationExtractionList
+from backend.llm.client import extract_json, get_model
 
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s - %(levelname)s - %(message)s")
 
@@ -25,7 +25,7 @@ logging.basicConfig(level=logging.WARNING, format="%(asctime)s - %(levelname)s -
 def get_urls_to_test(url_ids: list[int] | None, limit: int) -> list[dict]:
     if url_ids:
         placeholders = ",".join(["%s"] * len(url_ids))
-        return Database.fetch_all(
+        return fetch_all(
             f"""SELECT ru.id, ru.url, ru.researcher_id
                 FROM researcher_urls ru
                 JOIN html_content hc ON hc.url_id = ru.id
@@ -33,7 +33,7 @@ def get_urls_to_test(url_ids: list[int] | None, limit: int) -> list[dict]:
                   AND hc.content_hash IS NOT NULL""",
             tuple(url_ids),
         )
-    return Database.fetch_all(
+    return fetch_all(
         """SELECT ru.id, ru.url, ru.researcher_id
            FROM researcher_urls ru
            JOIN html_content hc ON hc.url_id = ru.id

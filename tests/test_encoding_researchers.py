@@ -16,11 +16,11 @@ from unittest.mock import patch, MagicMock
 class TestResearcherEncodingGuard:
     """Verify researcher write paths pass text through encoding guard."""
 
-    @patch("database.researchers.fetch_one", return_value=None)
-    @patch("database.researchers.fetch_all", return_value=[])
-    @patch("database.researchers.execute_query", return_value=99)
+    @patch("backend.database.researchers.fetch_one", return_value=None)
+    @patch("backend.database.researchers.fetch_all", return_value=[])
+    @patch("backend.database.researchers.execute_query", return_value=99)
     def test_mojibake_name_fixed_on_insert(self, mock_exec, mock_fetch_all, mock_fetch_one):
-        from database.researchers import get_researcher_id
+        from backend.database.researchers import get_researcher_id
 
         result = get_researcher_id(
             first_name="FrÃ©dÃ©ric",
@@ -39,9 +39,9 @@ class TestResearcherEncodingGuard:
         assert params[2] == "Professor"  # ASCII, unchanged
         assert params[3] == "Universität Zürich"
 
-    @patch("database.researchers.execute_query")
+    @patch("backend.database.researchers.execute_query")
     def test_mojibake_bio_fixed_on_update(self, mock_exec):
-        from database.researchers import update_researcher_bio
+        from backend.database.researchers import update_researcher_bio
 
         update_researcher_bio(1, "Forschung Ã¼ber Ã–konomie")
 

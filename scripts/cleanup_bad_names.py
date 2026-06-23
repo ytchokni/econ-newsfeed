@@ -12,7 +12,7 @@ import os
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from database import Database
+from backend.database import execute_query, fetch_all
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 logger = logging.getLogger(__name__)
@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 
 def find_bad_name_researchers() -> list[dict]:
     """Find researchers with empty first names or initial-only last names."""
-    return Database.fetch_all("""
+    return fetch_all("""
         SELECT r.id, r.first_name, r.last_name,
                COUNT(a.publication_id) AS pub_count
         FROM researchers r
@@ -38,7 +38,7 @@ def find_bad_name_researchers() -> list[dict]:
 
 def find_suspicious_researchers() -> list[dict]:
     """Find researchers with other suspicious name patterns for manual review."""
-    return Database.fetch_all("""
+    return fetch_all("""
         SELECT r.id, r.first_name, r.last_name,
                COUNT(a.publication_id) AS pub_count
         FROM researchers r
@@ -81,7 +81,7 @@ def main():
 
     ids = [r["id"] for r in bad]
     placeholders = ",".join(["%s"] * len(ids))
-    Database.execute_query(
+    execute_query(
         f"DELETE FROM researchers WHERE id IN ({placeholders})",
         tuple(ids),
     )

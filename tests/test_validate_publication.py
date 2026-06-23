@@ -1,6 +1,6 @@
 """Tests for validate_publication — catches garbage LLM extractions."""
 import pytest
-from publication import validate_publication
+from backend.pipeline.publication import validate_publication
 
 
 class TestAuthorTitleOverlap:

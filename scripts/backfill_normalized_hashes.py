@@ -17,13 +17,13 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-from database import Database
-from html_fetcher import HTMLFetcher
+from backend.database import execute_query, fetch_all
+from backend.pipeline.html_fetcher import HTMLFetcher
 
 
 def backfill_normalized_hashes():
     """Re-normalize and re-hash all html_content rows."""
-    rows = Database.fetch_all(
+    rows = fetch_all(
         "SELECT id, url_id, content, content_hash, extracted_hash FROM html_content WHERE content IS NOT NULL"
     )
     logger.info("Found %d html_content rows to re-normalize", len(rows))
@@ -48,7 +48,7 @@ def backfill_normalized_hashes():
         # (meaning extraction was up-to-date before normalization).
         new_extracted_hash = new_hash if row['extracted_hash'] == old_hash else row['extracted_hash']
 
-        Database.execute_query(
+        execute_query(
             """UPDATE html_content
                SET content = %s, content_hash = %s, extracted_hash = %s
                WHERE id = %s""",

@@ -13,8 +13,8 @@ import sys
 # Ensure project root is importable
 sys.path.insert(0, ".")
 
-from database.researchers import first_name_is_initial_match, merge_researchers
-from database.connection import fetch_all, get_connection
+from backend.database.researchers import first_name_is_initial_match, merge_researchers
+from backend.database.connection import fetch_all, get_connection
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 

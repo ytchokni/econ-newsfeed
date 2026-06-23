@@ -13,7 +13,7 @@ os.environ.setdefault("FRONTEND_URL", "http://localhost:3000")
 os.environ.setdefault("SCRAPE_INTERVAL_HOURS", "24")
 
 from unittest.mock import patch, MagicMock
-from database.admin import get_admin_dashboard_stats
+from backend.database.admin import get_admin_dashboard_stats
 
 
 def test_get_admin_dashboard_stats_returns_all_sections():
@@ -49,8 +49,8 @@ def test_get_admin_dashboard_stats_returns_all_sections():
         "last_extracted_at": None,
     })
 
-    with patch("database.admin.fetch_all", mock_fetch_all), \
-         patch("database.admin.fetch_one", mock_fetch_one):
+    with patch("backend.database.admin.fetch_all", mock_fetch_all), \
+         patch("backend.database.admin.fetch_one", mock_fetch_one):
         result = get_admin_dashboard_stats()
 
     assert "health" in result
@@ -129,7 +129,7 @@ def test_admin_dashboard_endpoint_returns_data(client):
         "scrapes": {"recent": [], "totals": {"total_scrapes": 0, "total_pubs_extracted": 0}},
         "activity": {"events_last_7d": {}, "events_last_30d": {}, "recent_events": []},
     }
-    with patch("api.Database.get_admin_dashboard_stats", return_value=mock_stats):
+    with patch("backend.api.get_admin_dashboard_stats", return_value=mock_stats):
         resp = client.get(
             "/api/admin/dashboard",
             headers={"X-API-Key": "test-secret-key-for-ci-runs"},
@@ -139,6 +139,23 @@ def test_admin_dashboard_endpoint_returns_data(client):
     assert "health" in data
     assert "content" in data
     assert data["content"]["total_papers"] == 10
+
+
+def test_admin_dashboard_caches_result(client):
+    """Repeated dashboard requests should hit cache, not re-query."""
+    from backend.api import _admin_dashboard_cache
+    _admin_dashboard_cache.clear()
+    mock_stats = {
+        "health": {}, "content": {}, "quality": {},
+        "costs": {}, "scrapes": {}, "activity": {},
+        "extraction": {},
+    }
+    with patch("backend.api.get_admin_dashboard_stats", return_value=mock_stats) as mock_fn:
+        headers = {"X-API-Key": os.environ.get("SCRAPE_API_KEY", "test-key")}
+        client.get("/api/admin/dashboard", headers=headers)
+        client.get("/api/admin/dashboard", headers=headers)
+    assert mock_fn.call_count == 1
+    _admin_dashboard_cache.clear()
 
 
 def _extraction_fetch_one(queue=None, completions=None, attempts=None, last_extracted=None):
@@ -155,13 +172,13 @@ def _extraction_fetch_one(queue=None, completions=None, attempts=None, last_extr
 
 def test_extraction_stats_queue_split_and_eta():
     """Queue split sums to total; ETA = total / (last_hour rate × 24), 1 decimal."""
-    from database.admin import _get_extraction_stats
+    from backend.database.admin import _get_extraction_stats
     mock_one = _extraction_fetch_one(
         queue={"never_extracted": 6000, "changed_pending": 4000},
         completions={"last_hour": 40, "last_24h": 1000, "last_7d": 5000},
     )
-    with patch("database.admin.fetch_one", mock_one), \
-         patch("database.admin.fetch_all", MagicMock(return_value=[])):
+    with patch("backend.database.admin.fetch_one", mock_one), \
+         patch("backend.database.admin.fetch_all", MagicMock(return_value=[])):
         stats = _get_extraction_stats()
     assert stats["queue"] == {"never_extracted": 6000, "changed_pending": 4000, "total": 10000}
     # 40/hour → 960/day → 10000/960 = 10.4 days
@@ -171,10 +188,10 @@ def test_extraction_stats_queue_split_and_eta():
 
 def test_extraction_stats_eta_null_when_no_completions():
     """ETA is None when nothing completed in the last hour (avoid div-by-zero)."""
-    from database.admin import _get_extraction_stats
+    from backend.database.admin import _get_extraction_stats
     mock_one = _extraction_fetch_one(queue={"never_extracted": 5, "changed_pending": 0})
-    with patch("database.admin.fetch_one", mock_one), \
-         patch("database.admin.fetch_all", MagicMock(return_value=[])):
+    with patch("backend.database.admin.fetch_one", mock_one), \
+         patch("backend.database.admin.fetch_all", MagicMock(return_value=[])):
         stats = _get_extraction_stats()
     assert stats["eta_days"] is None
 
@@ -182,7 +199,7 @@ def test_extraction_stats_eta_null_when_no_completions():
 def test_extraction_stats_recent_calls_and_daily_shapes():
     """recent_calls and daily map DB rows into the documented shape."""
     from datetime import datetime, timezone, date
-    from database.admin import _get_extraction_stats
+    from backend.database.admin import _get_extraction_stats
     mock_one = _extraction_fetch_one()
     called = datetime(2026, 6, 10, 8, 0, 0, tzinfo=timezone.utc)
     mock_all = MagicMock(side_effect=[
@@ -190,8 +207,8 @@ def test_extraction_stats_recent_calls_and_daily_shapes():
         [{"called_at": called, "context_url": "https://x.com/pubs",
           "model": "gemma-4-31b-it", "total_tokens": 4102}],             # recent_calls
     ])
-    with patch("database.admin.fetch_one", mock_one), \
-         patch("database.admin.fetch_all", mock_all):
+    with patch("backend.database.admin.fetch_one", mock_one), \
+         patch("backend.database.admin.fetch_all", mock_all):
         stats = _get_extraction_stats()
     assert stats["daily"] == [{"date": "2026-06-10", "count": 950}]
     assert stats["recent_calls"] == [{

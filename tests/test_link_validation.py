@@ -12,8 +12,8 @@ from pydantic import ValidationError
 import pytest
 import requests
 
-from html_fetcher import HTMLFetcher
-from publication import PublicationExtraction
+from backend.pipeline.html_fetcher import HTMLFetcher
+from backend.pipeline.publication import PublicationExtraction
 
 
 # ---------------------------------------------------------------------------
@@ -104,17 +104,17 @@ class TestValidateDraftUrl:
 
     def test_private_ip_url_returns_invalid(self):
         """SSRF-blocked URLs (private IP) must return 'invalid' without making HTTP call."""
-        with patch("html_fetcher.HTMLFetcher.validate_url", return_value=False):
+        with patch("backend.pipeline.html_fetcher.HTMLFetcher.validate_url", return_value=False):
             result = HTMLFetcher.validate_draft_url("http://192.168.1.1/paper.pdf")
         assert result == "invalid"
 
     def test_localhost_url_returns_invalid(self):
-        with patch("html_fetcher.HTMLFetcher.validate_url", return_value=False):
+        with patch("backend.pipeline.html_fetcher.HTMLFetcher.validate_url", return_value=False):
             result = HTMLFetcher.validate_draft_url("http://localhost/paper.pdf")
         assert result == "invalid"
 
     def test_non_http_scheme_returns_invalid(self):
-        with patch("html_fetcher.HTMLFetcher.validate_url", return_value=False):
+        with patch("backend.pipeline.html_fetcher.HTMLFetcher.validate_url", return_value=False):
             result = HTMLFetcher.validate_draft_url("ftp://example.com/paper.pdf")
         assert result == "invalid"
 
@@ -130,7 +130,7 @@ class TestValidateDraftUrl:
     def _patch_for_valid_ssrf(self):
         """Context manager: SSRF validation passes."""
         return patch(
-            "html_fetcher.HTMLFetcher.validate_url",
+            "backend.pipeline.html_fetcher.HTMLFetcher.validate_url",
             return_value=True,
         )
 
@@ -211,7 +211,7 @@ class TestValidateDraftUrl:
             (False, None),   # SSRF blocked
         ]
         for ssrf_return in scenarios:
-            with patch("html_fetcher.HTMLFetcher.validate_url", return_value=ssrf_return):
+            with patch("backend.pipeline.html_fetcher.HTMLFetcher.validate_url", return_value=ssrf_return):
                 result = HTMLFetcher.validate_draft_url("https://example.com/paper.pdf")
             assert isinstance(result, str), f"Expected str, got {type(result)}"
 

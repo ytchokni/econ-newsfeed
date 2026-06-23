@@ -7,7 +7,7 @@ from jose import jwt
 
 NEXTAUTH_SECRET = os.environ.get("NEXTAUTH_SECRET", "test-nextauth-secret-for-ci")
 
-from auth import _extract_token, _decode_jwt, get_current_user, get_optional_user
+from backend.auth import _extract_token, _decode_jwt, get_current_user, get_optional_user
 
 
 def _make_token(payload: dict) -> str:
@@ -59,8 +59,8 @@ async def test_get_current_user_valid():
     req = FakeRequest(token)
     fake_user = {"id": 1, "google_id": "g123", "email": "test@example.com", "name": "Test"}
 
-    with patch("auth.Database") as mock_db, \
-         patch("auth.connection_scope", return_value=MagicMock(__enter__=MagicMock(), __exit__=MagicMock())):
+    with patch("backend.auth.Database") as mock_db, \
+         patch("backend.auth.connection_scope", return_value=MagicMock(__enter__=MagicMock(), __exit__=MagicMock())):
         mock_db.get_or_create_user.return_value = fake_user
         user = await get_current_user(req)
         assert user["id"] == 1

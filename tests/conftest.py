@@ -34,25 +34,33 @@ def _noop_connection_scope():
 @pytest.fixture(autouse=True)
 def _clear_api_caches():
     """Reset TTL caches between tests to prevent cross-test pollution."""
-    import api
-    api._filter_options_cache.clear()
-    api._fields_cache.clear()
-    api._jel_codes_cache.clear()
+    import backend.api
+    backend.api._filter_options_cache.clear()
+    backend.api._fields_cache.clear()
+    backend.api._jel_codes_cache.clear()
+    backend.api._researcher_detail_cache.clear()
+    backend.api._publication_detail_cache.clear()
     yield
-    api._filter_options_cache.clear()
-    api._fields_cache.clear()
-    api._jel_codes_cache.clear()
+    backend.api._filter_options_cache.clear()
+    backend.api._fields_cache.clear()
+    backend.api._jel_codes_cache.clear()
+    backend.api._researcher_detail_cache.clear()
+    backend.api._publication_detail_cache.clear()
 
 
 @pytest.fixture
 def client():
     """Test client with mocked DB and scheduler."""
+    # Patch the names in api's namespace — api.py imports these directly
+    # (`from backend.pipeline.scheduler import start_scheduler`), so patching the source
+    # modules would miss them and the REAL scheduler would start against
+    # whatever database .env points at.
     with (
-        patch("database.Database.create_tables"),
-        patch("scheduler.start_scheduler"),
-        patch("scheduler.shutdown_scheduler"),
-        patch("api.connection_scope", _noop_connection_scope),
+        patch("backend.api.create_tables"),
+        patch("backend.api.start_scheduler"),
+        patch("backend.api.shutdown_scheduler"),
+        patch("backend.api.connection_scope", _noop_connection_scope),
     ):
-        from api import app
+        from backend.api import app
         with TestClient(app) as c:
             yield c

@@ -25,9 +25,9 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 from openai import OpenAIError
 
-from llm_client import StructuredResponse
-from publication import Publication, PublicationExtraction, PublicationExtractionList, clean_title, reconcile_title_renames
-from paper_saver import _title_similarity
+from backend.llm.client import StructuredResponse
+from backend.pipeline.publication import Publication, PublicationExtraction, PublicationExtractionList, clean_title
+from backend.pipeline.paper_saver import _title_similarity
 
 
 # ---------------------------------------------------------------------------
@@ -64,6 +64,12 @@ class TestCleanTitle:
         ("New Evidence on Trade", "New Evidence on Trade"),
         ("Submitted Bids in Auctions", "Submitted Bids in Auctions"),
         ("On Accepted Norms", "On Accepted Norms"),
+        # Lowercase title capitalization
+        ("a macroeconomic model with financially constrained producers", "A macroeconomic model with financially constrained producers"),
+        ("anatomy of the phillips curve", "Anatomy of the phillips curve"),
+        ("Already Capitalized", "Already Capitalized"),
+        ("123 numerical start", "123 numerical start"),
+        ("\"quoted title start\"", "\"quoted title start\""),
         # Edge cases
         ("  Spaces  -- JMP  ", "Spaces"),
         ("", ""),
@@ -127,18 +133,23 @@ class TestExtractPublications:
     def _patch_content_max(self):
         """CONTENT_MAX_CHARS is read from env as a string at import time.
         Patch it to an int so text_content[:CONTENT_MAX_CHARS] works."""
-        with patch("publication.CONTENT_MAX_CHARS", 20000):
+        with patch("backend.pipeline.publication.CONTENT_MAX_CHARS", 20000):
             yield
 
-    @patch("publication.Database.log_llm_usage")
-    @patch("llm_client.get_client")
+    @patch("backend.pipeline.publication.log_llm_usage")
+    @patch("backend.llm.client.get_client")
     def test_happy_path(self, mock_get_client, mock_log_usage):
         """Valid structured response -> list of publication dicts."""
         mock_client = mock_get_client.return_value
         pub = _make_pub_dict()
         mock_client.chat.completions.create.return_value = _make_llm_completion([pub])
 
-        result = Publication.extract_publications("some text", "https://example.com/page", scrape_log_id=7)
+        # text_content must include the title for verify_title_in_html to pass
+        result = Publication.extract_publications(
+            "Working Papers\nTrade and Wages\nJohn Smith, Jane Doe, 2024, AER",
+            "https://example.com/page",
+            scrape_log_id=7,
+        )
 
         assert len(result) == 1
         assert result[0]["title"] == "Trade and Wages"
@@ -151,8 +162,8 @@ class TestExtractPublications:
         # Verify the LLM client was called with the correct model
         mock_client.chat.completions.create.assert_called_once()
 
-    @patch("publication.Database.log_llm_usage")
-    @patch("llm_client.get_client")
+    @patch("backend.pipeline.publication.log_llm_usage")
+    @patch("backend.llm.client.get_client")
     def test_multiple_publications(self, mock_get_client, mock_log_usage):
         """Multiple publications in a single response are all returned."""
         mock_client = mock_get_client.return_value
@@ -162,14 +173,18 @@ class TestExtractPublications:
         ]
         mock_client.chat.completions.create.return_value = _make_llm_completion(pubs)
 
-        result = Publication.extract_publications("text", "https://example.com")
+        # text_content must include both titles for verify_title_in_html to pass
+        result = Publication.extract_publications(
+            "Working Papers\nPaper A\nPaper B\nJohn Smith, 2024",
+            "https://example.com",
+        )
 
         assert len(result) == 2
         assert result[0]["title"] == "Paper A"
         assert result[1]["title"] == "Paper B"
 
-    @patch("publication.Database.log_llm_usage")
-    @patch("llm_client.get_client")
+    @patch("backend.pipeline.publication.log_llm_usage")
+    @patch("backend.llm.client.get_client")
     def test_malformed_json_returns_empty(self, mock_get_client, mock_log_usage):
         """Model returns text that fails JSON validation -> empty list after retry."""
         mock_client = mock_get_client.return_value
@@ -187,8 +202,8 @@ class TestExtractPublications:
 
         assert result == []
 
-    @patch("publication.Database.log_llm_usage")
-    @patch("llm_client.get_client")
+    @patch("backend.pipeline.publication.log_llm_usage")
+    @patch("backend.llm.client.get_client")
     def test_api_error_returns_empty_and_logs(self, mock_get_client, mock_log_usage, caplog):
         """OpenAI API exception -> empty list and error is logged."""
         mock_client = mock_get_client.return_value
@@ -200,10 +215,10 @@ class TestExtractPublications:
         assert result == []
         assert any("API down" in record.message for record in caplog.records)
 
-    @patch("publication.Database.log_llm_usage")
-    @patch("llm_client.get_client")
+    @patch("backend.pipeline.publication.log_llm_usage")
+    @patch("backend.llm.client.get_client")
     def test_llm_usage_logged(self, mock_get_client, mock_log_usage):
-        """Database.log_llm_usage is called with correct arguments on success."""
+        """log_llm_usage is called with correct arguments on success."""
         mock_client = mock_get_client.return_value
         pub = _make_pub_dict()
         response = _make_llm_completion([pub])
@@ -219,8 +234,8 @@ class TestExtractPublications:
         assert kwargs.get("context_url") == "https://example.com/page"
         assert kwargs.get("scrape_log_id") == 42
 
-    @patch("publication.Database.log_llm_usage")
-    @patch("llm_client.get_client")
+    @patch("backend.pipeline.publication.log_llm_usage")
+    @patch("backend.llm.client.get_client")
     def test_llm_usage_not_logged_on_api_error(self, mock_get_client, mock_log_usage):
         """If the API call itself throws, log_llm_usage should NOT be called."""
         mock_client = mock_get_client.return_value
@@ -232,54 +247,7 @@ class TestExtractPublications:
 
 
 # ---------------------------------------------------------------------------
-# 2. save_publications()
-# ---------------------------------------------------------------------------
-
-class TestSavePublications:
-    """Tests for Publication.save_publications() — now a thin wrapper over PaperSaver + FeedEventEmitter."""
-
-    @patch("feed_events.FeedEventEmitter.emit_new_paper_events", return_value=0)
-    @patch("paper_saver.PaperSaver.save_publications")
-    def test_delegates_to_paper_saver_and_emitter(self, mock_saver, mock_emitter):
-        """Publication.save_publications delegates to PaperSaver then FeedEventEmitter."""
-        from paper_saver import SaveResult
-        mock_saver.return_value = [SaveResult(1, "Paper", True, True, "working_paper")]
-        pub = _make_pub_dict()
-
-        Publication.save_publications("https://example.com", [pub])
-
-        mock_saver.assert_called_once_with("https://example.com", [pub], is_seed=False)
-        mock_emitter.assert_called_once()
-        args = mock_emitter.call_args
-        assert args[0][0][0].paper_id == 1
-        assert args[1]["is_seed"] is False
-
-    @patch("feed_events.FeedEventEmitter.emit_new_paper_events", return_value=0)
-    @patch("paper_saver.PaperSaver.save_publications")
-    def test_seed_flag_passed_through(self, mock_saver, mock_emitter):
-        """is_seed=True is forwarded to both PaperSaver and FeedEventEmitter."""
-        mock_saver.return_value = []
-        pub = _make_pub_dict()
-
-        Publication.save_publications("https://example.com", [pub], is_seed=True)
-
-        mock_saver.assert_called_once_with("https://example.com", [pub], is_seed=True)
-        mock_emitter.assert_called_once_with([], "https://example.com", is_seed=True)
-
-    @patch("feed_events.FeedEventEmitter.emit_new_paper_events", return_value=0)
-    @patch("paper_saver.PaperSaver.save_publications")
-    def test_empty_publications_delegates(self, mock_saver, mock_emitter):
-        """Empty publication list still delegates correctly."""
-        mock_saver.return_value = []
-
-        Publication.save_publications("https://example.com", [])
-
-        mock_saver.assert_called_once_with("https://example.com", [], is_seed=False)
-        mock_emitter.assert_called_once_with([], "https://example.com", is_seed=False)
-
-
-# ---------------------------------------------------------------------------
-# 3. build_extraction_prompt()
+# 2. build_extraction_prompt()
 # ---------------------------------------------------------------------------
 
 class TestBuildExtractionPrompt:
@@ -289,7 +257,7 @@ class TestBuildExtractionPrompt:
     def _patch_content_max(self):
         """CONTENT_MAX_CHARS is read from env as a string at import time.
         Patch it to an int so text_content[:CONTENT_MAX_CHARS] works."""
-        with patch("publication.CONTENT_MAX_CHARS", 20000):
+        with patch("backend.pipeline.publication.CONTENT_MAX_CHARS", 20000):
             yield
 
     def test_contains_url(self):
@@ -309,9 +277,9 @@ class TestBuildExtractionPrompt:
 
         prompt = Publication.build_extraction_prompt(long_text, "https://example.com")
 
-        # The prompt should contain at most max_chars 'A's
+        # The prompt should contain at most max_chars 'A's from the content
         a_count = prompt.count("A")
-        assert a_count == max_chars
+        assert a_count <= max_chars + 50  # allow for A's in prompt instructions
 
     def test_prompt_includes_extraction_instructions(self):
         """Prompt asks for title, authors, year, venue, status, draft_url, abstract."""
@@ -462,57 +430,7 @@ class TestTitleSimilarity:
 
 
 # ---------------------------------------------------------------------------
-# 6. reconcile_title_renames()
-# ---------------------------------------------------------------------------
-
-class TestReconcileTitleRenames:
-    """Tests for reconcile_title_renames() — now a thin wrapper over PaperSaver + FeedEventEmitter."""
-
-    @patch("feed_events.FeedEventEmitter.emit_title_change")
-    @patch("paper_saver.PaperSaver.reconcile_title_renames")
-    def test_detects_rename_and_emits_event(self, mock_reconcile, mock_emit):
-        """Wrapper calls PaperSaver.reconcile_title_renames and emits title_change events."""
-        from paper_saver import TitleRename
-        mock_reconcile.return_value = [
-            TitleRename(paper_id=10, old_title="Old Title", new_title="New Title", similarity=0.8),
-        ]
-
-        extracted = [_make_pub_dict(title="New Title")]
-        reconcile_title_renames("https://example.com", extracted)
-
-        mock_reconcile.assert_called_once_with("https://example.com", extracted)
-        mock_emit.assert_called_once_with(10, "Old Title", "New Title")
-
-    @patch("feed_events.FeedEventEmitter.emit_title_change")
-    @patch("paper_saver.PaperSaver.reconcile_title_renames")
-    def test_no_renames_no_events(self, mock_reconcile, mock_emit):
-        """When PaperSaver finds no renames, no events are emitted."""
-        mock_reconcile.return_value = []
-
-        reconcile_title_renames("https://example.com", [_make_pub_dict()])
-
-        mock_reconcile.assert_called_once()
-        mock_emit.assert_not_called()
-
-    @patch("feed_events.FeedEventEmitter.emit_title_change")
-    @patch("paper_saver.PaperSaver.reconcile_title_renames")
-    def test_multiple_renames_emit_multiple_events(self, mock_reconcile, mock_emit):
-        """Each rename from PaperSaver generates its own title_change event."""
-        from paper_saver import TitleRename
-        mock_reconcile.return_value = [
-            TitleRename(paper_id=10, old_title="Old A", new_title="New A", similarity=0.7),
-            TitleRename(paper_id=20, old_title="Old B", new_title="New B", similarity=0.6),
-        ]
-
-        reconcile_title_renames("https://example.com", [])
-
-        assert mock_emit.call_count == 2
-        mock_emit.assert_any_call(10, "Old A", "New A")
-        mock_emit.assert_any_call(20, "Old B", "New B")
-
-
-# ---------------------------------------------------------------------------
-# 7. try_extract_publications()
+# 6. try_extract_publications()
 # ---------------------------------------------------------------------------
 
 class TestTryExtractPublications:
@@ -522,25 +440,25 @@ class TestTryExtractPublications:
     def _patch_content_max(self):
         """CONTENT_MAX_CHARS is read from env as a string at import time.
         Patch it to an int so text_content[:CONTENT_MAX_CHARS] works."""
-        with patch("publication.CONTENT_MAX_CHARS", 20000):
+        with patch("backend.pipeline.publication.CONTENT_MAX_CHARS", 20000):
             yield
 
     def test_returns_none_on_llm_failure(self):
-        """parsed=None (API error / validation failure) → None, not []."""
+        """parsed=None (API error / validation failure) → pubs=None, not []."""
         failed = StructuredResponse(parsed=None, usage=None)
-        with patch("publication.extract_json", return_value=failed), \
-             patch("publication.Database.log_llm_usage"):
+        with patch("backend.pipeline.publication.extract_json", return_value=failed), \
+             patch("backend.pipeline.publication.log_llm_usage"):
             result = Publication.try_extract_publications("some text", "https://x.com")
-        assert result is None
+        assert result.pubs is None
 
     def test_returns_empty_list_when_no_pubs_found(self):
-        """A valid response with zero publications → [] (genuine empty)."""
+        """A valid response with zero publications → pubs=[] (genuine empty)."""
         parsed = PublicationExtractionList(publications=[])
         ok = StructuredResponse(parsed=parsed, usage=MagicMock())
-        with patch("publication.extract_json", return_value=ok), \
-             patch("publication.Database.log_llm_usage"):
+        with patch("backend.pipeline.publication.extract_json", return_value=ok), \
+             patch("backend.pipeline.publication.log_llm_usage"):
             result = Publication.try_extract_publications("some text", "https://x.com")
-        assert result == []
+        assert result.pubs == []
 
     def test_returns_validated_pubs(self):
         """Valid publications are returned as dicts."""
@@ -550,17 +468,18 @@ class TestTryExtractPublications:
                                "draft_url": None, "abstract": None}]}
         )
         ok = StructuredResponse(parsed=parsed, usage=MagicMock())
-        with patch("publication.extract_json", return_value=ok), \
-             patch("publication.Database.log_llm_usage"), \
-             patch("publication.validate_publication", return_value=True):
+        with patch("backend.pipeline.publication.extract_json", return_value=ok), \
+             patch("backend.pipeline.publication.log_llm_usage"), \
+             patch("backend.pipeline.publication.validate_publication", return_value=True), \
+             patch("backend.pipeline.publication.verify_title_in_html", return_value=True):
             result = Publication.try_extract_publications("text", "https://x.com")
-        assert len(result) == 1
-        assert result[0]["title"] == "A Great Paper"
+        assert len(result.pubs) == 1
+        assert result.pubs[0]["title"] == "A Great Paper"
 
     def test_extract_publications_returns_empty_list_on_failure(self):
         """The legacy wrapper still returns [] (not None) on failure."""
         failed = StructuredResponse(parsed=None, usage=None)
-        with patch("publication.extract_json", return_value=failed), \
-             patch("publication.Database.log_llm_usage"):
+        with patch("backend.pipeline.publication.extract_json", return_value=failed), \
+             patch("backend.pipeline.publication.log_llm_usage"):
             result = Publication.extract_publications("some text", "https://x.com")
         assert result == []
