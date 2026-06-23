@@ -162,9 +162,9 @@ class TestBuildDiffPrompt:
         original = publication.CONTENT_MAX_CHARS
         try:
             publication.CONTENT_MAX_CHARS = 100
-            long = "X" * 200
-            prompt = Publication.build_diff_extraction_prompt(long, "new", "https://x.com")
-            assert prompt.count("X") == 100
+            long = "æ" * 200
+            prompt = Publication.build_diff_extraction_prompt(long, "new", "https://example.com")
+            assert prompt.count("æ") == 100
         finally:
             publication.CONTENT_MAX_CHARS = original
 
@@ -207,7 +207,11 @@ class TestTryExtractChanges:
         ok = StructuredResponse(parsed=parsed, usage=MagicMock())
         with patch("backend.pipeline.publication.extract_json", return_value=ok), \
              patch("backend.pipeline.publication.log_llm_usage"):
-            result = Publication.try_extract_changes("old", "new", "https://x.com")
+            result = Publication.try_extract_changes(
+                "old text without new papers",
+                "Working Papers\nA New Discovery\nJane Doe, 2025",
+                "https://x.com",
+            )
         assert len(result.pubs) == 1
         assert result.pubs[0]["change_type"] == "new_paper"
         assert result.pubs[0]["title"] == "A New Discovery"

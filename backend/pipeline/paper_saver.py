@@ -4,6 +4,7 @@ Returns SaveResult objects describing what changed.
 Does NOT create feed events — that is FeedEventEmitter's responsibility.
 """
 from dataclasses import dataclass
+import re
 from backend.database import (
     append_paper_snapshot,
     compute_title_hash,
@@ -46,6 +47,52 @@ def _title_similarity(title_a: str | None, title_b: str | None) -> float:
     if not tokens_a or not tokens_b:
         return 0.0
     return len(tokens_a & tokens_b) / len(tokens_a | tokens_b)
+
+
+_BRACKET_PREFIX = re.compile(r'^\[.*?\]\s*')
+
+
+def validate_title_change(old_title: str, new_title: str) -> bool:
+    """Return True only for genuine title renames, filtering LLM extraction artifacts.
+
+    Rejects: identical-after-normalization, bracket prefix diffs, subtitle
+    addition/removal, single-word addition/removal, hyphenation-only changes.
+    """
+    norm_old = normalize_title(old_title)
+    norm_new = normalize_title(new_title)
+
+    if norm_old == norm_new:
+        return False
+
+    stripped_old = normalize_title(_BRACKET_PREFIX.sub('', old_title))
+    stripped_new = normalize_title(_BRACKET_PREFIX.sub('', new_title))
+    if stripped_old == stripped_new:
+        return False
+
+    old_tokens = norm_old.split()
+    new_tokens = norm_new.split()
+    if abs(len(old_tokens) - len(new_tokens)) <= 1:
+        shorter, longer = sorted([old_tokens, new_tokens], key=len)
+        diff_count = 0
+        j = 0
+        for tok in longer:
+            if j < len(shorter) and tok == shorter[j]:
+                j += 1
+            else:
+                diff_count += 1
+        diff_count += len(shorter) - j
+        if diff_count <= 1:
+            return False
+
+    dehyphen_old = norm_old.replace(' ', '')
+    dehyphen_new = norm_new.replace(' ', '')
+    if dehyphen_old == dehyphen_new:
+        return False
+
+    if norm_old.startswith(norm_new) or norm_new.startswith(norm_old):
+        return False
+
+    return True
 
 
 class PaperSaver:
@@ -293,6 +340,14 @@ class PaperSaver:
                     best_dis = dis_norm
 
             if best_dis is not None and best_sim >= _SIMILARITY_THRESHOLD:
+                old_t = existing_normalized[best_dis]['title']
+                new_t = extracted_normalized[app_norm]['title']
+                if not validate_title_change(old_t, new_t):
+                    logging.info(
+                        "Suppressed spurious title rename (sim=%.2f): '%s' → '%s'",
+                        best_sim, old_t[:50], new_t[:50],
+                    )
+                    continue
                 matched_disappeared.add(best_dis)
                 renames_to_apply.append((
                     existing_normalized[best_dis],
