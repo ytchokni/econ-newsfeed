@@ -9,7 +9,8 @@ export type PublicationStatus =
   | "accepted"
   | "revise_and_resubmit"
   | "reject_and_resubmit"
-  | "working_paper";
+  | "working_paper"
+  | "work_in_progress";
 
 export type DraftUrlStatus = "unchecked" | "valid" | "invalid" | "timeout";
 

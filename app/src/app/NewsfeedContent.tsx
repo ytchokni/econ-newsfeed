@@ -64,6 +64,7 @@ const STATUS_OPTIONS = [
   { label: "Revise & Resubmit", value: "revise_and_resubmit" },
   { label: "Reject & Resubmit", value: "reject_and_resubmit" },
   { label: "Working Paper", value: "working_paper" },
+  { label: "Work in Progress", value: "work_in_progress" },
 ];
 
 const FEED_PRESETS = [
