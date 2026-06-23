@@ -44,7 +44,8 @@ class TestSavePublicationsReturnsResults:
         assert len(results) == 1
         assert results[0].is_new is True
         assert results[0].new_to_this_url is True
-        assert results[0].status == "working_paper"
+        # working_paper with no draft_url is downgraded to work_in_progress on INSERT
+        assert results[0].status == "work_in_progress"
         assert results[0].paper_id == 1
 
     @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
