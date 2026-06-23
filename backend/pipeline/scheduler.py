@@ -53,6 +53,22 @@ def _acquire_db_lock() -> "mysql.connector.connection.MySQLConnection | None":
         return None
 
 
+def _ping_lock_conn(conn: "mysql.connector.connection.MySQLConnection") -> None:
+    """Send a lightweight query on the lock connection to keep it alive.
+
+    The lock connection sits idle for the entire scrape. Despite SET SESSION
+    wait_timeout = 7 days, the connection dies at ~8h in production. A periodic
+    SELECT 1 resets the idle timer and keeps TCP alive.
+    """
+    try:
+        cursor = conn.cursor()
+        cursor.execute("SELECT 1")
+        cursor.fetchone()
+        cursor.close()
+    except Exception as e:
+        logger.warning("Lock connection ping failed: %s", e)
+
+
 def _release_db_lock(conn: "mysql.connector.connection.MySQLConnection") -> None:
     """Release the MySQL advisory lock and close the connection."""
     try:
@@ -227,7 +243,9 @@ def _validate_draft_urls() -> None:
     logger.info(f"Validating {len(unchecked)} unchecked draft URLs")
     start = time.time()
     validated = 0
-    for paper_id, draft_url in unchecked:
+    for row in unchecked:
+        paper_id = row['id']
+        draft_url = row['draft_url']
         if time.time() - start > _DRAFT_VALIDATION_BUDGET_SECONDS:
             logger.info(f"Draft URL validation time budget exceeded after {validated} URLs")
             break
@@ -316,6 +334,7 @@ def run_scrape_job() -> None:
 
                 if urls_checked % 10 == 0:
                     _with_db_retry(_update_progress, log_id, urls_checked=urls_checked, urls_changed=urls_changed)
+                    _ping_lock_conn(lock_conn)
 
             except _TRANSIENT_MYSQL_ERRORS as e:
                 logger.error("MySQL connection error fetching URL %s (id=%s) after retries: %s", url, url_id, e)
