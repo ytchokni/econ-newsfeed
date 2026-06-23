@@ -11,7 +11,7 @@ from backend.database.connection import get_connection, fetch_all
 
 # Canonical publication-status progression, lowest to highest rank.
 # schema.py derives its SQL FIELD() list from this — keep it the single source.
-STATUS_ORDER = ('working_paper', 'reject_and_resubmit', 'revise_and_resubmit',
+STATUS_ORDER = ('work_in_progress', 'working_paper', 'reject_and_resubmit', 'revise_and_resubmit',
                 'accepted', 'published')
 _STATUS_RANK = {status: rank for rank, status in enumerate(STATUS_ORDER)}
 

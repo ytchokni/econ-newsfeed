@@ -21,12 +21,15 @@ class TestStatusRankIntegrity:
         assert ranks == sorted(ranks)
         assert len(set(ranks)) == len(ranks)
 
-    def test_all_five_statuses_present(self):
-        expected = {'working_paper', 'reject_and_resubmit', 'revise_and_resubmit', 'accepted', 'published'}
+    def test_all_six_statuses_present(self):
+        expected = {'work_in_progress', 'working_paper', 'reject_and_resubmit', 'revise_and_resubmit', 'accepted', 'published'}
         assert set(_STATUS_RANK.keys()) == expected
 
-    def test_working_paper_is_lowest(self):
-        assert _STATUS_RANK['working_paper'] == min(_STATUS_RANK.values())
+    def test_work_in_progress_is_lowest(self):
+        assert _STATUS_RANK['work_in_progress'] == min(_STATUS_RANK.values())
+
+    def test_working_paper_is_second_lowest(self):
+        assert _STATUS_RANK['working_paper'] == _STATUS_RANK['work_in_progress'] + 1
 
     def test_published_is_highest(self):
         assert _STATUS_RANK['published'] == max(_STATUS_RANK.values())
@@ -118,3 +121,20 @@ class TestPaperSnapshotResultStatusChanged:
     def test_each_single_step_backward(self, old, new):
         r = PaperSnapshotResult(changed=True, old_status=old, new_status=new)
         assert r.status_changed is False
+
+
+class TestWorkInProgressStatus:
+    """work_in_progress is a new status below working_paper."""
+
+    def test_wip_is_lowest_rank(self):
+        from backend.database.snapshots import STATUS_ORDER, _STATUS_RANK
+        assert STATUS_ORDER[0] == 'work_in_progress'
+        assert _STATUS_RANK['work_in_progress'] < _STATUS_RANK['working_paper']
+
+    def test_wip_to_working_paper_is_progression(self):
+        from backend.database.snapshots import _is_status_progression
+        assert _is_status_progression('work_in_progress', 'working_paper') is True
+
+    def test_working_paper_to_wip_is_not_progression(self):
+        from backend.database.snapshots import _is_status_progression
+        assert _is_status_progression('working_paper', 'work_in_progress') is False

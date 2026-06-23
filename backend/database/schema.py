@@ -103,7 +103,7 @@ _TABLE_DEFINITIONS = {
             venue TEXT,
             abstract TEXT DEFAULT NULL,
             discovered_at DATETIME,
-            status ENUM('published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper') DEFAULT NULL,
+            status ENUM('published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper', 'work_in_progress') DEFAULT NULL,
             draft_url VARCHAR(2048) DEFAULT NULL,
             draft_url_status ENUM('unchecked', 'valid', 'invalid', 'timeout') DEFAULT 'unchecked',
             draft_url_checked_at DATETIME DEFAULT NULL,
@@ -243,7 +243,7 @@ _TABLE_DEFINITIONS = {
             id INT AUTO_INCREMENT PRIMARY KEY,
             paper_id INT NOT NULL,
             title TEXT DEFAULT NULL,
-            status ENUM('published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper') DEFAULT NULL,
+            status ENUM('published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper', 'work_in_progress') DEFAULT NULL,
             venue TEXT,
             abstract TEXT,
             draft_url VARCHAR(2048) DEFAULT NULL,
@@ -292,8 +292,8 @@ _TABLE_DEFINITIONS = {
             id INT AUTO_INCREMENT PRIMARY KEY,
             paper_id INT NOT NULL,
             event_type ENUM('new_paper', 'status_change', 'title_change') NOT NULL,
-            old_status ENUM('published','accepted','revise_and_resubmit','reject_and_resubmit','working_paper') DEFAULT NULL,
-            new_status ENUM('published','accepted','revise_and_resubmit','reject_and_resubmit','working_paper') DEFAULT NULL,
+            old_status ENUM('published','accepted','revise_and_resubmit','reject_and_resubmit','working_paper','work_in_progress') DEFAULT NULL,
+            new_status ENUM('published','accepted','revise_and_resubmit','reject_and_resubmit','working_paper','work_in_progress') DEFAULT NULL,
             old_title TEXT DEFAULT NULL,
             new_title TEXT DEFAULT NULL,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -748,6 +748,49 @@ def create_tables() -> None:
                             )
                     except Exception as e:
                         logging.warning("Migration: forward-flapping cleanup: %s", e)
+
+                    # Add work_in_progress to papers.status ENUM
+                    try:
+                        cursor.execute("""
+                            ALTER TABLE papers
+                            MODIFY COLUMN status ENUM('published', 'accepted', 'revise_and_resubmit',
+                                                       'reject_and_resubmit', 'working_paper', 'work_in_progress')
+                            DEFAULT NULL
+                        """)
+                        conn.commit()
+                        logging.info("Migration: added work_in_progress to papers.status ENUM")
+                    except Exception as e:
+                        logging.warning("Migration: papers.status ENUM: %s", e)
+
+                    # Add work_in_progress to paper_snapshots.status ENUM
+                    try:
+                        cursor.execute("""
+                            ALTER TABLE paper_snapshots
+                            MODIFY COLUMN status ENUM('published', 'accepted', 'revise_and_resubmit',
+                                                       'reject_and_resubmit', 'working_paper', 'work_in_progress')
+                            DEFAULT NULL
+                        """)
+                        conn.commit()
+                        logging.info("Migration: added work_in_progress to paper_snapshots.status ENUM")
+                    except Exception as e:
+                        logging.warning("Migration: paper_snapshots.status ENUM: %s", e)
+
+                    # Add work_in_progress to feed_events.old_status / new_status ENUMs
+                    try:
+                        cursor.execute("""
+                            ALTER TABLE feed_events
+                            MODIFY COLUMN old_status ENUM('published','accepted','revise_and_resubmit',
+                                                          'reject_and_resubmit','working_paper','work_in_progress')
+                            DEFAULT NULL,
+                            MODIFY COLUMN new_status ENUM('published','accepted','revise_and_resubmit',
+                                                          'reject_and_resubmit','working_paper','work_in_progress')
+                            DEFAULT NULL
+                        """)
+                        conn.commit()
+                        logging.info("Migration: added work_in_progress to feed_events status ENUMs")
+                    except Exception as e:
+                        logging.warning("Migration: feed_events status ENUMs: %s", e)
+
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                     cursor.fetchone()
