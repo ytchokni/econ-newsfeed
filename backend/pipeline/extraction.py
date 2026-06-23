@@ -22,7 +22,7 @@ from backend.database import (
 from backend.pipeline.feed_events import FeedEventEmitter
 from backend.pipeline.html_fetcher import HTMLFetcher
 from backend.enrichment.link_extractor import match_and_save_paper_links
-from backend.pipeline.paper_saver import PaperSaver
+from backend.pipeline.paper_saver import PaperSaver, validate_title_change
 from backend.pipeline.publication import Publication
 
 logger = logging.getLogger(__name__)
@@ -146,7 +146,7 @@ def _append_snapshots(pubs: list[dict], source_url: str, event_date=None) -> Non
         )
         if result.status_changed:
             pub_year = pub.get('year')
-            if pub_year and str(pub_year).isdigit() and (current_year - int(pub_year)) > _STALENESS_YEARS:
+            if pub_year and pub_year.isdigit() and (current_year - int(pub_year)) > _STALENESS_YEARS:
                 logger.info(
                     "Suppressed status_change for old paper (year=%s): %s",
                     pub_year, pub.get('title', '')[:60],
@@ -216,7 +216,6 @@ def _apply_title_change(change: dict, source_url: str, event_date) -> None:
     if not old_title or not new_title:
         return
 
-    from backend.pipeline.paper_saver import validate_title_change
     if not validate_title_change(old_title, new_title):
         logger.info("Suppressed spurious diff title change: '%s' → '%s'",
                      old_title[:50], new_title[:50])
