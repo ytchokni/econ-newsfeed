@@ -289,25 +289,22 @@ async function fetchJsonAuth<T>(url: string, token: string, init?: RequestInit):
   return res.json();
 }
 
+export const followingSwrKey = (token: string | null) =>
+  token ? ["/api/users/following", token] as const : null;
+
 export function useFollowing(token: string | null) {
   return useSWR<UserFollowing>(
-    token ? ["/api/users/following", token] : null,
+    followingSwrKey(token),
     ([url, t]: [string, string]) => fetchJsonAuth(url, t),
   );
 }
 
 export async function followResearcher(researcherId: number, token: string): Promise<void> {
-  await fetch(`/api/users/follow/${researcherId}`, {
-    method: "POST",
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  await fetchJsonAuth(`/api/users/follow/${researcherId}`, token, { method: "POST" });
 }
 
 export async function unfollowResearcher(researcherId: number, token: string): Promise<void> {
-  await fetch(`/api/users/follow/${researcherId}`, {
-    method: "DELETE",
-    headers: { Authorization: `Bearer ${token}` },
-  });
+  await fetchJsonAuth(`/api/users/follow/${researcherId}`, token, { method: "DELETE" });
 }
 
 export function useNotificationPrefs(token: string | null) {
@@ -321,12 +318,9 @@ export async function updateNotificationPrefs(
   prefs: { digest_enabled: boolean },
   token: string,
 ): Promise<void> {
-  await fetch("/api/users/notifications", {
+  await fetchJsonAuth("/api/users/notifications", token, {
     method: "PATCH",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${token}`,
-    },
+    headers: { "Content-Type": "application/json" },
     body: JSON.stringify(prefs),
   });
 }

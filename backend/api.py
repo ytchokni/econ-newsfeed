@@ -615,7 +615,6 @@ async def update_notifications(
 @app.get("/api/users/unsubscribe")
 async def unsubscribe(token: str = Query(...)):
     """One-click email unsubscribe via HMAC-signed token."""
-    import os
     secret = os.environ.get("NEXTAUTH_SECRET", "")
     user_id = Database.verify_unsubscribe_token(token, secret)
     if user_id is None:

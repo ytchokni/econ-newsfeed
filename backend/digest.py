@@ -75,8 +75,8 @@ def _send_email(to: str, subject: str, html: str) -> bool:
     if not RESEND_API_KEY:
         logger.warning("RESEND_API_KEY not set, skipping email to %s", to)
         return False
+    resend.api_key = RESEND_API_KEY
     try:
-        resend.api_key = RESEND_API_KEY
         resend.Emails.send({
             "from": DIGEST_FROM_EMAIL,
             "to": [to],

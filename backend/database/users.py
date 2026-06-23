@@ -1,6 +1,8 @@
 """User accounts, follows, and notification preferences."""
 from __future__ import annotations
 
+import hashlib
+import hmac
 from datetime import datetime, timezone
 
 from backend.database.connection import execute_query, fetch_all, fetch_one, get_connection
@@ -86,16 +88,19 @@ def get_digest_recipients() -> list[dict]:
     """Return users with digest enabled and their followed researcher IDs."""
     rows = fetch_all(
         """SELECT u.id, u.email, u.name,
-                  np.last_digest_sent, u.created_at
+                  np.last_digest_sent, u.created_at,
+                  GROUP_CONCAT(uf.researcher_id ORDER BY uf.created_at DESC) AS researcher_ids_csv
            FROM users u
            JOIN user_notification_prefs np ON np.user_id = u.id
-           WHERE np.digest_enabled = TRUE""",
+           JOIN user_follows uf ON uf.user_id = u.id
+           WHERE np.digest_enabled = TRUE
+           GROUP BY u.id, u.email, u.name, np.last_digest_sent, u.created_at
+           HAVING COUNT(uf.researcher_id) > 0""",
     )
     result = []
     for row in rows:
-        researcher_ids = get_followed_researcher_ids(row['id'])
-        if researcher_ids:
-            result.append({**row, 'researcher_ids': researcher_ids})
+        ids = [int(x) for x in row['researcher_ids_csv'].split(',')]
+        result.append({**row, 'researcher_ids': ids})
     return result
 
 
@@ -137,8 +142,6 @@ def researcher_exists(researcher_id: int) -> bool:
 
 def generate_unsubscribe_token(user_id: int, secret: str) -> str:
     """Generate an HMAC-signed unsubscribe token."""
-    import hmac
-    import hashlib
     signature = hmac.new(
         secret.encode(), str(user_id).encode(), hashlib.sha256
     ).hexdigest()
@@ -147,8 +150,6 @@ def generate_unsubscribe_token(user_id: int, secret: str) -> str:
 
 def verify_unsubscribe_token(token: str, secret: str) -> int | None:
     """Verify an unsubscribe token and return user_id, or None if invalid."""
-    import hmac
-    import hashlib
     parts = token.split(".", 1)
     if len(parts) != 2:
         return None

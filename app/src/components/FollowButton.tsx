@@ -3,7 +3,7 @@
 import { useCallback } from "react";
 import { mutate } from "swr";
 import { useAuth } from "@/lib/auth";
-import { useFollowing, followResearcher, unfollowResearcher } from "@/lib/api";
+import { useFollowing, followResearcher, unfollowResearcher, followingSwrKey } from "@/lib/api";
 
 export default function FollowButton({
   researcherId,
@@ -23,10 +23,9 @@ export default function FollowButton({
       e.stopPropagation();
       if (!accessToken) return;
 
-      const key = ["/api/users/following", accessToken];
+      const key = followingSwrKey(accessToken);
       const currentIds = data?.researcher_ids ?? [];
 
-      // Optimistic update
       const newIds = isFollowing
         ? currentIds.filter((id) => id !== researcherId)
         : [...currentIds, researcherId];
