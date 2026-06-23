@@ -159,7 +159,7 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
 
             conn.commit()
     logging.info(f"Paper snapshot appended for id={paper_id}")
-    return PaperSnapshotResult(changed=True, old_status=old_status, new_status=status)
+    return PaperSnapshotResult(changed=True, old_status=old_status, new_status=effective_status)
 
 
 def get_paper_snapshots(paper_id: int, limit: int = 20) -> list[dict]:

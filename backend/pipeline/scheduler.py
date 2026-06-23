@@ -235,6 +235,9 @@ def _validate_draft_urls() -> None:
             status = HTMLFetcher.validate_draft_url(draft_url)
             update_draft_url_status(paper_id, status)
             logger.info(f"Draft URL for paper {paper_id}: {status}")
+            if status == 'valid':
+                from backend.pipeline.wip_reconciler import reconcile_wip_status
+                reconcile_wip_status(paper_id)
             validated += 1
             time.sleep(_DRAFT_VALIDATION_DELAY)
         except Exception as e:
