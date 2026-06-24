@@ -5,7 +5,7 @@ services:
     # feed_events snapshot-guard trigger migration (app user lacks SUPER, binlog on)
     # performance-schema=off: saves ~150-200MB; with it on, total usage creeps
     # to the 1GiB mem_limit and the container thrashes until healthchecks time out
-    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --innodb-buffer-pool-size=768M --log-bin-trust-function-creators=1 --performance-schema=off
+    command: --character-set-server=utf8mb4 --collation-server=utf8mb4_unicode_ci --innodb-buffer-pool-size=768M --log-bin-trust-function-creators=1 --performance-schema=off --skip-log-bin
     restart: unless-stopped
     mem_limit: 1536m
     cpus: 1.0
