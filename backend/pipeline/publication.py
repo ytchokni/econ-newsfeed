@@ -529,7 +529,7 @@ If no changes were detected, return an empty changes list."""
         model = get_model()
         logging.info(f"Extracting publications from {url} using LLM ({model})")
 
-        result = extract_json(prompt, PublicationExtractionList)
+        result = extract_json(prompt, PublicationExtractionList, max_tokens=32000)
 
         if result.usage is not None:
             log_llm_usage(
