@@ -239,6 +239,9 @@ class TestMergeResearchers:
         assert any("UPDATE authorship SET researcher_id" in q for q in executed)
         # Should transfer JEL codes
         assert any("UPDATE IGNORE researcher_jel_codes" in q for q in executed)
+        # Should transfer follows before duplicate deletion to avoid ON DELETE CASCADE loss
+        assert any("INSERT IGNORE INTO user_follows" in q for q in executed)
+        assert any("DELETE FROM user_follows" in q for q in executed)
         # Should update first_name to longer
         assert any("UPDATE researchers SET first_name" in q for q in executed)
         # Should backfill metadata

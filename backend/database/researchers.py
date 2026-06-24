@@ -374,7 +374,16 @@ def merge_researchers(canonical_id: int, duplicate_id: int, conn) -> None:
         (canonical_id, duplicate_id),
     )
 
-    # 3. Upgrade first_name to the longer variant
+    # 3. Transfer user follows before deleting the duplicate researcher.
+    # INSERT IGNORE keeps the existing follow when a user already follows both profiles.
+    c.execute(
+        "INSERT IGNORE INTO user_follows (user_id, researcher_id, created_at) "
+        "SELECT user_id, %s, created_at FROM user_follows WHERE researcher_id = %s",
+        (canonical_id, duplicate_id),
+    )
+    c.execute("DELETE FROM user_follows WHERE researcher_id = %s", (duplicate_id,))
+
+    # 4. Upgrade first_name to the longer variant
     longer_name = _longer_first_name(canonical['first_name'], duplicate['first_name'])
     if longer_name != canonical['first_name']:
         c.execute(
@@ -382,7 +391,7 @@ def merge_researchers(canonical_id: int, duplicate_id: int, conn) -> None:
             (longer_name, canonical_id),
         )
 
-    # 4. Backfill metadata where canonical has NULL
+    # 5. Backfill metadata where canonical has NULL
     c.execute(
         "UPDATE researchers SET "
         "affiliation = COALESCE(affiliation, %s), "
@@ -395,7 +404,7 @@ def merge_researchers(canonical_id: int, duplicate_id: int, conn) -> None:
          canonical_id),
     )
 
-    # 5. Delete duplicate (cascade handles researcher_urls, html_content, researcher_fields, etc.)
+    # 6. Delete duplicate (cascade handles researcher_urls, html_content, researcher_fields, etc.)
     c.execute("DELETE FROM researchers WHERE id = %s", (duplicate_id,))
 
     c.close()
