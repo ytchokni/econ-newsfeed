@@ -378,7 +378,7 @@ def merge_researchers_compatible_name():
 def merge_researchers_shared_papers():
     """Same last name, 5+ shared papers, no conflicting personal websites —
     catches nickname variants (Chris/Christopher) that escape name matching."""
-    from backend.database.researchers import is_compatible_name
+    from backend.database.researchers import is_abbreviation_of, is_compatible_name
 
     rows = fetch_all(
         """SELECT r1.id AS id1, r1.first_name AS fn1, r1.last_name AS ln1,
@@ -399,6 +399,8 @@ def merge_researchers_shared_papers():
     merges = []
     for r in rows:
         if is_compatible_name(r["fn1"], r["fn2"]):
+            continue
+        if not is_abbreviation_of(r["fn1"], r["fn2"]):
             continue
         rid1, rid2 = r["id1"], r["id2"]
         urls1 = {u["url"] for u in fetch_all(

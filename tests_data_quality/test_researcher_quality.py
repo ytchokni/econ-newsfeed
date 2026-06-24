@@ -8,6 +8,7 @@ database — the same code path the /researchers page renders — so they catch
 both SQL-guard regressions and bad rows that slip through.
 """
 from conftest import fmt_violations, mojibake_condition
+from backend.database.researchers import is_abbreviation_of, is_compatible_name
 
 
 class TestDirectoryServesValidResearchers:
@@ -214,6 +215,10 @@ class TestResearcherDuplicates:
         )
         dupes = []
         for r in rows:
+            if is_compatible_name(r['fn1'], r['fn2']):
+                continue
+            if not is_abbreviation_of(r['fn1'], r['fn2']):
+                continue
             urls1 = {u['url'] for u in db.fetch_all(
                 "SELECT url FROM researcher_urls WHERE researcher_id = %s", (r['id1'],))}
             urls2 = {u['url'] for u in db.fetch_all(

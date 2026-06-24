@@ -13,7 +13,7 @@ from backend.database import (
     get_researcher_id,
     normalize_title,
 )
-from backend.database.researchers import is_compatible_name, merge_researchers, refresh_has_top5
+from backend.database.researchers import is_abbreviation_of, is_compatible_name, merge_researchers, refresh_has_top5
 from backend.config import guard_text_fields
 from backend.pipeline.publication import clean_title
 from datetime import datetime, timezone
@@ -149,8 +149,11 @@ def _merge_compatible_authors(paper_id: int) -> None:
                 )
                 if not shared or shared[0]['cnt'] < threshold:
                     continue
-                if not compatible and _have_conflicting_urls(a['researcher_id'], b['researcher_id']):
-                    continue
+                if not compatible:
+                    if not is_abbreviation_of(a['first_name'], b['first_name']):
+                        continue
+                    if _have_conflicting_urls(a['researcher_id'], b['researcher_id']):
+                        continue
                 canonical = a if len(a['first_name']) >= len(b['first_name']) else b
                 duplicate = b if canonical is a else a
                 try:

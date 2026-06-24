@@ -118,6 +118,19 @@ def is_compatible_name(name_a: str, name_b: str) -> bool:
     return True
 
 
+def is_abbreviation_of(name_a: str, name_b: str) -> bool:
+    """True if one first name is a substring of the other (accent-insensitive).
+
+    Catches nickname pairs like Chris/Christopher, Jon/Jonathan, Max/Maximilian
+    where one form is literally contained in the other.
+    """
+    a = _strip_accents(name_a).lower().strip()
+    b = _strip_accents(name_b).lower().strip()
+    if not a or not b:
+        return False
+    return a in b or b in a
+
+
 def is_bad_researcher_name(first_name: str, last_name: str) -> bool:
     """Return True if the name is too malformed to create a researcher record.
 
