@@ -48,11 +48,6 @@ def _strip_initial(name: str) -> str | None:
     return None
 
 
-def _is_initial_token(token: str) -> bool:
-    """True if token is a single letter optionally followed by '.'."""
-    return _strip_initial(token) is not None
-
-
 def _tokens_match(a: str, b: str) -> bool:
     """True if two first-name tokens are compatible: equal, or one is an initial matching the other's first char."""
     if a.lower() == b.lower():
