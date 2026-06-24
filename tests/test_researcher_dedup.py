@@ -1,7 +1,88 @@
 """Tests for researcher deduplication: initial matching and merge logic."""
 import pytest
 from unittest.mock import patch, MagicMock
-from backend.database.researchers import first_name_is_initial_match, get_researcher_id, merge_researchers
+from backend.database.researchers import (
+    first_name_is_initial_match,
+    is_compatible_name,
+    get_researcher_id,
+    merge_researchers,
+)
+
+
+class TestIsCompatibleName:
+    """is_compatible_name matches initials, multi-initials, and prefix first names."""
+
+    # --- single initial ---
+    def test_initial_with_period(self):
+        assert is_compatible_name("L.", "Liam") is True
+
+    def test_initial_without_period(self):
+        assert is_compatible_name("L", "Liam") is True
+
+    def test_initial_case_insensitive(self):
+        assert is_compatible_name("l.", "Liam") is True
+
+    def test_initial_reversed(self):
+        assert is_compatible_name("Liam", "L.") is True
+
+    def test_different_initial(self):
+        assert is_compatible_name("J.", "Liam") is False
+
+    def test_both_initials_same(self):
+        assert is_compatible_name("L.", "L") is True
+
+    def test_both_initials_different(self):
+        assert is_compatible_name("L.", "J.") is False
+
+    # --- multi-initial ---
+    def test_multi_initial_matches(self):
+        assert is_compatible_name("M. F.", "Max Friedrich") is True
+
+    def test_multi_initial_second_mismatch(self):
+        assert is_compatible_name("M. J.", "Max Friedrich") is False
+
+    def test_multi_initial_reversed(self):
+        assert is_compatible_name("Max Friedrich", "M. F.") is True
+
+    # --- prefix ---
+    def test_prefix_match(self):
+        assert is_compatible_name("Max", "Max Friedrich") is True
+
+    def test_prefix_reversed(self):
+        assert is_compatible_name("Max Friedrich", "Max") is True
+
+    def test_prefix_mismatch(self):
+        assert is_compatible_name("Michael", "Max Friedrich") is False
+
+    # --- exact ---
+    def test_exact_match(self):
+        assert is_compatible_name("Max Friedrich", "Max Friedrich") is True
+
+    def test_exact_case_insensitive(self):
+        assert is_compatible_name("max", "Max") is True
+
+    # --- mixed ---
+    def test_initial_plus_full_token(self):
+        assert is_compatible_name("M. Friedrich", "Max Friedrich") is True
+
+    def test_full_plus_initial(self):
+        assert is_compatible_name("Max F.", "Max Friedrich") is True
+
+    # --- edge cases ---
+    def test_empty_returns_false(self):
+        assert is_compatible_name("", "Liam") is False
+
+    def test_both_empty_returns_false(self):
+        assert is_compatible_name("", "") is False
+
+    def test_different_full_names(self):
+        assert is_compatible_name("Michael", "Max") is False
+
+    def test_three_token_prefix(self):
+        assert is_compatible_name("Anna Maria", "Anna Maria Garcia") is True
+
+    def test_three_token_mismatch(self):
+        assert is_compatible_name("Anna Carlos", "Anna Maria Garcia") is False
 
 
 class TestFirstNameIsInitialMatch:

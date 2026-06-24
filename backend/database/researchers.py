@@ -48,6 +48,55 @@ def _strip_initial(name: str) -> str | None:
     return None
 
 
+def _is_initial_token(token: str) -> bool:
+    """True if token is a single letter optionally followed by '.'."""
+    return _strip_initial(token) is not None
+
+
+def _tokens_match(a: str, b: str) -> bool:
+    """True if two first-name tokens are compatible: equal, or one is an initial matching the other's first char."""
+    if a.lower() == b.lower():
+        return True
+    init_a = _strip_initial(a)
+    init_b = _strip_initial(b)
+    if init_a is not None and init_b is not None:
+        return init_a == init_b
+    if init_a is not None:
+        return init_a == b[0].lower()
+    if init_b is not None:
+        return init_b == a[0].lower()
+    return False
+
+
+def is_compatible_name(name_a: str, name_b: str) -> bool:
+    """True if two first names are plausibly the same person.
+
+    Tokenizes both, aligns shorter to longer positionally. Each token pair must
+    be equal or one must be a single-char initial matching the other's first char.
+    Prefix semantics: if all tokens in the shorter name match, returns True.
+
+    Examples:
+        is_compatible_name("M.", "Max")                  -> True
+        is_compatible_name("M. F.", "Max Friedrich")     -> True
+        is_compatible_name("Max", "Max Friedrich")       -> True
+        is_compatible_name("Max J.", "Max Friedrich")    -> False
+        is_compatible_name("Michael", "Max")             -> False
+    """
+    if not name_a or not name_b:
+        return False
+    tokens_a = name_a.split()
+    tokens_b = name_b.split()
+    if not tokens_a or not tokens_b:
+        return False
+    shorter, longer = (tokens_a, tokens_b) if len(tokens_a) <= len(tokens_b) else (tokens_b, tokens_a)
+    for i, short_tok in enumerate(shorter):
+        if i >= len(longer):
+            return False
+        if not _tokens_match(short_tok, longer[i]):
+            return False
+    return True
+
+
 def is_bad_researcher_name(first_name: str, last_name: str) -> bool:
     """Return True if the name is too malformed to create a researcher record.
 
@@ -65,10 +114,10 @@ def is_bad_researcher_name(first_name: str, last_name: str) -> bool:
 
 
 def first_name_is_initial_match(name_a: str, name_b: str) -> bool:
-    """Return True when one name is a single-char initial matching the other's first character.
+    """Deprecated: use is_compatible_name instead.
 
-    Handles 'L.', 'L', or 'l.' matching 'Liam'. Returns False for exact matches,
-    multi-char prefixes, or different initials.
+    Kept for backward compatibility — returns True only for the single-initial
+    subset (exact matches return False, unlike is_compatible_name).
     """
     if not name_a or not name_b:
         return False
