@@ -13,13 +13,16 @@ from backend.database import (
     get_researcher_id,
     normalize_title,
 )
-from backend.database.researchers import refresh_has_top5
+from backend.database.researchers import is_compatible_name, merge_researchers, refresh_has_top5
 from backend.config import guard_text_fields
 from backend.pipeline.publication import clean_title
 from datetime import datetime, timezone
 import logging
 
 _author_id_cache: dict[tuple[str, str], int] = {}
+
+_SHARED_PAPER_THRESHOLD = 2
+_SHARED_PAPER_THRESHOLD_WEAK = 5
 
 _SIMILARITY_THRESHOLD = 0.5
 
@@ -94,6 +97,77 @@ def validate_title_change(old_title: str, new_title: str) -> bool:
         return False
 
     return True
+
+
+def _have_conflicting_urls(rid_a: int, rid_b: int) -> bool:
+    """True if both researchers have personal websites and none overlap."""
+    urls = fetch_all(
+        "SELECT researcher_id, url FROM researcher_urls WHERE researcher_id IN (%s, %s)",
+        (rid_a, rid_b),
+    )
+    urls_a = {r['url'] for r in urls if r['researcher_id'] == rid_a}
+    urls_b = {r['url'] for r in urls if r['researcher_id'] == rid_b}
+    if not urls_a or not urls_b:
+        return False
+    return len(urls_a & urls_b) == 0
+
+
+def _merge_compatible_authors(paper_id: int) -> None:
+    """Layer 2: merge researcher pairs on this paper sharing enough papers.
+
+    Compatible names (initials/prefixes): 2+ shared papers.
+    Any same-last-name pair: 5+ shared papers, no conflicting personal websites.
+    """
+    authors = fetch_all(
+        """SELECT a.researcher_id, r.first_name, r.last_name
+           FROM authorship a JOIN researchers r ON r.id = a.researcher_id
+           WHERE a.publication_id = %s""",
+        (paper_id,),
+    )
+    if len(authors) < 2:
+        return
+
+    by_last: dict[str, list[dict]] = {}
+    for a in authors:
+        by_last.setdefault(a['last_name'].lower().strip(), []).append(a)
+
+    for last_key, group in by_last.items():
+        if len(group) < 2:
+            continue
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                a, b = group[i], group[j]
+                if a['researcher_id'] == b['researcher_id']:
+                    continue
+                compatible = is_compatible_name(a['first_name'], b['first_name'])
+                threshold = _SHARED_PAPER_THRESHOLD if compatible else _SHARED_PAPER_THRESHOLD_WEAK
+                shared = fetch_all(
+                    """SELECT COUNT(*) AS cnt FROM authorship a1
+                       JOIN authorship a2 ON a1.publication_id = a2.publication_id
+                       WHERE a1.researcher_id = %s AND a2.researcher_id = %s""",
+                    (a['researcher_id'], b['researcher_id']),
+                )
+                if not shared or shared[0]['cnt'] < threshold:
+                    continue
+                if not compatible and _have_conflicting_urls(a['researcher_id'], b['researcher_id']):
+                    continue
+                canonical = a if len(a['first_name']) >= len(b['first_name']) else b
+                duplicate = b if canonical is a else a
+                try:
+                    with get_connection() as conn:
+                        merge_researchers(canonical['researcher_id'], duplicate['researcher_id'], conn)
+                    logging.info(
+                        "Layer 2 merge: %s %s (id=%d) absorbed %s %s (id=%d) — %d shared papers",
+                        canonical['first_name'], canonical['last_name'], canonical['researcher_id'],
+                        duplicate['first_name'], duplicate['last_name'], duplicate['researcher_id'],
+                        shared[0]['cnt'],
+                    )
+                except Exception:
+                    logging.exception(
+                        "Layer 2 merge failed: %d into %d",
+                        duplicate['researcher_id'], canonical['researcher_id'],
+                    )
+                return
 
 
 class PaperSaver:
@@ -183,7 +257,10 @@ class PaperSaver:
                         new_to_this_url = cursor.rowcount > 0
                         logging.info(f"Duplicate publication (title_hash match), added source URL: {pub['title']}")
 
-                    # Authors
+                    # Authors — track resolved (last_name -> (researcher_id, first_name))
+                    # for within-paper dedup of name variants
+                    resolved_by_last: dict[str, list[tuple[int, str]]] = {}
+
                     for author_order, author in enumerate(pub['authors'], start=1):
                         if not author:
                             continue
@@ -194,32 +271,62 @@ class PaperSaver:
                         else:
                             first_name = " ".join(author[:-1])
                             last_name = author[-1]
-                        cache_key = (first_name, last_name)
-                        if cache_key in _author_id_cache:
-                            author_id = _author_id_cache[cache_key]
-                        else:
-                            author_id = get_researcher_id(first_name, last_name, conn=conn)
-                            _author_id_cache[cache_key] = author_id
-                        cursor.execute(
-                            "INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order) VALUES (%s, %s, %s)",
-                            (author_id, publication_id, author_order),
-                        )
 
-                    # Page owner
+                        # Layer 1: check if a compatible-name author is already
+                        # resolved for this paper (same last name, compatible first)
+                        last_key = last_name.lower().strip()
+                        author_id = None
+                        if first_name and last_key in resolved_by_last:
+                            for rid, resolved_first in resolved_by_last[last_key]:
+                                if is_compatible_name(first_name, resolved_first):
+                                    author_id = rid
+                                    break
+
+                        if author_id is None:
+                            cache_key = (first_name, last_name)
+                            if cache_key in _author_id_cache:
+                                author_id = _author_id_cache[cache_key]
+                            else:
+                                author_id = get_researcher_id(first_name, last_name, conn=conn)
+                                _author_id_cache[cache_key] = author_id
+
+                        if author_id is not None:
+                            resolved_by_last.setdefault(last_key, []).append((author_id, first_name))
+                            cursor.execute(
+                                "INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order) VALUES (%s, %s, %s)",
+                                (author_id, publication_id, author_order),
+                            )
+
+                    # Page owner — skip if a compatible-name author is already on this paper
                     cursor.execute(
-                        """SELECT r.id FROM researchers r
+                        """SELECT r.id, r.first_name, r.last_name FROM researchers r
                            JOIN researcher_urls ru ON ru.researcher_id = r.id
                            WHERE ru.url = %s LIMIT 1""",
                         (url,),
                     )
                     owner_row = cursor.fetchone()
                     if owner_row:
-                        cursor.execute(
-                            "INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order) VALUES (%s, %s, %s)",
-                            (owner_row[0], publication_id, 0),
-                        )
+                        owner_id, owner_first, owner_last = owner_row
+                        owner_last_key = owner_last.lower().strip()
+                        already_represented = False
+                        if owner_first and owner_last_key in resolved_by_last:
+                            for rid, resolved_first in resolved_by_last[owner_last_key]:
+                                if is_compatible_name(owner_first, resolved_first):
+                                    already_represented = True
+                                    break
+                        if not already_represented:
+                            cursor.execute(
+                                "INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order) VALUES (%s, %s, %s)",
+                                (owner_id, publication_id, 0),
+                            )
 
                     conn.commit()
+
+                    try:
+                        _merge_compatible_authors(publication_id)
+                    except Exception:
+                        logging.exception("Layer 2 author merge failed for paper %d", publication_id)
+
                     results.append(SaveResult(
                         paper_id=publication_id,
                         title=title,

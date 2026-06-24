@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import unicodedata
 
 from backend.database.connection import execute_query, fetch_one, fetch_all
 from backend.database.llm import log_llm_usage
@@ -38,6 +39,29 @@ def refresh_has_top5(researcher_id: int) -> None:
     )
 
 
+def _strip_accents(s: str) -> str:
+    """Remove diacritical marks: Gérard -> Gerard, Andrés -> Andres, Ø -> O."""
+    return ''.join(
+        c for c in unicodedata.normalize('NFKD', s)
+        if not unicodedata.combining(c)
+    )
+
+
+_COMPOUND_INITIAL_RE = re.compile(r'([A-Za-z])\.(?=[A-Za-z])')
+
+
+def _tokenize_name(name: str) -> list[str]:
+    """Normalize and tokenize a first name for comparison.
+
+    Strips accents, replaces hyphens with spaces, and splits compound
+    initials (R.A. -> R. A.) before whitespace-tokenizing.
+    """
+    s = _strip_accents(name)
+    s = s.replace('-', ' ')
+    s = _COMPOUND_INITIAL_RE.sub(r'\1. ', s)
+    return s.split()
+
+
 def _strip_initial(name: str) -> str | None:
     """If name is a single letter optionally followed by '.', return that letter lowercase. Else None."""
     stripped = name.strip()
@@ -46,6 +70,52 @@ def _strip_initial(name: str) -> str | None:
     if len(stripped) == 2 and stripped[0].isalpha() and stripped[1] == '.':
         return stripped[0].lower()
     return None
+
+
+def _tokens_match(a: str, b: str) -> bool:
+    """True if two first-name tokens are compatible: equal, or one is an initial matching the other's first char."""
+    if a.lower() == b.lower():
+        return True
+    init_a = _strip_initial(a)
+    init_b = _strip_initial(b)
+    if init_a is not None and init_b is not None:
+        return init_a == init_b
+    if init_a is not None:
+        return init_a == b[0].lower()
+    if init_b is not None:
+        return init_b == a[0].lower()
+    return False
+
+
+def is_compatible_name(name_a: str, name_b: str) -> bool:
+    """True if two first names are plausibly the same person.
+
+    Tokenizes both (with accent stripping, hyphen normalization, and compound
+    initial splitting), aligns shorter to longer positionally. Each token pair
+    must be equal or one must be a single-char initial matching the other's
+    first char. Prefix semantics: if all tokens in the shorter name match,
+    returns True.
+
+    Examples:
+        is_compatible_name("M.", "Max")                  -> True
+        is_compatible_name("R.A.", "Ronald A.")          -> True
+        is_compatible_name("Gérard", "Gerard")           -> True
+        is_compatible_name("Pei-Tha", "Pei Tha")        -> True
+        is_compatible_name("Michael", "Max")             -> False
+    """
+    if not name_a or not name_b:
+        return False
+    tokens_a = _tokenize_name(name_a)
+    tokens_b = _tokenize_name(name_b)
+    if not tokens_a or not tokens_b:
+        return False
+    shorter, longer = (tokens_a, tokens_b) if len(tokens_a) <= len(tokens_b) else (tokens_b, tokens_a)
+    for i, short_tok in enumerate(shorter):
+        if i >= len(longer):
+            return False
+        if not _tokens_match(short_tok, longer[i]):
+            return False
+    return True
 
 
 def is_bad_researcher_name(first_name: str, last_name: str) -> bool:
@@ -65,10 +135,10 @@ def is_bad_researcher_name(first_name: str, last_name: str) -> bool:
 
 
 def first_name_is_initial_match(name_a: str, name_b: str) -> bool:
-    """Return True when one name is a single-char initial matching the other's first character.
+    """Deprecated: use is_compatible_name instead.
 
-    Handles 'L.', 'L', or 'l.' matching 'Liam'. Returns False for exact matches,
-    multi-char prefixes, or different initials.
+    Kept for backward compatibility — returns True only for the single-initial
+    subset (exact matches return False, unlike is_compatible_name).
     """
     if not name_a or not name_b:
         return False
@@ -217,11 +287,12 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
         (last_name,),
     )
 
-    # 2.5. Initial match — single-char initial vs full first name
+    # 2.5. Compatible name match — initials, prefixes, multi-initials
     if candidates:
         initial_matches = [
             c for c in candidates
-            if first_name_is_initial_match(first_name, c['first_name'])
+            if is_compatible_name(first_name, c['first_name'])
+            and first_name.lower() != c['first_name'].lower()
         ]
         if len(initial_matches) == 1:
             match = initial_matches[0]
