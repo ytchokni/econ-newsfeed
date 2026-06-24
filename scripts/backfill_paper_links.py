@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
-from backend.database import fetch_all, fetch_one, compute_title_hash
+from backend.database import fetch_all, fetch_one
 from backend.pipeline.html_fetcher import HTMLFetcher
 from backend.enrichment.link_extractor import match_and_save_paper_links
 from backend.pipeline.wip_reconciler import reconcile_wip_status
@@ -38,9 +38,8 @@ def backfill_links():
     logger.info("Processing %d HTML pages for link extraction", len(all_urls))
 
     for i, row in enumerate(all_urls):
-        # Get all papers for this researcher to pass as publications
         papers = fetch_all(
-            "SELECT p.title FROM papers p "
+            "SELECT p.id, p.title FROM papers p "
             "JOIN authorship a ON a.publication_id = p.id "
             "WHERE a.researcher_id = %s",
             (row['researcher_id'],),
@@ -49,14 +48,8 @@ def backfill_links():
 
         match_and_save_paper_links(row['url_id'], pubs)
 
-        # Reconcile WIP status for researcher's papers after link extraction
         for p in papers:
-            paper_row = fetch_one(
-                "SELECT id FROM papers WHERE title_hash = %s",
-                (compute_title_hash(p['title']),),
-            )
-            if paper_row:
-                reconcile_wip_status(paper_row['id'])
+            reconcile_wip_status(p['id'])
 
         if (i + 1) % 50 == 0:
             logger.info("Progress: %d/%d pages", i + 1, len(all_urls))

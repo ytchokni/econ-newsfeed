@@ -49,10 +49,10 @@ from backend.database import (
     search_feed_events,
     search_researchers,
 )
+from backend.database.snapshots import STATUS_ORDER
 from backend.pipeline.publication import VALID_STATUSES
 
-# Extend LLM statuses with UI-only status values for filter validation
-FILTER_VALID_STATUSES = VALID_STATUSES | {'work_in_progress'}
+FILTER_VALID_STATUSES = frozenset(STATUS_ORDER)
 import backend.pipeline.scheduler as scheduler
 from backend.pipeline.scheduler import (
     start_scheduler,

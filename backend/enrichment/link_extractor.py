@@ -413,6 +413,7 @@ def match_and_save_paper_links(url_id, publications):
     Called after save_publications().
     """
     import time
+    from backend.pipeline.wip_reconciler import reconcile_wip_status
 
     raw_html = HTMLFetcher.get_raw_html(url_id)
     if not raw_html:
@@ -478,8 +479,6 @@ def match_and_save_paper_links(url_id, publications):
                        VALUES (%s, %s, %s, %s, %s)""",
                     (paper_id, link['url'], link['link_type'], link_doi,
                      datetime.now(timezone.utc)))
-                # Promote work_in_progress → working_paper if this paper gained a link
-                from backend.pipeline.wip_reconciler import reconcile_wip_status
                 reconcile_wip_status(paper_id)
             except Exception as e:
                 logging.warning("Error saving paper link: %s", e)

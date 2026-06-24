@@ -6,42 +6,28 @@ from backend.database import get_connection
 from backend.pipeline.feed_events import FeedEventEmitter
 
 
-def _paper_has_link(cursor, paper_id: int) -> bool:
-    """Return True if the paper has any paper_links row or a valid draft_url."""
-    cursor.execute(
-        "SELECT COUNT(*) FROM paper_links WHERE paper_id = %s",
-        (paper_id,),
-    )
-    if cursor.fetchone()[0] > 0:
-        return True
-
-    cursor.execute(
-        "SELECT draft_url_status FROM papers WHERE id = %s",
-        (paper_id,),
-    )
-    row = cursor.fetchone()
-    return row is not None and row[0] == "valid"
-
-
 def reconcile_wip_status(paper_id: int) -> None:
     """Promote work_in_progress → working_paper if the paper now has links."""
     with get_connection() as conn:
-        cursor = conn.cursor(buffered=True)
-        cursor.execute("SELECT status FROM papers WHERE id = %s", (paper_id,))
-        row = cursor.fetchone()
-        if not row or row[0] != "work_in_progress":
-            cursor.close()
-            return
+        with conn.cursor(buffered=True) as cursor:
+            cursor.execute(
+                """SELECT p.status, p.draft_url_status,
+                          EXISTS(SELECT 1 FROM paper_links pl WHERE pl.paper_id = p.id) AS has_link
+                   FROM papers p WHERE p.id = %s""",
+                (paper_id,),
+            )
+            row = cursor.fetchone()
+            if not row or row[0] != "work_in_progress":
+                return
 
-        if not _paper_has_link(cursor, paper_id):
-            cursor.close()
-            return
+            has_link = row[2] or row[1] == "valid"
+            if not has_link:
+                return
 
-        cursor.execute(
-            "UPDATE papers SET status = 'working_paper' WHERE id = %s",
-            (paper_id,),
-        )
-        conn.commit()
-        cursor.close()
+            cursor.execute(
+                "UPDATE papers SET status = 'working_paper' WHERE id = %s",
+                (paper_id,),
+            )
+            conn.commit()
 
     FeedEventEmitter.emit_status_change(paper_id, "work_in_progress", "working_paper")
