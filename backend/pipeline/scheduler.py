@@ -32,7 +32,7 @@ _scheduler_lock_conn = None  # connection holding the advisory lock for the sche
 # lock silently drops, the zombie cleanup falsely fails the live scrape row,
 # and concurrent-scrape protection vanishes. A full scrape takes ~12h.
 _LOCK_CONN_WAIT_TIMEOUT = 7 * 24 * 3600  # 7 days
-_LOCK_KEEPALIVE_SECONDS = 1800  # ping idle lock connections every 30 min
+_LOCK_KEEPALIVE_SECONDS = 60  # ping idle lock connections every 60s
 _MAX_SCRAPE_DURATION_HOURS = 18  # force-release lock if scrape exceeds this
 
 _keepalive_stop = threading.Event()
@@ -57,22 +57,52 @@ def _acquire_db_lock() -> "mysql.connector.connection.MySQLConnection | None":
         return None
 
 
+def _reacquire_lock(name: str, lock_name: str) -> "mysql.connector.connection.MySQLConnection | None":
+    """Create a new connection and re-acquire an advisory lock after the old connection died."""
+    try:
+        conn = mysql.connector.connect(**db_config)
+        cursor = conn.cursor()
+        cursor.execute("SET SESSION wait_timeout = %s", (_LOCK_CONN_WAIT_TIMEOUT,))
+        cursor.execute("SELECT GET_LOCK(%s, 0)", (lock_name,))
+        result = cursor.fetchone()
+        cursor.close()
+        if result and result[0] == 1:
+            logger.info("Re-acquired %s advisory lock on new connection", name)
+            return conn
+        conn.close()
+        logger.warning("Could not re-acquire %s advisory lock (held by another process)", name)
+        return None
+    except Exception as e:
+        logger.error("Failed to re-acquire %s advisory lock: %s", name, e)
+        return None
+
+
 def _lock_keepalive_loop() -> None:
-    """Ping idle lock connections on a fixed wall-clock interval.
+    """Ping idle lock connections every 60s and re-acquire if dead.
 
     Both _lock_conn (scrape) and _scheduler_lock_conn sit idle for hours/days.
-    Despite SET SESSION wait_timeout = 7 days, connections die at ~8h in
-    production. A periodic conn.ping() resets the idle timer and keeps TCP alive.
-    Runs as a daemon thread started alongside the scheduler.
+    Connections can die from Docker networking, MySQL restarts, or disk pressure.
+    A periodic ping resets the idle timer; if dead, re-acquire on a new connection.
     """
+    global _lock_conn, _scheduler_lock_conn
     while not _keepalive_stop.wait(_LOCK_KEEPALIVE_SECONDS):
-        for name, conn in [("scrape", _lock_conn), ("scheduler", _scheduler_lock_conn)]:
-            if conn is None:
-                continue
+        if _lock_conn is not None:
             try:
-                conn.ping(reconnect=False)
+                _lock_conn.ping(reconnect=False)
             except Exception as e:
-                logger.warning("Lock keepalive ping failed (%s): %s", name, e)
+                logger.warning("Lock keepalive ping failed (scrape): %s — attempting re-acquire", e)
+                new_conn = _reacquire_lock("scrape", _LOCK_NAME)
+                if new_conn is not None:
+                    _lock_conn = new_conn
+
+        if _scheduler_lock_conn is not None:
+            try:
+                _scheduler_lock_conn.ping(reconnect=False)
+            except Exception as e:
+                logger.warning("Lock keepalive ping failed (scheduler): %s — attempting re-acquire", e)
+                new_conn = _reacquire_lock("scheduler", _SCHEDULER_LOCK_NAME)
+                if new_conn is not None:
+                    _scheduler_lock_conn = new_conn
 
 
 def _release_db_lock(conn: "mysql.connector.connection.MySQLConnection") -> None:
