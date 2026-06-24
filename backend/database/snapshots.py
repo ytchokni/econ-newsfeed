@@ -11,7 +11,7 @@ from backend.database.connection import get_connection, fetch_all
 
 # Canonical publication-status progression, lowest to highest rank.
 # schema.py derives its SQL FIELD() list from this — keep it the single source.
-STATUS_ORDER = ('working_paper', 'reject_and_resubmit', 'revise_and_resubmit',
+STATUS_ORDER = ('work_in_progress', 'working_paper', 'reject_and_resubmit', 'revise_and_resubmit',
                 'accepted', 'published')
 _STATUS_RANK = {status: rank for rank, status in enumerate(STATUS_ORDER)}
 
@@ -140,8 +140,15 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
                 (paper_id, title, status, venue, abstract, draft_url, year, now, source_url, content_hash),
             )
 
-            # Block status regressions on the denormalized papers table
-            effective_status = status if _is_status_progression(old_status, status) or old_status is None else old_status
+            # Block status regressions on the denormalized papers table.
+            # Special case: work_in_progress → working_paper is handled by
+            # reconcile_wip_status (link-based), not by LLM re-extraction.
+            if old_status == 'work_in_progress' and status == 'working_paper':
+                effective_status = old_status
+            elif _is_status_progression(old_status, status) or old_status is None:
+                effective_status = status
+            else:
+                effective_status = old_status
             cursor.execute(
                 """UPDATE papers
                    SET status = %s, venue = %s, abstract = %s, draft_url = %s,
@@ -152,7 +159,7 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
 
             conn.commit()
     logging.info(f"Paper snapshot appended for id={paper_id}")
-    return PaperSnapshotResult(changed=True, old_status=old_status, new_status=status)
+    return PaperSnapshotResult(changed=True, old_status=old_status, new_status=effective_status)
 
 
 def get_paper_snapshots(paper_id: int, limit: int = 20) -> list[dict]:

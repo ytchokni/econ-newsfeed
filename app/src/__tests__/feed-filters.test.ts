@@ -78,10 +78,15 @@ describe("PublicationStatus union", () => {
     "revise_and_resubmit",
     "reject_and_resubmit",
     "working_paper",
+    "work_in_progress",
   ];
 
   it("includes working_paper as a valid status", () => {
     expect(VALID_STATUSES).toContain("working_paper");
+  });
+
+  it("includes work_in_progress as a valid status", () => {
+    expect(VALID_STATUSES).toContain("work_in_progress");
   });
 
   it("includes all four pre-existing statuses", () => {

@@ -6,6 +6,7 @@ export const statusPillConfig: Record<PublicationStatus, { label: string; classN
   revise_and_resubmit: { label: "Revise & Resubmit", className: "bg-amber-100 text-amber-700" },
   reject_and_resubmit: { label: "Reject & Resubmit", className: "bg-rose-100 text-rose-700" },
   accepted: { label: "Accepted", className: "bg-emerald-100 text-emerald-700" },
+  work_in_progress: { label: "Work in Progress", className: "bg-sky-100 text-sky-700" },
 };
 
 export function formatAuthor(author: { id: number; first_name: string; last_name: string }) {

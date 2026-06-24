@@ -59,7 +59,10 @@ from backend.database import (
     verify_unsubscribe_token,
 )
 from backend.auth import get_current_user, get_optional_user
+from backend.database.snapshots import STATUS_ORDER
 from backend.pipeline.publication import VALID_STATUSES
+
+FILTER_VALID_STATUSES = frozenset(STATUS_ORDER)
 import backend.pipeline.scheduler as scheduler
 from backend.pipeline.scheduler import (
     start_scheduler,
@@ -262,8 +265,8 @@ def _parse_feed_filters(
     institution_list = [i.strip() for i in institution.split(",") if i.strip()] if institution else []
 
     for s in status_list:
-        if s not in VALID_STATUSES:
-            raise HTTPException(status_code=400, detail=f"Invalid status value '{s}'. Must be one of: {', '.join(sorted(VALID_STATUSES))}")
+        if s not in FILTER_VALID_STATUSES:
+            raise HTTPException(status_code=400, detail=f"Invalid status value '{s}'. Must be one of: {', '.join(sorted(FILTER_VALID_STATUSES))}")
     if event_type and event_type not in VALID_EVENT_TYPES:
         raise HTTPException(status_code=400, detail=f"Invalid event_type value '{event_type}'. Must be one of: {', '.join(sorted(VALID_EVENT_TYPES))}")
 
