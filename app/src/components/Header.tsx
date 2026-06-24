@@ -2,13 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { signIn } from "next-auth/react";
-import { useAuth } from "@/lib/auth";
+import { useAuth, useLoginModal } from "@/lib/auth";
 import UserMenu from "@/components/UserMenu";
 
 export default function Header() {
   const pathname = usePathname();
   const { isAuthenticated, isLoading } = useAuth();
+  const { openLoginModal } = useLoginModal();
 
   return (
     <header className="bg-[var(--bg-header)] sticky top-0 z-50 shadow-[0_2px_16px_rgba(26,35,50,0.18)]">
@@ -48,10 +48,10 @@ export default function Header() {
               <UserMenu />
             ) : (
               <button
-                onClick={() => signIn("google")}
-                className="font-sans text-xs font-semibold text-[#c5cdd8] hover:text-[#f0ece4] transition-colors"
+                onClick={openLoginModal}
+                className="font-sans text-xs font-semibold uppercase tracking-widest bg-[var(--accent)] text-white px-4 py-1.5 rounded-full hover:brightness-110 transition-all"
               >
-                Sign in
+                Login
               </button>
             )
           )}

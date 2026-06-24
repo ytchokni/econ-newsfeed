@@ -2,7 +2,7 @@
 
 import { useCallback } from "react";
 import { mutate } from "swr";
-import { useAuth } from "@/lib/auth";
+import { useAuth, useLoginModal } from "@/lib/auth";
 import { useFollowing, followResearcher, unfollowResearcher, followingSwrKey } from "@/lib/api";
 
 export default function FollowButton({
@@ -13,6 +13,7 @@ export default function FollowButton({
   size?: "sm" | "md";
 }) {
   const { isAuthenticated, accessToken } = useAuth();
+  const { openLoginModal } = useLoginModal();
   const { data } = useFollowing(accessToken);
 
   const isFollowing = data?.researcher_ids?.includes(researcherId) ?? false;
@@ -45,8 +46,6 @@ export default function FollowButton({
     [accessToken, data, isFollowing, researcherId],
   );
 
-  if (!isAuthenticated) return null;
-
   const sizeClasses =
     size === "md"
       ? "px-4 py-1.5 text-sm"
@@ -54,7 +53,7 @@ export default function FollowButton({
 
   return (
     <button
-      onClick={handleClick}
+      onClick={isAuthenticated ? handleClick : (e) => { e.preventDefault(); e.stopPropagation(); openLoginModal(); }}
       className={`relative z-[1] font-sans font-semibold rounded-full transition-all ${sizeClasses} ${
         isFollowing
           ? "bg-[var(--accent)] text-white hover:bg-red-600"
