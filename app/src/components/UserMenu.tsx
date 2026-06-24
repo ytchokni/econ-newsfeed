@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from "react";
 import { signOut } from "next-auth/react";
+import Link from "next/link";
 import { useAuth } from "@/lib/auth";
 
 export default function UserMenu() {
@@ -54,6 +55,13 @@ export default function UserMenu() {
               {user.email}
             </p>
           </div>
+          <Link
+            href="/settings"
+            onClick={() => setOpen(false)}
+            className="block px-3 py-2 font-sans text-sm text-[var(--text-secondary)] hover:bg-[var(--border-light)] transition-colors"
+          >
+            Settings
+          </Link>
           <button
             onClick={() => {
               setOpen(false);
