@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Deploy econ-newsfeed on Lightsail
+# Deploy econ-newsfeed on Hetzner
 # Usage: ./scripts/deploy.sh
 #
 # Pulls latest code from main, rebuilds and restarts containers.

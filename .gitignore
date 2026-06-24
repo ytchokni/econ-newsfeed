@@ -28,6 +28,8 @@ backups/
 CLAUDE.md
 
 .claude/
+.agents/
+docs/
 
 # Worktrees
 .worktrees/
@@ -41,6 +43,7 @@ CLAUDE.md
 
 *.png
 *.pem
+client_secret*.json
 
 RePEc/*
 
