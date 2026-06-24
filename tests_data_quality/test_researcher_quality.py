@@ -157,6 +157,40 @@ class TestResearcherDuplicates:
         )
         assert not rows, "exact-name duplicate researchers with publications:\n" + fmt_violations(rows)
 
+    def test_no_compatible_name_researchers_sharing_papers(self, db):
+        """Researchers with the same last name, compatible first names (initials,
+        prefixes, multi-initials), and 2+ shared papers are almost certainly the
+        same person. Uses the same is_compatible_name function as the pipeline."""
+        from backend.database.researchers import is_compatible_name
+
+        rows = db.fetch_all(
+            """SELECT r1.id AS id1, r1.first_name AS fn1, r1.last_name AS ln1,
+                      r2.id AS id2, r2.first_name AS fn2, r2.last_name AS ln2,
+                      COUNT(DISTINCT a1.publication_id) AS shared_papers
+               FROM researchers r1
+               JOIN researchers r2 ON r2.id > r1.id
+                 AND LOWER(r2.last_name) = LOWER(r1.last_name)
+               JOIN authorship a1 ON a1.researcher_id = r1.id
+               JOIN authorship a2 ON a2.researcher_id = r2.id
+                 AND a2.publication_id = a1.publication_id
+               WHERE EXISTS (SELECT 1 FROM authorship a WHERE a.researcher_id = r1.id)
+                 AND EXISTS (SELECT 1 FROM authorship a WHERE a.researcher_id = r2.id)
+               GROUP BY r1.id, r1.first_name, r1.last_name,
+                        r2.id, r2.first_name, r2.last_name
+               HAVING COUNT(DISTINCT a1.publication_id) >= 2
+               LIMIT 100"""
+        )
+        dupes = [
+            {"ids": f"{r['id1']},{r['id2']}", "names": f"{r['fn1']} {r['ln1']} / {r['fn2']} {r['ln2']}",
+             "shared": r['shared_papers']}
+            for r in rows
+            if is_compatible_name(r['fn1'], r['fn2'])
+        ]
+        assert not dupes, (
+            "compatible-name researchers sharing 2+ papers (ADR-0002):\n"
+            + fmt_violations(dupes)
+        )
+
 
 class TestAffiliationFieldQuality:
     def test_no_overlong_affiliations(self, db):
