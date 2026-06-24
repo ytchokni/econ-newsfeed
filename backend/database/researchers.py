@@ -20,6 +20,23 @@ from backend.database.search_helpers import (
     TOP5_JOURNAL_KEYWORDS as _TOP5_JOURNAL_KEYWORDS,
 )
 
+_TOP5_VENUE_LIKES = " OR ".join(
+    ["p.venue LIKE %s"] * len(_TOP5_JOURNAL_KEYWORDS)
+)
+_TOP5_VENUE_PARAMS = [f"%{_escape_like(kw)}%" for kw in _TOP5_JOURNAL_KEYWORDS]
+
+
+def refresh_has_top5(researcher_id: int) -> None:
+    """Recompute has_top5_pub for a single researcher."""
+    execute_query(
+        f"""UPDATE researchers SET has_top5_pub = EXISTS(
+                SELECT 1 FROM authorship a
+                JOIN papers p ON p.id = a.publication_id
+                WHERE a.researcher_id = %s AND ({_TOP5_VENUE_LIKES})
+            ) WHERE id = %s""",
+        (researcher_id, *_TOP5_VENUE_PARAMS, researcher_id),
+    )
+
 
 def _strip_initial(name: str) -> str | None:
     """If name is a single letter optionally followed by '.', return that letter lowercase. Else None."""
@@ -646,13 +663,7 @@ def search_researchers(
         params.extend(f"%{_escape_like(kw)}%" for kw in _TOP5_JOURNAL_KEYWORDS)
 
     if preset == "has_top5":
-        venue_likes = " OR ".join(["p.venue LIKE %s"] * len(_TOP5_JOURNAL_KEYWORDS))
-        conditions.append(
-            f"EXISTS (SELECT 1 FROM authorship a "
-            f"JOIN papers p ON p.id = a.publication_id "
-            f"WHERE a.researcher_id = r.id AND ({venue_likes}))"
-        )
-        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP5_JOURNAL_KEYWORDS)
+        conditions.append("r.has_top5_pub = TRUE")
 
     if field_slug:
         field_slugs = [f.strip() for f in field_slug.split(",") if f.strip()]
@@ -692,10 +703,15 @@ def search_researchers(
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
+    count_row = fetch_one(
+        f"SELECT COUNT(*) AS cnt FROM researchers r {where}",
+        tuple(params),
+    )
+    total = count_row['cnt'] if count_row else 0
+
     rows = fetch_all(
         f"""
-        SELECT r.id, r.first_name, r.last_name, r.position, r.affiliation, r.description,
-               COUNT(*) OVER() AS total_count
+        SELECT r.id, r.first_name, r.last_name, r.position, r.affiliation, r.description
         FROM researchers r
         {where}
         ORDER BY r.last_name, r.first_name
@@ -703,5 +719,4 @@ def search_researchers(
         """,
         (*params, limit, offset),
     )
-    total = rows[0]['total_count'] if rows else 0
     return rows, total

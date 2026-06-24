@@ -13,6 +13,7 @@ from backend.database import (
     get_researcher_id,
     normalize_title,
 )
+from backend.database.researchers import refresh_has_top5
 from backend.config import guard_text_fields
 from backend.pipeline.publication import clean_title
 from datetime import datetime, timezone
@@ -239,6 +240,19 @@ class PaperSaver:
                         cursor.close()
 
         logging.info(f"{len(publications)} publications processed for {url}")
+
+        if results:
+            try:
+                owner_row = fetch_all(
+                    "SELECT r.id FROM researchers r "
+                    "JOIN researcher_urls ru ON ru.researcher_id = r.id "
+                    "WHERE ru.url = %s", (url,),
+                )
+                for row in owner_row:
+                    refresh_has_top5(row['id'])
+            except Exception as e:
+                logging.warning("Failed to refresh has_top5_pub for %s: %s", url, e)
+
         return results
 
     @staticmethod

@@ -266,18 +266,19 @@ class TestSearchResearchers:
     """Tests for search_researchers dynamic SQL builder."""
 
     def _call(self, mock_rows=None, **kwargs):
-        """Helper: call search_researchers with mocked fetch_all."""
+        """Helper: call search_researchers with mocked fetch_one + fetch_all."""
         if mock_rows is None:
             mock_rows = []
-        with patch("backend.database.researchers.fetch_all", return_value=mock_rows) as mock_fetch:
+        count_result = {'cnt': len(mock_rows)}
+        with patch("backend.database.researchers.fetch_one", return_value=count_result), \
+             patch("backend.database.researchers.fetch_all", return_value=mock_rows) as mock_fetch:
             from backend.database.researchers import search_researchers
             result = search_researchers(**kwargs)
         return result, mock_fetch
 
     def test_no_filters_returns_all(self):
         rows = [{"id": 1, "first_name": "Alice", "last_name": "Smith",
-                 "position": "Prof", "affiliation": "MIT", "description": None,
-                 "total_count": 1}]
+                 "position": "Prof", "affiliation": "MIT", "description": None}]
         (result_rows, total), mock_fetch = self._call(mock_rows=rows)
         assert total == 1
         assert result_rows == rows
@@ -375,10 +376,15 @@ class TestSearchResearchers:
         assert params[-2] == 10
         assert params[-1] == 20
 
-    def test_window_function_in_sql(self):
-        (_, _), mock_fetch = self._call()
-        sql, _ = mock_fetch.call_args[0]
-        assert "COUNT(*) OVER()" in sql
+    def test_count_query_separate_from_main(self):
+        """COUNT is via a separate fetch_one call, not a window function."""
+        with patch("backend.database.researchers.fetch_one", return_value={'cnt': 0}) as mock_count, \
+             patch("backend.database.researchers.fetch_all", return_value=[]):
+            from backend.database.researchers import search_researchers
+            _, total = search_researchers()
+        count_sql, _ = mock_count.call_args[0]
+        assert "COUNT(*)" in count_sql
+        assert "OVER" not in count_sql
 
     def test_order_by_last_name_first_name(self):
         (_, _), mock_fetch = self._call()

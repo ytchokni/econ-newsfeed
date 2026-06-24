@@ -858,6 +858,49 @@ def create_tables() -> None:
                     except Exception as e:
                         logging.warning("Migration: feed_events backfill: %s", e)
 
+                    # Add has_top5_pub denormalized flag to researchers
+                    try:
+                        cursor.execute("""
+                            ALTER TABLE researchers
+                            ADD COLUMN has_top5_pub BOOLEAN NOT NULL DEFAULT FALSE
+                        """)
+                        conn.commit()
+                        logging.info("Migration: added researchers.has_top5_pub column")
+                    except Exception as e:
+                        if "Duplicate column name" not in str(e):
+                            logging.warning("Migration: researchers.has_top5_pub: %s", e)
+
+                    try:
+                        cursor.execute("ALTER TABLE researchers ADD INDEX idx_has_top5_pub (has_top5_pub)")
+                        conn.commit()
+                    except Exception as e:
+                        if getattr(e, 'errno', None) != 1061:
+                            logging.warning("Migration: researchers.idx_has_top5_pub: %s", e)
+
+                    # Backfill has_top5_pub from existing data
+                    try:
+                        from backend.database.search_helpers import TOP5_JOURNAL_KEYWORDS
+                        venue_likes = " OR ".join(["p.venue LIKE %s"] * len(TOP5_JOURNAL_KEYWORDS))
+                        params = [f"%{kw}%" for kw in TOP5_JOURNAL_KEYWORDS]
+                        cursor.execute(
+                            f"""UPDATE researchers r
+                                JOIN (
+                                    SELECT DISTINCT a.researcher_id
+                                    FROM authorship a
+                                    JOIN papers p ON p.id = a.publication_id
+                                    WHERE {venue_likes}
+                                ) t5 ON t5.researcher_id = r.id
+                                SET r.has_top5_pub = TRUE
+                                WHERE r.has_top5_pub = FALSE""",
+                            params,
+                        )
+                        backfilled = cursor.rowcount
+                        conn.commit()
+                        if backfilled:
+                            logging.info("Migration: backfilled has_top5_pub for %d researchers", backfilled)
+                    except Exception as e:
+                        logging.warning("Migration: has_top5_pub backfill: %s", e)
+
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                     cursor.fetchone()

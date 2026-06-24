@@ -10,8 +10,9 @@ from unittest.mock import patch
 
 
 def _get_sql(**kwargs):
-    """Call search_researchers with mocked fetch_all and return the SQL string + params."""
-    with patch("backend.database.researchers.fetch_all", return_value=[]) as mock_fetch:
+    """Call search_researchers with mocked fetch_one + fetch_all and return the SQL string + params."""
+    with patch("backend.database.researchers.fetch_one", return_value={'cnt': 0}), \
+         patch("backend.database.researchers.fetch_all", return_value=[]) as mock_fetch:
         from backend.database.researchers import search_researchers
         search_researchers(**kwargs)
     sql, params = mock_fetch.call_args[0]
