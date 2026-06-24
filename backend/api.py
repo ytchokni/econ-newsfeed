@@ -655,7 +655,7 @@ async def list_publications(
     non-published papers with known status generate events, so no
     include_seed parameter is needed.
     """
-    valid_presets = {"top20", "top5_rr_accepted", "has_top5", "following"}
+    valid_presets = {"top20", "top5_rr_accepted", "has_top5", "following", "top5_journals", "top100_repec"}
     if preset and preset not in valid_presets:
         raise HTTPException(status_code=400, detail=f"Invalid preset value. Must be one of: {', '.join(sorted(valid_presets))}")
 

@@ -178,18 +178,19 @@ describe("NewsfeedContent", () => {
     });
   });
 
-  it("renders New Projects and Status Changes toggle buttons", async () => {
+  it("renders Working Papers, Publications, and Work In Progress toggle buttons", async () => {
     mockFetch(page1);
 
     renderWithSWR(<NewsfeedContent />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /new projects/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /working papers/i })).toBeInTheDocument();
     });
-    expect(screen.getByRole("button", { name: /status changes/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /publications/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /work in progress/i })).toBeInTheDocument();
   });
 
-  it("defaults to New Projects tab as active", async () => {
+  it("defaults to Working Papers tab as active", async () => {
     mockFetch(page1);
 
     renderWithSWR(<NewsfeedContent />);
@@ -198,13 +199,16 @@ describe("NewsfeedContent", () => {
       expect(screen.getByText("Immigration and Wages")).toBeInTheDocument();
     });
 
-    // Verify the API was called with event_type=new_paper
+    // Verify the API was called with event_type=new_paper and status=working_paper
     expect(global.fetch).toHaveBeenCalledWith(
       expect.stringContaining("event_type=new_paper")
     );
+    expect(global.fetch).toHaveBeenCalledWith(
+      expect.stringContaining("status=working_paper")
+    );
   });
 
-  it("switches to Status Changes tab and resets filters", async () => {
+  it("switches to Publications tab and resets filters", async () => {
     mockFetch(page1);
 
     renderWithSWR(<NewsfeedContent />);
@@ -214,7 +218,7 @@ describe("NewsfeedContent", () => {
     });
 
     const user = userEvent.setup();
-    await user.click(screen.getByRole("button", { name: /status changes/i }));
+    await user.click(screen.getByRole("button", { name: "Publications" }));
 
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
@@ -223,9 +227,8 @@ describe("NewsfeedContent", () => {
     });
   });
 
-  it("reads ?tab=status_change from URL and activates that tab", async () => {
-    // Use pushState to set the URL — jsdom allows this without navigation.
-    window.history.pushState({}, "", "?tab=status_change");
+  it("reads ?tab=publications from URL and activates that tab", async () => {
+    window.history.pushState({}, "", "?tab=publications");
 
     mockFetch(page1);
 

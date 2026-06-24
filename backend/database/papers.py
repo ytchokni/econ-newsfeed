@@ -107,6 +107,7 @@ from backend.database.search_helpers import (
     FT_MIN_TOKEN_SIZE as _FT_MIN_TOKEN_SIZE,
     TOP20_DEPT_KEYWORDS as _TOP20_DEPT_KEYWORDS,
     TOP5_JOURNAL_KEYWORDS as _TOP5_JOURNAL_KEYWORDS,
+    TOP100_REPEC_KEYWORDS as _TOP100_REPEC_KEYWORDS,
 )
 
 
@@ -335,6 +336,16 @@ def search_feed_events(
             f"WHERE a2.publication_id = p.id AND ({venue_likes}))"
         )
         params.extend(f"%{_escape_like(kw)}%" for kw in _TOP5_JOURNAL_KEYWORDS)
+
+    if preset == "top5_journals":
+        venue_likes = " OR ".join(["p.venue LIKE %s"] * len(_TOP5_JOURNAL_KEYWORDS))
+        conditions.append(f"({venue_likes})")
+        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP5_JOURNAL_KEYWORDS)
+
+    if preset == "top100_repec":
+        venue_likes = " OR ".join(["p.venue LIKE %s"] * len(_TOP100_REPEC_KEYWORDS))
+        conditions.append(f"({venue_likes})")
+        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP100_REPEC_KEYWORDS)
 
     search_term = search.strip() if search else ""
     if search_term:

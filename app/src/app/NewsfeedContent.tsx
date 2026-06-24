@@ -13,6 +13,7 @@ import EmptyState from "@/components/EmptyState";
 import SearchInput from "@/components/SearchInput";
 import SearchableCheckboxDropdown from "@/components/SearchableCheckboxDropdown";
 import PresetBar from "@/components/PresetBar";
+import type { PresetOption } from "@/components/PresetBar";
 
 /* ---------- helpers ---------- */
 
@@ -31,7 +32,7 @@ function groupByDate(publications: Publication[]) {
   return groups;
 }
 
-const FILTER_PARAM_KEYS = ["status", "institution", "preset", "year", "search", "jel_code", "since", "until"] as const satisfies readonly (keyof Omit<FeedFilters, "event_type">)[];
+const FILTER_PARAM_KEYS = ["institution", "preset", "search", "jel_code", "since", "until"] as const satisfies readonly (keyof Omit<FeedFilters, "event_type" | "status" | "year">)[];
 
 function filtersFromParams(params: URLSearchParams): FeedFilters {
   const filters: FeedFilters = {};
@@ -48,7 +49,7 @@ function filtersToParams(
   page: number
 ): URLSearchParams {
   const params = new URLSearchParams();
-  if (tab !== "new_paper") params.set("tab", tab);
+  if (tab !== "working_papers") params.set("tab", tab);
   if (page > 1) params.set("page", String(page));
   for (const key of FILTER_PARAM_KEYS) {
     const val = (filters as Record<string, string | undefined>)[key];
@@ -59,33 +60,35 @@ function filtersToParams(
 
 /* ---------- constants ---------- */
 
-const STATUS_OPTIONS = [
-  { label: "Published", value: "published" },
-  { label: "Accepted", value: "accepted" },
-  { label: "Revise & Resubmit", value: "revise_and_resubmit" },
-  { label: "Reject & Resubmit", value: "reject_and_resubmit" },
-  { label: "Working Paper", value: "working_paper" },
-  { label: "Work in Progress", value: "work_in_progress" },
-];
+const MIN_DATE = "2026-06-15";
 
-const FEED_PRESETS = [
-  { label: "R&R / Accepted at Top-5", value: "top5_rr_accepted" },
+const TAB_FILTERS: Record<TabValue, { event_type: string; status?: string }> = {
+  working_papers: { event_type: "new_paper", status: "working_paper" },
+  publications: { event_type: "status_change", status: "revise_and_resubmit,accepted,published" },
+  work_in_progress: { event_type: "new_paper", status: "work_in_progress" },
+};
+
+const PRESETS_COMMON: PresetOption[] = [
   { label: "Top-20 Departments", value: "top20" },
   { label: "Researchers with a Top-5", value: "has_top5" },
 ];
 
-function getYearOptions(): string[] {
-  const currentYear = new Date().getFullYear();
-  const years: string[] = [];
-  for (let y = currentYear; y >= 2020; y--) {
-    years.push(String(y));
-  }
-  return years;
-}
+const PRESETS_PUBLICATIONS: PresetOption[] = [
+  { label: "Top-5 Journals", value: "top5_journals" },
+  { label: "Top-100 RePEc Journals", value: "top100_repec" },
+  ...PRESETS_COMMON,
+];
 
 /* ---------- types ---------- */
 
-type TabValue = "new_paper" | "status_change";
+type TabValue = "working_papers" | "publications" | "work_in_progress";
+
+const VALID_TABS: TabValue[] = ["working_papers", "publications", "work_in_progress"];
+
+function parseTab(value: string | null): TabValue {
+  if (value && VALID_TABS.includes(value as TabValue)) return value as TabValue;
+  return "working_papers";
+}
 
 /* ---------- filter bar ---------- */
 
@@ -94,15 +97,12 @@ function FilterBar({
   onChange,
   activeTab,
   onTabChange,
-  showMyFeed,
 }: {
   filters: FeedFilters;
   onChange: (next: FeedFilters) => void;
   activeTab: TabValue;
   onTabChange: (tab: TabValue) => void;
-  showMyFeed: boolean;
 }) {
-  const selectedStatuses = filters.status ? filters.status.split(",") : [];
   const selectedInstitutions = (() => {
     if (filters.preset === "top20") return ["top20"];
     if (filters.institution) return filters.institution.split(",");
@@ -125,24 +125,15 @@ function FilterBar({
     })),
   ];
 
-  const yearOptions = getYearOptions();
-
   const hasActiveFilters = !!(
-    filters.status || filters.institution || filters.preset ||
-    filters.year || filters.search || filters.jel_code ||
+    filters.institution || filters.preset ||
+    filters.search || filters.jel_code ||
     filters.since || filters.until
   );
 
   const handleJelChange = useCallback(
     (selected: string[]) => {
       onChange({ ...filters, jel_code: selected.join(",") || undefined });
-    },
-    [filters, onChange]
-  );
-
-  const handleStatusChange = useCallback(
-    (selected: string[]) => {
-      onChange({ ...filters, status: selected.join(",") || undefined });
     },
     [filters, onChange]
   );
@@ -160,43 +151,31 @@ function FilterBar({
     [filters, onChange]
   );
 
-  const handleYearChange = useCallback(
-    (year: string) => {
-      onChange({ ...filters, year: year || undefined });
-    },
-    [filters, onChange]
-  );
-
   const dateInputClass =
     "px-3 py-1.5 font-sans text-sm border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card focus:outline-none focus:ring-1 focus:ring-[var(--link)]";
 
+  const tabButton = (tab: TabValue, label: string) => (
+    <button
+      onClick={() => onTabChange(tab)}
+      aria-pressed={activeTab === tab}
+      className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${
+        activeTab === tab
+          ? "bg-[var(--bg-header)] text-white shadow-sm"
+          : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
+      }`}
+    >
+      {label}
+    </button>
+  );
+
   return (
     <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-4 mb-8 space-y-3">
-      {/* Event type toggle */}
+      {/* Tab toggle */}
       <div className="flex items-center gap-2">
         <div className="inline-flex bg-[var(--bg)] rounded-lg p-0.5">
-          <button
-            onClick={() => onTabChange("new_paper")}
-            aria-pressed={activeTab === "new_paper"}
-            className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${
-              activeTab === "new_paper"
-                ? "bg-[var(--bg-header)] text-white shadow-sm"
-                : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-            }`}
-          >
-            New Projects
-          </button>
-          <button
-            onClick={() => onTabChange("status_change")}
-            aria-pressed={activeTab === "status_change"}
-            className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${
-              activeTab === "status_change"
-                ? "bg-[var(--bg-header)] text-white shadow-sm"
-                : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-            }`}
-          >
-            Status Changes
-          </button>
+          {tabButton("working_papers", "Working Papers")}
+          {tabButton("publications", "Publications")}
+          {tabButton("work_in_progress", "Work In Progress (Beta)")}
         </div>
       </div>
       <div className="max-w-md">
@@ -206,49 +185,10 @@ function FilterBar({
           placeholder="Search papers by title..."
         />
       </div>
-          {showMyFeed && (
-            <button
-              onClick={() => {
-                const isActive = filters.preset === "following";
-                onChange({
-                  ...filters,
-                  preset: isActive ? undefined : "following",
-                  institution: isActive ? filters.institution : undefined,
-                });
-              }}
-              className={`font-sans text-xs font-semibold px-3 py-1 rounded-full transition-all ${
-                filters.preset === "following"
-                  ? "bg-[var(--accent)] text-white"
-                  : "border border-[var(--border)] text-[var(--text-muted)] hover:border-[var(--accent)] hover:text-[var(--accent)]"
-              }`}
-            >
-              My Feed
-            </button>
-          )}
       <div className="flex items-center gap-3 flex-wrap">
         <span className="font-sans text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mr-1">
           Filter
         </span>
-
-        <SearchableCheckboxDropdown
-          label="Status"
-          options={STATUS_OPTIONS}
-          selected={selectedStatuses}
-          onChange={handleStatusChange}
-        />
-
-        <select
-          value={filters.year ?? ""}
-          onChange={(e) => handleYearChange(e.target.value)}
-          className="px-3 py-1.5 font-sans text-sm border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card focus:outline-none focus:ring-1 focus:ring-[var(--link)]"
-        >
-          <option value="">All years</option>
-          {yearOptions.map((y) => (
-            <option key={y} value={y}>
-              {y}
-            </option>
-          ))}
-        </select>
 
         <SearchableCheckboxDropdown
           label="Institution"
@@ -269,6 +209,7 @@ function FilterBar({
           <input
             type="date"
             value={filters.since ?? ""}
+            min={MIN_DATE}
             onChange={(e) =>
               onChange({ ...filters, since: e.target.value || undefined })
             }
@@ -278,6 +219,7 @@ function FilterBar({
           <input
             type="date"
             value={filters.until ?? ""}
+            min={MIN_DATE}
             onChange={(e) =>
               onChange({ ...filters, until: e.target.value || undefined })
             }
@@ -309,8 +251,8 @@ export default function NewsfeedContent() {
   const router = useRouter();
   const pathname = usePathname();
 
-  const [activeTab, setActiveTab] = useState<TabValue>(
-    searchParams.get("tab") === "status_change" ? "status_change" : "new_paper"
+  const [activeTab, setActiveTab] = useState<TabValue>(() =>
+    parseTab(searchParams.get("tab"))
   );
   const [page, setPage] = useState(Math.max(1, Number(searchParams.get("page")) || 1));
   const [filters, setFilters] = useState<FeedFilters>(() => filtersFromParams(searchParams));
@@ -328,10 +270,15 @@ export default function NewsfeedContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters, activeTab, page, pathname]);
 
-  const mergedFilters = useMemo<FeedFilters>(
-    () => ({ ...filters, event_type: activeTab }),
-    [filters, activeTab]
-  );
+  const mergedFilters = useMemo<FeedFilters>(() => {
+    const tabF = TAB_FILTERS[activeTab];
+    return {
+      ...filters,
+      event_type: tabF.event_type as FeedFilters["event_type"],
+      status: tabF.status,
+    };
+  }, [filters, activeTab]);
+
   const { data, error, isLoading, isValidating } = usePublications(page, 20, mergedFilters);
 
   const handleFilterChange = useCallback((next: FeedFilters) => {
@@ -345,6 +292,14 @@ export default function NewsfeedContent() {
     setPage(1);
   }, []);
 
+  const presets = useMemo<PresetOption[]>(() => {
+    const base = activeTab === "publications" ? PRESETS_PUBLICATIONS : PRESETS_COMMON;
+    if (isAuthenticated) {
+      return [{ label: "My Feed", value: "following", highlight: true }, ...base];
+    }
+    return base;
+  }, [activeTab, isAuthenticated]);
+
   return (
     <div className="space-y-6">
       <FilterBar
@@ -352,11 +307,10 @@ export default function NewsfeedContent() {
         onChange={handleFilterChange}
         activeTab={activeTab}
         onTabChange={handleTabChange}
-        showMyFeed={isAuthenticated}
       />
 
       <PresetBar
-        presets={FEED_PRESETS}
+        presets={presets}
         active={filters.preset}
         onChange={(preset) =>
           handleFilterChange({ ...filters, preset, institution: preset ? undefined : filters.institution })
@@ -390,9 +344,11 @@ export default function NewsfeedContent() {
       {!isLoading && data && data.items.length === 0 && (
         <EmptyState
           message={
-            activeTab === "new_paper"
-              ? "No new publications yet. Papers will appear here as researchers update their pages."
-              : "No status changes yet. Updates will appear here when papers change status."
+            activeTab === "working_papers"
+              ? "No new working papers yet. Papers will appear here as researchers update their pages."
+              : activeTab === "publications"
+              ? "No publication updates yet. Status changes will appear here when papers get R&R, accepted, or published."
+              : "No work in progress yet. Items will appear here as researchers add new projects."
           }
         />
       )}
