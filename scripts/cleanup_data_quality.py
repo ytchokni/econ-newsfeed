@@ -375,6 +375,54 @@ def merge_researchers_compatible_name():
 
 
 @step
+def merge_researchers_shared_papers():
+    """Same last name, 5+ shared papers, no conflicting personal websites —
+    catches nickname variants (Chris/Christopher) that escape name matching."""
+    from backend.database.researchers import is_compatible_name
+
+    rows = fetch_all(
+        """SELECT r1.id AS id1, r1.first_name AS fn1, r1.last_name AS ln1,
+                  r2.id AS id2, r2.first_name AS fn2, r2.last_name AS ln2,
+                  COUNT(DISTINCT a1.publication_id) AS shared
+           FROM researchers r1
+           JOIN researchers r2 ON r2.id > r1.id
+             AND LOWER(r2.last_name) = LOWER(r1.last_name)
+           JOIN authorship a1 ON a1.researcher_id = r1.id
+           JOIN authorship a2 ON a2.researcher_id = r2.id
+             AND a2.publication_id = a1.publication_id
+           WHERE EXISTS (SELECT 1 FROM authorship a WHERE a.researcher_id = r1.id)
+             AND EXISTS (SELECT 1 FROM authorship a WHERE a.researcher_id = r2.id)
+           GROUP BY r1.id, r1.first_name, r1.last_name,
+                    r2.id, r2.first_name, r2.last_name
+           HAVING COUNT(DISTINCT a1.publication_id) >= 5""")
+
+    merges = []
+    for r in rows:
+        if is_compatible_name(r["fn1"], r["fn2"]):
+            continue
+        rid1, rid2 = r["id1"], r["id2"]
+        urls1 = {u["url"] for u in fetch_all(
+            "SELECT url FROM researcher_urls WHERE researcher_id = %s", (rid1,))}
+        urls2 = {u["url"] for u in fetch_all(
+            "SELECT url FROM researcher_urls WHERE researcher_id = %s", (rid2,))}
+        if urls1 and urls2 and not (urls1 & urls2):
+            continue
+        ids = [rid1, rid2]
+        weights = sorted(_fetch_researcher_weights(ids), key=_researcher_weight)
+        canonical = weights[0]["id"]
+        dup = weights[1]["id"]
+        merges.append((canonical, dup))
+        log.info("  merge researcher %d into %d: %s %s / %s %s (%d shared papers)",
+                 dup, canonical, r["fn1"], r["ln1"], r["fn2"], r["ln2"], r["shared"])
+
+    def writes(cur):
+        for canonical, dup in merges:
+            merge_researcher_pair(cur, canonical, dup)
+    _run_writes("merge_researchers_shared_papers", writes)
+    return len(merges)
+
+
+@step
 def dedupe_shared_researcher_urls():
     """A URL tracked under several researchers (department pages) double-
     extracts every paper. Keep the earliest row, drop the rest."""
@@ -730,6 +778,7 @@ STEP_ORDER = [
     "merge_researchers_shared_openalex",
     "merge_researchers_exact_name",
     "merge_researchers_compatible_name",
+    "merge_researchers_shared_papers",
     "dedupe_shared_researcher_urls",
     "merge_papers_by_identifier",
     "clean_paper_titles",

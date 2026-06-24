@@ -22,6 +22,7 @@ import logging
 _author_id_cache: dict[tuple[str, str], int] = {}
 
 _SHARED_PAPER_THRESHOLD = 2
+_SHARED_PAPER_THRESHOLD_WEAK = 5
 
 _SIMILARITY_THRESHOLD = 0.5
 
@@ -98,8 +99,25 @@ def validate_title_change(old_title: str, new_title: str) -> bool:
     return True
 
 
+def _have_conflicting_urls(rid_a: int, rid_b: int) -> bool:
+    """True if both researchers have personal websites and none overlap."""
+    urls = fetch_all(
+        "SELECT researcher_id, url FROM researcher_urls WHERE researcher_id IN (%s, %s)",
+        (rid_a, rid_b),
+    )
+    urls_a = {r['url'] for r in urls if r['researcher_id'] == rid_a}
+    urls_b = {r['url'] for r in urls if r['researcher_id'] == rid_b}
+    if not urls_a or not urls_b:
+        return False
+    return len(urls_a & urls_b) == 0
+
+
 def _merge_compatible_authors(paper_id: int) -> None:
-    """Layer 2: merge researcher pairs on this paper with compatible names and 2+ shared papers."""
+    """Layer 2: merge researcher pairs on this paper sharing enough papers.
+
+    Compatible names (initials/prefixes): 2+ shared papers.
+    Any same-last-name pair: 5+ shared papers, no conflicting personal websites.
+    """
     authors = fetch_all(
         """SELECT a.researcher_id, r.first_name, r.last_name
            FROM authorship a JOIN researchers r ON r.id = a.researcher_id
@@ -121,32 +139,35 @@ def _merge_compatible_authors(paper_id: int) -> None:
                 a, b = group[i], group[j]
                 if a['researcher_id'] == b['researcher_id']:
                     continue
-                if not is_compatible_name(a['first_name'], b['first_name']):
-                    continue
+                compatible = is_compatible_name(a['first_name'], b['first_name'])
+                threshold = _SHARED_PAPER_THRESHOLD if compatible else _SHARED_PAPER_THRESHOLD_WEAK
                 shared = fetch_all(
                     """SELECT COUNT(*) AS cnt FROM authorship a1
                        JOIN authorship a2 ON a1.publication_id = a2.publication_id
                        WHERE a1.researcher_id = %s AND a2.researcher_id = %s""",
                     (a['researcher_id'], b['researcher_id']),
                 )
-                if shared and shared[0]['cnt'] >= _SHARED_PAPER_THRESHOLD:
-                    canonical = a if len(a['first_name']) >= len(b['first_name']) else b
-                    duplicate = b if canonical is a else a
-                    try:
-                        with get_connection() as conn:
-                            merge_researchers(canonical['researcher_id'], duplicate['researcher_id'], conn)
-                        logging.info(
-                            "Layer 2 merge: %s %s (id=%d) absorbed %s %s (id=%d) — %d shared papers",
-                            canonical['first_name'], canonical['last_name'], canonical['researcher_id'],
-                            duplicate['first_name'], duplicate['last_name'], duplicate['researcher_id'],
-                            shared[0]['cnt'],
-                        )
-                    except Exception:
-                        logging.exception(
-                            "Layer 2 merge failed: %d into %d",
-                            duplicate['researcher_id'], canonical['researcher_id'],
-                        )
-                    return
+                if not shared or shared[0]['cnt'] < threshold:
+                    continue
+                if not compatible and _have_conflicting_urls(a['researcher_id'], b['researcher_id']):
+                    continue
+                canonical = a if len(a['first_name']) >= len(b['first_name']) else b
+                duplicate = b if canonical is a else a
+                try:
+                    with get_connection() as conn:
+                        merge_researchers(canonical['researcher_id'], duplicate['researcher_id'], conn)
+                    logging.info(
+                        "Layer 2 merge: %s %s (id=%d) absorbed %s %s (id=%d) — %d shared papers",
+                        canonical['first_name'], canonical['last_name'], canonical['researcher_id'],
+                        duplicate['first_name'], duplicate['last_name'], duplicate['researcher_id'],
+                        shared[0]['cnt'],
+                    )
+                except Exception:
+                    logging.exception(
+                        "Layer 2 merge failed: %d into %d",
+                        duplicate['researcher_id'], canonical['researcher_id'],
+                    )
+                return
 
 
 class PaperSaver:
