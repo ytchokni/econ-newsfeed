@@ -266,11 +266,12 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
         (last_name,),
     )
 
-    # 2.5. Initial match — single-char initial vs full first name
+    # 2.5. Compatible name match — initials, prefixes, multi-initials
     if candidates:
         initial_matches = [
             c for c in candidates
-            if first_name_is_initial_match(first_name, c['first_name'])
+            if is_compatible_name(first_name, c['first_name'])
+            and first_name.lower() != c['first_name'].lower()
         ]
         if len(initial_matches) == 1:
             match = initial_matches[0]
