@@ -24,6 +24,7 @@ logger = logging.getLogger(__name__)
 _LOCK_NAME = 'econ_newsfeed_scrape'
 _SCHEDULER_LOCK_NAME = 'econ_newsfeed_scheduler'
 _lock_conn = None  # connection holding the advisory lock for the duration of a scrape
+_lock_conn_guard = threading.Lock()
 _scheduler = None
 _scheduler_lock_conn = None  # connection holding the advisory lock for the scheduler singleton
 
@@ -77,6 +78,21 @@ def _reacquire_lock(name: str, lock_name: str) -> "mysql.connector.connection.My
         return None
 
 
+def _close_lock_connection(conn: "mysql.connector.connection.MySQLConnection | None") -> None:
+    if conn is None:
+        return
+    try:
+        conn.close()
+    except Exception:
+        logger.debug("Failed to close stale lock connection", exc_info=True)
+
+
+def _ensure_scrape_lock_held() -> None:
+    with _lock_conn_guard:
+        if _lock_conn is None:
+            raise RuntimeError("Scrape advisory lock was lost")
+
+
 def _lock_keepalive_loop() -> None:
     """Ping idle lock connections every 60s and re-acquire if dead.
 
@@ -86,14 +102,21 @@ def _lock_keepalive_loop() -> None:
     """
     global _lock_conn, _scheduler_lock_conn
     while not _keepalive_stop.wait(_LOCK_KEEPALIVE_SECONDS):
-        if _lock_conn is not None:
+        with _lock_conn_guard:
+            scrape_conn = _lock_conn
+        if scrape_conn is not None:
             try:
-                _lock_conn.ping(reconnect=False)
+                scrape_conn.ping(reconnect=False)
             except Exception as e:
                 logger.warning("Lock keepalive ping failed (scrape): %s — attempting re-acquire", e)
                 new_conn = _reacquire_lock("scrape", _LOCK_NAME)
-                if new_conn is not None:
-                    _lock_conn = new_conn
+                with _lock_conn_guard:
+                    if _lock_conn is scrape_conn:
+                        _lock_conn = new_conn
+                        stale_conn = scrape_conn
+                    else:
+                        stale_conn = new_conn
+                _close_lock_connection(stale_conn)
 
         if _scheduler_lock_conn is not None:
             try:
@@ -353,6 +376,7 @@ def run_scrape_job() -> None:
         scrape_start = time.time()
         scrape_deadline = scrape_start + _MAX_SCRAPE_DURATION_HOURS * 3600
         for url_row in urls:
+            _ensure_scrape_lock_held()
             if time.time() > scrape_deadline:
                 logger.warning("Scrape deadline reached (%dh), stopping at %d/%d URLs",
                                _MAX_SCRAPE_DURATION_HOURS, urls_checked, len(urls))
@@ -386,6 +410,7 @@ def run_scrape_job() -> None:
         fetch_phase_s = time.time() - scrape_start
         logger.info(f"Fetch phase done: {fetch_phase_s:.1f}s — {urls_checked} checked, {urls_changed} changed")
 
+        _ensure_scrape_lock_held()
         t0 = time.time()
         _validate_draft_urls()
         validate_s = time.time() - t0
@@ -400,8 +425,10 @@ def run_scrape_job() -> None:
         if log_id:
             update_scrape_log(log_id, "failed", error_message=f"{type(e).__name__}: {e}")
     finally:
-        _release_db_lock(lock_conn)
-        _lock_conn = None
+        with _lock_conn_guard:
+            lock_to_release = _lock_conn or lock_conn
+            _lock_conn = None
+        _release_db_lock(lock_to_release)
 
     t0 = time.time()
     try:
