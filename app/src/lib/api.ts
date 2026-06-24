@@ -65,11 +65,20 @@ export async function getResearcher(id: number): Promise<ResearcherDetail> {
   return fetchJson(`/api/researchers/${id}`);
 }
 
-export function usePublications(page = 1, perPage = 20, filters?: FeedFilters) {
+export function usePublications(
+  page = 1,
+  perPage = 20,
+  filters?: FeedFilters,
+  token?: string | null,
+) {
   const url = buildPublicationsUrl(page, perPage, filters);
-  return useSWR<PaginatedResponse<Publication>>(url, fetchJson, {
-    keepPreviousData: true,
-  });
+  const key = filters?.preset === "following" && token ? [url, token] as const : url;
+  return useSWR<PaginatedResponse<Publication>>(
+    key,
+    (arg: string | readonly [string, string]) =>
+      Array.isArray(arg) ? fetchJsonAuth(arg[0], arg[1]) : fetchJson(arg),
+    { keepPreviousData: true },
+  );
 }
 
 export function useResearchers() {
@@ -286,6 +295,7 @@ async function fetchJsonAuth<T>(url: string, token: string, init?: RequestInit):
   });
   if (res.status === 401) throw new Error("UNAUTHORIZED");
   if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+  if (res.status === 204) return undefined as T;
   return res.json();
 }
 
