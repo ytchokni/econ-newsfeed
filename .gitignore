@@ -53,3 +53,4 @@ docs/session-log-archive.md
 # Eval framework
 eval/test_cases/*.json
 eval/output/
+.vercel

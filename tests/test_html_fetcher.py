@@ -394,6 +394,13 @@ class TestNormalizeText:
         assert "Learn more Got it" not in result
         assert "Research papers" in result
 
+    def test_boilerplate_removal_with_turkish_i(self):
+        """Turkish İ (U+0130) expands under .lower(), must not cause infinite loop."""
+        text = "İstanbul Research Google SitesReport abuseGoogle SitesReport abuseThis cookies"
+        result = HTMLFetcher.normalize_text(text)
+        assert "report abuse" not in result.lower()
+        assert "İstanbul" in result
+
     def test_preserves_real_content_change(self):
         """Maria Silfa case — R&R status update must survive normalization."""
         old = 'How Crisis Reshapes Government Talent with Jacob R. Brown'

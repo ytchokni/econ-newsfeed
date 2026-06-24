@@ -445,13 +445,8 @@ class HTMLFetcher:
         text = _RE_WHITESPACE.sub(' ', text)
         text = _RE_CLOSING_PUNCT.sub(r'\1', text)
         text = _RE_DIGIT_SPLIT.sub(r'\1\2', text)
-        text_lower = text.lower()
         for phrase in _BOILERPLATE_NOISE:
-            idx = text_lower.find(phrase)
-            while idx != -1:
-                text = text[:idx] + text[idx + len(phrase):]
-                text_lower = text.lower()
-                idx = text_lower.find(phrase)
+            text = re.sub(re.escape(phrase), '', text, flags=re.IGNORECASE)
         text = _RE_WHITESPACE.sub(' ', text).strip()
         return text
 
