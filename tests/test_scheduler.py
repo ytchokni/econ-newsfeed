@@ -157,9 +157,11 @@ class TestLockConnectionKeepalive:
                 backend.pipeline.scheduler._lock_keepalive_loop()
 
             assert backend.pipeline.scheduler._lock_conn is new_conn
+            assert backend.pipeline.scheduler._scrape_lock_lost is False
             old_conn.close.assert_called_once()
         finally:
             backend.pipeline.scheduler._lock_conn = None
+            backend.pipeline.scheduler._scrape_lock_lost = False
 
     def test_keepalive_marks_scrape_lock_lost_when_reacquire_fails(self):
         old_conn = MagicMock(name="old_lock_conn")
@@ -172,9 +174,27 @@ class TestLockConnectionKeepalive:
                 backend.pipeline.scheduler._lock_keepalive_loop()
 
             assert backend.pipeline.scheduler._lock_conn is None
+            assert backend.pipeline.scheduler._scrape_lock_lost is True
             old_conn.close.assert_called_once()
         finally:
             backend.pipeline.scheduler._lock_conn = None
+            backend.pipeline.scheduler._scrape_lock_lost = False
+
+    def test_keepalive_replaces_dead_scheduler_lock_connection(self):
+        old_conn = MagicMock(name="old_scheduler_lock_conn")
+        new_conn = MagicMock(name="new_scheduler_lock_conn")
+        old_conn.ping.side_effect = RuntimeError("connection died")
+        backend.pipeline.scheduler._scheduler_lock_conn = old_conn
+
+        try:
+            with patch.object(backend.pipeline.scheduler._keepalive_stop, "wait", side_effect=[False, True]), \
+                 patch("backend.pipeline.scheduler._reacquire_lock", return_value=new_conn):
+                backend.pipeline.scheduler._lock_keepalive_loop()
+
+            assert backend.pipeline.scheduler._scheduler_lock_conn is new_conn
+            old_conn.close.assert_called_once()
+        finally:
+            backend.pipeline.scheduler._scheduler_lock_conn = None
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +306,9 @@ class TestLockReleaseOnError:
         url = _make_url_row()
 
         def lose_lock(*args, **kwargs):
-            backend.pipeline.scheduler._lock_conn = None
+            with backend.pipeline.scheduler._lock_conn_guard:
+                backend.pipeline.scheduler._lock_conn = None
+                backend.pipeline.scheduler._scrape_lock_lost = True
             return False
 
         patches = _base_patches()
@@ -306,9 +328,10 @@ class TestLockReleaseOnError:
             mocks["validate"].assert_not_called()
             assert mocks["update_log"].call_args[0][1] == "failed"
             assert "Scrape advisory lock was lost" in mocks["update_log"].call_args.kwargs["error_message"]
-            mocks["release"].assert_called_once_with(lock_conn)
+            mocks["release"].assert_not_called()
         finally:
             backend.pipeline.scheduler._lock_conn = None
+            backend.pipeline.scheduler._scrape_lock_lost = False
             for p in patches.values():
                 p.stop()
 

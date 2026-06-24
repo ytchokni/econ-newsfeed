@@ -25,6 +25,7 @@ _LOCK_NAME = 'econ_newsfeed_scrape'
 _SCHEDULER_LOCK_NAME = 'econ_newsfeed_scheduler'
 _lock_conn = None  # connection holding the advisory lock for the duration of a scrape
 _lock_conn_guard = threading.Lock()
+_scrape_lock_lost = False
 _scheduler = None
 _scheduler_lock_conn = None  # connection holding the advisory lock for the scheduler singleton
 
@@ -100,7 +101,7 @@ def _lock_keepalive_loop() -> None:
     Connections can die from Docker networking, MySQL restarts, or disk pressure.
     A periodic ping resets the idle timer; if dead, re-acquire on a new connection.
     """
-    global _lock_conn, _scheduler_lock_conn
+    global _lock_conn, _scrape_lock_lost, _scheduler_lock_conn
     while not _keepalive_stop.wait(_LOCK_KEEPALIVE_SECONDS):
         with _lock_conn_guard:
             scrape_conn = _lock_conn
@@ -113,19 +114,28 @@ def _lock_keepalive_loop() -> None:
                 with _lock_conn_guard:
                     if _lock_conn is scrape_conn:
                         _lock_conn = new_conn
+                        if new_conn is None:
+                            _scrape_lock_lost = True
                         stale_conn = scrape_conn
                     else:
                         stale_conn = new_conn
                 _close_lock_connection(stale_conn)
 
-        if _scheduler_lock_conn is not None:
+        with _lock_conn_guard:
+            scheduler_conn = _scheduler_lock_conn
+        if scheduler_conn is not None:
             try:
-                _scheduler_lock_conn.ping(reconnect=False)
+                scheduler_conn.ping(reconnect=False)
             except Exception as e:
                 logger.warning("Lock keepalive ping failed (scheduler): %s — attempting re-acquire", e)
                 new_conn = _reacquire_lock("scheduler", _SCHEDULER_LOCK_NAME)
-                if new_conn is not None:
-                    _scheduler_lock_conn = new_conn
+                with _lock_conn_guard:
+                    if _scheduler_lock_conn is scheduler_conn:
+                        _scheduler_lock_conn = new_conn
+                        stale_conn = scheduler_conn
+                    else:
+                        stale_conn = new_conn
+                _close_lock_connection(stale_conn)
 
 
 def _release_db_lock(conn: "mysql.connector.connection.MySQLConnection") -> None:
@@ -357,12 +367,14 @@ def run_scrape_job() -> None:
     Extraction is owned by the continuous extraction worker — this job only
     downloads pages and validates draft URLs.
     """
-    global _lock_conn
+    global _lock_conn, _scrape_lock_lost
     lock_conn = _acquire_db_lock()
     if lock_conn is None:
         logger.warning("Scrape already in progress, skipping")
         return
-    _lock_conn = lock_conn
+    with _lock_conn_guard:
+        _lock_conn = lock_conn
+        _scrape_lock_lost = False
 
     HTMLFetcher._robots_cache.clear()
 
@@ -426,9 +438,14 @@ def run_scrape_job() -> None:
             update_scrape_log(log_id, "failed", error_message=f"{type(e).__name__}: {e}")
     finally:
         with _lock_conn_guard:
-            lock_to_release = _lock_conn or lock_conn
+            lock_to_release = _lock_conn
+            lock_was_lost = _scrape_lock_lost
             _lock_conn = None
-        _release_db_lock(lock_to_release)
+            _scrape_lock_lost = False
+        if lock_to_release is not None:
+            _release_db_lock(lock_to_release)
+        elif not lock_was_lost:
+            _release_db_lock(lock_conn)
 
     t0 = time.time()
     try:
@@ -653,7 +670,8 @@ def start_scheduler() -> None:
             conn.close()
             logger.info("Another worker owns the scheduler lock — this worker handles API requests only")
             return
-        _scheduler_lock_conn = conn  # keep connection alive to hold the lock
+        with _lock_conn_guard:
+            _scheduler_lock_conn = conn  # keep connection alive to hold the lock
     except Exception as e:
         logger.warning("Could not acquire scheduler lock: %s — skipping scheduler", e)
         return
@@ -715,13 +733,15 @@ def shutdown_scheduler() -> None:
         _scheduler.shutdown(wait=True)
         _scheduler = None
         logger.info("Scheduler shut down")
-    if _scheduler_lock_conn is not None:
+    with _lock_conn_guard:
+        scheduler_lock_conn = _scheduler_lock_conn
+        _scheduler_lock_conn = None
+    if scheduler_lock_conn is not None:
         try:
-            cursor = _scheduler_lock_conn.cursor()
+            cursor = scheduler_lock_conn.cursor()
             cursor.execute("SELECT RELEASE_LOCK(%s)", (_SCHEDULER_LOCK_NAME,))
             cursor.fetchone()
             cursor.close()
-            _scheduler_lock_conn.close()
+            scheduler_lock_conn.close()
         except Exception:
             pass
-        _scheduler_lock_conn = None
