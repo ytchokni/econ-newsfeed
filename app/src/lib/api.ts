@@ -76,7 +76,7 @@ export function usePublications(
   return useSWR<PaginatedResponse<Publication>>(
     key,
     (arg: string | readonly [string, string]) =>
-      Array.isArray(arg) ? fetchJsonAuth(arg[0], arg[1]) : fetchJson(arg),
+      typeof arg === "string" ? fetchJson(arg) : fetchJsonAuth(arg[0], arg[1]),
     { keepPreviousData: true },
   );
 }
