@@ -13,13 +13,15 @@ from backend.database import (
     get_researcher_id,
     normalize_title,
 )
-from backend.database.researchers import is_compatible_name, refresh_has_top5
+from backend.database.researchers import is_compatible_name, merge_researchers, refresh_has_top5
 from backend.config import guard_text_fields
 from backend.pipeline.publication import clean_title
 from datetime import datetime, timezone
 import logging
 
 _author_id_cache: dict[tuple[str, str], int] = {}
+
+_SHARED_PAPER_THRESHOLD = 2
 
 _SIMILARITY_THRESHOLD = 0.5
 
@@ -94,6 +96,57 @@ def validate_title_change(old_title: str, new_title: str) -> bool:
         return False
 
     return True
+
+
+def _merge_compatible_authors(paper_id: int) -> None:
+    """Layer 2: merge researcher pairs on this paper with compatible names and 2+ shared papers."""
+    authors = fetch_all(
+        """SELECT a.researcher_id, r.first_name, r.last_name
+           FROM authorship a JOIN researchers r ON r.id = a.researcher_id
+           WHERE a.publication_id = %s""",
+        (paper_id,),
+    )
+    if len(authors) < 2:
+        return
+
+    by_last: dict[str, list[dict]] = {}
+    for a in authors:
+        by_last.setdefault(a['last_name'].lower().strip(), []).append(a)
+
+    for last_key, group in by_last.items():
+        if len(group) < 2:
+            continue
+        for i in range(len(group)):
+            for j in range(i + 1, len(group)):
+                a, b = group[i], group[j]
+                if a['researcher_id'] == b['researcher_id']:
+                    continue
+                if not is_compatible_name(a['first_name'], b['first_name']):
+                    continue
+                shared = fetch_all(
+                    """SELECT COUNT(*) AS cnt FROM authorship a1
+                       JOIN authorship a2 ON a1.publication_id = a2.publication_id
+                       WHERE a1.researcher_id = %s AND a2.researcher_id = %s""",
+                    (a['researcher_id'], b['researcher_id']),
+                )
+                if shared and shared[0]['cnt'] >= _SHARED_PAPER_THRESHOLD:
+                    canonical = a if len(a['first_name']) >= len(b['first_name']) else b
+                    duplicate = b if canonical is a else a
+                    try:
+                        with get_connection() as conn:
+                            merge_researchers(canonical['researcher_id'], duplicate['researcher_id'], conn)
+                        logging.info(
+                            "Layer 2 merge: %s %s (id=%d) absorbed %s %s (id=%d) — %d shared papers",
+                            canonical['first_name'], canonical['last_name'], canonical['researcher_id'],
+                            duplicate['first_name'], duplicate['last_name'], duplicate['researcher_id'],
+                            shared[0]['cnt'],
+                        )
+                    except Exception:
+                        logging.exception(
+                            "Layer 2 merge failed: %d into %d",
+                            duplicate['researcher_id'], canonical['researcher_id'],
+                        )
+                    return
 
 
 class PaperSaver:
@@ -247,6 +300,12 @@ class PaperSaver:
                             )
 
                     conn.commit()
+
+                    try:
+                        _merge_compatible_authors(publication_id)
+                    except Exception:
+                        logging.exception("Layer 2 author merge failed for paper %d", publication_id)
+
                     results.append(SaveResult(
                         paper_id=publication_id,
                         title=title,
