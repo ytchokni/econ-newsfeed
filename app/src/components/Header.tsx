@@ -2,9 +2,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { signIn } from "next-auth/react";
+import { useAuth } from "@/lib/auth";
+import UserMenu from "@/components/UserMenu";
 
 export default function Header() {
   const pathname = usePathname();
+  const { isAuthenticated, isLoading } = useAuth();
 
   return (
     <header className="bg-[var(--bg-header)] sticky top-0 z-50 shadow-[0_2px_16px_rgba(26,35,50,0.18)]">
@@ -16,28 +20,42 @@ export default function Header() {
             <span className="text-[var(--accent)]">Newsfeed</span>
           </span>
         </Link>
-        <nav className="flex gap-8 font-sans text-xs font-semibold uppercase tracking-widest">
-          <Link
-            href="/"
-            className={`py-1 border-b-2 transition-colors ${
-              pathname === "/"
-                ? "text-[#f0ece4] border-[var(--accent)]"
-                : "text-[#8896a7] border-transparent hover:text-[#f0ece4]"
-            }`}
-          >
-            Feed
-          </Link>
-          <Link
-            href="/researchers"
-            className={`py-1 border-b-2 transition-colors ${
-              pathname?.startsWith("/researchers")
-                ? "text-[#f0ece4] border-[var(--accent)]"
-                : "text-[#8896a7] border-transparent hover:text-[#f0ece4]"
-            }`}
-          >
-            Researchers
-          </Link>
-        </nav>
+        <div className="flex items-center gap-6">
+          <nav className="flex gap-8 font-sans text-xs font-semibold uppercase tracking-widest">
+            <Link
+              href="/"
+              className={`py-1 border-b-2 transition-colors ${
+                pathname === "/"
+                  ? "text-[#f0ece4] border-[var(--accent)]"
+                  : "text-[#8896a7] border-transparent hover:text-[#f0ece4]"
+              }`}
+            >
+              Feed
+            </Link>
+            <Link
+              href="/researchers"
+              className={`py-1 border-b-2 transition-colors ${
+                pathname?.startsWith("/researchers")
+                  ? "text-[#f0ece4] border-[var(--accent)]"
+                  : "text-[#8896a7] border-transparent hover:text-[#f0ece4]"
+              }`}
+            >
+              Researchers
+            </Link>
+          </nav>
+          {!isLoading && (
+            isAuthenticated ? (
+              <UserMenu />
+            ) : (
+              <button
+                onClick={() => signIn("google")}
+                className="font-sans text-xs font-semibold text-[#c5cdd8] hover:text-[#f0ece4] transition-colors"
+              >
+                Sign in
+              </button>
+            )
+          )}
+        </div>
       </div>
     </header>
   );

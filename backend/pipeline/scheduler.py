@@ -32,7 +32,11 @@ _scheduler_lock_conn = None  # connection holding the advisory lock for the sche
 # lock silently drops, the zombie cleanup falsely fails the live scrape row,
 # and concurrent-scrape protection vanishes. A full scrape takes ~12h.
 _LOCK_CONN_WAIT_TIMEOUT = 7 * 24 * 3600  # 7 days
+_LOCK_KEEPALIVE_SECONDS = 1800  # ping idle lock connections every 30 min
 _MAX_SCRAPE_DURATION_HOURS = 18  # force-release lock if scrape exceeds this
+
+_keepalive_stop = threading.Event()
+_keepalive_thread = None
 
 
 def _acquire_db_lock() -> "mysql.connector.connection.MySQLConnection | None":
@@ -51,6 +55,24 @@ def _acquire_db_lock() -> "mysql.connector.connection.MySQLConnection | None":
     except Exception as e:
         logger.error(f"Failed to acquire DB advisory lock: {e}")
         return None
+
+
+def _lock_keepalive_loop() -> None:
+    """Ping idle lock connections on a fixed wall-clock interval.
+
+    Both _lock_conn (scrape) and _scheduler_lock_conn sit idle for hours/days.
+    Despite SET SESSION wait_timeout = 7 days, connections die at ~8h in
+    production. A periodic conn.ping() resets the idle timer and keeps TCP alive.
+    Runs as a daemon thread started alongside the scheduler.
+    """
+    while not _keepalive_stop.wait(_LOCK_KEEPALIVE_SECONDS):
+        for name, conn in [("scrape", _lock_conn), ("scheduler", _scheduler_lock_conn)]:
+            if conn is None:
+                continue
+            try:
+                conn.ping(reconnect=False)
+            except Exception as e:
+                logger.warning("Lock keepalive ping failed (%s): %s", name, e)
 
 
 def _release_db_lock(conn: "mysql.connector.connection.MySQLConnection") -> None:
@@ -91,6 +113,7 @@ _enrichment_thread = None
 _enrichment_stop_event = threading.Event()
 
 EXTRACTION_WORKER_ENABLED = os.environ.get('EXTRACTION_WORKER_ENABLED', 'false').lower() == 'true'
+DIGEST_ENABLED = os.environ.get('RESEND_API_KEY', '') != ''
 _EXTRACTION_DELAY_SECONDS = float(os.environ.get('EXTRACTION_DELAY_SECONDS', '2'))
 _EXTRACTION_IDLE_SECONDS = 300       # queue empty → re-poll every 5 min
 _EXTRACTION_BACKOFF_THRESHOLD = 10   # consecutive failures before backing off
@@ -228,7 +251,9 @@ def _validate_draft_urls() -> None:
     logger.info(f"Validating {len(unchecked)} unchecked draft URLs")
     start = time.time()
     validated = 0
-    for paper_id, draft_url in unchecked:
+    for row in unchecked:
+        paper_id = row['id']
+        draft_url = row['draft_url']
         if time.time() - start > _DRAFT_VALIDATION_BUDGET_SECONDS:
             logger.info(f"Draft URL validation time budget exceeded after {validated} URLs")
             break
@@ -356,6 +381,27 @@ def run_scrape_job() -> None:
         logger.error("Paper merge failed: %s: %s", type(e).__name__, e)
     merge_s = time.time() - t0
     logger.info(f"Paper merge: {merge_s:.1f}s")
+
+
+def _start_lock_keepalive() -> None:
+    global _keepalive_thread
+    if _keepalive_thread is not None and _keepalive_thread.is_alive():
+        return
+    _keepalive_stop.clear()
+    _keepalive_thread = threading.Thread(
+        target=_lock_keepalive_loop, name="lock-keepalive", daemon=True,
+    )
+    _keepalive_thread.start()
+    logger.info("Lock keepalive thread started (interval=%ds)", _LOCK_KEEPALIVE_SECONDS)
+
+
+def _stop_lock_keepalive() -> None:
+    global _keepalive_thread
+    if _keepalive_thread is None:
+        return
+    _keepalive_stop.set()
+    _keepalive_thread.join(timeout=5)
+    _keepalive_thread = None
 
 
 def _handle_sigterm(signum: int, frame: object) -> None:
@@ -577,6 +623,8 @@ def start_scheduler() -> None:
     _scheduler.start()
     logger.info(f"Scheduler started: scraping every {SCRAPE_INTERVAL_HOURS} hours")
 
+    _start_lock_keepalive()
+
     if SCRAPE_ON_STARTUP:
         logger.info("SCRAPE_ON_STARTUP is true, triggering immediate scrape in background")
         threading.Thread(target=run_scrape_job, name="startup-scrape").start()
@@ -587,10 +635,23 @@ def start_scheduler() -> None:
     if EXTRACTION_WORKER_ENABLED:
         start_extraction_worker()
 
+    if DIGEST_ENABLED:
+        from backend.digest import run_weekly_digest
+        _scheduler.add_job(
+            run_weekly_digest,
+            'cron',
+            day_of_week='mon',
+            hour=8,
+            minute=0,
+            id='weekly_digest',
+        )
+        logger.info("Weekly digest job scheduled for Mondays 8:00 UTC")
+
 
 def shutdown_scheduler() -> None:
     """Shut down the scheduler gracefully, waiting for any running job to complete."""
     global _scheduler, _scheduler_lock_conn
+    _stop_lock_keepalive()
     stop_enrichment_worker()
     stop_extraction_worker()
     if _scheduler is not None:

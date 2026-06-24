@@ -1,6 +1,7 @@
 import Link from "next/link";
 import AffiliationLine from "@/components/AffiliationLine";
 import type { Researcher } from "@/lib/types";
+import FollowButton from "@/components/FollowButton";
 
 export default function ResearcherCard({
   researcher,
@@ -17,11 +18,14 @@ export default function ResearcherCard({
         tabIndex={-1}
       />
 
-      <h3 className="font-serif font-semibold text-[var(--text-primary)] text-lg">
-        <Link href={`/researchers/${researcher.id}`} className="relative z-[1]">
-          {researcher.first_name} {researcher.last_name}
-        </Link>
-      </h3>
+      <div className="flex items-start justify-between gap-3">
+        <h3 className="font-serif font-semibold text-[var(--text-primary)] text-lg">
+          <Link href={`/researchers/${researcher.id}`} className="relative z-[1]">
+            {researcher.first_name} {researcher.last_name}
+          </Link>
+        </h3>
+        <FollowButton researcherId={researcher.id} size="sm" />
+      </div>
       <AffiliationLine
         position={researcher.position}
         affiliation={researcher.affiliation}

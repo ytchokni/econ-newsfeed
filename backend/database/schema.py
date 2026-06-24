@@ -345,6 +345,37 @@ _TABLE_DEFINITIONS = {
             UNIQUE KEY uq_paper_link (paper_id, url(500))
         ) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
     """,
+    "users": """
+        CREATE TABLE IF NOT EXISTS users (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            google_id VARCHAR(255) NOT NULL,
+            email VARCHAR(255) NOT NULL,
+            name VARCHAR(255),
+            picture_url TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+            UNIQUE KEY uq_google_id (google_id),
+            INDEX idx_email (email)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "user_follows": """
+        CREATE TABLE IF NOT EXISTS user_follows (
+            user_id INT NOT NULL,
+            researcher_id INT NOT NULL,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (user_id, researcher_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "user_notification_prefs": """
+        CREATE TABLE IF NOT EXISTS user_notification_prefs (
+            user_id INT PRIMARY KEY,
+            digest_enabled BOOLEAN DEFAULT TRUE,
+            last_digest_sent DATETIME,
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 }
 
 
@@ -461,6 +492,9 @@ def create_tables() -> None:
                         "openalex_coauthors",
                         "paper_links",
                         "paper_topics",
+                        "users",
+                        "user_follows",
+                        "user_notification_prefs",
                     ]
                     for tbl in _ALL_TABLES:
                         try:

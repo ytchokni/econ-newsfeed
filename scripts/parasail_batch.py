@@ -126,7 +126,12 @@ def main():
     log.info("Output saved: %s", OUTPUT_FILE)
 
     # ── 6. Process results ────────────────────────────────────────────────
-    processed = errors = saved = 0
+    process_output()
+
+
+def process_output():
+    """Process the downloaded output JSONL, skipping already-extracted URLs."""
+    processed = skipped_done = errors = saved = 0
     with open(OUTPUT_FILE) as f:
         for line in f:
             result = json.loads(line)
@@ -135,6 +140,10 @@ def main():
                 errors += 1
                 continue
             url_id = int(cid[4:])
+
+            if not HTMLFetcher.needs_extraction(url_id):
+                skipped_done += 1
+                continue
 
             url_row = fetch_one("SELECT url FROM researcher_urls WHERE id = %s", (url_id,))
             if not url_row:
@@ -194,10 +203,15 @@ def main():
             processed += 1
 
             if processed % 200 == 0:
-                log.info("Processed %d (%d pubs, %d errors)", processed, saved, errors)
+                log.info("Processed %d (%d pubs, %d errors, %d already done)",
+                         processed, saved, errors, skipped_done)
 
-    log.info("Done: %d processed, %d pubs saved, %d errors", processed, saved, errors)
+    log.info("Done: %d processed, %d pubs saved, %d errors, %d already done",
+             processed, saved, errors, skipped_done)
 
 
 if __name__ == '__main__':
-    main()
+    if len(sys.argv) > 1 and sys.argv[1] == 'process':
+        process_output()
+    else:
+        main()

@@ -149,3 +149,12 @@ export interface ResearcherFilters {
   search?: string;
   preset?: string;
 }
+
+export interface UserFollowing {
+  researcher_ids: number[];
+}
+
+export interface NotificationPrefs {
+  digest_enabled: boolean;
+  last_digest_sent: string | null;
+}

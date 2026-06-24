@@ -3,6 +3,7 @@ import type {
   FeedFilters,
   FilterOptions,
   JelCode,
+  NotificationPrefs,
   PaginatedResponse,
   Publication,
   PublicationDetail,
@@ -10,6 +11,7 @@ import type {
   Researcher,
   ResearcherDetail,
   ResearcherFilters,
+  UserFollowing,
 } from "./types";
 
 export const API_BASE_URL =
@@ -269,5 +271,56 @@ export function useAtRiskUrls() {
 export async function reactivateUrl(urlId: number): Promise<void> {
   await fetchJsonWithAuth(`/api/admin/reactivate-url/${urlId}`, {
     method: "POST",
+  });
+}
+
+// --- Authenticated API helpers ---
+
+async function fetchJsonAuth<T>(url: string, token: string, init?: RequestInit): Promise<T> {
+  const res = await fetch(url, {
+    ...init,
+    headers: {
+      ...init?.headers,
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  if (res.status === 401) throw new Error("UNAUTHORIZED");
+  if (!res.ok) throw new Error(`API error: ${res.status} ${res.statusText}`);
+  return res.json();
+}
+
+export const followingSwrKey = (token: string | null) =>
+  token ? ["/api/users/following", token] as const : null;
+
+export function useFollowing(token: string | null) {
+  return useSWR<UserFollowing>(
+    followingSwrKey(token),
+    ([url, t]: [string, string]) => fetchJsonAuth(url, t),
+  );
+}
+
+export async function followResearcher(researcherId: number, token: string): Promise<void> {
+  await fetchJsonAuth(`/api/users/follow/${researcherId}`, token, { method: "POST" });
+}
+
+export async function unfollowResearcher(researcherId: number, token: string): Promise<void> {
+  await fetchJsonAuth(`/api/users/follow/${researcherId}`, token, { method: "DELETE" });
+}
+
+export function useNotificationPrefs(token: string | null) {
+  return useSWR<NotificationPrefs>(
+    token ? ["/api/users/notifications", token] : null,
+    ([url, t]: [string, string]) => fetchJsonAuth(url, t),
+  );
+}
+
+export async function updateNotificationPrefs(
+  prefs: { digest_enabled: boolean },
+  token: string,
+): Promise<void> {
+  await fetchJsonAuth("/api/users/notifications", token, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(prefs),
   });
 }
