@@ -130,7 +130,7 @@ class TestPageOwnerAuthorship:
     def test_owner_added_with_order_zero(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        cursor.fetchone.return_value = (55,)
+        cursor.fetchone.return_value = (55, "Jane", "Smith")
 
         PaperSaver.save_publications("http://example.com", [{
             "title": "Paper", "authors": [["John", "Doe"]], "year": "2024",

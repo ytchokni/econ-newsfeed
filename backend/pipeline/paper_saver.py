@@ -13,7 +13,7 @@ from backend.database import (
     get_researcher_id,
     normalize_title,
 )
-from backend.database.researchers import refresh_has_top5
+from backend.database.researchers import is_compatible_name, refresh_has_top5
 from backend.config import guard_text_fields
 from backend.pipeline.publication import clean_title
 from datetime import datetime, timezone
@@ -183,7 +183,10 @@ class PaperSaver:
                         new_to_this_url = cursor.rowcount > 0
                         logging.info(f"Duplicate publication (title_hash match), added source URL: {pub['title']}")
 
-                    # Authors
+                    # Authors — track resolved (last_name -> (researcher_id, first_name))
+                    # for within-paper dedup of name variants
+                    resolved_by_last: dict[str, list[tuple[int, str]]] = {}
+
                     for author_order, author in enumerate(pub['authors'], start=1):
                         if not author:
                             continue
@@ -194,30 +197,54 @@ class PaperSaver:
                         else:
                             first_name = " ".join(author[:-1])
                             last_name = author[-1]
-                        cache_key = (first_name, last_name)
-                        if cache_key in _author_id_cache:
-                            author_id = _author_id_cache[cache_key]
-                        else:
-                            author_id = get_researcher_id(first_name, last_name, conn=conn)
-                            _author_id_cache[cache_key] = author_id
-                        cursor.execute(
-                            "INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order) VALUES (%s, %s, %s)",
-                            (author_id, publication_id, author_order),
-                        )
 
-                    # Page owner
+                        # Layer 1: check if a compatible-name author is already
+                        # resolved for this paper (same last name, compatible first)
+                        last_key = last_name.lower().strip()
+                        author_id = None
+                        if first_name and last_key in resolved_by_last:
+                            for rid, resolved_first in resolved_by_last[last_key]:
+                                if is_compatible_name(first_name, resolved_first):
+                                    author_id = rid
+                                    break
+
+                        if author_id is None:
+                            cache_key = (first_name, last_name)
+                            if cache_key in _author_id_cache:
+                                author_id = _author_id_cache[cache_key]
+                            else:
+                                author_id = get_researcher_id(first_name, last_name, conn=conn)
+                                _author_id_cache[cache_key] = author_id
+
+                        if author_id is not None:
+                            resolved_by_last.setdefault(last_key, []).append((author_id, first_name))
+                            cursor.execute(
+                                "INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order) VALUES (%s, %s, %s)",
+                                (author_id, publication_id, author_order),
+                            )
+
+                    # Page owner — skip if a compatible-name author is already on this paper
                     cursor.execute(
-                        """SELECT r.id FROM researchers r
+                        """SELECT r.id, r.first_name, r.last_name FROM researchers r
                            JOIN researcher_urls ru ON ru.researcher_id = r.id
                            WHERE ru.url = %s LIMIT 1""",
                         (url,),
                     )
                     owner_row = cursor.fetchone()
                     if owner_row:
-                        cursor.execute(
-                            "INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order) VALUES (%s, %s, %s)",
-                            (owner_row[0], publication_id, 0),
-                        )
+                        owner_id, owner_first, owner_last = owner_row
+                        owner_last_key = owner_last.lower().strip()
+                        already_represented = False
+                        if owner_first and owner_last_key in resolved_by_last:
+                            for rid, resolved_first in resolved_by_last[owner_last_key]:
+                                if is_compatible_name(owner_first, resolved_first):
+                                    already_represented = True
+                                    break
+                        if not already_represented:
+                            cursor.execute(
+                                "INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order) VALUES (%s, %s, %s)",
+                                (owner_id, publication_id, 0),
+                            )
 
                     conn.commit()
                     results.append(SaveResult(
