@@ -84,6 +84,42 @@ class TestIsCompatibleName:
     def test_three_token_mismatch(self):
         assert is_compatible_name("Anna Carlos", "Anna Maria Garcia") is False
 
+    # --- compound initials (R.A., T.F., J.M.C.) ---
+    def test_compound_initial_ra(self):
+        assert is_compatible_name("R.A.", "Ronald A.") is True
+
+    def test_compound_initial_tf(self):
+        assert is_compatible_name("T.F.", "Tim F.") is True
+
+    def test_compound_initial_jmc(self):
+        assert is_compatible_name("J.M.C.", "João M.C.") is True
+
+    def test_compound_initial_kl(self):
+        assert is_compatible_name("K.L.", "Kai-Lung") is True
+
+    def test_compound_initial_hj(self):
+        assert is_compatible_name("H.-J.", "Hung-Ju") is True
+
+    def test_compound_initial_ji(self):
+        assert is_compatible_name("J.I.", "José Ignacio") is True
+
+    # --- accent normalization ---
+    def test_accent_match(self):
+        assert is_compatible_name("Gérard", "Gerard") is True
+
+    def test_accent_full_name(self):
+        assert is_compatible_name("Andrés", "Andres") is True
+
+    # --- hyphen-vs-space ---
+    def test_hyphen_vs_space(self):
+        assert is_compatible_name("Pei-Tha", "Pei Tha") is True
+
+    def test_hyphen_vs_space_accent(self):
+        assert is_compatible_name("Félix-Fernando", "Félix Fernando") is True
+
+    def test_hyphen_prefix(self):
+        assert is_compatible_name("Pierre-Emmanuel", "Pierre") is True
+
 
 class TestFirstNameIsInitialMatch:
     """first_name_is_initial_match returns True when one name is a single-char

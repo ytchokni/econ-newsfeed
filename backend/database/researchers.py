@@ -6,6 +6,7 @@ import json
 import logging
 import os
 import re
+import unicodedata
 
 from backend.database.connection import execute_query, fetch_one, fetch_all
 from backend.database.llm import log_llm_usage
@@ -38,6 +39,29 @@ def refresh_has_top5(researcher_id: int) -> None:
     )
 
 
+def _strip_accents(s: str) -> str:
+    """Remove diacritical marks: Gérard -> Gerard, Andrés -> Andres, Ø -> O."""
+    return ''.join(
+        c for c in unicodedata.normalize('NFKD', s)
+        if not unicodedata.combining(c)
+    )
+
+
+_COMPOUND_INITIAL_RE = re.compile(r'([A-Za-z])\.(?=[A-Za-z])')
+
+
+def _tokenize_name(name: str) -> list[str]:
+    """Normalize and tokenize a first name for comparison.
+
+    Strips accents, replaces hyphens with spaces, and splits compound
+    initials (R.A. -> R. A.) before whitespace-tokenizing.
+    """
+    s = _strip_accents(name)
+    s = s.replace('-', ' ')
+    s = _COMPOUND_INITIAL_RE.sub(r'\1. ', s)
+    return s.split()
+
+
 def _strip_initial(name: str) -> str | None:
     """If name is a single letter optionally followed by '.', return that letter lowercase. Else None."""
     stripped = name.strip()
@@ -66,21 +90,23 @@ def _tokens_match(a: str, b: str) -> bool:
 def is_compatible_name(name_a: str, name_b: str) -> bool:
     """True if two first names are plausibly the same person.
 
-    Tokenizes both, aligns shorter to longer positionally. Each token pair must
-    be equal or one must be a single-char initial matching the other's first char.
-    Prefix semantics: if all tokens in the shorter name match, returns True.
+    Tokenizes both (with accent stripping, hyphen normalization, and compound
+    initial splitting), aligns shorter to longer positionally. Each token pair
+    must be equal or one must be a single-char initial matching the other's
+    first char. Prefix semantics: if all tokens in the shorter name match,
+    returns True.
 
     Examples:
         is_compatible_name("M.", "Max")                  -> True
-        is_compatible_name("M. F.", "Max Friedrich")     -> True
-        is_compatible_name("Max", "Max Friedrich")       -> True
-        is_compatible_name("Max J.", "Max Friedrich")    -> False
+        is_compatible_name("R.A.", "Ronald A.")          -> True
+        is_compatible_name("Gérard", "Gerard")           -> True
+        is_compatible_name("Pei-Tha", "Pei Tha")        -> True
         is_compatible_name("Michael", "Max")             -> False
     """
     if not name_a or not name_b:
         return False
-    tokens_a = name_a.split()
-    tokens_b = name_b.split()
+    tokens_a = _tokenize_name(name_a)
+    tokens_b = _tokenize_name(name_b)
     if not tokens_a or not tokens_b:
         return False
     shorter, longer = (tokens_a, tokens_b) if len(tokens_a) <= len(tokens_b) else (tokens_b, tokens_a)
