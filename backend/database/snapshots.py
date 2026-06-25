@@ -141,11 +141,7 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
             )
 
             # Block status regressions on the denormalized papers table.
-            # Special case: work_in_progress → working_paper is handled by
-            # reconcile_wip_status (link-based), not by LLM re-extraction.
-            if old_status == 'work_in_progress' and status == 'working_paper':
-                effective_status = old_status
-            elif _is_status_progression(old_status, status) or old_status is None:
+            if _is_status_progression(old_status, status) or old_status is None:
                 effective_status = status
             else:
                 effective_status = old_status
