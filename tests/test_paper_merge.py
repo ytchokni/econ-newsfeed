@@ -101,7 +101,7 @@ class TestMergePaperGroup:
 
 
 class TestTitleSimilarity:
-    """Word-level title similarity for fuzzy matching."""
+    """Title similarity using max(normalized word sequence, content overlap)."""
 
     def test_similar_titles_high_score(self):
         score = _title_similarity(
@@ -120,6 +120,41 @@ class TestTitleSimilarity:
     def test_empty_title_returns_zero(self):
         assert _title_similarity("", "Something") == 0.0
         assert _title_similarity("Something", "") == 0.0
+
+    def test_hyphenated_vs_unhyphenated(self):
+        score = _title_similarity(
+            "The impact of childhood inter-ethnic contact on managers' hiring decisions",
+            "The Impact of Interethnic Contact in Schools on Managers' Hiring Decisions",
+        )
+        assert score >= 0.85
+
+    def test_subtitle_addition(self):
+        score = _title_similarity(
+            "Do Natural Disasters Stimulate Individual Saving?",
+            "Do Natural Disasters Stimulate Individual Saving? Evidence from a Natural Experiment",
+        )
+        assert score >= 0.85
+
+    def test_rewording_with_same_core(self):
+        score = _title_similarity(
+            "Housing Shortage in Germany - An Analysis of Socioeconomic Causes and Effects",
+            "Housing Shortage in Germany: Socioeconomic Causes and Effects",
+        )
+        assert score >= 0.85
+
+    def test_similar_topic_different_paper(self):
+        score = _title_similarity(
+            "The Impact of Immigration on Wages",
+            "The Impact of Immigration on Employment",
+        )
+        assert score < 0.85
+
+    def test_overlapping_words_different_paper(self):
+        score = _title_similarity(
+            "The long run impact of childhood interracial contact on residential segregation",
+            "The impact of childhood inter-ethnic contact on managers' hiring decisions",
+        )
+        assert score < 0.85
 
 
 class TestFindFuzzyDuplicateGroups:

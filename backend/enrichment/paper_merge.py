@@ -5,6 +5,7 @@ sharing the same identifier and merges them into a single canonical record.
 Also does fuzzy title matching for papers with identical author sets.
 """
 import logging
+import re
 from difflib import SequenceMatcher
 from backend.database import fetch_all, get_connection
 
@@ -109,16 +110,46 @@ def merge_paper_group(paper_ids: list[int]) -> None:
             cursor.close()
 
 
-_FUZZY_THRESHOLD = 0.85  # word-level SequenceMatcher ratio
+_FUZZY_THRESHOLD = 0.85
+
+_STOP_WORDS = frozenset({
+    'the', 'a', 'an', 'of', 'on', 'in', 'at', 'to', 'for',
+    'and', 'or', 'by', 'with', 'from', 'as', 'is', 'are',
+})
+
+
+def _normalize(title: str) -> str:
+    t = title.lower().replace('-', '').replace("'s", "").replace("’s", "")
+    return re.sub(r'[^\w\s]', '', t)
+
+
+def _content_words(title: str) -> list[str]:
+    return [w for w in _normalize(title).split() if w not in _STOP_WORDS]
+
+
+def _content_overlap(t1: str, t2: str) -> float:
+    """Overlap coefficient on content words: |intersection| / min(|A|, |B|)."""
+    s1, s2 = set(_content_words(t1)), set(_content_words(t2))
+    if not s1 or not s2:
+        return 0.0
+    return len(s1 & s2) / min(len(s1), len(s2))
+
+
+_SEQ_FLOOR = 0.5
 
 
 def _title_similarity(t1: str, t2: str) -> float:
-    """Word-level similarity between two titles."""
-    w1 = t1.lower().split()
-    w2 = t2.lower().split()
+    w1 = _normalize(t1).split()
+    w2 = _normalize(t2).split()
     if not w1 or not w2:
         return 0.0
-    return SequenceMatcher(None, w1, w2).ratio()
+    seq_ratio = SequenceMatcher(None, w1, w2).ratio()
+    overlap = _content_overlap(t1, t2)
+    # Overlap is the primary signal, but require a minimum sequence agreement
+    # to guard against same-topic-different-paper false positives.
+    if overlap > seq_ratio and seq_ratio < _SEQ_FLOOR:
+        return seq_ratio
+    return max(seq_ratio, overlap)
 
 
 def find_fuzzy_duplicate_groups() -> list[list[int]]:
