@@ -3,7 +3,7 @@
 import { useState } from "react";
 import Link from "next/link";
 import type { Publication } from "@/lib/types";
-import { statusPillConfig, formatAuthor } from "@/lib/publication-utils";
+import { statusPillConfig, chipForStatus, formatAuthor } from "@/lib/publication-utils";
 
 export default function PublicationCard({
   publication,
@@ -15,94 +15,42 @@ export default function PublicationCard({
   const [abstractOpen, setAbstractOpen] = useState(false);
   const authors = publication.authors.map(formatAuthor);
 
+  const isStatusChange = publication.event_type === "status_change";
   const venueYear = [publication.venue, publication.year].filter(Boolean).join(", ");
 
+  const oldLabel = publication.old_status
+    ? statusPillConfig[publication.old_status]?.label ?? publication.old_status
+    : null;
+  const newLabel = publication.new_status
+    ? statusPillConfig[publication.new_status]?.label ?? publication.new_status
+    : null;
+
+  const fromChip = oldLabel ? chipForStatus(oldLabel) : null;
+  const toChip = newLabel ? chipForStatus(newLabel) : null;
+
+  const statusTag = !isStatusChange && publication.status
+    ? statusPillConfig[publication.status]
+    : null;
+
   return (
-    <div
-      data-testid="publication-card"
-      className="relative rounded-md bg-[var(--bg-card)] border border-[var(--border-light)] hover:border-[var(--border)] transition-colors duration-150 px-5 py-4"
-    >
-      {/* Stretched link: covers the entire card for right-click / keyboard nav */}
-      <Link
-        href={`/papers/${publication.id}`}
-        className="absolute inset-0 z-0"
-        aria-label={publication.title}
-        tabIndex={-1}
-      />
-
-      {/* Status change banner (feed only) */}
-      {publication.event_type === "status_change" && publication.old_status && publication.new_status && (
-        <div className="font-sans flex items-center gap-2 text-xs font-medium mb-2.5 px-3 py-1.5 rounded bg-[#f0f4ff] border border-[#d0daf0]">
-          <span className="text-[var(--text-secondary)]">Status update:</span>
-          <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${statusPillConfig[publication.old_status].className}`}>
-            {statusPillConfig[publication.old_status].label}
-          </span>
-          <span className="text-[var(--text-muted)]">&rarr;</span>
-          <span className={`inline-block rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${statusPillConfig[publication.new_status].className}`}>
-            {statusPillConfig[publication.new_status].label}
-          </span>
-          {publication.venue && (
-            <span className="text-[var(--text-secondary)] ml-1">at {publication.venue}</span>
-          )}
-        </div>
-      )}
-
-      {/* Title */}
-      <h3 className="font-serif font-semibold text-[var(--text-primary)] leading-snug">
-        <Link href={`/papers/${publication.id}`} className="relative z-[1]">
+    <article className="py-[var(--rowpad)] border-b border-[var(--line)]">
+      {/* Title with inline links */}
+      <h3 className="m-0 font-sans text-xl font-semibold leading-[1.32] tracking-[-0.005em] text-[var(--ink)] max-w-[62ch]">
+        <Link
+          href={`/papers/${publication.id}`}
+          className="hover:text-[var(--accent)] transition-colors"
+        >
           {publication.title}
         </Link>
-      </h3>
-
-      {/* Authors · Venue — primary author is bold/dark, others are link-colored */}
-      <p className="relative z-[1] mt-1 font-sans text-sm font-medium">
-        {authors.map((a, i) => {
-          const isPrimary = primaryAuthorId != null && a.id === primaryAuthorId;
-          return (
-            <span key={a.id}>
-              {i > 0 && ", "}
-              <Link
-                href={`/researchers/${a.id}`}
-                className={isPrimary
-                  ? "text-[var(--text-primary)] font-semibold hover:underline"
-                  : "text-[var(--link)] hover:underline"
-                }
-                onClick={e => e.stopPropagation()}
-              >
-                {a.display}
-              </Link>
-            </span>
-          );
-        })}
-        {venueYear && (
-          <>
-            <span className="mx-1.5 text-[var(--text-muted)] font-normal">&middot;</span>
-            <span className="italic text-[var(--text-muted)] font-normal">{venueYear}</span>
-          </>
-        )}
-      </p>
-
-      {/* Bottom row: status pill, draft link, abstract toggle */}
-      <div className="relative z-[1] mt-2.5 font-sans flex items-center gap-2.5 flex-wrap">
-        {publication.event_type !== "status_change" && publication.status && (
-          <span
-            className={`inline-block text-[10px] font-bold uppercase tracking-wider rounded px-2.5 py-0.5 ${statusPillConfig[publication.status].className}`}
-          >
-            {statusPillConfig[publication.status].label}
-          </span>
-        )}
         {publication.draft_available && publication.draft_url && (
           <a
             href={publication.draft_url}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider rounded px-2.5 py-0.5 bg-[#c2594b]/10 text-[#c2594b] hover:bg-[#c2594b]/20 transition-colors"
-            onClick={e => e.stopPropagation()}
+            className="text-base font-medium text-[var(--ink2)] ml-2.5 whitespace-nowrap hover:text-[var(--accent)] transition-colors"
+            onClick={(e) => e.stopPropagation()}
           >
-            Draft
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
-            </svg>
+            (Link)
           </a>
         )}
         {publication.doi && (
@@ -110,27 +58,81 @@ export default function PublicationCard({
             href={`https://doi.org/${publication.doi}`}
             target="_blank"
             rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider rounded px-2.5 py-0.5 bg-indigo-100 text-indigo-700 hover:bg-indigo-200 transition-colors"
-            onClick={e => e.stopPropagation()}
+            className="text-base font-medium text-[var(--ink2)] ml-2.5 whitespace-nowrap hover:text-[var(--accent)] transition-colors"
+            onClick={(e) => e.stopPropagation()}
           >
-            DOI
-            <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" />
-            </svg>
+            (DOI)
           </a>
+        )}
+      </h3>
+
+      {/* Authors and venue */}
+      <p className="mt-[7px] m-0 text-sm leading-normal text-[var(--ink2)]">
+        {authors.map((a, i) => (
+          <span key={a.id}>
+            {i > 0 && ", "}
+            <Link
+              href={`/researchers/${a.id}`}
+              className={primaryAuthorId != null && a.id === primaryAuthorId
+                ? "text-[var(--ink)] font-semibold hover:underline"
+                : "hover:underline"
+              }
+            >
+              {a.display}
+            </Link>
+          </span>
+        ))}
+        {!isStatusChange && venueYear && (
+          <>
+            <span className="text-[var(--muted)]">{"  ·  "}</span>
+            <span className="italic text-[var(--muted)]">{venueYear}</span>
+          </>
+        )}
+      </p>
+
+      {/* Status change transition */}
+      {isStatusChange && fromChip && toChip && oldLabel && newLabel && (
+        <p className="mt-[9px] m-0 text-[13px] leading-relaxed text-[var(--muted)] flex items-center gap-[9px] flex-wrap">
+          <span
+            className="text-[10px] font-bold tracking-[0.1em] uppercase rounded-sm px-2 py-[3px]"
+            style={{ color: fromChip.text, background: fromChip.bg, border: `1px solid ${fromChip.border}` }}
+          >
+            {oldLabel}
+          </span>
+          <span className="text-[var(--ink2)]">&rarr;</span>
+          <span
+            className="text-[10px] font-bold tracking-[0.1em] uppercase rounded-sm px-2 py-[3px]"
+            style={{ color: toChip.text, background: toChip.bg, border: `1px solid ${toChip.border}` }}
+          >
+            {newLabel}
+          </span>
+          <span>at</span>
+          <span className="italic">{venueYear}</span>
+        </p>
+      )}
+
+      {/* Bottom row: status tag, abstract toggle, JEL codes */}
+      <div className="mt-[13px] flex items-center gap-4 flex-wrap">
+        {statusTag && (
+          <span
+            className="text-[10px] font-bold tracking-[0.1em] uppercase rounded-sm px-2 py-[3px]"
+            style={{ color: statusTag.text, background: statusTag.bg, border: `1px solid ${statusTag.border}` }}
+          >
+            {statusTag.label}
+          </span>
         )}
         {publication.abstract && (
           <button
-            onClick={(e) => { e.stopPropagation(); setAbstractOpen((prev) => !prev); }}
-            className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors"
+            onClick={() => setAbstractOpen((prev) => !prev)}
+            className="text-[11px] font-semibold tracking-[0.08em] uppercase text-[var(--ink2)] bg-transparent border-none cursor-pointer p-0 inline-flex items-center gap-[5px] hover:text-[var(--accent)] transition-colors"
           >
-            Abstract
-            <svg
-              className={`w-3 h-3 transition-transform duration-200 ${abstractOpen ? "rotate-180" : ""}`}
-              fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}
+            <span>Abstract</span>
+            <span
+              className="inline-block text-[9px] transition-transform duration-200"
+              style={{ transform: abstractOpen ? "rotate(180deg)" : "none" }}
             >
-              <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
-            </svg>
+              &#9662;
+            </span>
           </button>
         )}
         {publication.links && publication.links.length > 0 &&
@@ -140,21 +142,19 @@ export default function PublicationCard({
               href={link.url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider rounded px-2.5 py-0.5 bg-violet-50 text-violet-700 hover:bg-violet-100 transition-colors"
-              onClick={e => e.stopPropagation()}
+              className="text-[11px] font-semibold tracking-[0.08em] uppercase text-[var(--ink2)] hover:text-[var(--accent)] transition-colors"
+              onClick={(e) => e.stopPropagation()}
             >
-              {link.link_type?.toUpperCase() || 'LINK'}
-              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
-              </svg>
+              {link.link_type?.toUpperCase() || "LINK"}
             </a>
           ))
         }
+        <span className="flex-1" />
       </div>
 
       {/* OpenAlex co-authors */}
       {publication.coauthors && publication.coauthors.length > 0 && (
-        <p className="mt-1.5 font-sans text-xs text-[var(--text-muted)]">
+        <p className="mt-1.5 text-xs text-[var(--muted)]">
           <span className="font-medium">All authors:</span>{" "}
           {publication.coauthors.map((ca) => ca.display_name).join(", ")}
         </p>
@@ -162,10 +162,10 @@ export default function PublicationCard({
 
       {/* Abstract expanded */}
       {abstractOpen && publication.abstract && (
-        <p className="mt-2.5 text-sm text-[var(--text-secondary)] leading-relaxed bg-[#faf8f4] border-l-2 border-[var(--border-light)] rounded-r-md p-3">
+        <p className="mt-[14px] mb-[2px] pl-4 border-l-2 border-[var(--line2)] font-serif text-[15px] leading-relaxed text-[var(--ink2)] max-w-[68ch]">
           {publication.abstract}
         </p>
       )}
-    </div>
+    </article>
   );
 }

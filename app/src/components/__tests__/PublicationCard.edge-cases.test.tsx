@@ -89,12 +89,12 @@ describe("PublicationCard with null fields", () => {
 
   it("does not render DOI link when doi is null", () => {
     render(<PublicationCard publication={basePublication} />);
-    expect(screen.queryByText("DOI")).not.toBeInTheDocument();
+    expect(screen.queryByText("(DOI)")).not.toBeInTheDocument();
   });
 
   it("does not render draft link when draft_available is false", () => {
     render(<PublicationCard publication={basePublication} />);
-    expect(screen.queryByText("Draft")).not.toBeInTheDocument();
+    expect(screen.queryByText("(Link)")).not.toBeInTheDocument();
   });
 
   it("does not render abstract toggle when abstract is null", () => {
@@ -115,7 +115,7 @@ describe("PublicationCard with null fields", () => {
 });
 
 describe("PublicationCard status change events", () => {
-  it("renders status change banner with valid statuses", () => {
+  it("renders status change transition chips", () => {
     render(
       <PublicationCard
         publication={{
@@ -126,12 +126,11 @@ describe("PublicationCard status change events", () => {
         }}
       />
     );
-    expect(screen.getByText("Status update:")).toBeInTheDocument();
     expect(screen.getByText("Working Paper")).toBeInTheDocument();
     expect(screen.getByText("Accepted")).toBeInTheDocument();
   });
 
-  it("does not render status change banner for new_paper events", () => {
+  it("does not render status change transition for new_paper events", () => {
     render(
       <PublicationCard
         publication={{
@@ -141,7 +140,7 @@ describe("PublicationCard status change events", () => {
         }}
       />
     );
-    expect(screen.queryByText("Status update:")).not.toBeInTheDocument();
+    expect(screen.queryByText("→")).not.toBeInTheDocument();
   });
 
   it("hides status pill during status_change event to avoid duplication", () => {

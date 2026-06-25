@@ -90,7 +90,8 @@ describe("ResearchersContent", () => {
     (global.fetch as jest.Mock).mockReturnValue(new Promise(() => {}));
 
     renderWithSWR(<ResearchersContent />);
-    expect(screen.getByText(/Loading/i)).toBeInTheDocument();
+    const skeletons = document.querySelectorAll(".animate-pulse");
+    expect(skeletons.length).toBeGreaterThan(0);
   });
 
   it("shows error state", async () => {

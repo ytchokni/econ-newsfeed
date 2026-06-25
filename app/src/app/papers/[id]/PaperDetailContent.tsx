@@ -133,7 +133,7 @@ export default function PaperDetailContent({ id, initialData }: { id: number; in
   const events = publication.feed_events;
 
   return (
-    <div className="max-w-2xl mx-auto">
+    <div className="max-w-[800px] mx-auto px-6 py-8">
       <button
         onClick={() => router.back()}
         className="font-sans text-sm text-[var(--text-muted)] hover:text-[var(--text-primary)] transition-colors mb-6"

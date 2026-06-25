@@ -39,7 +39,7 @@ export default function ResearcherDetailContent({ id, initialData }: { id: numbe
   );
 
   return (
-    <div>
+    <div className="max-w-[800px] mx-auto px-6 py-8">
       {/* Breadcrumb */}
       <nav className="font-sans text-sm text-[var(--text-muted)] mb-6 flex items-center gap-1.5">
         <Link href="/researchers" className="hover:text-[var(--link)] transition-colors">

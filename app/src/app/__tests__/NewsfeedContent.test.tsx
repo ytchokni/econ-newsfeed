@@ -126,16 +126,13 @@ describe("NewsfeedContent", () => {
     });
 
     expect(screen.getByText("Trade Shocks")).toBeInTheDocument();
-    // Check date group headers exist
-    expect(screen.getByText(/Mar 15, 2026/)).toBeInTheDocument();
-    expect(screen.getByText(/Mar 14, 2026/)).toBeInTheDocument();
   });
 
   it("shows loading skeletons initially", () => {
     (global.fetch as jest.Mock).mockReturnValue(new Promise(() => {}));
 
-    renderWithSWR(<NewsfeedContent />);
-    expect(screen.getByText(/Loading/i)).toBeInTheDocument();
+    const { container } = renderWithSWR(<NewsfeedContent />);
+    expect(container.querySelector(".animate-pulse")).toBeInTheDocument();
   });
 
   it("shows error state on fetch failure", async () => {
@@ -178,19 +175,20 @@ describe("NewsfeedContent", () => {
     });
   });
 
-  it("renders Early Stage, Working Papers, and Publications toggle buttons", async () => {
+  it("renders All, Work in Progress, Working Papers, and Publications tabs", async () => {
     mockFetch(page1);
 
     renderWithSWR(<NewsfeedContent />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /early stage/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /^all$/i })).toBeInTheDocument();
     });
+    expect(screen.getByRole("button", { name: /work in progress/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /working papers/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /publications/i })).toBeInTheDocument();
   });
 
-  it("defaults to Working Papers tab as active", async () => {
+  it("defaults to All tab (no event_type/status filter)", async () => {
     mockFetch(page1);
 
     renderWithSWR(<NewsfeedContent />);
@@ -199,13 +197,12 @@ describe("NewsfeedContent", () => {
       expect(screen.getByText("Immigration and Wages")).toBeInTheDocument();
     });
 
-    // Verify the API was called with event_type=new_paper and status=working_paper
-    expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("event_type=new_paper")
-    );
-    expect(global.fetch).toHaveBeenCalledWith(
-      expect.stringContaining("status=working_paper")
-    );
+    const pubCalls = (global.fetch as jest.Mock).mock.calls
+      .map(([url]: [string]) => url)
+      .filter((url: string) => url.includes("/api/publications"));
+    expect(pubCalls.length).toBeGreaterThan(0);
+    expect(pubCalls[0]).not.toContain("event_type=");
+    expect(pubCalls[0]).not.toContain("status=");
   });
 
   it("switches to Publications tab and resets filters", async () => {

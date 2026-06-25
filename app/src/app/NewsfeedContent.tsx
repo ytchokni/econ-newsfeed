@@ -12,8 +12,8 @@ import ErrorMessage from "@/components/ErrorMessage";
 import EmptyState from "@/components/EmptyState";
 import SearchInput from "@/components/SearchInput";
 import SearchableCheckboxDropdown from "@/components/SearchableCheckboxDropdown";
-import PresetBar from "@/components/PresetBar";
-import type { PresetOption } from "@/components/PresetBar";
+import ActiveFilterChips from "@/components/ActiveFilterChips";
+import type { FilterChip } from "@/components/ActiveFilterChips";
 
 /* ---------- helpers ---------- */
 
@@ -49,7 +49,7 @@ function filtersToParams(
   page: number
 ): URLSearchParams {
   const params = new URLSearchParams();
-  if (tab !== "working_papers") params.set("tab", tab);
+  if (tab !== "all") params.set("tab", tab);
   if (page > 1) params.set("page", String(page));
   for (const key of FILTER_PARAM_KEYS) {
     const val = (filters as Record<string, string | undefined>)[key];
@@ -58,189 +58,108 @@ function filtersToParams(
   return params;
 }
 
+function toISODate(d: Date): string {
+  return d.toISOString().slice(0, 10);
+}
+
+function quarterStart(d: Date): Date {
+  const month = d.getMonth();
+  const qMonth = month - (month % 3);
+  return new Date(d.getFullYear(), qMonth, 1);
+}
+
+function formatChipDate(iso: string): string {
+  const d = new Date(iso + "T00:00:00");
+  return d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
 /* ---------- constants ---------- */
 
 const MIN_DATE = "2026-06-15";
 
-const TAB_FILTERS: Record<TabValue, { event_type: string; status?: string }> = {
+const TAB_FILTERS: Record<TabValue, { event_type?: string; status?: string }> = {
+  all: {},
   working_papers: { event_type: "new_paper", status: "working_paper" },
   publications: { event_type: "status_change", status: "revise_and_resubmit,accepted,published" },
   work_in_progress: { event_type: "new_paper", status: "work_in_progress" },
 };
 
-const PRESETS_COMMON: PresetOption[] = [
-  { label: "Top-20 Departments", value: "top20" },
-  { label: "Researchers with a Top-5", value: "has_top5" },
+const PRESET_LABELS: Record<string, string> = {
+  top20: "Top-20 Departments",
+  has_top5: "Researchers with a Top-5",
+  top5_journals: "Top-5 Journals",
+  top100_repec: "Top-100 RePEc Journals",
+  following: "My Feed",
+};
+
+type DatePresetKey = "7d" | "month" | "quarter";
+
+const DATE_PRESETS: { key: DatePresetKey; label: string }[] = [
+  { key: "7d", label: "Last 7 days" },
+  { key: "month", label: "This month" },
+  { key: "quarter", label: "This quarter" },
 ];
 
-const PRESETS_PUBLICATIONS: PresetOption[] = [
-  { label: "Top-5 Journals", value: "top5_journals" },
-  { label: "Top-100 RePEc Journals", value: "top100_repec" },
-  ...PRESETS_COMMON,
-];
+function datePresetToSince(key: DatePresetKey): string {
+  const now = new Date();
+  switch (key) {
+    case "7d": {
+      const d = new Date(now);
+      d.setDate(d.getDate() - 7);
+      return toISODate(d);
+    }
+    case "month":
+      return toISODate(new Date(now.getFullYear(), now.getMonth(), 1));
+    case "quarter":
+      return toISODate(quarterStart(now));
+  }
+}
 
 /* ---------- types ---------- */
 
-type TabValue = "working_papers" | "publications" | "work_in_progress";
+type TabValue = "all" | "working_papers" | "publications" | "work_in_progress";
 
-const VALID_TABS: TabValue[] = ["working_papers", "publications", "work_in_progress"];
+const VALID_TABS: TabValue[] = ["all", "working_papers", "publications", "work_in_progress"];
+
+const TAB_DEFS: { key: TabValue; label: string }[] = [
+  { key: "all", label: "All" },
+  { key: "work_in_progress", label: "Work in Progress" },
+  { key: "working_papers", label: "Working Papers" },
+  { key: "publications", label: "Publications" },
+];
 
 function parseTab(value: string | null): TabValue {
   if (value && VALID_TABS.includes(value as TabValue)) return value as TabValue;
-  return "working_papers";
+  return "all";
 }
 
-/* ---------- filter bar ---------- */
+/* ---------- preset definitions per tab ---------- */
 
-function FilterBar({
-  filters,
-  onChange,
-  activeTab,
-  onTabChange,
-}: {
-  filters: FeedFilters;
-  onChange: (next: FeedFilters) => void;
-  activeTab: TabValue;
-  onTabChange: (tab: TabValue) => void;
-}) {
-  const selectedInstitutions = (() => {
-    if (filters.preset === "top20") return ["top20"];
-    if (filters.institution) return filters.institution.split(",");
-    return [];
+interface QuickPreset {
+  value: string;
+  label: string;
+  highlight?: boolean;
+}
+
+function presetsForTab(tab: TabValue, isAuthenticated: boolean): QuickPreset[] {
+  const base: QuickPreset[] = (() => {
+    if (tab === "publications") {
+      return [
+        { value: "top5_journals", label: "Top-5 Journals" },
+        { value: "top100_repec", label: "Top-100 RePEc" },
+        { value: "top20", label: "Top-20 Depts" },
+      ];
+    }
+    return [
+      { value: "top20", label: "Top-20 Depts" },
+      { value: "has_top5", label: "Has Top-5" },
+    ];
   })();
 
-  const selectedJelCodes = filters.jel_code ? filters.jel_code.split(",") : [];
-  const { data: jelCodes } = useJelCodes();
-  const jelOptions = (jelCodes ?? []).map((jel) => ({
-    label: `${jel.code} — ${jel.name}`,
-    value: jel.code,
-  }));
-
-  const { data: filterOptions } = useFilterOptions();
-  const institutionOptions = [
-    { label: "Top 20", value: "top20" },
-    ...(filterOptions?.institutions ?? []).map((inst) => ({
-      label: inst,
-      value: inst,
-    })),
-  ];
-
-  const hasActiveFilters = !!(
-    filters.institution || filters.preset ||
-    filters.search || filters.jel_code ||
-    filters.since || filters.until
-  );
-
-  const handleJelChange = useCallback(
-    (selected: string[]) => {
-      onChange({ ...filters, jel_code: selected.join(",") || undefined });
-    },
-    [filters, onChange]
-  );
-
-  const handleInstitutionChange = useCallback(
-    (selected: string[]) => {
-      const hasTop20 = selected.includes("top20");
-      const institutions = selected.filter((v) => v !== "top20");
-      onChange({
-        ...filters,
-        preset: hasTop20 ? "top20" : undefined,
-        institution: institutions.length > 0 ? institutions.join(",") : undefined,
-      });
-    },
-    [filters, onChange]
-  );
-
-  const dateInputClass =
-    "px-3 py-1.5 font-sans text-sm border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card focus:outline-none focus:ring-1 focus:ring-[var(--link)]";
-
-  const tabButton = (tab: TabValue, label: string) => (
-    <button
-      onClick={() => onTabChange(tab)}
-      aria-pressed={activeTab === tab}
-      className={`px-4 py-1.5 text-sm font-medium rounded-md transition-all ${
-        activeTab === tab
-          ? "bg-[var(--bg-header)] text-white shadow-sm"
-          : "text-[var(--text-muted)] hover:text-[var(--text-secondary)]"
-      }`}
-    >
-      {label}
-    </button>
-  );
-
-  return (
-    <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-4 mb-8 space-y-3">
-      {/* Tab toggle */}
-      <div className="flex items-center gap-2">
-        <div className="inline-flex bg-[var(--bg)] rounded-lg p-0.5">
-          {tabButton("work_in_progress", "Early Stage")}
-          {tabButton("working_papers", "Working Papers")}
-          {tabButton("publications", "Publications")}
-        </div>
-      </div>
-      <div className="max-w-md">
-        <SearchInput
-          value={filters.search ?? ""}
-          onChange={(v) => onChange({ ...filters, search: v || undefined })}
-          placeholder="Search by title, abstract, or author..."
-        />
-      </div>
-      <div className="flex items-center gap-3 flex-wrap">
-        <span className="font-sans text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mr-1">
-          Filter
-        </span>
-
-        <SearchableCheckboxDropdown
-          label="Institution"
-          options={institutionOptions}
-          selected={selectedInstitutions}
-          onChange={handleInstitutionChange}
-        />
-
-        <SearchableCheckboxDropdown
-          label="Field"
-          options={jelOptions}
-          selected={selectedJelCodes}
-          onChange={handleJelChange}
-        />
-
-        <div className="flex items-center gap-1.5">
-          <label className="font-sans text-xs text-[var(--text-muted)]">From</label>
-          <input
-            type="date"
-            value={filters.since ?? ""}
-            min={MIN_DATE}
-            onChange={(e) =>
-              onChange({ ...filters, since: e.target.value || undefined })
-            }
-            className={dateInputClass}
-          />
-          <label className="font-sans text-xs text-[var(--text-muted)]">to</label>
-          <input
-            type="date"
-            value={filters.until ?? ""}
-            min={MIN_DATE}
-            onChange={(e) =>
-              onChange({ ...filters, until: e.target.value || undefined })
-            }
-            className={dateInputClass}
-          />
-        </div>
-
-        {hasActiveFilters && (
-          <>
-            <span className="w-px h-5 bg-[var(--border)]" />
-            <button
-              onClick={() => onChange({})}
-              className="font-sans text-xs text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
-            >
-              Clear all
-            </button>
-          </>
-        )}
-      </div>
-    </div>
-  );
+  if (isAuthenticated) {
+    return [{ value: "following", label: "My Feed", highlight: true }, ...base];
+  }
+  return base;
 }
 
 /* ---------- main component ---------- */
@@ -256,6 +175,7 @@ export default function NewsfeedContent() {
   );
   const [page, setPage] = useState(Math.max(1, Number(searchParams.get("page")) || 1));
   const [filters, setFilters] = useState<FeedFilters>(() => filtersFromParams(searchParams));
+  const [datePreset, setDatePreset] = useState<DatePresetKey | null>(null);
 
   const isInitialMount = useRef(true);
   useEffect(() => {
@@ -274,8 +194,8 @@ export default function NewsfeedContent() {
     const tabF = TAB_FILTERS[activeTab];
     return {
       ...filters,
-      event_type: tabF.event_type as FeedFilters["event_type"],
-      status: tabF.status,
+      ...(tabF.event_type ? { event_type: tabF.event_type as FeedFilters["event_type"] } : {}),
+      ...(tabF.status ? { status: tabF.status } : {}),
     };
   }, [filters, activeTab]);
 
@@ -289,114 +209,380 @@ export default function NewsfeedContent() {
   const handleTabChange = useCallback((tab: TabValue) => {
     setActiveTab(tab);
     setFilters({});
+    setDatePreset(null);
     setPage(1);
   }, []);
 
-  const presets = useMemo<PresetOption[]>(() => {
-    const base = activeTab === "publications" ? PRESETS_PUBLICATIONS : PRESETS_COMMON;
-    if (isAuthenticated) {
-      return [{ label: "My Feed", value: "following", highlight: true }, ...base];
+  /* ---------- filter data ---------- */
+
+  const selectedInstitutions = filters.institution ? filters.institution.split(",") : [];
+  const selectedJelCodes = filters.jel_code ? filters.jel_code.split(",") : [];
+
+  const { data: jelCodes } = useJelCodes();
+  const jelOptions = (jelCodes ?? []).map((jel) => ({
+    label: `${jel.code} — ${jel.name}`,
+    value: jel.code,
+  }));
+  const jelLabelMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const jel of jelCodes ?? []) {
+      map[jel.code] = `${jel.code} — ${jel.name}`;
     }
-    return base;
-  }, [activeTab, isAuthenticated]);
+    return map;
+  }, [jelCodes]);
+
+  const { data: filterOptions } = useFilterOptions();
+  const institutionOptions = (filterOptions?.institutions ?? []).map((inst) => ({
+    label: inst,
+    value: inst,
+  }));
+
+  const handleJelChange = useCallback(
+    (selected: string[]) => {
+      handleFilterChange({ ...filters, jel_code: selected.join(",") || undefined });
+    },
+    [filters, handleFilterChange]
+  );
+
+  const handleInstitutionChange = useCallback(
+    (selected: string[]) => {
+      handleFilterChange({
+        ...filters,
+        institution: selected.length > 0 ? selected.join(",") : undefined,
+      });
+    },
+    [filters, handleFilterChange]
+  );
+
+  const handlePresetClick = useCallback(
+    (value: string) => {
+      if (filters.preset === value) {
+        handleFilterChange({ ...filters, preset: undefined });
+      } else {
+        handleFilterChange({ ...filters, preset: value });
+      }
+    },
+    [filters, handleFilterChange]
+  );
+
+  const handleDatePreset = useCallback(
+    (key: DatePresetKey) => {
+      if (datePreset === key) {
+        setDatePreset(null);
+        handleFilterChange({ ...filters, since: undefined, until: undefined });
+      } else {
+        setDatePreset(key);
+        handleFilterChange({ ...filters, since: datePresetToSince(key), until: undefined });
+      }
+    },
+    [datePreset, filters, handleFilterChange]
+  );
+
+  const handleSinceChange = useCallback(
+    (value: string) => {
+      setDatePreset(null);
+      handleFilterChange({ ...filters, since: value || undefined });
+    },
+    [filters, handleFilterChange]
+  );
+
+  const handleUntilChange = useCallback(
+    (value: string) => {
+      setDatePreset(null);
+      handleFilterChange({ ...filters, until: value || undefined });
+    },
+    [filters, handleFilterChange]
+  );
+
+  const clearAll = useCallback(() => {
+    setDatePreset(null);
+    handleFilterChange({});
+  }, [handleFilterChange]);
+
+  const presets = useMemo(
+    () => presetsForTab(activeTab, isAuthenticated),
+    [activeTab, isAuthenticated]
+  );
+
+  /* ---------- build chips ---------- */
+
+  const chips = useMemo<FilterChip[]>(() => {
+    const result: FilterChip[] = [];
+
+    if (filters.preset) {
+      result.push({
+        key: `preset:${filters.preset}`,
+        label: PRESET_LABELS[filters.preset] ?? filters.preset,
+        onRemove: () => handleFilterChange({ ...filters, preset: undefined }),
+      });
+    }
+
+    for (const inst of selectedInstitutions) {
+      result.push({
+        key: `inst:${inst}`,
+        label: inst,
+        onRemove: () => {
+          const remaining = selectedInstitutions.filter((i) => i !== inst);
+          handleFilterChange({
+            ...filters,
+            institution: remaining.length > 0 ? remaining.join(",") : undefined,
+          });
+        },
+      });
+    }
+
+    for (const code of selectedJelCodes) {
+      result.push({
+        key: `jel:${code}`,
+        label: jelLabelMap[code] ?? code,
+        onRemove: () => {
+          const remaining = selectedJelCodes.filter((c) => c !== code);
+          handleFilterChange({
+            ...filters,
+            jel_code: remaining.length > 0 ? remaining.join(",") : undefined,
+          });
+        },
+      });
+    }
+
+    if (datePreset) {
+      const presetDef = DATE_PRESETS.find((d) => d.key === datePreset);
+      result.push({
+        key: "date_preset",
+        label: presetDef?.label ?? datePreset,
+        onRemove: () => {
+          setDatePreset(null);
+          handleFilterChange({ ...filters, since: undefined, until: undefined });
+        },
+      });
+    } else {
+      if (filters.since) {
+        result.push({
+          key: "since",
+          label: `Since ${formatChipDate(filters.since)}`,
+          onRemove: () => handleFilterChange({ ...filters, since: undefined }),
+        });
+      }
+      if (filters.until) {
+        result.push({
+          key: "until",
+          label: `Until ${formatChipDate(filters.until)}`,
+          onRemove: () => handleFilterChange({ ...filters, until: undefined }),
+        });
+      }
+    }
+
+    if (filters.search) {
+      result.push({
+        key: "search",
+        label: `Search: ${filters.search}`,
+        onRemove: () => handleFilterChange({ ...filters, search: undefined }),
+      });
+    }
+
+    return result;
+  }, [filters, selectedInstitutions, selectedJelCodes, jelLabelMap, datePreset, handleFilterChange]);
 
   return (
-    <div className="space-y-6">
-      <FilterBar
-        filters={filters}
-        onChange={handleFilterChange}
-        activeTab={activeTab}
-        onTabChange={handleTabChange}
-      />
+    <div className="max-w-[800px] mx-auto px-6">
+      {/* Tabs */}
+      <div className="pt-[22px]">
+        <div className="flex gap-[30px] border-b border-[var(--line)]">
+          {TAB_DEFS.map((t) => {
+            const active = t.key === activeTab;
+            return (
+              <button
+                key={t.key}
+                onClick={() => handleTabChange(t.key)}
+                className={`text-sm pb-[11px] -mb-px border-b-2 cursor-pointer transition-colors ${
+                  active
+                    ? "text-[var(--ink)] font-semibold border-[var(--accent)]"
+                    : "text-[var(--muted)] font-medium border-transparent hover:text-[var(--ink)]"
+                }`}
+              >
+                {t.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
-      <PresetBar
-        presets={presets}
-        active={filters.preset}
-        onChange={(preset) =>
-          handleFilterChange({ ...filters, preset, institution: preset ? undefined : filters.institution })
-        }
-      />
-
-      {data && (
-        <p className="font-sans text-sm text-[var(--text-muted)]">
-          {data.total === 0
-            ? "No results"
-            : `Showing ${data.items.length.toLocaleString()} of ${data.total.toLocaleString()} results`}
-          {data.researcher_count != null && data.researcher_count > 0
-            ? ` from ${data.researcher_count.toLocaleString()} researcher${data.researcher_count === 1 ? "" : "s"}`
-            : ""}
-        </p>
-      )}
-
-      {isLoading && !data && (
-        <div className="space-y-4">
-          <p className="font-sans text-sm text-[var(--text-muted)]">Loading publications...</p>
-          {Array.from({ length: 3 }).map((_, i) => (
-            <PublicationCardSkeleton key={i} />
+      {/* Search + Quick-filter presets */}
+      <div className="mt-5 flex items-center justify-between gap-[18px] flex-wrap">
+        <div className="flex-1 min-w-[240px] max-w-[360px]">
+          <SearchInput
+            value={filters.search ?? ""}
+            onChange={(v) => handleFilterChange({ ...filters, search: v || undefined })}
+            placeholder="Search title, author, or field..."
+          />
+        </div>
+        <div className="flex gap-2 flex-wrap">
+          {presets.map((p) => (
+            <button
+              key={p.value}
+              onClick={() => handlePresetClick(p.value)}
+              className={`text-xs font-medium tracking-[0.01em] px-[13px] py-[7px] rounded-sm cursor-pointer border transition-colors ${
+                p.highlight
+                  ? "border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white"
+                  : "bg-transparent text-[var(--ink2)] border-[var(--line2)] hover:border-[var(--muted)]"
+              }`}
+            >
+              {p.label}
+            </button>
           ))}
         </div>
-      )}
+      </div>
 
-      {error && !data && (
-        <ErrorMessage message="Failed to load publications." />
-      )}
+      {/* Filters row */}
+      <div className="mt-4 flex items-center gap-3 flex-wrap">
+        <span className="text-[10px] font-bold tracking-[0.16em] uppercase text-[var(--muted)]">
+          Filter
+        </span>
 
-      {!isLoading && data && data.items.length === 0 && (
-        <EmptyState
-          message={
-            activeTab === "working_papers"
-              ? "No new working papers yet. Papers will appear here as researchers update their pages."
-              : activeTab === "publications"
-              ? "No publication updates yet. Status changes will appear here when papers get R&R, accepted, or published."
-              : "No early stage papers yet. Items will appear here as researchers add new projects."
-          }
+        <SearchableCheckboxDropdown
+          label="Institution"
+          options={institutionOptions}
+          selected={selectedInstitutions}
+          onChange={handleInstitutionChange}
         />
-      )}
 
-      {data && data.items.length > 0 && (
-        <div className={isValidating && !isLoading ? "opacity-60 transition-opacity duration-200" : "transition-opacity duration-200"}>
-          <>
+        <SearchableCheckboxDropdown
+          label="Field"
+          options={jelOptions}
+          selected={selectedJelCodes}
+          onChange={handleJelChange}
+        />
+
+        <div className="flex items-center gap-1.5">
+          {DATE_PRESETS.map((dp) => (
+            <button
+              key={dp.key}
+              onClick={() => handleDatePreset(dp.key)}
+              className={`text-[11px] font-medium px-2.5 py-[5px] rounded-sm cursor-pointer border transition-colors ${
+                datePreset === dp.key
+                  ? "bg-[var(--ink)] text-white border-[var(--ink)]"
+                  : "bg-transparent text-[var(--ink2)] border-[var(--line2)] hover:border-[var(--muted)]"
+              }`}
+            >
+              {dp.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex items-center gap-[7px] text-[var(--muted)] text-xs">
+          <span>From</span>
+          <input
+            type="date"
+            value={filters.since ?? ""}
+            min={MIN_DATE}
+            onChange={(e) => handleSinceChange(e.target.value)}
+            className="text-xs text-[var(--ink)] border border-[var(--line2)] rounded-sm px-2 py-1.5 bg-white"
+          />
+          <span>to</span>
+          <input
+            type="date"
+            value={filters.until ?? ""}
+            min={MIN_DATE}
+            onChange={(e) => handleUntilChange(e.target.value)}
+            className="text-xs text-[var(--ink)] border border-[var(--line2)] rounded-sm px-2 py-1.5 bg-white"
+          />
+        </div>
+      </div>
+
+      {/* Active filter chips */}
+      <ActiveFilterChips chips={chips} onClearAll={clearAll} />
+
+      {/* Results line */}
+      <div className="mt-[18px] flex items-center gap-[14px]">
+        {data && (
+          <p className="m-0 text-[13px] text-[var(--muted)]">
+            {data.total === 0
+              ? "No updates"
+              : `Showing ${data.items.length.toLocaleString()} of ${data.total.toLocaleString()} updates`}
+          </p>
+        )}
+        {chips.length === 1 && (
+          <button
+            onClick={clearAll}
+            className="text-xs text-[var(--accent)] bg-transparent border-none cursor-pointer p-0"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      {/* Content */}
+      <div className="pb-[90px]">
+        {isLoading && !data && (
+          <div className="mt-8 space-y-4">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <PublicationCardSkeleton key={i} />
+            ))}
+          </div>
+        )}
+
+        {error && !data && (
+          <div className="mt-8">
+            <ErrorMessage message="Failed to load publications." />
+          </div>
+        )}
+
+        {!isLoading && data && data.items.length === 0 && (
+          <EmptyState onClear={clearAll} />
+        )}
+
+        {data && data.items.length > 0 && (
+          <div className={isValidating && !isLoading ? "opacity-60 transition-opacity duration-200" : "transition-opacity duration-200"}>
             {Array.from(groupByDate(data.items).entries()).map(([date, pubs]) => (
-              <section key={date}>
-                <h2 className="font-sans text-xs font-semibold uppercase tracking-widest text-[var(--text-muted)] mb-4 pb-2 border-b border-[var(--border-light)] flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)]" />
-                  {date}
-                </h2>
-                <div className="space-y-3 animate-stagger">
-                  {pubs.map((pub) => (
-                    <PublicationCard key={pub.event_id ?? pub.id} publication={pub} />
-                  ))}
+              <section key={date} className="mt-[34px]">
+                <div className="flex items-center gap-[14px] mb-1.5">
+                  {date === "Today" && (
+                    <span className="w-1.5 h-1.5 rounded-full bg-[var(--accent)] inline-block" />
+                  )}
+                  <span className="text-xs font-bold tracking-[0.14em] uppercase text-[var(--ink)] whitespace-nowrap">
+                    {date}
+                  </span>
+                  <span className="flex-1 h-px bg-[var(--line2)]" />
+                  <span className="text-[11px] text-[var(--muted)] whitespace-nowrap">
+                    {pubs.length} {pubs.length === 1 ? "item" : "items"}
+                  </span>
                 </div>
+
+                {pubs.map((pub) => (
+                  <PublicationCard key={pub.event_id ?? pub.id} publication={pub} />
+                ))}
               </section>
             ))}
-            <div className="flex items-center justify-center gap-3 pt-4">
+
+            {/* Pagination */}
+            <div className="flex items-center justify-center gap-3 pt-8">
               {page > 1 ? (
                 <button
                   onClick={() => setPage((p) => p - 1)}
-                  className="font-sans px-5 py-2 text-sm font-medium border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card hover:shadow-card-hover hover:-translate-y-px transition-all duration-200 text-[var(--text-primary)]"
+                  className="px-5 py-2 text-sm font-medium border border-[var(--line2)] rounded-sm bg-white hover:border-[var(--muted)] transition-colors text-[var(--ink)]"
                 >
                   &larr; Previous
                 </button>
               ) : (
                 <span />
               )}
-              {data && data.pages > 0 && (
-                <span className="font-sans text-sm text-[var(--text-muted)]">
+              {data.pages > 0 && (
+                <span className="text-sm text-[var(--muted)]">
                   Page {data.page} of {data.pages}
                 </span>
               )}
-              {data && data.page < data.pages && (
+              {data.page < data.pages && (
                 <button
                   onClick={() => setPage((p) => p + 1)}
-                  className="font-sans px-5 py-2 text-sm font-medium border border-[var(--border)] rounded-lg bg-[var(--bg-card)] shadow-card hover:shadow-card-hover hover:-translate-y-px transition-all duration-200 text-[var(--text-primary)]"
+                  className="px-5 py-2 text-sm font-medium border border-[var(--line2)] rounded-sm bg-white hover:border-[var(--muted)] transition-colors text-[var(--ink)]"
                 >
                   Next &rarr;
                 </button>
               )}
             </div>
-          </>
-        </div>
-      )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

@@ -2,61 +2,81 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useAuth, useLoginModal } from "@/lib/auth";
-import UserMenu from "@/components/UserMenu";
+
+function formatHeaderDate() {
+  return new Date().toLocaleDateString("en-US", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    year: "numeric",
+  });
+}
 
 export default function Header() {
   const pathname = usePathname();
-  const { isAuthenticated, isLoading } = useAuth();
-  const { openLoginModal } = useLoginModal();
+  const isAdmin = pathname?.startsWith("/admin");
+
+  if (isAdmin) {
+    return (
+      <header className="border-b border-[var(--line)]">
+        <div className="max-w-[800px] mx-auto px-6 py-3 flex items-center justify-between">
+          <Link href="/" className="text-[11px] font-semibold tracking-[0.14em] uppercase text-[var(--muted)] hover:text-[var(--ink)]">
+            &larr; Back to Feed
+          </Link>
+        </div>
+      </header>
+    );
+  }
 
   return (
-    <header className="bg-[var(--bg-header)] sticky top-0 z-50 shadow-[0_2px_16px_rgba(26,35,50,0.18)]">
-      <div className="mx-auto max-w-4xl px-4 sm:px-6 lg:px-8 py-5 flex items-center justify-between">
-        <Link href="/" className="text-xl font-bold tracking-tight">
-          <span className="sr-only">Econ Newsfeed</span>
-          <span aria-hidden="true">
-            <span className="text-[#f0ece4]">Econ</span>{" "}
-            <span className="text-[var(--accent)]">Newsfeed</span>
+    <>
+      {/* Top bar */}
+      <div className="border-b border-[var(--line)]">
+        <div className="max-w-[800px] mx-auto px-6 py-[11px] flex items-center justify-between">
+          <span className="text-[11px] font-semibold tracking-[0.14em] uppercase text-[var(--muted)]">
+            {formatHeaderDate()}
           </span>
-        </Link>
-        <div className="flex items-center gap-6">
-          <nav className="flex gap-8 font-sans text-xs font-semibold uppercase tracking-widest">
-            <Link
-              href="/"
-              className={`py-1 border-b-2 transition-colors ${
-                pathname === "/"
-                  ? "text-[#f0ece4] border-[var(--accent)]"
-                  : "text-[#8896a7] border-transparent hover:text-[#f0ece4]"
-              }`}
-            >
-              Feed
-            </Link>
-            <Link
-              href="/researchers"
-              className={`py-1 border-b-2 transition-colors ${
-                pathname?.startsWith("/researchers")
-                  ? "text-[#f0ece4] border-[var(--accent)]"
-                  : "text-[#8896a7] border-transparent hover:text-[#f0ece4]"
-              }`}
-            >
-              Researchers
-            </Link>
-          </nav>
-          {!isLoading && (
-            isAuthenticated ? (
-              <UserMenu />
-            ) : (
-              <button
-                onClick={openLoginModal}
-                className="font-sans text-xs font-semibold uppercase tracking-widest bg-[var(--accent)] text-white px-4 py-1.5 rounded-full hover:brightness-110 transition-all"
+          <div className="flex items-center gap-[26px]">
+            <nav className="flex gap-[22px] text-[11px] font-semibold tracking-[0.14em] uppercase">
+              <Link
+                href="/"
+                className={`pb-[3px] border-b-2 transition-colors ${
+                  pathname === "/" || pathname === ""
+                    ? "text-[var(--ink)] border-[var(--accent)]"
+                    : "text-[var(--muted)] border-transparent hover:text-[var(--ink)]"
+                }`}
               >
-                Login
-              </button>
-            )
-          )}
+                Feed
+              </Link>
+              <Link
+                href="/researchers"
+                className={`pb-[3px] border-b-2 transition-colors ${
+                  pathname?.startsWith("/researchers")
+                    ? "text-[var(--ink)] border-[var(--accent)]"
+                    : "text-[var(--muted)] border-transparent hover:text-[var(--ink)]"
+                }`}
+              >
+                Researchers
+              </Link>
+            </nav>
+          </div>
         </div>
       </div>
-    </header>
+
+      {/* Title section */}
+      <div className="border-b-2 border-[var(--ink)]">
+        <div className="max-w-[800px] mx-auto px-6 py-6 flex items-end justify-between gap-7">
+          <div className="flex items-center gap-[13px]">
+            <span className="w-[13px] h-[13px] bg-[var(--accent)] inline-block mb-[5px]" />
+            <h1 className="m-0 text-[35px] font-bold tracking-[-0.015em] leading-none">
+              Econ Newsfeed
+            </h1>
+          </div>
+          <p className="m-0 mb-[3px] font-serif italic text-sm leading-snug text-[var(--muted)] max-w-[250px] text-right">
+            Stay up to date with new work from economists, the day it appears.
+          </p>
+        </div>
+      </div>
+    </>
   );
 }

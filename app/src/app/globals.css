@@ -8,57 +8,52 @@
 }
 
 :root {
-  --bg: #f6f3ee;
-  --bg-card: #ffffff;
-  --bg-header: #1a2332;
-  --text-primary: #1a2332;
-  --text-secondary: #4a5568;
-  --text-muted: #8896a7;
-  --accent: #c45d3e;
-  --link: #2a6f6f;
-  --border: #e2ddd5;
-  --border-light: #ece8e1;
-  --shadow-sm: 0 1px 3px rgba(26,35,50,0.06), 0 1px 2px rgba(26,35,50,0.04);
-  --shadow-md: 0 4px 12px rgba(26,35,50,0.08), 0 2px 4px rgba(26,35,50,0.04);
+  --paper: #FFFFFF;
+  --ink: #191919;
+  --ink2: #525252;
+  --muted: #8A8A8A;
+  --line: #ECECEC;
+  --line2: #DCDCDC;
+  --accent: #9A3B2E;
+  --rowpad: 22px;
+
+  /* Legacy aliases for components not yet migrated */
+  --bg: #FFFFFF;
+  --bg-card: #FFFFFF;
+  --bg-header: #191919;
+  --text-primary: #191919;
+  --text-secondary: #525252;
+  --text-muted: #8A8A8A;
+  --link: #9A3B2E;
+  --border: #DCDCDC;
+  --border-light: #ECECEC;
 }
 
 body {
-  color: var(--text-primary);
-  background: var(--bg);
-  font-family: var(--font-source-serif), Georgia, "Times New Roman", serif;
+  color: var(--ink);
+  background: var(--paper);
+  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
 }
 
 h1, h2, h3, h4, h5, h6 {
-  font-family: var(--font-source-serif), Georgia, "Times New Roman", serif;
+  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
 }
 
 nav, button, select, input, label {
-  font-family: var(--font-dm-sans), system-ui, -apple-system, sans-serif;
+  font-family: var(--font-sans), system-ui, -apple-system, sans-serif;
+}
+
+::selection {
+  background: rgba(154, 59, 46, 0.14);
 }
 
 @layer utilities {
   .shadow-card {
-    box-shadow: 0 1px 3px rgba(26,35,50,0.06), 0 1px 2px rgba(26,35,50,0.04);
+    box-shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
   }
   .shadow-card-hover {
-    box-shadow: 0 4px 12px rgba(26,35,50,0.08), 0 2px 4px rgba(26,35,50,0.04);
+    box-shadow: 0 8px 28px rgba(0,0,0,0.10);
   }
-  .animate-stagger > * {
-    opacity: 0;
-    animation: fade-in-up 0.4s ease-out forwards;
-  }
-  .animate-stagger > *:nth-child(1) { animation-delay: 0ms; }
-  .animate-stagger > *:nth-child(2) { animation-delay: 60ms; }
-  .animate-stagger > *:nth-child(3) { animation-delay: 120ms; }
-  .animate-stagger > *:nth-child(4) { animation-delay: 180ms; }
-  .animate-stagger > *:nth-child(5) { animation-delay: 240ms; }
-  .animate-stagger > *:nth-child(6) { animation-delay: 300ms; }
-  .animate-stagger > *:nth-child(n+7) { animation-delay: 360ms; }
-}
-
-@keyframes fade-in-up {
-  0% { opacity: 0; transform: translateY(8px); }
-  100% { opacity: 1; transform: translateY(0); }
 }
 
 @keyframes dropdown-in {
