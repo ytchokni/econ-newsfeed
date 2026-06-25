@@ -94,7 +94,8 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
 
 
 def persist_extraction(url: str, url_id: int, pubs: list[dict],
-                       is_seed: bool = False, event_date=None) -> None:
+                       is_seed: bool = False, event_date=None,
+                       reconcile_titles: bool = True) -> None:
     """Persist extraction results in one call.
 
     Absorbs the full post-extraction sequence: save papers, emit feed events,
@@ -104,9 +105,10 @@ def persist_extraction(url: str, url_id: int, pubs: list[dict],
     results = PaperSaver.save_publications(url, pubs, is_seed=is_seed)
     FeedEventEmitter.emit_new_paper_events(results, url, is_seed=is_seed, event_date=event_date)
 
-    renames = PaperSaver.reconcile_title_renames(url, pubs)
-    for r in renames:
-        FeedEventEmitter.emit_title_change(r.paper_id, r.old_title, r.new_title, event_date=event_date)
+    if reconcile_titles:
+        renames = PaperSaver.reconcile_title_renames(url, pubs)
+        for r in renames:
+            FeedEventEmitter.emit_title_change(r.paper_id, r.old_title, r.new_title, event_date=event_date)
 
     match_and_save_paper_links(url_id, pubs)
     _append_snapshots(pubs, url, event_date)
@@ -198,7 +200,10 @@ def _process_diff_changes(changes: list[dict], url: str, url_id: int,
     title_changes = [c for c in changes if c['change_type'] == 'title_change']
 
     if new_pubs:
-        persist_extraction(url, url_id, new_pubs, is_seed=False, event_date=fetch_date)
+        persist_extraction(
+            url, url_id, new_pubs, is_seed=False, event_date=fetch_date,
+            reconcile_titles=False,
+        )
 
     if status_changes:
         _append_snapshots(status_changes, url, event_date=fetch_date)

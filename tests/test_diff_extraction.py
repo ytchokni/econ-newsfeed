@@ -342,6 +342,7 @@ class TestExtractOneUrlDiffPath:
         args = mocks["persist"].call_args
         assert args[0][2] == [new_pub]
         assert args[1]["is_seed"] is False
+        assert args[1]["reconcile_titles"] is False
 
     def test_diff_llm_failure_returns_failed(self):
         """LLM failure on diff path returns 'failed' and does not mark extracted."""

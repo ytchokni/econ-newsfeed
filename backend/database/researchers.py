@@ -266,7 +266,6 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
         if conn is not None:
             c = conn.cursor(buffered=True)
             c.execute(query, params)
-            conn.commit()
             lid = c.lastrowid
             c.close()
             return lid
