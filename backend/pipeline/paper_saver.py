@@ -194,6 +194,7 @@ class PaperSaver:
                     )
                     title = pub['title']
                     title_hash = compute_title_hash(title)
+                    status = pub.get('status')
 
                     cursor = conn.cursor(buffered=True)
 
@@ -203,7 +204,7 @@ class PaperSaver:
                             discovered_at, status, draft_url, is_seed)
                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                         (url, title, title_hash, pub.get('year'), pub.get('venue'),
-                         pub.get('abstract'), datetime.now(timezone.utc), pub.get('status'),
+                         pub.get('abstract'), datetime.now(timezone.utc), status,
                          pub.get('draft_url'), is_seed),
                     )
 
@@ -329,7 +330,7 @@ class PaperSaver:
                         title=title,
                         is_new=is_new,
                         new_to_this_url=new_to_this_url,
-                        status=pub.get('status'),
+                        status=status,
                     ))
                     logging.info(f"Publication saved successfully: {pub['title']}")
 

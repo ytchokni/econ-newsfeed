@@ -905,29 +905,30 @@ def create_tables() -> None:
                     # WIP/WP distinction is now LLM-determined at extraction time;
                     # existing WIP data was set by a draft_url heuristic that is removed.
                     try:
-                        cursor.execute("""
-                            UPDATE papers SET status = 'working_paper'
-                            WHERE status = 'work_in_progress'
-                        """)
-                        papers_reverted = cursor.rowcount
-                        conn.commit()
+                        cursor.execute(
+                            "SELECT EXISTS(SELECT 1 FROM papers WHERE status = 'work_in_progress' LIMIT 1)"
+                        )
+                        if cursor.fetchone()[0]:
+                            cursor.execute("""
+                                UPDATE papers SET status = 'working_paper'
+                                WHERE status = 'work_in_progress'
+                            """)
+                            papers_reverted = cursor.rowcount
 
-                        cursor.execute("""
-                            UPDATE paper_snapshots SET status = 'working_paper'
-                            WHERE status = 'work_in_progress'
-                        """)
-                        snapshots_reverted = cursor.rowcount
-                        conn.commit()
+                            cursor.execute("""
+                                UPDATE paper_snapshots SET status = 'working_paper'
+                                WHERE status = 'work_in_progress'
+                            """)
+                            snapshots_reverted = cursor.rowcount
 
-                        cursor.execute("""
-                            DELETE FROM feed_events
-                            WHERE new_status = 'work_in_progress'
-                               OR old_status = 'work_in_progress'
-                        """)
-                        events_deleted = cursor.rowcount
-                        conn.commit()
+                            cursor.execute("""
+                                DELETE FROM feed_events
+                                WHERE new_status = 'work_in_progress'
+                                   OR old_status = 'work_in_progress'
+                            """)
+                            events_deleted = cursor.rowcount
+                            conn.commit()
 
-                        if papers_reverted or events_deleted:
                             logging.info(
                                 "Migration: reverted %d papers and %d snapshots from "
                                 "work_in_progress to working_paper, deleted %d WIP feed events",

@@ -300,7 +300,7 @@ For each change, provide:
 - change_type: one of "new_paper", "status_change", "title_change", "removed"
 - title: the publication title (current/new version), copied verbatim from the page
 - authors: a list of [first_name, last_name] pairs
-- year, venue, status, draft_url, abstract: from the NEW version (or OLD version for "removed")
+- year, venue, draft_url, abstract: from the NEW version (or OLD version for "removed")
 - status: one of "published", "accepted", "revise_and_resubmit", "reject_and_resubmit", "working_paper", "work_in_progress", or null. Use "work_in_progress" ONLY for early-stage research under explicit "Work in Progress" / "Research in Progress" sections without a working paper series. If a paper has a working paper series (e.g. "NBER WP", "CEPR Discussion Paper"), use "working_paper" regardless of section. Default to "working_paper" for unpublished papers when neither signal is present.
 - old_status: previous status (for status_change only)
 - old_title: previous title (for title_change only)"""
