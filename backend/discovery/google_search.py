@@ -9,6 +9,10 @@ logger = logging.getLogger(__name__)
 _API_URL = "https://www.googleapis.com/customsearch/v1"
 
 
+class QuotaExhaustedError(Exception):
+    """Raised when Google CSE daily quota is exhausted (HTTP 429)."""
+
+
 def search_researcher(
     first_name: str,
     last_name: str,
@@ -37,7 +41,7 @@ def search_researcher(
         )
         if resp.status_code == 429:
             logger.warning("Google CSE daily quota exhausted")
-            return query, []
+            raise QuotaExhaustedError("Google CSE daily quota exhausted")
         resp.raise_for_status()
         data = resp.json()
         items = data.get("items", [])

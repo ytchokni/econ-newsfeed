@@ -15,6 +15,7 @@ os.environ.setdefault("NEXTAUTH_SECRET", "test-nextauth-secret-for-ci")
 
 from unittest.mock import patch, MagicMock
 from backend.discovery.classifier import WebsiteClassification
+from backend.discovery.google_search import QuotaExhaustedError
 
 
 def test_run_discovery_batch_no_candidates():
@@ -81,6 +82,24 @@ def test_subpage_crawler_finds_research():
 
     page_types = {sp["page_type"] for sp in result}
     assert "research" in page_types
+
+
+def test_run_discovery_batch_stops_on_quota_exhaustion():
+    """Batch stops immediately on CSE quota exhaustion without burning candidates."""
+    candidates = [
+        {"id": 1, "first_name": "Jane", "last_name": "Doe", "affiliation": "MIT"},
+        {"id": 2, "first_name": "John", "last_name": "Smith", "affiliation": "Harvard"},
+    ]
+    mock_insert = MagicMock()
+
+    with patch("backend.discovery.engine.get_discovery_candidates", return_value=candidates), \
+         patch("backend.discovery.engine.search_researcher", side_effect=QuotaExhaustedError("quota")), \
+         patch("backend.discovery.engine.insert_discovery", mock_insert):
+        from backend.discovery.engine import run_discovery_batch
+        result = run_discovery_batch(limit=2)
+
+    assert result["searched"] == 0
+    mock_insert.assert_not_called()
 
 
 def test_classifier_prompt_format():

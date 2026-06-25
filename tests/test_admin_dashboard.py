@@ -47,17 +47,21 @@ def test_get_admin_dashboard_stats_returns_all_sections():
         "last_call_at": None,
         "tokens_last_24h": 0,
         "last_extracted_at": None,
-        # discovery section keys
-        "total_pending": 0,
-        "total_approved": 0,
-        "total_rejected": 0,
+        # discovery section keys (unused — get_discovery_stats is patched separately)
+        "total_searched": 0,
+        "pending_review": 0,
+        "approved": 0,
+        "rejected": 0,
+        "no_result": 0,
     })
 
     mock_discovery_stats = {
-        "total_pending": 0,
-        "total_approved": 0,
-        "total_rejected": 0,
-        "recent": [],
+        "total_searched": 0,
+        "pending_review": 0,
+        "approved": 0,
+        "rejected": 0,
+        "no_result": 0,
+        "pool_remaining": 0,
     }
 
     with patch("backend.database.admin.fetch_all", mock_fetch_all), \
@@ -118,9 +122,12 @@ def test_get_admin_dashboard_stats_returns_all_sections():
 
     # Discovery section
     assert "discovery" in result
-    assert "total_pending" in result["discovery"]
-    assert "total_approved" in result["discovery"]
-    assert "total_rejected" in result["discovery"]
+    assert "total_searched" in result["discovery"]
+    assert "pending_review" in result["discovery"]
+    assert "approved" in result["discovery"]
+    assert "rejected" in result["discovery"]
+    assert "no_result" in result["discovery"]
+    assert "pool_remaining" in result["discovery"]
 
 
 def test_admin_dashboard_endpoint_requires_api_key(client):
@@ -147,7 +154,7 @@ def test_admin_dashboard_endpoint_returns_data(client):
                   "last_30_days": []},
         "scrapes": {"recent": [], "totals": {"total_scrapes": 0, "total_pubs_extracted": 0}},
         "activity": {"events_last_7d": {}, "events_last_30d": {}, "recent_events": []},
-        "discovery": {"total_pending": 0, "total_approved": 0, "total_rejected": 0},
+        "discovery": {"total_searched": 0, "pending_review": 0, "approved": 0, "rejected": 0, "no_result": 0, "pool_remaining": 0},
     }
     with patch("backend.api.get_admin_dashboard_stats", return_value=mock_stats):
         resp = client.get(

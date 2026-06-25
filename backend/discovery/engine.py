@@ -4,7 +4,7 @@ import os
 import time
 
 from backend.database.discoveries import get_discovery_candidates, insert_discovery
-from backend.discovery.google_search import search_researcher
+from backend.discovery.google_search import search_researcher, QuotaExhaustedError
 from backend.discovery.classifier import classify_search_results
 from backend.discovery.subpage_crawler import crawl_subpages
 
@@ -40,7 +40,11 @@ def run_discovery_batch(limit: int | None = None) -> dict:
         affiliation = candidate.get("affiliation")
 
         try:
-            query, results = search_researcher(first, last, affiliation)
+            try:
+                query, results = search_researcher(first, last, affiliation)
+            except QuotaExhaustedError:
+                logger.warning("CSE quota exhausted after %d searches — stopping batch", stats["searched"])
+                break
             if not results:
                 insert_discovery(rid, None, None, None, query or f"{first} {last}")
                 stats["no_result"] += 1
