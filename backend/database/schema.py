@@ -913,6 +913,42 @@ def create_tables() -> None:
                     except Exception as e:
                         logging.warning("Migration: has_top5_pub backfill: %s", e)
 
+                    # Revert all work_in_progress → working_paper.
+                    # WIP/WP distinction is now LLM-determined at extraction time;
+                    # existing WIP data was set by a draft_url heuristic that is removed.
+                    try:
+                        cursor.execute(
+                            "SELECT EXISTS(SELECT 1 FROM papers WHERE status = 'work_in_progress' LIMIT 1)"
+                        )
+                        if cursor.fetchone()[0]:
+                            cursor.execute("""
+                                UPDATE papers SET status = 'working_paper'
+                                WHERE status = 'work_in_progress'
+                            """)
+                            papers_reverted = cursor.rowcount
+
+                            cursor.execute("""
+                                UPDATE paper_snapshots SET status = 'working_paper'
+                                WHERE status = 'work_in_progress'
+                            """)
+                            snapshots_reverted = cursor.rowcount
+
+                            cursor.execute("""
+                                DELETE FROM feed_events
+                                WHERE new_status = 'work_in_progress'
+                                   OR old_status = 'work_in_progress'
+                            """)
+                            events_deleted = cursor.rowcount
+                            conn.commit()
+
+                            logging.info(
+                                "Migration: reverted %d papers and %d snapshots from "
+                                "work_in_progress to working_paper, deleted %d WIP feed events",
+                                papers_reverted, snapshots_reverted, events_deleted,
+                            )
+                    except Exception as e:
+                        logging.warning("Migration: WIP revert: %s", e)
+
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                     cursor.fetchone()

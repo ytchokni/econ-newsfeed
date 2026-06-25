@@ -26,10 +26,12 @@ class ExtractionLLMResult:
 
 VALID_STATUSES = frozenset({
     'published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper',
+    'work_in_progress',
 })
 
 _VALID_STATUSES = Literal[
-    'published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper'
+    'published', 'accepted', 'revise_and_resubmit', 'reject_and_resubmit', 'working_paper',
+    'work_in_progress',
 ]
 
 
@@ -298,7 +300,8 @@ For each change, provide:
 - change_type: one of "new_paper", "status_change", "title_change", "removed"
 - title: the publication title (current/new version), copied verbatim from the page
 - authors: a list of [first_name, last_name] pairs
-- year, venue, status, draft_url, abstract: from the NEW version (or OLD version for "removed")
+- year, venue, draft_url, abstract: from the NEW version (or OLD version for "removed")
+- status: one of "published", "accepted", "revise_and_resubmit", "reject_and_resubmit", "working_paper", "work_in_progress", or null. Use "work_in_progress" ONLY for early-stage research under explicit "Work in Progress" / "Research in Progress" sections without a working paper series. If a paper has a working paper series (e.g. "NBER WP", "CEPR Discussion Paper"), use "working_paper" regardless of section. Default to "working_paper" for unpublished papers when neither signal is present.
 - old_status: previous status (for status_change only)
 - old_title: previous title (for title_change only)"""
 
@@ -333,7 +336,11 @@ For each publication, extract:
 - authors: a list of [first_name, last_name] pairs. Use full first names when available (e.g., "John" not "J."). If only an initial appears, use it as given.
 - year: the year associated with this paper as a 4-digit string. Use the publication year, working paper release year, revision date, or most recent year shown near the paper entry. Only return null if no year appears anywhere near the paper entry.
 - venue: journal or conference name, or null if unknown
-- status: one of "published", "accepted", "revise_and_resubmit", "reject_and_resubmit", "working_paper", or null if unknown. Determine status from paper-level labels FIRST (e.g., "Forthcoming" means "accepted", NOT "published"). Only fall back to section headers if no paper-level label exists. Use "reject_and_resubmit" ONLY if the page explicitly mentions rejection or R&R for this specific paper.
+- status: one of "published", "accepted", "revise_and_resubmit", "reject_and_resubmit", "working_paper", "work_in_progress", or null if unknown. Determine status using these rules in priority order:
+  1. Paper-level labels FIRST (e.g., "Forthcoming" means "accepted", NOT "published"; "NBER Working Paper No. 12345" or "HBS Working Paper" means "working_paper").
+  2. Section headers as FALLBACK if no paper-level label exists: "Working Papers" or "Discussion Papers" → "working_paper". "Work in Progress", "Works in Progress", "Research in Progress", "Selected Work in Progress" → "work_in_progress".
+  3. When NEITHER signal is present (no working paper series AND no clear section header), default to "working_paper" for unpublished papers.
+  Use "work_in_progress" ONLY for early-stage research that lacks a formal working paper series affiliation — papers listed under explicit "Work in Progress" sections, typically without a working paper number or institutional series. Use "reject_and_resubmit" ONLY if the page explicitly mentions rejection or R&R for this specific paper.
 - draft_url: a URL to a PDF, SSRN, NBER, or working paper version, or null if not available
 - abstract: the paper abstract, or null if not shown on the page
 
@@ -416,7 +423,7 @@ Analyze this diff and identify ALL changes to academic publications:
 3. **title_change**: A publication whose title was modified. Set old_title to the previous title.
 4. **removed**: A publication that appears only in removed lines and is not present in added/context lines.
 
-If a paper moved sections (e.g. "Working Papers" to "Refereed Publications"), that is a status_change, NOT a new_paper.
+If a paper moved sections (e.g. "Working Papers" to "Refereed Publications", or "Work in Progress" to "Working Papers"), that is a status_change, NOT a new_paper.
 
 IMPORTANT: Ignore changes to navigation, dates, layout, boilerplate, or non-publication content. Only report changes that affect academic publications.
 
@@ -436,11 +443,11 @@ If no publication changes were detected, return an empty changes list."""
 Compare the OLD and NEW versions and identify ALL changes to publications:
 
 1. **new_paper**: A publication that appears in NEW but is completely absent from OLD.
-2. **status_change**: A publication that existed in OLD but moved sections (e.g. from "Working Papers" to "Publications"), or gained a venue/status it didn't have before. Set old_status to the previous status. IMPORTANT: Determine status from paper-level labels FIRST (e.g., "Forthcoming" means "accepted", NOT "published"). Only fall back to section headers if no paper-level label exists.
+2. **status_change**: A publication that existed in OLD but moved sections (e.g. from "Working Papers" to "Publications", or "Work in Progress" to "Working Papers"), or gained a venue/status it didn't have before. Set old_status to the previous status. IMPORTANT: Determine status from paper-level labels FIRST (e.g., "Forthcoming" means "accepted", NOT "published"; a working paper series means "working_paper"). Only fall back to section headers if no paper-level label exists.
 3. **title_change**: A publication whose title was modified. Set old_title to the previous title. Only report if the core title text actually changed — ignore differences in capitalization, punctuation, or bracketed annotations.
 4. **removed**: A publication that was in OLD but is completely absent from NEW.
 
-If a paper moved from "Working Papers" to "Refereed Publications" or gained "forthcoming"/"accepted", that is a status_change, NOT a new_paper.
+If a paper moved from "Working Papers" to "Refereed Publications", or from "Work in Progress" to "Working Papers", or gained "forthcoming"/"accepted", that is a status_change, NOT a new_paper.
 
 IMPORTANT: Copy all titles EXACTLY as they appear on the page — verbatim. Do not use your prior knowledge of papers to add subtitles, correct titles, or fill in information not present. Do NOT report publications that are identical in both versions.
 

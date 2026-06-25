@@ -194,12 +194,7 @@ class PaperSaver:
                     )
                     title = pub['title']
                     title_hash = compute_title_hash(title)
-
-                    # Downgrade working_paper → work_in_progress when no draft URL present.
-                    # work_in_progress is never an LLM output — it's deterministic post-processing.
-                    effective_status = pub.get('status')
-                    if effective_status == 'working_paper' and not pub.get('draft_url'):
-                        effective_status = 'work_in_progress'
+                    status = pub.get('status')
 
                     cursor = conn.cursor(buffered=True)
 
@@ -209,7 +204,7 @@ class PaperSaver:
                             discovered_at, status, draft_url, is_seed)
                            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
                         (url, title, title_hash, pub.get('year'), pub.get('venue'),
-                         pub.get('abstract'), datetime.now(timezone.utc), effective_status,
+                         pub.get('abstract'), datetime.now(timezone.utc), status,
                          pub.get('draft_url'), is_seed),
                     )
 
@@ -335,7 +330,7 @@ class PaperSaver:
                         title=title,
                         is_new=is_new,
                         new_to_this_url=new_to_this_url,
-                        status=effective_status if is_new else pub.get('status'),
+                        status=status,
                     ))
                     logging.info(f"Publication saved successfully: {pub['title']}")
 
