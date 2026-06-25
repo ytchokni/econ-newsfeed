@@ -57,6 +57,11 @@ from backend.database import (
     get_notification_prefs,
     update_notification_prefs,
     verify_unsubscribe_token,
+    get_pending_discoveries as db_get_pending_discoveries,
+    approve_discovery as db_approve_discovery,
+    reject_discovery as db_reject_discovery,
+    bulk_approve_discoveries as db_bulk_approve_discoveries,
+    get_recent_discoveries as db_get_recent_discoveries,
 )
 from backend.auth import get_current_user, get_optional_user
 from backend.database.snapshots import STATUS_ORDER
@@ -547,6 +552,43 @@ def reactivate_url(url_id: int, request: Request):
     _require_api_key(request)
     db_reactivate_url(url_id)
     return {"status": "ok"}
+
+
+@app.get("/api/admin/discoveries")
+def get_discoveries(request: Request):
+    """List pending URL discoveries for review."""
+    _require_api_key(request)
+    return {
+        "pending": db_get_pending_discoveries(),
+        "recent": db_get_recent_discoveries(),
+    }
+
+
+@app.post("/api/admin/discoveries/{discovery_id}/approve")
+def approve_discovery_endpoint(discovery_id: int, request: Request):
+    """Approve a URL discovery — copies to researcher_urls."""
+    _require_api_key(request)
+    db_approve_discovery(discovery_id)
+    _admin_dashboard_cache.clear()
+    return {"status": "ok"}
+
+
+@app.post("/api/admin/discoveries/{discovery_id}/reject")
+def reject_discovery_endpoint(discovery_id: int, request: Request):
+    """Reject a URL discovery."""
+    _require_api_key(request)
+    db_reject_discovery(discovery_id)
+    _admin_dashboard_cache.clear()
+    return {"status": "ok"}
+
+
+@app.post("/api/admin/discoveries/bulk-approve")
+def bulk_approve_discoveries_endpoint(request: Request):
+    """Approve all high-confidence discoveries."""
+    _require_api_key(request)
+    count = db_bulk_approve_discoveries(min_confidence=0.8)
+    _admin_dashboard_cache.clear()
+    return {"status": "ok", "approved_count": count}
 
 
 # ---------------------------------------------------------------------------
