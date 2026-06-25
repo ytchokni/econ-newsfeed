@@ -173,9 +173,9 @@ function FilterBar({
       {/* Tab toggle */}
       <div className="flex items-center gap-2">
         <div className="inline-flex bg-[var(--bg)] rounded-lg p-0.5">
+          {tabButton("work_in_progress", "Early Stage")}
           {tabButton("working_papers", "Working Papers")}
           {tabButton("publications", "Publications")}
-          {tabButton("work_in_progress", "Work In Progress (Beta)")}
         </div>
       </div>
       <div className="max-w-md">
@@ -348,7 +348,7 @@ export default function NewsfeedContent() {
               ? "No new working papers yet. Papers will appear here as researchers update their pages."
               : activeTab === "publications"
               ? "No publication updates yet. Status changes will appear here when papers get R&R, accepted, or published."
-              : "No work in progress yet. Items will appear here as researchers add new projects."
+              : "No early stage papers yet. Items will appear here as researchers add new projects."
           }
         />
       )}

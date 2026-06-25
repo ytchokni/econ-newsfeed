@@ -105,12 +105,12 @@ export default function ResearcherDetailContent({ id, initialData }: { id: numbe
         )}
       </div>
 
-      {/* Work in Progress section */}
+      {/* Early Stage section */}
       {wipPapers.length > 0 && (
         <section className="mb-8">
           <div className="flex items-center gap-3 mb-4">
             <h2 className="font-serif text-lg font-semibold text-[var(--text-primary)]">
-              Work in Progress
+              Early Stage
             </h2>
             <span className="font-sans text-xs font-bold bg-sky-100 text-sky-700 px-2 py-0.5 rounded-full">
               {wipPapers.length}

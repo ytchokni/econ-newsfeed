@@ -178,16 +178,16 @@ describe("NewsfeedContent", () => {
     });
   });
 
-  it("renders Working Papers, Publications, and Work In Progress toggle buttons", async () => {
+  it("renders Early Stage, Working Papers, and Publications toggle buttons", async () => {
     mockFetch(page1);
 
     renderWithSWR(<NewsfeedContent />);
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /working papers/i })).toBeInTheDocument();
+      expect(screen.getByRole("button", { name: /early stage/i })).toBeInTheDocument();
     });
+    expect(screen.getByRole("button", { name: /working papers/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /publications/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /work in progress/i })).toBeInTheDocument();
   });
 
   it("defaults to Working Papers tab as active", async () => {
