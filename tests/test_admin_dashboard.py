@@ -17,7 +17,7 @@ from backend.database.admin import get_admin_dashboard_stats
 
 
 def test_get_admin_dashboard_stats_returns_all_sections():
-    """Stats response contains all 6 dashboard sections."""
+    """Stats response contains all 7 dashboard sections."""
     mock_fetch_all = MagicMock(return_value=[])
     mock_fetch_one = MagicMock(return_value={
         "total_papers": 0,
@@ -47,10 +47,22 @@ def test_get_admin_dashboard_stats_returns_all_sections():
         "last_call_at": None,
         "tokens_last_24h": 0,
         "last_extracted_at": None,
+        # discovery section keys
+        "total_pending": 0,
+        "total_approved": 0,
+        "total_rejected": 0,
     })
 
+    mock_discovery_stats = {
+        "total_pending": 0,
+        "total_approved": 0,
+        "total_rejected": 0,
+        "recent": [],
+    }
+
     with patch("backend.database.admin.fetch_all", mock_fetch_all), \
-         patch("backend.database.admin.fetch_one", mock_fetch_one):
+         patch("backend.database.admin.fetch_one", mock_fetch_one), \
+         patch("backend.database.admin.get_discovery_stats", return_value=mock_discovery_stats):
         result = get_admin_dashboard_stats()
 
     assert "health" in result
@@ -59,6 +71,7 @@ def test_get_admin_dashboard_stats_returns_all_sections():
     assert "costs" in result
     assert "scrapes" in result
     assert "activity" in result
+    assert "discovery" in result
 
     # Health section
     assert "last_scrape" in result["health"]
@@ -103,6 +116,12 @@ def test_get_admin_dashboard_stats_returns_all_sections():
     assert "daily" in result["extraction"]
     assert "recent_calls" in result["extraction"]
 
+    # Discovery section
+    assert "discovery" in result
+    assert "total_pending" in result["discovery"]
+    assert "total_approved" in result["discovery"]
+    assert "total_rejected" in result["discovery"]
+
 
 def test_admin_dashboard_endpoint_requires_api_key(client):
     """GET /api/admin/dashboard returns 401 without API key."""
@@ -128,6 +147,7 @@ def test_admin_dashboard_endpoint_returns_data(client):
                   "last_30_days": []},
         "scrapes": {"recent": [], "totals": {"total_scrapes": 0, "total_pubs_extracted": 0}},
         "activity": {"events_last_7d": {}, "events_last_30d": {}, "recent_events": []},
+        "discovery": {"total_pending": 0, "total_approved": 0, "total_rejected": 0},
     }
     with patch("backend.api.get_admin_dashboard_stats", return_value=mock_stats):
         resp = client.get(
@@ -148,7 +168,7 @@ def test_admin_dashboard_caches_result(client):
     mock_stats = {
         "health": {}, "content": {}, "quality": {},
         "costs": {}, "scrapes": {}, "activity": {},
-        "extraction": {},
+        "extraction": {}, "discovery": {},
     }
     with patch("backend.api.get_admin_dashboard_stats", return_value=mock_stats) as mock_fn:
         headers = {"X-API-Key": os.environ.get("SCRAPE_API_KEY", "test-key")}
