@@ -49,6 +49,22 @@ TOP5_JOURNAL_KEYWORDS = [
     "REStud",
 ]
 
+TOP5_JOURNAL_EXCLUSIONS = [
+    "European Journal of Political Economy",
+]
+
+
+def top5_venue_clause(
+    col: str = "p.venue",
+) -> tuple[str, list[str]]:
+    """Return (sql_fragment, params) for a top-5 venue filter with exclusions."""
+    likes = " OR ".join([f"{col} LIKE %s"] * len(TOP5_JOURNAL_KEYWORDS))
+    not_likes = " AND ".join([f"{col} NOT LIKE %s"] * len(TOP5_JOURNAL_EXCLUSIONS))
+    clause = f"(({likes}) AND {not_likes})"
+    params: list[str] = [f"%{escape_like(kw)}%" for kw in TOP5_JOURNAL_KEYWORDS]
+    params.extend(f"%{escape_like(kw)}%" for kw in TOP5_JOURNAL_EXCLUSIONS)
+    return clause, params
+
 TOP100_REPEC_KEYWORDS = [
     # Top 5
     "Econometrica",

@@ -182,7 +182,7 @@ function FilterBar({
         <SearchInput
           value={filters.search ?? ""}
           onChange={(v) => onChange({ ...filters, search: v || undefined })}
-          placeholder="Search papers by title..."
+          placeholder="Search by title, abstract, or author..."
         />
       </div>
       <div className="flex items-center gap-3 flex-wrap">

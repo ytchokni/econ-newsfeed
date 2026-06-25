@@ -376,6 +376,17 @@ _TABLE_DEFINITIONS = {
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "newsletter_emails": """
+        CREATE TABLE IF NOT EXISTS newsletter_emails (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            gmail_msg_id VARCHAR(255) NOT NULL,
+            subject VARCHAR(500),
+            papers_saved INT DEFAULT 0,
+            processed_at DATETIME NOT NULL,
+            UNIQUE KEY uq_gmail_msg_id (gmail_msg_id),
+            INDEX idx_processed_at (processed_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 }
 
 
@@ -495,6 +506,7 @@ def create_tables() -> None:
                         "users",
                         "user_follows",
                         "user_notification_prefs",
+                        "newsletter_emails",
                     ]
                     for tbl in _ALL_TABLES:
                         try:
@@ -604,7 +616,8 @@ def create_tables() -> None:
                                     SELECT source_url INTO v_source_url
                                     FROM papers WHERE id = NEW.paper_id;
 
-                                    IF v_source_url IS NOT NULL THEN
+                                    IF v_source_url IS NOT NULL
+                                       AND v_source_url NOT LIKE 'newsletter://%' THEN
                                         SELECT COALESCE(MAX(cnt), 0) INTO v_snapshot_count
                                         FROM (
                                             SELECT COUNT(*) AS cnt
@@ -879,16 +892,15 @@ def create_tables() -> None:
 
                     # Backfill has_top5_pub from existing data
                     try:
-                        from backend.database.search_helpers import TOP5_JOURNAL_KEYWORDS
-                        venue_likes = " OR ".join(["p.venue LIKE %s"] * len(TOP5_JOURNAL_KEYWORDS))
-                        params = [f"%{kw}%" for kw in TOP5_JOURNAL_KEYWORDS]
+                        from backend.database.search_helpers import top5_venue_clause
+                        venue_clause, params = top5_venue_clause("p.venue")
                         cursor.execute(
                             f"""UPDATE researchers r
                                 JOIN (
                                     SELECT DISTINCT a.researcher_id
                                     FROM authorship a
                                     JOIN papers p ON p.id = a.publication_id
-                                    WHERE {venue_likes}
+                                    WHERE {venue_clause}
                                 ) t5 ON t5.researcher_id = r.id
                                 SET r.has_top5_pub = TRUE
                                 WHERE r.has_top5_pub = FALSE""",

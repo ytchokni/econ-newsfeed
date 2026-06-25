@@ -19,12 +19,10 @@ from backend.database.search_helpers import (
     FT_MIN_TOKEN_SIZE as _FT_MIN_TOKEN_SIZE,
     TOP20_DEPT_KEYWORDS as _TOP20_DEPT_KEYWORDS,
     TOP5_JOURNAL_KEYWORDS as _TOP5_JOURNAL_KEYWORDS,
+    top5_venue_clause as _top5_venue_clause,
 )
 
-_TOP5_VENUE_LIKES = " OR ".join(
-    ["p.venue LIKE %s"] * len(_TOP5_JOURNAL_KEYWORDS)
-)
-_TOP5_VENUE_PARAMS = [f"%{_escape_like(kw)}%" for kw in _TOP5_JOURNAL_KEYWORDS]
+_TOP5_VENUE_CLAUSE, _TOP5_VENUE_PARAMS = _top5_venue_clause("p.venue")
 
 
 def refresh_has_top5(researcher_id: int) -> None:
@@ -33,7 +31,7 @@ def refresh_has_top5(researcher_id: int) -> None:
         f"""UPDATE researchers SET has_top5_pub = EXISTS(
                 SELECT 1 FROM authorship a
                 JOIN papers p ON p.id = a.publication_id
-                WHERE a.researcher_id = %s AND ({_TOP5_VENUE_LIKES})
+                WHERE a.researcher_id = %s AND {_TOP5_VENUE_CLAUSE}
             ) WHERE id = %s""",
         (researcher_id, *_TOP5_VENUE_PARAMS, researcher_id),
     )
@@ -736,15 +734,15 @@ def search_researchers(
         params.extend(f"%{_escape_like(kw)}%" for kw in _TOP20_DEPT_KEYWORDS)
 
     if preset == "top5_rr_accepted":
-        venue_likes = " OR ".join(["p.venue LIKE %s"] * len(_TOP5_JOURNAL_KEYWORDS))
+        venue_clause, venue_params = _top5_venue_clause("p.venue")
         conditions.append(
             f"EXISTS (SELECT 1 FROM authorship a "
             f"JOIN papers p ON p.id = a.publication_id "
             f"WHERE a.researcher_id = r.id "
             f"AND p.status IN ('accepted', 'revise_and_resubmit') "
-            f"AND ({venue_likes}))"
+            f"AND {venue_clause})"
         )
-        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP5_JOURNAL_KEYWORDS)
+        params.extend(venue_params)
 
     if preset == "has_top5":
         conditions.append("r.has_top5_pub = TRUE")
