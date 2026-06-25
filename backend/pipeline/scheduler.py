@@ -674,6 +674,17 @@ def start_scheduler() -> None:
         )
         logger.info("Weekly digest job scheduled for Mondays 8:00 UTC")
 
+    if os.environ.get("GOOGLE_CSE_API_KEY") and os.environ.get("GOOGLE_CSE_CX"):
+        from backend.discovery.engine import run_discovery_batch
+        _scheduler.add_job(
+            run_discovery_batch,
+            'cron',
+            hour=5,
+            minute=0,
+            id='url_discovery',
+        )
+        logger.info("URL discovery job scheduled for daily at 05:00 UTC")
+
 
 def shutdown_scheduler() -> None:
     """Shut down the scheduler gracefully, waiting for any running job to complete."""
