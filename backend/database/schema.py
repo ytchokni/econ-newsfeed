@@ -387,6 +387,22 @@ _TABLE_DEFINITIONS = {
             INDEX idx_processed_at (processed_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "url_discoveries": """
+        CREATE TABLE IF NOT EXISTS url_discoveries (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            researcher_id INT NOT NULL,
+            url VARCHAR(2048) DEFAULT NULL,
+            subpages JSON DEFAULT NULL,
+            confidence FLOAT DEFAULT NULL,
+            search_query VARCHAR(512) NOT NULL,
+            status ENUM('pending', 'approved', 'rejected', 'no_result') NOT NULL DEFAULT 'pending',
+            searched_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            reviewed_at DATETIME DEFAULT NULL,
+            INDEX idx_status (status),
+            INDEX idx_researcher (researcher_id),
+            FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 }
 
 
@@ -507,6 +523,7 @@ def create_tables() -> None:
                         "user_follows",
                         "user_notification_prefs",
                         "newsletter_emails",
+                        "url_discoveries",
                     ]
                     for tbl in _ALL_TABLES:
                         try:
@@ -948,6 +965,29 @@ def create_tables() -> None:
                             )
                     except Exception as e:
                         logging.warning("Migration: WIP revert: %s", e)
+
+                    # Create url_discoveries table for URL discovery pipeline
+                    try:
+                        cursor.execute("""
+                            CREATE TABLE IF NOT EXISTS url_discoveries (
+                                id INT AUTO_INCREMENT PRIMARY KEY,
+                                researcher_id INT NOT NULL,
+                                url VARCHAR(2048) DEFAULT NULL,
+                                subpages JSON DEFAULT NULL,
+                                confidence FLOAT DEFAULT NULL,
+                                search_query VARCHAR(512) NOT NULL,
+                                status ENUM('pending', 'approved', 'rejected', 'no_result') NOT NULL DEFAULT 'pending',
+                                searched_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                reviewed_at DATETIME DEFAULT NULL,
+                                INDEX idx_status (status),
+                                INDEX idx_researcher (researcher_id),
+                                FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
+                            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                        """)
+                        conn.commit()
+                        logging.info("Migration: created url_discoveries table (if not exists)")
+                    except Exception as e:
+                        logging.warning("Migration: url_discoveries table: %s", e)
 
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
