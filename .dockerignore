@@ -7,5 +7,7 @@
 !scripts/backfill_affiliations.py
 !scripts/audit_zero_pub_researchers.py
 !scripts/backfill_page_owner_authorship.py
+!scripts/cleanup_data_quality.py
+!scripts/merge_fuzzy_duplicates.py
 !pyproject.toml
 !poetry.lock
