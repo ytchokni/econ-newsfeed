@@ -163,8 +163,8 @@ class TestFindFuzzyDuplicateGroups:
     @patch("backend.enrichment.paper_merge.fetch_all")
     def test_finds_fuzzy_duplicates_with_same_authors(self, mock_fetch):
         mock_fetch.return_value = [
-            {"id": 1, "title": "Ideas Have Consequences: The Impact of Law and Economics on American Justice", "author_ids": "2,6,141"},
-            {"id": 2, "title": "Ideas Have Consequences: The Effect of Law and Economics on American Justice", "author_ids": "2,6,141"},
+            {"id": 1, "title": "Ideas Have Consequences: The Impact of Law and Economics on American Justice", "author_ids": "2,6,141", "doi": None, "openalex_id": None},
+            {"id": 2, "title": "Ideas Have Consequences: The Effect of Law and Economics on American Justice", "author_ids": "2,6,141", "doi": None, "openalex_id": None},
         ]
         groups = find_fuzzy_duplicate_groups()
         assert len(groups) == 1
@@ -173,8 +173,8 @@ class TestFindFuzzyDuplicateGroups:
     @patch("backend.enrichment.paper_merge.fetch_all")
     def test_no_match_when_titles_too_different(self, mock_fetch):
         mock_fetch.return_value = [
-            {"id": 1, "title": "Levels and Drivers of Lifetime Earnings", "author_ids": "2,6,141"},
-            {"id": 2, "title": "Trade Policy in Open Economies", "author_ids": "2,6,141"},
+            {"id": 1, "title": "Levels and Drivers of Lifetime Earnings", "author_ids": "2,6,141", "doi": None, "openalex_id": None},
+            {"id": 2, "title": "Trade Policy in Open Economies", "author_ids": "2,6,141", "doi": None, "openalex_id": None},
         ]
         groups = find_fuzzy_duplicate_groups()
         assert groups == []
@@ -182,11 +182,32 @@ class TestFindFuzzyDuplicateGroups:
     @patch("backend.enrichment.paper_merge.fetch_all")
     def test_no_match_when_different_authors(self, mock_fetch):
         mock_fetch.return_value = [
-            {"id": 1, "title": "Levels and Drivers of Lifetime Earnings", "author_ids": "2,6,141"},
-            {"id": 2, "title": "Levels and Drivers of Lifetime Earnings", "author_ids": "3,7,200"},
+            {"id": 1, "title": "Levels and Drivers of Lifetime Earnings", "author_ids": "2,6,141", "doi": None, "openalex_id": None},
+            {"id": 2, "title": "Levels and Drivers of Lifetime Earnings", "author_ids": "3,7,200", "doi": None, "openalex_id": None},
         ]
         groups = find_fuzzy_duplicate_groups()
         assert groups == []
+
+    @patch("backend.enrichment.paper_merge.fetch_all")
+    def test_skips_pairs_sharing_doi(self, mock_fetch):
+        """Papers with the same DOI are handled by find_duplicate_groups, not fuzzy."""
+        mock_fetch.return_value = [
+            {"id": 1, "title": "Same Title Here", "author_ids": "2,6", "doi": "10.1234/test", "openalex_id": None},
+            {"id": 2, "title": "Same Title Here", "author_ids": "2,6", "doi": "10.1234/test", "openalex_id": None},
+        ]
+        groups = find_fuzzy_duplicate_groups()
+        assert groups == []
+
+    @patch("backend.enrichment.paper_merge.fetch_all")
+    def test_matches_when_only_one_has_identifier(self, mock_fetch):
+        """One paper enriched, the other not — fuzzy should still catch it."""
+        mock_fetch.return_value = [
+            {"id": 1, "title": "Same Title Here", "author_ids": "2,6", "doi": "10.1234/test", "openalex_id": "W123"},
+            {"id": 2, "title": "Same Title Here", "author_ids": "2,6", "doi": None, "openalex_id": None},
+        ]
+        groups = find_fuzzy_duplicate_groups()
+        assert len(groups) == 1
+        assert set(groups[0]) == {1, 2}
 
     @patch("backend.enrichment.paper_merge.fetch_all")
     def test_skips_single_author_papers(self, mock_fetch):
