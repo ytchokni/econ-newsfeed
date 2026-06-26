@@ -11,7 +11,7 @@ import PublicationCardSkeleton from "@/components/PublicationCardSkeleton";
 import ErrorMessage from "@/components/ErrorMessage";
 import EmptyState from "@/components/EmptyState";
 import SearchInput from "@/components/SearchInput";
-import SearchableCheckboxDropdown from "@/components/SearchableCheckboxDropdown";
+import FilterDrawer from "@/components/FilterDrawer";
 import ActiveFilterChips from "@/components/ActiveFilterChips";
 import type { FilterChip } from "@/components/ActiveFilterChips";
 
@@ -133,33 +133,20 @@ function parseTab(value: string | null): TabValue {
   return "all";
 }
 
-/* ---------- preset definitions per tab ---------- */
+/* ---------- drawer presets per tab ---------- */
 
-interface QuickPreset {
-  value: string;
-  label: string;
-  highlight?: boolean;
-}
-
-function presetsForTab(tab: TabValue, isAuthenticated: boolean): QuickPreset[] {
-  const base: QuickPreset[] = (() => {
-    if (tab === "publications") {
-      return [
-        { value: "top5_journals", label: "Top-5 Journals" },
-        { value: "top100_repec", label: "Top-100 RePEc" },
-        { value: "top20", label: "Top-20 Depts" },
-      ];
-    }
+function drawerPresetsForTab(tab: TabValue): { value: string; label: string }[] {
+  if (tab === "publications") {
     return [
-      { value: "top20", label: "Top-20 Depts" },
-      { value: "has_top5", label: "Has Top-5" },
+      { value: "top5_journals", label: "Top-5 Journals" },
+      { value: "top100_repec", label: "Top-100 RePEc" },
+      { value: "top20", label: "Top-20 Departments" },
     ];
-  })();
-
-  if (isAuthenticated) {
-    return [{ value: "following", label: "My Feed", highlight: true }, ...base];
   }
-  return base;
+  return [
+    { value: "top20", label: "Top-20 Departments" },
+    { value: "has_top5", label: "Has Top-5" },
+  ];
 }
 
 /* ---------- main component ---------- */
@@ -176,6 +163,7 @@ export default function NewsfeedContent() {
   const [page, setPage] = useState(Math.max(1, Number(searchParams.get("page")) || 1));
   const [filters, setFilters] = useState<FeedFilters>(() => filtersFromParams(searchParams));
   const [datePreset, setDatePreset] = useState<DatePresetKey | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
 
   const isInitialMount = useRef(true);
   useEffect(() => {
@@ -299,9 +287,14 @@ export default function NewsfeedContent() {
     handleFilterChange({});
   }, [handleFilterChange]);
 
-  const presets = useMemo(
-    () => presetsForTab(activeTab, isAuthenticated),
-    [activeTab, isAuthenticated]
+  const drawerPresets = useMemo(
+    () => drawerPresetsForTab(activeTab),
+    [activeTab]
+  );
+
+  const hasAnyDrawerFilter = !!(
+    filters.preset || filters.institution ||
+    filters.jel_code || filters.since || filters.until
   );
 
   /* ---------- build chips ---------- */
@@ -309,7 +302,7 @@ export default function NewsfeedContent() {
   const chips = useMemo<FilterChip[]>(() => {
     const result: FilterChip[] = [];
 
-    if (filters.preset) {
+    if (filters.preset && filters.preset !== "following") {
       result.push({
         key: `preset:${filters.preset}`,
         label: PRESET_LABELS[filters.preset] ?? filters.preset,
@@ -407,86 +400,47 @@ export default function NewsfeedContent() {
         </div>
       </div>
 
-      {/* Search + Quick-filter presets */}
-      <div className="mt-5 flex items-center justify-between gap-[18px] flex-wrap">
-        <div className="flex-1 min-w-[240px] max-w-[360px]">
+      {/* Search + My Feed + Filters button */}
+      <div className="mt-5 flex items-center gap-3 flex-wrap">
+        <div className="flex-1 min-w-[240px]">
           <SearchInput
             value={filters.search ?? ""}
             onChange={(v) => handleFilterChange({ ...filters, search: v || undefined })}
             placeholder="Search title, author, or field..."
           />
         </div>
-        <div className="flex gap-2 flex-wrap">
-          {presets.map((p) => (
-            <button
-              key={p.value}
-              onClick={() => handlePresetClick(p.value)}
-              className={`text-xs font-medium tracking-[0.01em] px-[13px] py-[7px] rounded-sm cursor-pointer border transition-colors ${
-                p.highlight
-                  ? "border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white"
-                  : "bg-transparent text-[var(--ink2)] border-[var(--line2)] hover:border-[var(--muted)]"
-              }`}
-            >
-              {p.label}
-            </button>
-          ))}
-        </div>
-      </div>
 
-      {/* Filters row */}
-      <div className="mt-4 flex items-center gap-3 flex-wrap">
-        <span className="text-[10px] font-bold tracking-[0.16em] uppercase text-[var(--muted)]">
-          Filter
-        </span>
+        {isAuthenticated && (
+          <button
+            onClick={() => handlePresetClick("following")}
+            className={`text-xs font-medium tracking-[0.01em] px-[13px] py-[7px] rounded-sm cursor-pointer border transition-colors ${
+              filters.preset === "following"
+                ? "bg-[var(--accent)] text-white border-[var(--accent)]"
+                : "border-[var(--accent)] text-[var(--accent)] hover:bg-[var(--accent)] hover:text-white"
+            }`}
+          >
+            My Feed
+          </button>
+        )}
 
-        <SearchableCheckboxDropdown
-          label="Institution"
-          options={institutionOptions}
-          selected={selectedInstitutions}
-          onChange={handleInstitutionChange}
-        />
-
-        <SearchableCheckboxDropdown
-          label="Field"
-          options={jelOptions}
-          selected={selectedJelCodes}
-          onChange={handleJelChange}
-        />
-
-        <div className="flex items-center gap-1.5">
-          {DATE_PRESETS.map((dp) => (
-            <button
-              key={dp.key}
-              onClick={() => handleDatePreset(dp.key)}
-              className={`text-[11px] font-medium px-2.5 py-[5px] rounded-sm cursor-pointer border transition-colors ${
-                datePreset === dp.key
-                  ? "bg-[var(--ink)] text-white border-[var(--ink)]"
-                  : "bg-transparent text-[var(--ink2)] border-[var(--line2)] hover:border-[var(--muted)]"
-              }`}
-            >
-              {dp.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-[7px] text-[var(--muted)] text-xs">
-          <span>From</span>
-          <input
-            type="date"
-            value={filters.since ?? ""}
-            min={MIN_DATE}
-            onChange={(e) => handleSinceChange(e.target.value)}
-            className="text-xs text-[var(--ink)] border border-[var(--line2)] rounded-sm px-2 py-1.5 bg-white"
-          />
-          <span>to</span>
-          <input
-            type="date"
-            value={filters.until ?? ""}
-            min={MIN_DATE}
-            onChange={(e) => handleUntilChange(e.target.value)}
-            className="text-xs text-[var(--ink)] border border-[var(--line2)] rounded-sm px-2 py-1.5 bg-white"
-          />
-        </div>
+        <button
+          onClick={() => setDrawerOpen(true)}
+          className={`inline-flex items-center gap-1.5 text-xs font-medium px-[13px] py-[7px] rounded-sm cursor-pointer border transition-colors ${
+            hasAnyDrawerFilter
+              ? "bg-[var(--ink)] text-white border-[var(--ink)]"
+              : "bg-transparent text-[var(--ink2)] border-[var(--line2)] hover:border-[var(--muted)]"
+          }`}
+        >
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <line x1="4" y1="6" x2="20" y2="6" />
+            <line x1="4" y1="12" x2="20" y2="12" />
+            <line x1="4" y1="18" x2="20" y2="18" />
+            <circle cx="8" cy="6" r="2" fill="currentColor" />
+            <circle cx="16" cy="12" r="2" fill="currentColor" />
+            <circle cx="10" cy="18" r="2" fill="currentColor" />
+          </svg>
+          Filters
+        </button>
       </div>
 
       {/* Active filter chips */}
@@ -583,6 +537,30 @@ export default function NewsfeedContent() {
           </div>
         )}
       </div>
+
+      {/* Filter Drawer */}
+      <FilterDrawer
+        open={drawerOpen}
+        onClose={() => setDrawerOpen(false)}
+        presets={drawerPresets}
+        activePreset={filters.preset}
+        onPresetClick={handlePresetClick}
+        datePreset={datePreset}
+        onDatePreset={handleDatePreset}
+        since={filters.since}
+        until={filters.until}
+        onSinceChange={handleSinceChange}
+        onUntilChange={handleUntilChange}
+        institutionOptions={institutionOptions}
+        selectedInstitutions={selectedInstitutions}
+        onInstitutionChange={handleInstitutionChange}
+        jelOptions={jelOptions}
+        selectedJelCodes={selectedJelCodes}
+        onJelChange={handleJelChange}
+        onResetAll={clearAll}
+        totalResults={data?.total ?? null}
+        minDate={MIN_DATE}
+      />
     </div>
   );
 }

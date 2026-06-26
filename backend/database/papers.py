@@ -374,10 +374,9 @@ def search_feed_events(
         conditions.append("fe.event_type = %s")
         params.append(event_type)
 
-    if event_type == "status_change":
-        conditions.append(
-            "NOT (fe.old_status = 'accepted' AND fe.new_status = 'published')"
-        )
+    conditions.append(
+        "NOT (fe.event_type = 'status_change' AND fe.old_status = 'accepted' AND fe.new_status = 'published')"
+    )
 
     jel_list = [j.strip().upper() for j in jel_code.split(",") if j.strip()] if jel_code else []
     if jel_list:

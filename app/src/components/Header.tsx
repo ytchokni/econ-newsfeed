@@ -2,6 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useAuth, useLoginModal } from "@/lib/auth";
+import UserMenu from "@/components/UserMenu";
 
 function formatHeaderDate() {
   return new Date().toLocaleDateString("en-US", {
@@ -14,6 +16,8 @@ function formatHeaderDate() {
 
 export default function Header() {
   const pathname = usePathname();
+  const { isAuthenticated, isLoading } = useAuth();
+  const { openLoginModal } = useLoginModal();
   const isAdmin = pathname?.startsWith("/admin");
 
   if (isAdmin) {
@@ -59,6 +63,18 @@ export default function Header() {
                 Researchers
               </Link>
             </nav>
+            {!isLoading && (
+              isAuthenticated ? (
+                <UserMenu />
+              ) : (
+                <button
+                  onClick={openLoginModal}
+                  className="text-[11px] font-semibold tracking-[0.14em] uppercase text-[var(--accent)] bg-transparent border border-[var(--accent)] px-3 py-1 rounded-sm cursor-pointer hover:bg-[var(--accent)] hover:text-white transition-colors"
+                >
+                  Subscribe
+                </button>
+              )
+            )}
           </div>
         </div>
       </div>
