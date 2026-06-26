@@ -15,7 +15,7 @@ def run_discovery_batch(limit: int | None = None) -> dict:
     """Run one batch of URL discovery.
 
     1. Pick candidates from the DB
-    2. Google search each one
+    2. Search each one via Searlo
     3. Gemma classifies search results
     4. HTML crawl for subpages if URL found
     5. Save to url_discoveries
@@ -43,8 +43,12 @@ def run_discovery_batch(limit: int | None = None) -> dict:
             try:
                 query, results = search_researcher(first, last, affiliation)
             except QuotaExhaustedError:
-                logger.warning("CSE quota exhausted after %d searches — stopping batch", stats["searched"])
+                logger.warning("Search quota exhausted after %d searches — stopping batch", stats["searched"])
                 break
+
+            # Pace searches to stay under Searlo's 10 req/min free-tier limit
+            time.sleep(6)
+
             if not results:
                 insert_discovery(rid, None, None, None, query or f"{first} {last}")
                 stats["no_result"] += 1
@@ -71,7 +75,6 @@ def run_discovery_batch(limit: int | None = None) -> dict:
                 )
 
             stats["searched"] += 1
-            time.sleep(0.5)
 
         except Exception as e:
             logger.warning("Discovery failed for %s %s (id=%d): %s", first, last, rid, e)

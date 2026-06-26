@@ -674,7 +674,7 @@ def start_scheduler() -> None:
         )
         logger.info("Weekly digest job scheduled for Mondays 8:00 UTC")
 
-    if os.environ.get("GOOGLE_CSE_API_KEY") and os.environ.get("GOOGLE_CSE_CX"):
+    if os.environ.get("SEARLO_API_KEY"):
         from backend.discovery.engine import run_discovery_batch
         _scheduler.add_job(
             run_discovery_batch,
