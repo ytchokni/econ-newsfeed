@@ -1,4 +1,4 @@
-"""Google Custom Search Engine client for finding researcher websites."""
+"""Searlo web search client for finding researcher websites."""
 import logging
 import os
 
@@ -6,11 +6,11 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-_API_URL = "https://www.googleapis.com/customsearch/v1"
+_API_URL = "https://api.searlo.tech/api/v1/search/web"
 
 
 class QuotaExhaustedError(Exception):
-    """Raised when Google CSE daily quota is exhausted (HTTP 429)."""
+    """Raised when search API quota/credits are exhausted."""
 
 
 def search_researcher(
@@ -18,15 +18,14 @@ def search_researcher(
     last_name: str,
     affiliation: str | None = None,
 ) -> tuple[str, list[dict]]:
-    """Search Google for a researcher's personal website.
+    """Search for a researcher's personal website via Searlo.
 
     Returns (query_used, results) where each result is
     {"title": str, "url": str, "snippet": str}.
-    Returns (query, []) if API key not configured or quota exhausted.
+    Returns (query, []) if API key not configured.
     """
-    api_key = os.environ.get("GOOGLE_CSE_API_KEY")
-    cse_cx = os.environ.get("GOOGLE_CSE_CX")
-    if not api_key or not cse_cx:
+    api_key = os.environ.get("SEARLO_API_KEY")
+    if not api_key:
         return "", []
 
     query = f'"{first_name} {last_name}" economist personal website'
@@ -36,15 +35,17 @@ def search_researcher(
     try:
         resp = requests.get(
             _API_URL,
-            params={"key": api_key, "cx": cse_cx, "q": query, "num": 5},
+            params={"q": query, "limit": 5},
+            headers={"X-API-Key": api_key},
             timeout=10,
         )
         if resp.status_code == 429:
-            logger.warning("Google CSE daily quota exhausted")
-            raise QuotaExhaustedError("Google CSE daily quota exhausted")
+            raise QuotaExhaustedError("Searlo rate limit exceeded")
+        if resp.status_code == 402:
+            raise QuotaExhaustedError("Searlo credits exhausted")
         resp.raise_for_status()
         data = resp.json()
-        items = data.get("items", [])
+        items = data.get("organic", [])
         return query, [
             {
                 "title": item.get("title", ""),
@@ -53,6 +54,8 @@ def search_researcher(
             }
             for item in items
         ]
+    except QuotaExhaustedError:
+        raise
     except Exception as e:
-        logger.warning("Google CSE search failed for %s %s: %s", first_name, last_name, e)
+        logger.warning("Searlo search failed for %s %s: %s", first_name, last_name, e)
         return query, []
