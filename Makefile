@@ -1,4 +1,4 @@
-.PHONY: setup dev kill seed reset-db scrape fetch extract batch-submit batch-check classify-jel enrich enrich-jel discover-domains discover-research-pages backfill-normalize populate-fields backfill-affiliations audit-zero-pubs check
+.PHONY: setup dev kill seed reset-db scrape fetch extract batch-submit batch-check classify-jel enrich enrich-jel discover-domains discover-urls discover-research-pages backfill-normalize populate-fields backfill-affiliations audit-zero-pubs ingest-newsletters check
 
 setup:
 	poetry install
@@ -55,6 +55,9 @@ enrich-jel:  ## Enrich researcher JEL codes from paper topics
 discover-domains:  ## Scan for untrusted domains that may host paper links
 	poetry run python -m backend.main discover-domains
 
+discover-urls:  ## Find personal websites for researchers via Google search
+	poetry run python -m backend.main discover-urls
+
 discover-research-pages:  ## Find research/publications pages from stored homepage HTML
 	poetry run python scripts/discover_research_pages.py
 
@@ -69,6 +72,9 @@ backfill-affiliations:  ## Backfill researcher affiliations from OpenAlex
 
 audit-zero-pubs:  ## Audit researchers with URLs but 0 publications
 	poetry run python scripts/audit_zero_pub_researchers.py
+
+ingest-newsletters:  ## Ingest papers from newsletter emails (Gmail inbox)
+	poetry run python -m backend.main ingest-newsletters
 
 backfill-page-owner:  ## Backfill page owner as author on papers from their page
 	poetry run python scripts/backfill_page_owner_authorship.py

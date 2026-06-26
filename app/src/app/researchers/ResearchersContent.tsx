@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { useFilterOptions, useResearchersFiltered } from "@/lib/api";
 import type { ResearcherFilters } from "@/lib/types";
@@ -10,14 +10,21 @@ import ErrorMessage from "@/components/ErrorMessage";
 import EmptyState from "@/components/EmptyState";
 import SearchableCheckboxDropdown from "@/components/SearchableCheckboxDropdown";
 import SearchInput from "@/components/SearchInput";
-import PresetBar from "@/components/PresetBar";
+import ActiveFilterChips from "@/components/ActiveFilterChips";
+import type { FilterChip } from "@/components/ActiveFilterChips";
 
 const FILTER_PARAM_KEYS = ["institution", "field", "position", "search", "preset"] as const satisfies readonly (keyof ResearcherFilters)[];
 
+const PRESET_LABELS: Record<string, string> = {
+  top5_rr_accepted: "R&R / Accepted at Top-5",
+  top20: "Top-20 Departments",
+  has_top5: "Researchers with a Top-5",
+};
+
 const RESEARCHER_PRESETS = [
-  { label: "R&R / Accepted at Top-5", value: "top5_rr_accepted" },
-  { label: "Top-20 Departments", value: "top20" },
-  { label: "Researchers with a Top-5", value: "has_top5" },
+  { value: "top5_rr_accepted", label: "R&R / Accepted at Top-5" },
+  { value: "top20", label: "Top-20 Depts" },
+  { value: "has_top5", label: "Has Top-5" },
 ];
 
 function filtersFromParams(params: URLSearchParams): ResearcherFilters {
@@ -62,13 +69,18 @@ export default function ResearchersContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters, pathname]);
 
-  const institutionOptions = [
-    { label: "Top 20", value: "top20" },
-    ...(filterOptions?.institutions ?? []).map((i) => ({
-      label: i,
-      value: i,
-    })),
-  ];
+  const handleFilterChange = useCallback((next: ResearcherFilters) => {
+    setFilters(next);
+  }, []);
+
+  const clearAll = useCallback(() => {
+    setFilters({});
+  }, []);
+
+  const institutionOptions = (filterOptions?.institutions ?? []).map((i) => ({
+    label: i,
+    value: i,
+  }));
   const positionOptions = (filterOptions?.positions ?? []).map((p) => ({
     label: p,
     value: p,
@@ -78,21 +90,14 @@ export default function ResearchersContent() {
     value: f.slug,
   }));
 
-  const selectedInstitutions = (() => {
-    if (filters.preset === "top20") return ["top20"];
-    if (filters.institution) return filters.institution.split(",");
-    return [];
-  })();
+  const selectedInstitutions = filters.institution ? filters.institution.split(",") : [];
   const selectedPositions = filters.position ? filters.position.split(",") : [];
   const selectedFields = filters.field ? filters.field.split(",") : [];
 
   const handleInstitutionChange = useCallback((selected: string[]) => {
-    const hasTop20 = selected.includes("top20");
-    const institutions = selected.filter((v) => v !== "top20");
     setFilters((prev) => ({
       ...prev,
-      preset: hasTop20 ? "top20" : undefined,
-      institution: institutions.length > 0 ? institutions.join(",") : undefined,
+      institution: selected.length > 0 ? selected.join(",") : undefined,
     }));
   }, []);
 
@@ -104,109 +109,182 @@ export default function ResearchersContent() {
     setFilters((prev) => ({ ...prev, field: selected.join(",") || undefined }));
   }, []);
 
-  const handleSearchChange = useCallback((value: string) => {
-    setFilters((prev) => ({ ...prev, search: value || undefined }));
-  }, []);
-
-  const handlePresetChange = useCallback((preset: string | undefined) => {
+  const handlePresetClick = useCallback((value: string) => {
     setFilters((prev) => ({
       ...prev,
-      preset,
-      institution: preset ? undefined : prev.institution,
+      preset: prev.preset === value ? undefined : value,
     }));
   }, []);
 
-  const hasActiveFilters = !!(
-    filters.institution || filters.field || filters.position ||
-    filters.search || filters.preset
-  );
+  /* ---------- build chips ---------- */
+
+  const chips = useMemo<FilterChip[]>(() => {
+    const result: FilterChip[] = [];
+
+    if (filters.preset) {
+      result.push({
+        key: `preset:${filters.preset}`,
+        label: PRESET_LABELS[filters.preset] ?? filters.preset,
+        onRemove: () => handleFilterChange({ ...filters, preset: undefined }),
+      });
+    }
+
+    for (const inst of selectedInstitutions) {
+      result.push({
+        key: `inst:${inst}`,
+        label: inst,
+        onRemove: () => {
+          const remaining = selectedInstitutions.filter((i) => i !== inst);
+          handleFilterChange({
+            ...filters,
+            institution: remaining.length > 0 ? remaining.join(",") : undefined,
+          });
+        },
+      });
+    }
+
+    for (const field of selectedFields) {
+      const opt = fieldOptions.find((f) => f.value === field);
+      result.push({
+        key: `field:${field}`,
+        label: opt?.label ?? field,
+        onRemove: () => {
+          const remaining = selectedFields.filter((f) => f !== field);
+          handleFilterChange({
+            ...filters,
+            field: remaining.length > 0 ? remaining.join(",") : undefined,
+          });
+        },
+      });
+    }
+
+    for (const pos of selectedPositions) {
+      result.push({
+        key: `pos:${pos}`,
+        label: pos,
+        onRemove: () => {
+          const remaining = selectedPositions.filter((p) => p !== pos);
+          handleFilterChange({
+            ...filters,
+            position: remaining.length > 0 ? remaining.join(",") : undefined,
+          });
+        },
+      });
+    }
+
+    if (filters.search) {
+      result.push({
+        key: "search",
+        label: `Search: ${filters.search}`,
+        onRemove: () => handleFilterChange({ ...filters, search: undefined }),
+      });
+    }
+
+    return result;
+  }, [filters, selectedInstitutions, selectedFields, selectedPositions, fieldOptions, handleFilterChange]);
 
   return (
-    <div className="space-y-6">
-      {/* Filter bar */}
-      <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-4 space-y-3">
-        <div className="max-w-md">
+    <div>
+      {/* Search + Quick-filter presets */}
+      <div className="flex items-center justify-between gap-[18px] flex-wrap">
+        <div className="flex-1 min-w-[240px] max-w-[360px]">
           <SearchInput
             value={filters.search ?? ""}
-            onChange={handleSearchChange}
+            onChange={(v) => handleFilterChange({ ...filters, search: v || undefined })}
             placeholder="Search researchers by name..."
           />
         </div>
-        <div className="flex items-center gap-3 flex-wrap">
-          <span className="font-sans text-[10px] font-bold uppercase tracking-widest text-[var(--text-muted)] mr-1">
-            Filter
-          </span>
-          <SearchableCheckboxDropdown
-            label="Institution"
-            options={institutionOptions}
-            selected={selectedInstitutions}
-            onChange={handleInstitutionChange}
-          />
-          <SearchableCheckboxDropdown
-            label="Field"
-            options={fieldOptions}
-            selected={selectedFields}
-            onChange={handleFieldChange}
-          />
-          <SearchableCheckboxDropdown
-            label="Position"
-            options={positionOptions}
-            selected={selectedPositions}
-            onChange={handlePositionChange}
-          />
-          {hasActiveFilters && (
-            <>
-              <span className="w-px h-5 bg-[var(--border)]" />
-              <button
-                onClick={() => setFilters({})}
-                className="font-sans text-xs text-[var(--text-muted)] hover:text-[var(--accent)] transition-colors"
-              >
-                Clear all
-              </button>
-            </>
-          )}
+        <div className="flex gap-2 flex-wrap">
+          {RESEARCHER_PRESETS.map((p) => (
+            <button
+              key={p.value}
+              onClick={() => handlePresetClick(p.value)}
+              className="text-xs font-medium tracking-[0.01em] px-[13px] py-[7px] rounded-sm cursor-pointer border bg-transparent text-[var(--ink2)] border-[var(--line2)] hover:border-[var(--muted)] transition-colors"
+            >
+              {p.label}
+            </button>
+          ))}
         </div>
       </div>
 
-      <PresetBar
-        presets={RESEARCHER_PRESETS}
-        active={filters.preset}
-        onChange={handlePresetChange}
-      />
+      {/* Filters row */}
+      <div className="mt-4 flex items-center gap-3 flex-wrap">
+        <span className="text-[10px] font-bold tracking-[0.16em] uppercase text-[var(--muted)]">
+          Filter
+        </span>
 
-      {/* Result count banner */}
-      {!isLoading && researchers && (
-        <p className="font-sans text-sm text-[var(--text-muted)]">
-          {researchers.length === 0
-            ? "No researchers match the current filters"
-            : `Showing ${researchers.length.toLocaleString()} researcher${researchers.length === 1 ? "" : "s"}`}
-        </p>
-      )}
+        <SearchableCheckboxDropdown
+          label="Institution"
+          options={institutionOptions}
+          selected={selectedInstitutions}
+          onChange={handleInstitutionChange}
+        />
 
-      {isLoading && (
-        <div className="space-y-4">
-          <p className="font-sans text-sm text-[var(--text-muted)]">Loading researchers...</p>
-          {Array.from({ length: 3 }).map((_, i) => (
-            <ResearcherCardSkeleton key={i} />
-          ))}
-        </div>
-      )}
+        <SearchableCheckboxDropdown
+          label="Field"
+          options={fieldOptions}
+          selected={selectedFields}
+          onChange={handleFieldChange}
+        />
 
-      {error && !researchers && (
-        <ErrorMessage message="Failed to load researchers." />
-      )}
+        <SearchableCheckboxDropdown
+          label="Position"
+          options={positionOptions}
+          selected={selectedPositions}
+          onChange={handlePositionChange}
+        />
+      </div>
 
-      {!isLoading && researchers && researchers.length === 0 && (
-        <EmptyState message="No researchers match the current filters." />
-      )}
+      {/* Active filter chips */}
+      <ActiveFilterChips chips={chips} onClearAll={clearAll} />
 
-      {researchers && researchers.length > 0 && (
-        <div className="space-y-4 animate-stagger">
-          {researchers.map((r) => (
-            <ResearcherCard key={r.id} researcher={r} />
-          ))}
-        </div>
-      )}
+      {/* Results line */}
+      <div className="mt-[18px] flex items-center gap-[14px]">
+        {!isLoading && researchers && (
+          <p className="m-0 text-[13px] text-[var(--muted)]">
+            {researchers.length === 0
+              ? "No researchers match the current filters"
+              : `Showing ${researchers.length.toLocaleString()} researcher${researchers.length === 1 ? "" : "s"}`}
+          </p>
+        )}
+        {chips.length === 1 && (
+          <button
+            onClick={clearAll}
+            className="text-xs text-[var(--accent)] bg-transparent border-none cursor-pointer p-0"
+          >
+            Clear filters
+          </button>
+        )}
+      </div>
+
+      {/* Content */}
+      <div className="pb-[90px]">
+        {isLoading && (
+          <div className="mt-8 space-y-0">
+            {Array.from({ length: 3 }).map((_, i) => (
+              <ResearcherCardSkeleton key={i} />
+            ))}
+          </div>
+        )}
+
+        {error && !researchers && (
+          <div className="mt-8">
+            <ErrorMessage message="Failed to load researchers." />
+          </div>
+        )}
+
+        {!isLoading && researchers && researchers.length === 0 && (
+          <EmptyState message="No researchers match the current filters." onClear={clearAll} />
+        )}
+
+        {researchers && researchers.length > 0 && (
+          <div className="mt-2">
+            {researchers.map((r) => (
+              <ResearcherCard key={r.id} researcher={r} />
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }

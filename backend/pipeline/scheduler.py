@@ -307,7 +307,6 @@ _DRAFT_VALIDATION_DELAY = 0.1  # 100ms between requests
 
 def _validate_draft_urls() -> None:
     """Validate papers with unchecked draft URLs (rate-limited, time-budgeted)."""
-    from backend.pipeline.wip_reconciler import reconcile_wip_status
     unchecked = get_unchecked_draft_urls()
     if not unchecked:
         return
@@ -324,8 +323,6 @@ def _validate_draft_urls() -> None:
             status = HTMLFetcher.validate_draft_url(draft_url)
             update_draft_url_status(paper_id, status)
             logger.info(f"Draft URL for paper {paper_id}: {status}")
-            if status == 'valid':
-                reconcile_wip_status(paper_id)
             validated += 1
             time.sleep(_DRAFT_VALIDATION_DELAY)
         except Exception as e:
@@ -721,6 +718,17 @@ def start_scheduler() -> None:
             id='weekly_digest',
         )
         logger.info("Weekly digest job scheduled for Mondays 8:00 UTC")
+
+    if os.environ.get("GOOGLE_CSE_API_KEY") and os.environ.get("GOOGLE_CSE_CX"):
+        from backend.discovery.engine import run_discovery_batch
+        _scheduler.add_job(
+            run_discovery_batch,
+            'cron',
+            hour=5,
+            minute=0,
+            id='url_discovery',
+        )
+        logger.info("URL discovery job scheduled for daily at 05:00 UTC")
 
 
 def shutdown_scheduler() -> None:

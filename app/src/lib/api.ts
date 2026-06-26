@@ -222,6 +222,14 @@ export interface AdminDashboardData {
       total_tokens: number;
     }[];
   };
+  discovery: {
+    total_searched: number;
+    pending_review: number;
+    approved: number;
+    rejected: number;
+    no_result: number;
+    pool_remaining: number;
+  };
 }
 
 async function fetchJsonWithAuth<T>(url: string, init?: RequestInit): Promise<T> {
@@ -263,6 +271,26 @@ export interface AtRiskUrl {
   researcher_id: number;
 }
 
+export interface UrlDiscovery {
+  id: number;
+  researcher_id: number;
+  url: string | null;
+  subpages: { page_type: string; url: string }[] | null;
+  confidence: number | null;
+  search_query: string;
+  searched_at: string;
+  reviewed_at: string | null;
+  first_name: string;
+  last_name: string;
+  affiliation: string | null;
+  status?: string;
+}
+
+export interface DiscoveriesResponse {
+  pending: UrlDiscovery[];
+  recent: UrlDiscovery[];
+}
+
 export function useDeactivatedUrls() {
   return useSWR<DeactivatedUrl[]>(
     "/api/admin/deactivated-urls",
@@ -279,6 +307,31 @@ export function useAtRiskUrls() {
 
 export async function reactivateUrl(urlId: number): Promise<void> {
   await fetchJsonWithAuth(`/api/admin/reactivate-url/${urlId}`, {
+    method: "POST",
+  });
+}
+
+export function useDiscoveries() {
+  return useSWR<DiscoveriesResponse>(
+    "/api/admin/discoveries",
+    fetchJsonWithAuth,
+  );
+}
+
+export async function approveDiscovery(discoveryId: number): Promise<void> {
+  await fetchJsonWithAuth(`/api/admin/discoveries/${discoveryId}/approve`, {
+    method: "POST",
+  });
+}
+
+export async function rejectDiscovery(discoveryId: number): Promise<void> {
+  await fetchJsonWithAuth(`/api/admin/discoveries/${discoveryId}/reject`, {
+    method: "POST",
+  });
+}
+
+export async function bulkApproveDiscoveries(): Promise<{ approved_count: number }> {
+  return fetchJsonWithAuth("/api/admin/discoveries/bulk-approve", {
     method: "POST",
   });
 }

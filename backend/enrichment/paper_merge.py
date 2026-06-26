@@ -5,6 +5,7 @@ sharing the same identifier and merges them into a single canonical record.
 Also does fuzzy title matching for papers with identical author sets.
 """
 import logging
+import re
 from difflib import SequenceMatcher
 from backend.database import fetch_all, get_connection
 
@@ -109,33 +110,61 @@ def merge_paper_group(paper_ids: list[int]) -> None:
             cursor.close()
 
 
-_FUZZY_THRESHOLD = 0.85  # word-level SequenceMatcher ratio
+_FUZZY_THRESHOLD = 0.85
+
+_STOP_WORDS = frozenset({
+    'the', 'a', 'an', 'of', 'on', 'in', 'at', 'to', 'for',
+    'and', 'or', 'by', 'with', 'from', 'as', 'is', 'are',
+})
+
+
+def _normalize(title: str) -> str:
+    t = title.lower().replace('-', '').replace("'s", "").replace("’s", "")
+    return re.sub(r'[^\w\s]', '', t)
+
+
+def _content_words(title: str) -> list[str]:
+    return [w for w in _normalize(title).split() if w not in _STOP_WORDS]
+
+
+def _content_overlap(t1: str, t2: str) -> float:
+    """Overlap coefficient on content words: |intersection| / min(|A|, |B|)."""
+    s1, s2 = set(_content_words(t1)), set(_content_words(t2))
+    if not s1 or not s2:
+        return 0.0
+    return len(s1 & s2) / min(len(s1), len(s2))
+
+
+_SEQ_FLOOR = 0.5
 
 
 def _title_similarity(t1: str, t2: str) -> float:
-    """Word-level similarity between two titles."""
-    w1 = t1.lower().split()
-    w2 = t2.lower().split()
+    w1 = _normalize(t1).split()
+    w2 = _normalize(t2).split()
     if not w1 or not w2:
         return 0.0
-    return SequenceMatcher(None, w1, w2).ratio()
+    seq_ratio = SequenceMatcher(None, w1, w2).ratio()
+    overlap = _content_overlap(t1, t2)
+    # Overlap is the primary signal, but require a minimum sequence agreement
+    # to guard against same-topic-different-paper false positives.
+    if overlap > seq_ratio and seq_ratio < _SEQ_FLOOR:
+        return seq_ratio
+    return max(seq_ratio, overlap)
 
 
 def find_fuzzy_duplicate_groups() -> list[list[int]]:
-    """Find papers with identical author sets and similar titles (no DOI/OpenAlex).
+    """Find papers with identical author sets and similar titles.
 
-    Only considers papers that couldn't be matched by identifier. Groups papers
-    by their exact author set, then within each group finds pairs whose titles
-    are similar above _FUZZY_THRESHOLD.
+    Groups papers by their exact author set, then within each group finds
+    pairs whose titles are similar above _FUZZY_THRESHOLD.  Skips pairs that
+    already share a DOI or OpenAlex ID (handled by find_duplicate_groups).
     """
-    # Papers with no identifier and at least one author
     candidates = fetch_all("""
-        SELECT p.id, p.title,
+        SELECT p.id, p.title, p.doi, p.openalex_id,
                GROUP_CONCAT(a.researcher_id ORDER BY a.researcher_id) AS author_ids
         FROM papers p
         JOIN authorship a ON a.publication_id = p.id
-        WHERE p.doi IS NULL AND p.openalex_id IS NULL
-        GROUP BY p.id, p.title
+        GROUP BY p.id, p.title, p.doi, p.openalex_id
         HAVING COUNT(a.researcher_id) >= 2
     """)
 
@@ -149,11 +178,16 @@ def find_fuzzy_duplicate_groups() -> list[list[int]]:
     for author_key, papers in by_authors.items():
         if len(papers) < 2:
             continue
-        # Pairwise fuzzy title matching — each pair is its own group (no transitive merging)
         for i in range(len(papers)):
             for j in range(i + 1, len(papers)):
-                if _title_similarity(papers[i]['title'], papers[j]['title']) >= _FUZZY_THRESHOLD:
-                    groups.append(sorted([papers[i]['id'], papers[j]['id']]))
+                pi, pj = papers[i], papers[j]
+                # Skip pairs that share an identifier (handled by find_duplicate_groups)
+                if (pi['doi'] and pj['doi'] and pi['doi'] == pj['doi']):
+                    continue
+                if (pi['openalex_id'] and pj['openalex_id'] and pi['openalex_id'] == pj['openalex_id']):
+                    continue
+                if _title_similarity(pi['title'], pj['title']) >= _FUZZY_THRESHOLD:
+                    groups.append(sorted([pi['id'], pj['id']]))
 
     return groups
 

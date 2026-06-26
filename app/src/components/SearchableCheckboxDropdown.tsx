@@ -49,81 +49,67 @@ export default function SearchableCheckboxDropdown({
     }
   };
 
-  const display =
-    selected.length === 0
-      ? label
-      : selected.length <= 2
-        ? options
-            .filter((o) => selected.includes(o.value))
-            .map((o) => o.label)
-            .join(", ")
-        : `${selected.length} selected`;
+  const display = selected.length > 0
+    ? `${label} · ${selected.length}`
+    : label;
 
   return (
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(!open)}
-        className={`flex items-center gap-1.5 px-3 py-1.5 font-sans text-sm border rounded-lg transition-all min-w-[120px] ${
-          selected.length > 0
-            ? "bg-[var(--bg-header)] text-white border-[var(--bg-header)]"
-            : "border-[var(--border)] bg-[var(--bg-card)] shadow-card hover:border-[var(--text-muted)]"
-        }`}
+        className="text-[13px] text-[var(--ink2)] bg-white border border-[var(--line2)] rounded-sm px-3 py-[7px] cursor-pointer inline-flex items-center gap-2 hover:border-[var(--muted)] transition-colors"
       >
-        <span className={selected.length === 0 ? "text-[var(--text-muted)]" : ""}>
-          {display}
-        </span>
-        <svg
-          className="w-3.5 h-3.5 ml-auto opacity-50"
-          fill="none"
-          stroke="currentColor"
-          viewBox="0 0 24 24"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
+        <span>{display}</span>
+        <span className="text-[9px] text-[var(--muted)]">&#9662;</span>
       </button>
       {open && (
-        <div className="absolute z-10 mt-1 w-64 bg-[var(--bg-card)] border border-[var(--border)] rounded-lg shadow-card-hover py-1 animate-dropdown-in">
-          <div className="px-2 py-1.5">
-            <input
-              ref={inputRef}
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search..."
-              className="w-full px-2.5 py-1.5 text-sm font-sans border border-[var(--border-light)] rounded-md bg-[var(--bg)] focus:outline-none focus:ring-1 focus:ring-[var(--link)] placeholder:text-[var(--text-muted)]"
-            />
-          </div>
-          <div className="max-h-48 overflow-y-auto">
+        <>
+          <div
+            onClick={() => { setOpen(false); setSearch(""); }}
+            className="fixed inset-0 z-[39]"
+          />
+          <div className="absolute top-[calc(100%+6px)] left-0 z-40 bg-white border border-[var(--line2)] rounded-[3px] shadow-card-hover min-w-[250px] max-h-[300px] overflow-auto p-[5px]">
+            <div className="px-2.5 py-1.5">
+              <input
+                ref={inputRef}
+                type="text"
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Search..."
+                className="w-full px-2.5 py-1.5 text-sm border border-[var(--line)] rounded-sm bg-white focus:outline-none placeholder:text-[var(--muted)]"
+              />
+            </div>
             {filtered.length === 0 && (
-              <p className="px-3 py-2 text-sm text-[var(--text-muted)] font-sans">No matches</p>
+              <p className="px-2.5 py-2 text-sm text-[var(--muted)]">No matches</p>
             )}
             {filtered.map((opt) => (
               <label
                 key={opt.value}
-                className="flex items-center gap-2 px-3 py-1.5 text-sm hover:bg-[var(--bg)] cursor-pointer font-sans"
+                className="flex items-center gap-2.5 px-2.5 py-2 text-[13px] text-[var(--ink)] cursor-pointer rounded-sm hover:bg-[#F5F5F5]"
               >
                 <input
                   type="checkbox"
                   checked={selected.includes(opt.value)}
                   onChange={() => toggle(opt.value)}
-                  className="rounded border-[var(--border)] text-[var(--link)] focus:ring-[var(--link)]"
+                  className="w-3.5 h-3.5 cursor-pointer flex-shrink-0"
+                  style={{ accentColor: "var(--accent)" }}
                 />
-                <span className="truncate">{opt.label}</span>
+                <span>{opt.label}</span>
               </label>
             ))}
+            {selected.length > 0 && (
+              <button
+                onClick={() => {
+                  onChange([]);
+                  setSearch("");
+                }}
+                className="w-full text-left px-2.5 py-1.5 text-xs text-[var(--muted)] hover:bg-[#F5F5F5] border-t border-[var(--line)]"
+              >
+                Clear all
+              </button>
+            )}
           </div>
-          {selected.length > 0 && (
-            <button
-              onClick={() => {
-                onChange([]);
-                setSearch("");
-              }}
-              className="w-full text-left px-3 py-1.5 text-xs text-[var(--text-muted)] hover:bg-[var(--bg)] border-t border-[var(--border-light)] font-sans"
-            >
-              Clear all
-            </button>
-          )}
-        </div>
+        </>
       )}
     </div>
   );

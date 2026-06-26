@@ -82,6 +82,16 @@ from backend.database.jel import (
     sync_researcher_fields_from_jel,
 )
 from backend.database.admin import get_admin_dashboard_stats
+from backend.database.discoveries import (
+    get_discovery_candidates,
+    insert_discovery,
+    get_pending_discoveries,
+    approve_discovery,
+    reject_discovery,
+    bulk_approve_discoveries,
+    get_discovery_stats,
+    get_recent_discoveries,
+)
 from backend.database.users import (
     get_or_create_user,
     get_user_by_google_id,
@@ -181,6 +191,16 @@ class Database:
 
     # Admin
     get_admin_dashboard_stats = staticmethod(get_admin_dashboard_stats)
+
+    # Discoveries
+    get_discovery_candidates = staticmethod(get_discovery_candidates)
+    insert_discovery = staticmethod(insert_discovery)
+    get_pending_discoveries = staticmethod(get_pending_discoveries)
+    approve_discovery = staticmethod(approve_discovery)
+    reject_discovery = staticmethod(reject_discovery)
+    bulk_approve_discoveries = staticmethod(bulk_approve_discoveries)
+    get_discovery_stats = staticmethod(get_discovery_stats)
+    get_recent_discoveries = staticmethod(get_recent_discoveries)
 
     # Users
     get_or_create_user = staticmethod(get_or_create_user)

@@ -114,6 +114,17 @@ def persist_extraction(url: str, url_id: int, pubs: list[dict],
 
 _STALENESS_YEARS = 10
 
+_INTERESTING_TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
+    ("working_paper", "revise_and_resubmit"),
+    ("working_paper", "accepted"),
+    ("working_paper", "published"),
+    ("work_in_progress", "revise_and_resubmit"),
+    ("work_in_progress", "accepted"),
+    ("work_in_progress", "published"),
+    ("revise_and_resubmit", "accepted"),
+    ("revise_and_resubmit", "published"),
+})
+
 
 def _append_snapshots(pubs: list[dict], source_url: str, event_date=None) -> None:
     """Append paper snapshots and emit status_change events when detected."""
@@ -150,6 +161,12 @@ def _append_snapshots(pubs: list[dict], source_url: str, event_date=None) -> Non
                 logger.info(
                     "Suppressed status_change for old paper (year=%s): %s",
                     pub_year, pub.get('title', '')[:60],
+                )
+                continue
+            if (result.old_status, result.new_status) not in _INTERESTING_TRANSITIONS:
+                logger.debug(
+                    "Suppressed uninteresting transition %s→%s: %s",
+                    result.old_status, result.new_status, pub.get('title', '')[:60],
                 )
                 continue
             FeedEventEmitter.emit_status_change(

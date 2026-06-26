@@ -10,6 +10,7 @@ import CostsTab from "./tabs/CostsTab";
 import ScrapesTab from "./tabs/ScrapesTab";
 import ActivityTab from "./tabs/ActivityTab";
 import ExtractionTab from "./tabs/ExtractionTab";
+import DiscoveryTab from "./tabs/DiscoveryTab";
 
 const TABS = [
   { id: "health", label: "Health" },
@@ -19,6 +20,7 @@ const TABS = [
   { id: "scrapes", label: "Scrapes" },
   { id: "activity", label: "Activity" },
   { id: "extraction", label: "Extraction" },
+  { id: "discovery", label: "Discovery" },
 ] as const;
 
 type TabId = (typeof TABS)[number]["id"];
@@ -101,6 +103,9 @@ export default function AdminDashboard() {
             {activeTab === "scrapes" && <ScrapesTab data={data.scrapes} />}
             {activeTab === "activity" && <ActivityTab data={data.activity} />}
             {activeTab === "extraction" && <ExtractionTab data={data.extraction} />}
+            {activeTab === "discovery" && data.discovery && (
+              <DiscoveryTab data={data.discovery} onMutate={mutate} />
+            )}
           </>
         ) : null}
       </div>

@@ -77,7 +77,7 @@ class TestStalenessGuard:
         mock_hash.side_effect = lambda t: f"hash_{t}"
         mock_fetch_all.return_value = [{"id": 3, "title_hash": "hash_No Year Paper"}]
         mock_snapshot.return_value = FakeSnapshotResult(
-            status_changed=True, old_status="accepted", new_status="published"
+            status_changed=True, old_status="working_paper", new_status="published"
         )
 
         pubs = [{"title": "No Year Paper", "status": "published", "year": None,

@@ -44,8 +44,7 @@ class TestSavePublicationsReturnsResults:
         assert len(results) == 1
         assert results[0].is_new is True
         assert results[0].new_to_this_url is True
-        # working_paper with no draft_url is downgraded to work_in_progress on INSERT
-        assert results[0].status == "work_in_progress"
+        assert results[0].status == "working_paper"
         assert results[0].paper_id == 1
 
     @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
@@ -130,7 +129,7 @@ class TestPageOwnerAuthorship:
     def test_owner_added_with_order_zero(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        cursor.fetchone.return_value = (55,)
+        cursor.fetchone.return_value = (55, "Jane", "Smith")
 
         PaperSaver.save_publications("http://example.com", [{
             "title": "Paper", "authors": [["John", "Doe"]], "year": "2024",
@@ -177,6 +176,31 @@ class TestBackfill:
 
         backfill_calls = [c for c in cursor.execute.call_args_list if "COALESCE" in str(c)]
         assert len(backfill_calls) == 0
+
+
+class TestWithinPaperDedup:
+    """Layer 1: compatible-name authors on the same paper share one researcher ID."""
+
+    @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
+    def test_compatible_name_authors_deduplicated(self, mock_hash, mock_get_conn, mock_rid):
+        """'M. Steinhardt' and 'Max Steinhardt' on same paper => one get_researcher_id call."""
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+        cursor.fetchone.return_value = None  # no page owner
+
+        PaperSaver.save_publications("http://example.com", [{
+            "title": "Test Paper",
+            "authors": [["Max", "Steinhardt"], ["M.", "Steinhardt"]],
+            "year": "2024",
+        }])
+
+        # Layer 1: "M. Steinhardt" should reuse the ID from "Max Steinhardt"
+        mock_rid.assert_called_once_with("Max", "Steinhardt", conn=conn)
+        # Two authorship inserts (same researcher_id, different author_order)
+        authorship_inserts = [c for c in cursor.execute.call_args_list if "INSERT IGNORE INTO authorship" in str(c)]
+        assert len(authorship_inserts) == 2
 
 
 class TestAuthorLookupCache:

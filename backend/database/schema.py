@@ -376,6 +376,33 @@ _TABLE_DEFINITIONS = {
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "newsletter_emails": """
+        CREATE TABLE IF NOT EXISTS newsletter_emails (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            gmail_msg_id VARCHAR(255) NOT NULL,
+            subject VARCHAR(500),
+            papers_saved INT DEFAULT 0,
+            processed_at DATETIME NOT NULL,
+            UNIQUE KEY uq_gmail_msg_id (gmail_msg_id),
+            INDEX idx_processed_at (processed_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "url_discoveries": """
+        CREATE TABLE IF NOT EXISTS url_discoveries (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            researcher_id INT NOT NULL,
+            url VARCHAR(2048) DEFAULT NULL,
+            subpages JSON DEFAULT NULL,
+            confidence FLOAT DEFAULT NULL,
+            search_query VARCHAR(512) NOT NULL,
+            status ENUM('pending', 'approved', 'rejected', 'no_result') NOT NULL DEFAULT 'pending',
+            searched_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            reviewed_at DATETIME DEFAULT NULL,
+            INDEX idx_status (status),
+            INDEX idx_researcher (researcher_id),
+            FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
 }
 
 
@@ -495,6 +522,8 @@ def create_tables() -> None:
                         "users",
                         "user_follows",
                         "user_notification_prefs",
+                        "newsletter_emails",
+                        "url_discoveries",
                     ]
                     for tbl in _ALL_TABLES:
                         try:
@@ -604,7 +633,8 @@ def create_tables() -> None:
                                     SELECT source_url INTO v_source_url
                                     FROM papers WHERE id = NEW.paper_id;
 
-                                    IF v_source_url IS NOT NULL THEN
+                                    IF v_source_url IS NOT NULL
+                                       AND v_source_url NOT LIKE 'newsletter://%' THEN
                                         SELECT COALESCE(MAX(cnt), 0) INTO v_snapshot_count
                                         FROM (
                                             SELECT COUNT(*) AS cnt
@@ -879,16 +909,15 @@ def create_tables() -> None:
 
                     # Backfill has_top5_pub from existing data
                     try:
-                        from backend.database.search_helpers import TOP5_JOURNAL_KEYWORDS
-                        venue_likes = " OR ".join(["p.venue LIKE %s"] * len(TOP5_JOURNAL_KEYWORDS))
-                        params = [f"%{kw}%" for kw in TOP5_JOURNAL_KEYWORDS]
+                        from backend.database.search_helpers import top5_venue_clause
+                        venue_clause, params = top5_venue_clause("p.venue")
                         cursor.execute(
                             f"""UPDATE researchers r
                                 JOIN (
                                     SELECT DISTINCT a.researcher_id
                                     FROM authorship a
                                     JOIN papers p ON p.id = a.publication_id
-                                    WHERE {venue_likes}
+                                    WHERE {venue_clause}
                                 ) t5 ON t5.researcher_id = r.id
                                 SET r.has_top5_pub = TRUE
                                 WHERE r.has_top5_pub = FALSE""",
@@ -900,6 +929,65 @@ def create_tables() -> None:
                             logging.info("Migration: backfilled has_top5_pub for %d researchers", backfilled)
                     except Exception as e:
                         logging.warning("Migration: has_top5_pub backfill: %s", e)
+
+                    # Revert all work_in_progress → working_paper.
+                    # WIP/WP distinction is now LLM-determined at extraction time;
+                    # existing WIP data was set by a draft_url heuristic that is removed.
+                    try:
+                        cursor.execute(
+                            "SELECT EXISTS(SELECT 1 FROM papers WHERE status = 'work_in_progress' LIMIT 1)"
+                        )
+                        if cursor.fetchone()[0]:
+                            cursor.execute("""
+                                UPDATE papers SET status = 'working_paper'
+                                WHERE status = 'work_in_progress'
+                            """)
+                            papers_reverted = cursor.rowcount
+
+                            cursor.execute("""
+                                UPDATE paper_snapshots SET status = 'working_paper'
+                                WHERE status = 'work_in_progress'
+                            """)
+                            snapshots_reverted = cursor.rowcount
+
+                            cursor.execute("""
+                                DELETE FROM feed_events
+                                WHERE new_status = 'work_in_progress'
+                                   OR old_status = 'work_in_progress'
+                            """)
+                            events_deleted = cursor.rowcount
+                            conn.commit()
+
+                            logging.info(
+                                "Migration: reverted %d papers and %d snapshots from "
+                                "work_in_progress to working_paper, deleted %d WIP feed events",
+                                papers_reverted, snapshots_reverted, events_deleted,
+                            )
+                    except Exception as e:
+                        logging.warning("Migration: WIP revert: %s", e)
+
+                    # Create url_discoveries table for URL discovery pipeline
+                    try:
+                        cursor.execute("""
+                            CREATE TABLE IF NOT EXISTS url_discoveries (
+                                id INT AUTO_INCREMENT PRIMARY KEY,
+                                researcher_id INT NOT NULL,
+                                url VARCHAR(2048) DEFAULT NULL,
+                                subpages JSON DEFAULT NULL,
+                                confidence FLOAT DEFAULT NULL,
+                                search_query VARCHAR(512) NOT NULL,
+                                status ENUM('pending', 'approved', 'rejected', 'no_result') NOT NULL DEFAULT 'pending',
+                                searched_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                reviewed_at DATETIME DEFAULT NULL,
+                                INDEX idx_status (status),
+                                INDEX idx_researcher (researcher_id),
+                                FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
+                            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                        """)
+                        conn.commit()
+                        logging.info("Migration: created url_discoveries table (if not exists)")
+                    except Exception as e:
+                        logging.warning("Migration: url_discoveries table: %s", e)
 
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")

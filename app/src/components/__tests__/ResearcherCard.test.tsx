@@ -49,6 +49,6 @@ describe("ResearcherCard", () => {
     const detailLinks = links.filter((l) =>
       l.getAttribute("href") === "/researchers/1"
     );
-    expect(detailLinks).toHaveLength(2); // stretched link + visible name link
+    expect(detailLinks).toHaveLength(1);
   });
 });

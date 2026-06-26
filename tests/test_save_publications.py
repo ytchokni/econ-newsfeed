@@ -73,8 +73,8 @@ class TestAuthorNormalization:
         """[[]] (empty inner list) -> page owner added by ID, don't crash."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        # (owner_id,) for page owner lookup
-        cursor.fetchone.return_value = (42,)
+        # (owner_id, first, last) for page owner lookup
+        cursor.fetchone.return_value = (42, "Jane", "Doe")
 
         PaperSaver.save_publications("http://example.com", [{
             "title": "Test Paper",
@@ -279,8 +279,8 @@ class TestPageOwnerAuthorship:
         """Empty authors list should still add the page owner as author."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        # (owner_id,) for page owner lookup
-        cursor.fetchone.return_value = (55,)
+        # (owner_id, first, last) for page owner lookup
+        cursor.fetchone.return_value = (55, "Stefanie", "Stantcheva")
 
         PaperSaver.save_publications("https://www.stantcheva.com/research/", [{
             "title": "Understanding of Trade",
@@ -307,8 +307,8 @@ class TestPageOwnerAuthorship:
         """Page owner is added even when LLM extracts other authors."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        # (owner_id,) for page owner lookup
-        cursor.fetchone.return_value = (55,)
+        # (owner_id, first, last) for page owner lookup
+        cursor.fetchone.return_value = (55, "Jane", "Smith")
 
         PaperSaver.save_publications("https://example.com", [{
             "title": "Test Paper",
@@ -359,8 +359,8 @@ class TestPageOwnerAuthorship:
         """Page owner should be added as author even when LLM extracts other authors."""
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        # (owner_id=7,) for page owner lookup
-        cursor.fetchone.return_value = (7,)
+        # (owner_id=7, first, last) for page owner lookup
+        cursor.fetchone.return_value = (7, "Magne", "Mogstad")
 
         PaperSaver.save_publications("http://mogstad.com/research", [{
             "title": "Inequality in Current and Lifetime Income",

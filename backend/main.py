@@ -452,6 +452,10 @@ def main() -> None:
     batch_submit_parser = subparsers.add_parser('batch-submit', help='Submit batch LLM extraction for URLs with new content')
     batch_submit_parser.add_argument('--limit', type=int, default=None, help='Max URLs to include in the batch')
     subparsers.add_parser('batch-check', help='Check pending batches and process completed results')
+    newsletter_parser = subparsers.add_parser('ingest-newsletters', help='Ingest papers from newsletter emails')
+    newsletter_parser.add_argument('--max-emails', type=int, default=50, help='Max emails to process')
+    discover_parser = subparsers.add_parser('discover-urls', help='Search for personal websites for researchers without URLs')
+    discover_parser.add_argument('--limit', type=int, default=None, help='Max researchers to search (default: DISCOVERY_DAILY_LIMIT)')
 
     args = parser.parse_args()
 
@@ -477,6 +481,14 @@ def main() -> None:
         batch_submit(limit=args.limit)
     elif args.command == 'batch-check':
         batch_check()
+    elif args.command == 'ingest-newsletters':
+        from backend.pipeline.newsletter_ingest import ingest_newsletters
+        ingest_newsletters(max_emails=args.max_emails)
+    elif args.command == 'discover-urls':
+        create_tables()
+        from backend.discovery.engine import run_discovery_batch
+        result = run_discovery_batch(limit=args.limit)
+        logging.info("Discovery results: %s", result)
 
 if __name__ == "__main__":
     main()

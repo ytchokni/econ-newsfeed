@@ -183,12 +183,12 @@ class TestPaperContentHash:
 
 
 # ---------------------------------------------------------------------------
-# append_paper_snapshot WIP guard
+# append_paper_snapshot WIP → WP progression
 # ---------------------------------------------------------------------------
 
 @patch("backend.database.snapshots.get_connection")
-def test_append_snapshot_blocks_wip_to_wp_promotion(mock_conn_ctx):
-    """append_paper_snapshot should not promote work_in_progress via LLM output."""
+def test_append_snapshot_allows_wip_to_wp_promotion(mock_conn_ctx):
+    """append_paper_snapshot should allow work_in_progress → working_paper progression."""
     mock_conn = MagicMock()
     mock_cursor = MagicMock()
     mock_conn_ctx.return_value.__enter__ = MagicMock(return_value=mock_conn)
@@ -208,7 +208,7 @@ def test_append_snapshot_blocks_wip_to_wp_promotion(mock_conn_ctx):
         abstract=None, draft_url=None, year="2026",
     )
 
-    # The UPDATE should use work_in_progress, not working_paper
+    # The UPDATE should use working_paper (valid progression)
     update_call = [c for c in mock_cursor.execute.call_args_list if "UPDATE papers" in str(c)]
     assert len(update_call) == 1
-    assert "work_in_progress" in str(update_call[0])
+    assert "working_paper" in str(update_call[0])

@@ -5,6 +5,7 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 from backend.database.connection import fetch_all, fetch_one
+from backend.database.discoveries import get_discovery_stats
 
 logger = logging.getLogger(__name__)
 
@@ -392,4 +393,5 @@ def get_admin_dashboard_stats() -> dict:
         "scrapes": _get_scrape_stats(),
         "activity": _get_activity_stats(),
         "extraction": _get_extraction_stats(),
+        "discovery": get_discovery_stats(),
     }

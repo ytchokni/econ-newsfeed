@@ -259,7 +259,7 @@ class TestSearchFeedEvents:
         assert total == 1
         assert result_rows == rows
         sql, params = mock_fetch.call_args[0]
-        assert "WHERE" not in sql
+        assert "accepted" in sql and "published" in sql
 
     def test_empty_results_returns_zero_total(self):
         (rows, total, _rc), _, _ = self._call()

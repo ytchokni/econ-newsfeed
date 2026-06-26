@@ -107,6 +107,8 @@ from backend.database.search_helpers import (
     FT_MIN_TOKEN_SIZE as _FT_MIN_TOKEN_SIZE,
     TOP20_DEPT_KEYWORDS as _TOP20_DEPT_KEYWORDS,
     TOP5_JOURNAL_KEYWORDS as _TOP5_JOURNAL_KEYWORDS,
+    TOP100_REPEC_KEYWORDS as _TOP100_REPEC_KEYWORDS,
+    top5_venue_clause as _top5_venue_clause,
 )
 
 
@@ -322,38 +324,59 @@ def search_feed_events(
 
     if preset == "top5_rr_accepted":
         conditions.append("p.status IN ('accepted', 'revise_and_resubmit')")
-        venue_likes = " OR ".join(["p.venue LIKE %s"] * len(_TOP5_JOURNAL_KEYWORDS))
-        conditions.append(f"({venue_likes})")
-        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP5_JOURNAL_KEYWORDS)
+        venue_clause, venue_params = _top5_venue_clause("p.venue")
+        conditions.append(venue_clause)
+        params.extend(venue_params)
 
     if preset == "has_top5":
-        venue_likes = " OR ".join(["p2.venue LIKE %s"] * len(_TOP5_JOURNAL_KEYWORDS))
+        venue_clause, venue_params = _top5_venue_clause("p2.venue")
         conditions.append(
             f"EXISTS (SELECT 1 FROM authorship a2 "
             f"JOIN authorship a3 ON a3.researcher_id = a2.researcher_id "
             f"JOIN papers p2 ON p2.id = a3.publication_id "
-            f"WHERE a2.publication_id = p.id AND ({venue_likes}))"
+            f"WHERE a2.publication_id = p.id AND {venue_clause})"
         )
-        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP5_JOURNAL_KEYWORDS)
+        params.extend(venue_params)
+
+    if preset == "top5_journals":
+        venue_clause, venue_params = _top5_venue_clause("p.venue")
+        conditions.append(venue_clause)
+        params.extend(venue_params)
+
+    if preset == "top100_repec":
+        venue_likes = " OR ".join(["p.venue LIKE %s"] * len(_TOP100_REPEC_KEYWORDS))
+        conditions.append(f"({venue_likes})")
+        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP100_REPEC_KEYWORDS)
 
     search_term = search.strip() if search else ""
     if search_term:
+        author_exists = (
+            "EXISTS (SELECT 1 FROM authorship a_s "
+            "JOIN researchers r_s ON r_s.id = a_s.researcher_id "
+            "WHERE a_s.publication_id = p.id AND "
+            "CONCAT(r_s.first_name, ' ', r_s.last_name) LIKE %s ESCAPE '\\\\')"
+        )
+        author_escaped = f"%{_escape_like(search_term)}%"
         if len(search_term) >= _FT_MIN_TOKEN_SIZE:
-            conditions.append("MATCH(p.title, p.abstract) AGAINST (%s IN BOOLEAN MODE)")
+            conditions.append(
+                f"(MATCH(p.title, p.abstract) AGAINST (%s IN BOOLEAN MODE) OR {author_exists})"
+            )
             params.append(_escape_fulltext(search_term))
+            params.append(author_escaped)
         else:
             escaped = f"%{_escape_like(search_term)}%"
-            conditions.append("(p.title LIKE %s ESCAPE '\\\\' OR p.abstract LIKE %s ESCAPE '\\\\')")
-            params.extend([escaped, escaped])
+            conditions.append(
+                f"(p.title LIKE %s ESCAPE '\\\\' OR p.abstract LIKE %s ESCAPE '\\\\' OR {author_exists})"
+            )
+            params.extend([escaped, escaped, author_escaped])
 
     if event_type:
         conditions.append("fe.event_type = %s")
         params.append(event_type)
 
-    if event_type == "status_change":
-        conditions.append(
-            "NOT (fe.old_status = 'accepted' AND fe.new_status = 'published')"
-        )
+    conditions.append(
+        "NOT (fe.event_type = 'status_change' AND fe.old_status = 'accepted' AND fe.new_status = 'published')"
+    )
 
     jel_list = [j.strip().upper() for j in jel_code.split(",") if j.strip()] if jel_code else []
     if jel_list:

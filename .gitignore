@@ -30,6 +30,7 @@ CLAUDE.md
 .claude/
 .agents/
 docs/
+!docs/adr/
 
 # Worktrees
 .worktrees/

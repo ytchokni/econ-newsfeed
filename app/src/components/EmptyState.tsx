@@ -1,7 +1,17 @@
-export default function EmptyState({ message }: { message: string }) {
+export default function EmptyState({ message, onClear }: { message?: string; onClear?: () => void }) {
   return (
-    <div className="rounded-lg bg-[var(--bg-card)] shadow-card p-10 text-center font-sans text-sm text-[var(--text-muted)]">
-      {message}
+    <div className="text-center py-20 px-4">
+      <p className="m-0 font-serif italic text-lg text-[var(--muted)]">
+        {message || "No updates match your filters."}
+      </p>
+      {onClear && (
+        <button
+          onClick={onClear}
+          className="mt-3.5 text-[13px] text-[var(--accent)] bg-transparent border-none cursor-pointer"
+        >
+          Clear filters
+        </button>
+      )}
     </div>
   );
 }

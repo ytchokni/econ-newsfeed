@@ -66,7 +66,7 @@ describe("PublicationCard navigation", () => {
     const paperLinks = links.filter((l) =>
       l.getAttribute("href") === "/papers/1"
     );
-    expect(paperLinks).toHaveLength(2); // stretched link + visible title link
+    expect(paperLinks).toHaveLength(1);
   });
 
   it("has separate author links that don't point to the paper", () => {
@@ -88,14 +88,14 @@ describe("PublicationCard OpenAlex fields", () => {
 
   it("renders DOI link when doi is present", () => {
     render(<PublicationCard publication={pubWithDoi} />);
-    const doiLink = screen.getByText("DOI").closest("a");
+    const doiLink = screen.getByText("(DOI)").closest("a");
     expect(doiLink).toHaveAttribute("href", "https://doi.org/10.1257/aer.20181234");
     expect(doiLink).toHaveAttribute("target", "_blank");
   });
 
   it("does not render DOI link when doi is null", () => {
     render(<PublicationCard publication={publication} />);
-    expect(screen.queryByText("DOI")).not.toBeInTheDocument();
+    expect(screen.queryByText("(DOI)")).not.toBeInTheDocument();
   });
 
   it("renders OpenAlex co-authors", () => {
