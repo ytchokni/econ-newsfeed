@@ -1,6 +1,6 @@
 import NextAuth from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
-import { encode } from "next-auth/jwt";
+import { encodeBackendJwt } from "@/lib/backend-jwt";
 
 const NEXTAUTH_SECRET = process.env.NEXTAUTH_SECRET || "";
 
@@ -29,10 +29,8 @@ const handler = NextAuth({
     async session({ session, token }) {
       if (session.user) {
         (session.user as { id?: string }).id = token.sub;
-        (session.user as { accessToken?: string }).accessToken = await encode({
-          token,
-          secret: NEXTAUTH_SECRET,
-        });
+        (session.user as { accessToken?: string }).accessToken =
+          encodeBackendJwt(token, NEXTAUTH_SECRET);
       }
       return session;
     },

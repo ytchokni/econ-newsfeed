@@ -152,7 +152,7 @@ function drawerPresetsForTab(tab: TabValue): { value: string; label: string }[] 
 /* ---------- main component ---------- */
 
 export default function NewsfeedContent() {
-  const { isAuthenticated } = useAuth();
+  const { isAuthenticated, accessToken } = useAuth();
   const searchParams = useSearchParams();
   const router = useRouter();
   const pathname = usePathname();
@@ -187,7 +187,12 @@ export default function NewsfeedContent() {
     };
   }, [filters, activeTab]);
 
-  const { data, error, isLoading, isValidating } = usePublications(page, 20, mergedFilters);
+  const { data, error, isLoading, isValidating } = usePublications(
+    page,
+    20,
+    mergedFilters,
+    accessToken,
+  );
 
   const handleFilterChange = useCallback((next: FeedFilters) => {
     setFilters(next);
