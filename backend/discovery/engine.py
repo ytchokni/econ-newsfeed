@@ -4,11 +4,13 @@ import os
 import time
 
 from backend.database.discoveries import get_discovery_candidates, insert_discovery
-from backend.discovery.google_search import search_researcher, QuotaExhaustedError
+from backend.discovery.web_search import search_researcher, QuotaExhaustedError
 from backend.discovery.classifier import classify_search_results
 from backend.discovery.subpage_crawler import crawl_subpages
 
 logger = logging.getLogger(__name__)
+
+_SEARCH_DELAY_SECONDS = float(os.environ.get("DISCOVERY_SEARCH_DELAY", "6"))
 
 
 def run_discovery_batch(limit: int | None = None) -> dict:
@@ -46,13 +48,11 @@ def run_discovery_batch(limit: int | None = None) -> dict:
                 logger.warning("Search quota exhausted after %d searches — stopping batch", stats["searched"])
                 break
 
-            # Pace searches to stay under Searlo's 10 req/min free-tier limit
-            time.sleep(6)
-
             if not results:
                 insert_discovery(rid, None, None, None, query or f"{first} {last}")
                 stats["no_result"] += 1
                 stats["searched"] += 1
+                time.sleep(_SEARCH_DELAY_SECONDS)
                 continue
 
             classification = classify_search_results(first, last, affiliation, results)
@@ -75,6 +75,7 @@ def run_discovery_batch(limit: int | None = None) -> dict:
                 )
 
             stats["searched"] += 1
+            time.sleep(_SEARCH_DELAY_SECONDS)
 
         except Exception as e:
             logger.warning("Discovery failed for %s %s (id=%d): %s", first, last, rid, e)

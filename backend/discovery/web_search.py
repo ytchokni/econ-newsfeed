@@ -40,10 +40,8 @@ def search_researcher(
             timeout=10,
         )
         if resp.status_code == 429:
-            logger.warning("Searlo rate limit exceeded")
             raise QuotaExhaustedError("Searlo rate limit exceeded")
         if resp.status_code == 402:
-            logger.warning("Searlo credits exhausted")
             raise QuotaExhaustedError("Searlo credits exhausted")
         resp.raise_for_status()
         data = resp.json()

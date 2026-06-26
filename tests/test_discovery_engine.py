@@ -15,7 +15,7 @@ os.environ.setdefault("NEXTAUTH_SECRET", "test-nextauth-secret-for-ci")
 
 from unittest.mock import patch, MagicMock
 from backend.discovery.classifier import WebsiteClassification
-from backend.discovery.google_search import QuotaExhaustedError
+from backend.discovery.web_search import QuotaExhaustedError
 
 
 def test_run_discovery_batch_no_candidates():
