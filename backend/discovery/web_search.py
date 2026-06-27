@@ -13,6 +13,15 @@ class QuotaExhaustedError(Exception):
     """Raised when search API quota/credits are exhausted."""
 
 
+def _extract_result_items(data: dict) -> list[dict]:
+    """Return organic result rows across Searlo's documented response aliases."""
+    for key in ("organic", "organic_results", "items"):
+        items = data.get(key)
+        if isinstance(items, list):
+            return items
+    return []
+
+
 def search_researcher(
     first_name: str,
     last_name: str,
@@ -45,7 +54,7 @@ def search_researcher(
             raise QuotaExhaustedError("Searlo credits exhausted")
         resp.raise_for_status()
         data = resp.json()
-        items = data.get("organic", [])
+        items = _extract_result_items(data)
         return query, [
             {
                 "title": item.get("title", ""),
