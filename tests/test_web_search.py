@@ -69,3 +69,17 @@ def test_search_researcher_accepts_organic_schema():
         _, results = search_researcher("John", "Smith")
 
     assert results[0]["url"] == "https://johnsmith.github.io"
+
+
+def test_search_researcher_raises_on_transient_failure():
+    """Failed Searlo requests must not look like successful empty results."""
+    with patch.dict(os.environ, {"SEARLO_API_KEY": "test-key"}), \
+         patch("backend.discovery.web_search.requests.get", side_effect=TimeoutError("timeout")):
+        from backend.discovery.web_search import SearchFailedError, search_researcher
+
+        try:
+            search_researcher("Jane", "Doe")
+        except SearchFailedError:
+            return
+
+    raise AssertionError("Expected SearchFailedError")

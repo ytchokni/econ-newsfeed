@@ -15,7 +15,7 @@ os.environ.setdefault("NEXTAUTH_SECRET", "test-nextauth-secret-for-ci")
 
 from unittest.mock import patch, MagicMock
 from backend.discovery.classifier import WebsiteClassification
-from backend.discovery.web_search import QuotaExhaustedError
+from backend.discovery.web_search import QuotaExhaustedError, SearchFailedError
 
 
 def test_run_discovery_batch_no_candidates():
@@ -65,6 +65,44 @@ def test_run_discovery_batch_no_result():
 
     assert result["no_result"] == 1
     mock_insert.assert_called_once_with(1, None, None, None, "query")
+
+
+def test_run_discovery_batch_search_failure_does_not_burn_candidate():
+    """Transient search failures should leave candidates eligible for retry."""
+    candidates = [{"id": 1, "first_name": "Jane", "last_name": "Doe", "affiliation": None}]
+    mock_insert = MagicMock()
+
+    with patch("backend.discovery.engine.get_discovery_candidates", return_value=candidates), \
+         patch("backend.discovery.engine.search_researcher", side_effect=SearchFailedError("timeout")), \
+         patch("backend.discovery.engine.insert_discovery", mock_insert):
+        from backend.discovery.engine import run_discovery_batch
+        result = run_discovery_batch(limit=1)
+
+    assert result["errors"] == 1
+    assert result["no_result"] == 0
+    assert result["searched"] == 1
+    mock_insert.assert_not_called()
+
+
+def test_run_discovery_batch_classifier_failure_does_not_burn_candidate():
+    """LLM failures after a successful search should not be recorded as no_result."""
+    candidates = [{"id": 1, "first_name": "Jane", "last_name": "Doe", "affiliation": "MIT"}]
+    search_results = [
+        {"title": "Jane Doe", "url": "https://janedoe.com", "snippet": "economist"},
+    ]
+    mock_insert = MagicMock()
+
+    with patch("backend.discovery.engine.get_discovery_candidates", return_value=candidates), \
+         patch("backend.discovery.engine.search_researcher", return_value=("query", search_results)), \
+         patch("backend.discovery.engine.classify_search_results", return_value=None), \
+         patch("backend.discovery.engine.insert_discovery", mock_insert):
+        from backend.discovery.engine import run_discovery_batch
+        result = run_discovery_batch(limit=1)
+
+    assert result["errors"] == 1
+    assert result["no_result"] == 0
+    assert result["searched"] == 1
+    mock_insert.assert_not_called()
 
 
 def test_subpage_crawler_finds_research():
