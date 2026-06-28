@@ -1,3 +1,6 @@
+/**
+ * @jest-environment node
+ */
 import { createHmac } from "crypto";
 import type { NextRequest } from "next/server";
 
