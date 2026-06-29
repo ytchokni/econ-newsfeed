@@ -6,22 +6,15 @@ For full architecture, commands, and deployment details see `CLAUDE.md`. This fi
 
 Production runs on Hetzner (MySQL inside Docker). Cloud agents connect via SSH tunnel.
 
-The `HETZNER_SSH_KEY` secret is stored as the **base64 of the OpenSSH private-key body** (single line, no PEM armor), so it must be wrapped back into a PEM file before use — a plain `echo "$HETZNER_SSH_KEY" > ~/.ssh/hetzner` produces a malformed key and `ssh` then fails with `error in libcrypto`:
+The `HETZNER_SSH_KEY` secret is stored as the **base64 of the OpenSSH private-key body** (single line, no PEM armor). Do **not** use `echo "$HETZNER_SSH_KEY" > ~/.ssh/hetzner` — that produces a malformed key and `ssh` fails with `Load key ... error in libcrypto` (the tunnel never opens, so DB checks then fail with `Can't connect to MySQL server on 127.0.0.1:3306 (111)`). Instead run the helper, which reconstructs a valid `~/.ssh/hetzner` (handling PEM, literal-`\n` PEM, or base64-body forms) and validates it:
 
 ```bash
-mkdir -p ~/.ssh && chmod 700 ~/.ssh
-python3 - <<'PY'
-import os, textwrap
-k = os.environ["HETZNER_SSH_KEY"].strip()
-pem = "-----BEGIN OPENSSH PRIVATE KEY-----\n" + "\n".join(textwrap.wrap(k, 70)) + "\n-----END OPENSSH PRIVATE KEY-----\n"
-p = os.path.expanduser("~/.ssh/hetzner"); open(p, "w").write(pem); os.chmod(p, 0o600)
-PY
-ssh-keygen -y -f ~/.ssh/hetzner   # validate it parses (prints the public key)
+bash scripts/install_hetzner_key.sh
 ssh -i ~/.ssh/hetzner -o StrictHostKeyChecking=no -L 3306:localhost:3306 root@167.233.132.217 -fN
 export DB_HOST=127.0.0.1
 ```
 
-If `ssh` still reports `error in libcrypto`, the secret is truncated/malformed (a single-line paste of a multi-line key captures only the header) — re-enter the full key, base64-encoded.
+If the helper errors that the secret is truncated/malformed, re-enter the full key as base64 (`base64 -w0 ~/.ssh/hetzner`).
 
 Verify:
 ```bash
