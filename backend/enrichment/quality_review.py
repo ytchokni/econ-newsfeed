@@ -10,7 +10,7 @@ import re
 from datetime import datetime, timezone
 
 from backend.database import (
-    fetch_all, fetch_one, execute_query, get_connection,
+    fetch_all, execute_query,
     get_authors_for_papers,
 )
 
@@ -61,9 +61,15 @@ VALID_STATUSES = frozenset({
 })
 
 
+_openai_client = None
+
+
 def _get_openai_client():
-    from openai import OpenAI
-    return OpenAI()
+    global _openai_client
+    if _openai_client is None:
+        from openai import OpenAI
+        _openai_client = OpenAI()
+    return _openai_client
 
 
 def _call_model(prompt: str) -> dict | None:

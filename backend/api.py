@@ -1,6 +1,7 @@
 """FastAPI REST API for econ-newsfeed."""
 import asyncio
 import hmac
+import json
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -601,7 +602,6 @@ def get_reviews(
 ):
     """Quality review audit log with correction stats."""
     _require_api_key(request)
-    import json as _json
 
     where_clauses = []
     params: list = []
@@ -638,37 +638,32 @@ def get_reviews(
 
     for item in items:
         if isinstance(item.get("issues"), str):
-            item["issues"] = _json.loads(item["issues"])
+            item["issues"] = json.loads(item["issues"])
         if isinstance(item.get("corrections_applied"), str):
-            item["corrections_applied"] = _json.loads(item["corrections_applied"])
+            item["corrections_applied"] = json.loads(item["corrections_applied"])
 
     stats_row = fetch_one(
         """
         SELECT
             COUNT(*) AS total_reviewed,
-            SUM(CASE WHEN issues IS NOT NULL AND issues != '[]' THEN 1 ELSE 0 END) AS total_with_issues,
-            SUM(CASE WHEN corrections_applied IS NOT NULL THEN 1 ELSE 0 END) AS total_with_corrections
+            SUM(CASE WHEN issues IS NOT NULL AND issues != '[]' THEN 1 ELSE 0 END) AS total_with_issues
         FROM feed_event_reviews
         """,
     )
 
-    correction_rows = fetch_all(
+    type_rows = fetch_all(
         """
-        SELECT corrections_applied FROM feed_event_reviews
+        SELECT jt.correction_type, COUNT(*) AS cnt
+        FROM feed_event_reviews
+        CROSS JOIN JSON_TABLE(corrections_applied, '$[*]'
+            COLUMNS (correction_type VARCHAR(50) PATH '$.type')
+        ) AS jt
         WHERE corrections_applied IS NOT NULL
+        GROUP BY jt.correction_type
         """,
     )
-    corrections_by_type: dict[str, int] = {}
-    total_corrections = 0
-    for crow in correction_rows:
-        data = crow["corrections_applied"]
-        if isinstance(data, str):
-            data = _json.loads(data)
-        if isinstance(data, list):
-            for c in data:
-                ctype = c.get("type", "unknown")
-                corrections_by_type[ctype] = corrections_by_type.get(ctype, 0) + 1
-                total_corrections += 1
+    corrections_by_type = {r["correction_type"]: r["cnt"] for r in type_rows}
+    total_corrections = sum(corrections_by_type.values())
 
     return {
         "items": items,

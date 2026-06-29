@@ -12,15 +12,10 @@ from pathlib import Path
 from backend.database import fetch_all, execute_query
 from backend.enrichment.quality_review import (
     MODEL, get_unreviewed_events, build_review_payload,
-    apply_corrections, save_review, _extract_json,
+    apply_corrections, save_review, _extract_json, _get_openai_client,
 )
 
 logger = logging.getLogger(__name__)
-
-
-def _get_openai_client():
-    from openai import OpenAI
-    return OpenAI()
 
 
 def submit_review_batch(limit: int = 100) -> str | None:
@@ -34,13 +29,11 @@ def submit_review_batch(limit: int = 100) -> str | None:
         return None
 
     lines = []
-    event_map = {}
     for event in events:
         prompt = build_review_payload(event)
         if prompt is None:
             continue
         custom_id = f"evt_{event['event_id']}"
-        event_map[custom_id] = event
         lines.append(json.dumps({
             "custom_id": custom_id,
             "method": "POST",
@@ -159,21 +152,15 @@ def _process_completed_batch(client, batch, db_id: int) -> int:
         return 0
 
     content = client.files.content(batch.output_file_id)
-    lines = content.text.strip().split("\n")
+    raw_lines = content.text.strip().split("\n")
 
-    events_by_id = _load_events_for_batch(lines)
+    parsed_results, events_by_id = _load_events_for_batch(raw_lines)
 
     processed = 0
     total_prompt_tokens = 0
     total_completion_tokens = 0
 
-    for line in lines:
-        try:
-            result = json.loads(line)
-        except json.JSONDecodeError:
-            logger.warning("Skipping malformed JSONL line")
-            continue
-
+    for result in parsed_results:
         custom_id = result.get("custom_id", "")
         event_id = _parse_event_id(custom_id)
         if event_id is None:
@@ -230,12 +217,17 @@ def _process_completed_batch(client, batch, db_id: int) -> int:
     return processed
 
 
-def _load_events_for_batch(lines: list[str]) -> dict[int, dict]:
-    """Load event data from DB for all event IDs in batch results."""
+def _load_events_for_batch(lines: list[str]) -> tuple[list[dict], dict[int, dict]]:
+    """Parse JSONL lines and load event data from DB.
+
+    Returns (parsed_results, events_by_id) to avoid double-parsing.
+    """
+    parsed_results = []
     event_ids = []
     for line in lines:
         try:
             result = json.loads(line)
+            parsed_results.append(result)
             eid = _parse_event_id(result.get("custom_id", ""))
             if eid is not None:
                 event_ids.append(eid)
@@ -243,7 +235,7 @@ def _load_events_for_batch(lines: list[str]) -> dict[int, dict]:
             continue
 
     if not event_ids:
-        return {}
+        return parsed_results, {}
 
     placeholders = ",".join(["%s"] * len(event_ids))
     rows = fetch_all(
@@ -258,7 +250,7 @@ def _load_events_for_batch(lines: list[str]) -> dict[int, dict]:
         """,
         tuple(event_ids),
     )
-    return {r["event_id"]: r for r in rows}
+    return parsed_results, {r["event_id"]: r for r in rows}
 
 
 def _parse_event_id(custom_id: str) -> int | None:
