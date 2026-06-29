@@ -85,7 +85,7 @@ export default function PublicationCard({
         {!isStatusChange && venueYear && (
           <>
             <span className="text-[var(--muted)]">{"  ·  "}</span>
-            <span className="italic text-[var(--muted)]">{venueYear}</span>
+            <span className="italic text-[var(--ink2)]">{venueYear}</span>
           </>
         )}
       </p>
@@ -107,7 +107,7 @@ export default function PublicationCard({
             {newLabel}
           </span>
           <span>at</span>
-          <span className="italic">{venueYear}</span>
+          <span className="italic text-[var(--ink2)] font-medium">{venueYear}</span>
         </p>
       )}
 
