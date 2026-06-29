@@ -64,7 +64,7 @@ _SCHEMA_METADATA_KEYS = {"$defs", "title", "description", "default"}
 
 
 def _inline_refs(schema: dict) -> dict:
-    """Resolve $ref and strip metadata keys that Gemini Batch API rejects."""
+    """Resolve $ref and strip metadata keys unsupported by Google AI Studio."""
     defs = schema.pop("$defs", {})
 
     def resolve(node, inside_properties=False):
