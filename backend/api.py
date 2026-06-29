@@ -591,6 +591,97 @@ def bulk_approve_discoveries_endpoint(request: Request):
     return {"status": "ok", "approved_count": count}
 
 
+@app.get("/api/admin/reviews")
+def get_reviews(
+    request: Request,
+    has_corrections: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+    since: str | None = None,
+):
+    """Quality review audit log with correction stats."""
+    _require_api_key(request)
+    import json as _json
+
+    where_clauses = []
+    params: list = []
+
+    if has_corrections:
+        where_clauses.append("r.corrections_applied IS NOT NULL")
+
+    if since:
+        where_clauses.append("r.reviewed_at >= %s")
+        params.append(since)
+
+    where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+
+    items = fetch_all(
+        f"""
+        SELECT r.id, r.feed_event_id, r.model, r.issues, r.corrections_applied,
+               r.reviewed_at,
+               fe.event_type, p.id AS paper_id, p.title AS paper_title
+        FROM feed_event_reviews r
+        JOIN feed_events fe ON fe.id = r.feed_event_id
+        JOIN papers p ON p.id = fe.paper_id
+        WHERE {where_sql}
+        ORDER BY r.reviewed_at DESC
+        LIMIT %s OFFSET %s
+        """,
+        tuple(params + [limit, offset]),
+    )
+
+    count_row = fetch_one(
+        f"SELECT COUNT(*) AS cnt FROM feed_event_reviews r WHERE {where_sql}",
+        tuple(params) if params else None,
+    )
+    total = count_row["cnt"] if count_row else 0
+
+    for item in items:
+        if isinstance(item.get("issues"), str):
+            item["issues"] = _json.loads(item["issues"])
+        if isinstance(item.get("corrections_applied"), str):
+            item["corrections_applied"] = _json.loads(item["corrections_applied"])
+
+    stats_row = fetch_one(
+        """
+        SELECT
+            COUNT(*) AS total_reviewed,
+            SUM(CASE WHEN issues IS NOT NULL AND issues != '[]' THEN 1 ELSE 0 END) AS total_with_issues,
+            SUM(CASE WHEN corrections_applied IS NOT NULL THEN 1 ELSE 0 END) AS total_with_corrections
+        FROM feed_event_reviews
+        """,
+    )
+
+    correction_rows = fetch_all(
+        """
+        SELECT corrections_applied FROM feed_event_reviews
+        WHERE corrections_applied IS NOT NULL
+        """,
+    )
+    corrections_by_type: dict[str, int] = {}
+    total_corrections = 0
+    for crow in correction_rows:
+        data = crow["corrections_applied"]
+        if isinstance(data, str):
+            data = _json.loads(data)
+        if isinstance(data, list):
+            for c in data:
+                ctype = c.get("type", "unknown")
+                corrections_by_type[ctype] = corrections_by_type.get(ctype, 0) + 1
+                total_corrections += 1
+
+    return {
+        "items": items,
+        "total": total,
+        "stats": {
+            "total_reviewed": stats_row["total_reviewed"] if stats_row else 0,
+            "total_with_issues": stats_row["total_with_issues"] if stats_row else 0,
+            "total_corrections": total_corrections,
+            "corrections_by_type": corrections_by_type,
+        },
+    }
+
+
 # ---------------------------------------------------------------------------
 # User endpoints (require authentication)
 # ---------------------------------------------------------------------------

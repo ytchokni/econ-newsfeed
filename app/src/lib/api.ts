@@ -336,6 +336,41 @@ export async function bulkApproveDiscoveries(): Promise<{ approved_count: number
   });
 }
 
+export interface ReviewItem {
+  id: number;
+  feed_event_id: number;
+  model: string;
+  issues: { type: string; severity: string; description: string; correction: string | null }[];
+  corrections_applied: { type: string; paper_id?: number; event_id?: number; old_value: string | null; new_value: string | null }[] | null;
+  reviewed_at: string;
+  event_type: string;
+  paper_id: number;
+  paper_title: string;
+}
+
+export interface ReviewsResponse {
+  items: ReviewItem[];
+  total: number;
+  stats: {
+    total_reviewed: number;
+    total_with_issues: number;
+    total_corrections: number;
+    corrections_by_type: Record<string, number>;
+  };
+}
+
+export function useReviews(params: { has_corrections?: boolean; limit?: number; offset?: number } = {}) {
+  const query = new URLSearchParams();
+  if (params.has_corrections) query.set("has_corrections", "true");
+  if (params.limit) query.set("limit", String(params.limit));
+  if (params.offset) query.set("offset", String(params.offset));
+  const qs = query.toString();
+  return useSWR<ReviewsResponse>(
+    `/api/admin/reviews${qs ? `?${qs}` : ""}`,
+    fetchJsonWithAuth,
+  );
+}
+
 // --- Authenticated API helpers ---
 
 async function fetchJsonAuth<T>(url: string, token: string, init?: RequestInit): Promise<T> {
