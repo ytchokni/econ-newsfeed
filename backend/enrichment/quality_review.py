@@ -347,7 +347,10 @@ def review_events(batch_size: int = 100, dry_run: bool = False,
             high_issues = [x for x in issues if x.get("severity") == "high"]
 
             corrections = apply_corrections(event, review, dry_run=dry_run)
-            save_review(event["event_id"], review, corrections or None)
+            # hide_event deletes the feed_event row; skip saving (FK would fail)
+            has_hide = any(c.get("type") == "hide_event" for c in corrections)
+            if not has_hide:
+                save_review(event["event_id"], review, corrections or None)
 
             total_reviewed += 1
             total_issues += len(issues)
