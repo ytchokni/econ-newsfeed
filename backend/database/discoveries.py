@@ -115,8 +115,8 @@ def approve_discovery(discovery_id: int) -> None:
 
     add_researcher_url(row["researcher_id"], "personal", row["url"])
 
-    if row["subpages"]:
-        subs = json.loads(row["subpages"]) if isinstance(row["subpages"], str) else row["subpages"]
+    subs = _parse_subpages(row["subpages"])
+    if subs:
         for sp in subs:
             add_researcher_url(row["researcher_id"], sp["page_type"], sp["url"])
 
