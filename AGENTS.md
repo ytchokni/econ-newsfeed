@@ -4,14 +4,24 @@ For full architecture, commands, and deployment details see `CLAUDE.md`. This fi
 
 ## Connecting to the production database
 
-Production runs on Hetzner (MySQL inside Docker). Cloud agents connect via SSH tunnel:
+Production runs on Hetzner (MySQL inside Docker). Cloud agents connect via SSH tunnel.
+
+The `HETZNER_SSH_KEY` secret is stored as the **base64 of the OpenSSH private-key body** (single line, no PEM armor), so it must be wrapped back into a PEM file before use — a plain `echo "$HETZNER_SSH_KEY" > ~/.ssh/hetzner` produces a malformed key and `ssh` then fails with `error in libcrypto`:
 
 ```bash
-mkdir -p ~/.ssh
-echo "$HETZNER_SSH_KEY" > ~/.ssh/hetzner && chmod 600 ~/.ssh/hetzner
+mkdir -p ~/.ssh && chmod 700 ~/.ssh
+python3 - <<'PY'
+import os, textwrap
+k = os.environ["HETZNER_SSH_KEY"].strip()
+pem = "-----BEGIN OPENSSH PRIVATE KEY-----\n" + "\n".join(textwrap.wrap(k, 70)) + "\n-----END OPENSSH PRIVATE KEY-----\n"
+p = os.path.expanduser("~/.ssh/hetzner"); open(p, "w").write(pem); os.chmod(p, 0o600)
+PY
+ssh-keygen -y -f ~/.ssh/hetzner   # validate it parses (prints the public key)
 ssh -i ~/.ssh/hetzner -o StrictHostKeyChecking=no -L 3306:localhost:3306 root@167.233.132.217 -fN
 export DB_HOST=127.0.0.1
 ```
+
+If `ssh` still reports `error in libcrypto`, the secret is truncated/malformed (a single-line paste of a multi-line key captures only the header) — re-enter the full key, base64-encoded.
 
 Verify:
 ```bash
@@ -65,11 +75,11 @@ This project tracks economics researchers' publications. Key concepts:
 
 ## Local development (Cursor Cloud VM)
 
-For agents doing dev work (not prod auditing), a local MySQL is available:
+For agents doing dev work (not prod auditing), a local MySQL is available (the dev API on :8001 + frontend on :3000 use it, not the prod tunnel):
 
 - **Start MySQL**: `sudo service mysql start` (not auto-started on boot; not Docker)
-- **Seed schema**: `poetry run python -c "from backend.database import create_database, create_tables; create_database(); create_tables()"`
-- **Start dev servers**: Backend on :8001, frontend on :3000
+- **Seed schema**: `make seed` (idempotent), or `poetry run python -c "from backend.database import create_database, create_tables; create_database(); create_tables()"`
+- **Start dev servers** (`make dev` runs both):
   ```bash
   poetry run uvicorn backend.api:app --reload --port 8001 &
   cd app && API_INTERNAL_URL=http://localhost:8001 npm run dev &
@@ -84,7 +94,7 @@ For agents doing dev work (not prod auditing), a local MySQL is available:
 
 ### Non-obvious caveats
 
-- **Injected secrets override `.env`**: `load_dotenv()` does not override existing env vars. The local MySQL user/database must match the injected `DB_USER`/`DB_PASSWORD`/`DB_NAME`. If auth fails after credential changes, re-provision:
+- **Injected secrets override `.env`**: `load_dotenv()` does not override existing env vars. The local MySQL user/database must match the injected `DB_USER`/`DB_PASSWORD`/`DB_NAME` (`DB_HOST` is read from `.env` as `127.0.0.1`). If auth fails after credential changes, re-provision, then `make seed`:
   ```bash
   sudo mysql -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}';
@@ -95,5 +105,5 @@ For agents doing dev work (not prod auditing), a local MySQL is available:
     GRANT ALL PRIVILEGES ON *.* TO '${DB_USER}'@'localhost' WITH GRANT OPTION;
     FLUSH PRIVILEGES;"
   ```
-- **tmux stale env**: If a tmux server predates secret injection, sessions have stale env. Fix: `tmux kill-server` and recreate from a fresh shell.
-- **`GOOGLE_API_KEY`** powers LLM extraction (Gemini). The API/frontend work without it; only extraction needs it.
+- **tmux stale env**: If a tmux server predates secret injection, its sessions have stale env and the API fails with `Access denied for user ...`. Fix: `tmux kill-server` and recreate the session from a fresh shell (which has the injected secrets).
+- **`GOOGLE_API_KEY`** powers the live LLM extraction pipeline (`make fetch` → `make extract`/`make scrape`, Gemini). The API/frontend serve existing DB data without it; only extraction needs a valid key. If `make extract` fails with `400 ... Please pass a valid API key`, the secret needs refreshing.
