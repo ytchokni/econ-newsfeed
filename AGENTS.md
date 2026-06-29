@@ -27,7 +27,7 @@ Standard commands live in the `Makefile` (`make dev`, `make seed`, `make check`,
   ```
   Then `make seed` (idempotent) to create tables.
 - **tmux sessions must inherit the injected secrets.** A pre-existing tmux server may have been started before secrets were injected; new sessions then inherit that stale env and the API fails with `Access denied for user ...`. If that happens, run `tmux kill-server` and recreate the session from a fresh shell (which has the injected secrets).
-- **The injected `GOOGLE_API_KEY` is not guaranteed to be a valid Google AI Studio key.** The API/frontend serve existing DB data without the LLM, but the live extraction pipeline (`make extract` / `make scrape`) needs a valid key. Without one, `make fetch` still works (downloads HTML); only LLM extraction fails.
+- **`GOOGLE_API_KEY` powers the live LLM pipeline.** A valid Google AI Studio key has been provided as a secret and the live extraction pipeline (`make fetch` → `make extract` / `make scrape`) works end-to-end against `gemini-2.5-flash`. The API/frontend serve existing DB data even without a valid key; only the LLM extraction step needs it. If `make extract` ever fails with `400 ... Please pass a valid API key`, the `GOOGLE_API_KEY` secret needs refreshing.
 
 ### Testing caveat (non-obvious)
 - `tests/conftest.py` sets its own test env via `os.environ.setdefault(...)`, so the **injected secrets override the test defaults** and break auth-sensitive tests (e.g. `test_admin_dashboard`). Run the Python suite with the injected vars unset:
