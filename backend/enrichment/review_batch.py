@@ -194,7 +194,9 @@ def _process_completed_batch(client, batch, db_id: int) -> int:
             continue
 
         corrections = apply_corrections(event, review)
-        save_review(event_id, review, corrections or None)
+        has_hide = any(c.get("type") == "hide_event" for c in corrections)
+        if not has_hide:
+            save_review(event_id, review, corrections or None)
         processed += 1
 
         if corrections:
