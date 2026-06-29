@@ -63,6 +63,57 @@ def test_insert_discovery_no_result():
     assert args[0][1][5] == "no_result"  # status
 
 
+def test_get_pending_discoveries_parses_subpages_json():
+    """Admin discovery responses expose subpages as arrays, not raw JSON strings."""
+    mock_rows = [{
+        "id": 1,
+        "researcher_id": 42,
+        "url": "https://example.com",
+        "subpages": json.dumps([
+            {"page_type": "research", "url": "https://example.com/research"},
+        ]),
+        "confidence": 0.9,
+        "search_query": '"John Doe" economist',
+        "searched_at": "2026-06-28T00:00:00",
+        "first_name": "John",
+        "last_name": "Doe",
+        "affiliation": "Example University",
+    }]
+
+    with patch("backend.database.discoveries.fetch_all", return_value=mock_rows):
+        rows = get_pending_discoveries()
+
+    assert rows[0]["subpages"] == [
+        {"page_type": "research", "url": "https://example.com/research"},
+    ]
+
+
+def test_get_recent_discoveries_parses_subpages_json():
+    """Reviewed discovery history also returns subpages in frontend-safe form."""
+    mock_rows = [{
+        "id": 1,
+        "researcher_id": 42,
+        "url": "https://example.com",
+        "subpages": json.dumps([
+            {"page_type": "cv", "url": "https://example.com/cv.pdf"},
+        ]),
+        "confidence": 0.8,
+        "status": "approved",
+        "searched_at": "2026-06-28T00:00:00",
+        "reviewed_at": "2026-06-28T01:00:00",
+        "first_name": "John",
+        "last_name": "Doe",
+        "affiliation": "Example University",
+    }]
+
+    with patch("backend.database.discoveries.fetch_all", return_value=mock_rows):
+        rows = get_recent_discoveries()
+
+    assert rows[0]["subpages"] == [
+        {"page_type": "cv", "url": "https://example.com/cv.pdf"},
+    ]
+
+
 def test_approve_discovery_copies_urls():
     """approve_discovery inserts root + subpages into researcher_urls."""
     mock_row = {

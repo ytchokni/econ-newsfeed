@@ -71,9 +71,28 @@ def insert_discovery(
     )
 
 
+def _parse_subpages(raw_subpages) -> list[dict] | None:
+    """Decode MySQL JSON values into the shape expected by API clients."""
+    if raw_subpages is None:
+        return None
+    if isinstance(raw_subpages, str):
+        try:
+            return json.loads(raw_subpages)
+        except json.JSONDecodeError:
+            logger.warning("Invalid subpages JSON in url_discoveries: %r", raw_subpages)
+            return None
+    return raw_subpages
+
+
+def _with_parsed_subpages(row: dict) -> dict:
+    row = dict(row)
+    row["subpages"] = _parse_subpages(row.get("subpages"))
+    return row
+
+
 def get_pending_discoveries() -> list[dict]:
     """Return all pending discoveries for admin review."""
-    return fetch_all("""
+    rows = fetch_all("""
         SELECT ud.id, ud.researcher_id, ud.url, ud.subpages, ud.confidence,
                ud.search_query, ud.searched_at,
                r.first_name, r.last_name, r.affiliation
@@ -82,6 +101,7 @@ def get_pending_discoveries() -> list[dict]:
         WHERE ud.status = 'pending'
         ORDER BY ud.confidence DESC, ud.searched_at DESC
     """)
+    return [_with_parsed_subpages(row) for row in rows]
 
 
 def approve_discovery(discovery_id: int) -> None:
@@ -95,8 +115,8 @@ def approve_discovery(discovery_id: int) -> None:
 
     add_researcher_url(row["researcher_id"], "personal", row["url"])
 
-    if row["subpages"]:
-        subs = json.loads(row["subpages"]) if isinstance(row["subpages"], str) else row["subpages"]
+    subs = _parse_subpages(row["subpages"])
+    if subs:
         for sp in subs:
             add_researcher_url(row["researcher_id"], sp["page_type"], sp["url"])
 
@@ -171,7 +191,7 @@ def get_discovery_stats() -> dict:
 
 def get_recent_discoveries(limit: int = 20) -> list[dict]:
     """Return recently reviewed discoveries for history view."""
-    return fetch_all("""
+    rows = fetch_all("""
         SELECT ud.id, ud.researcher_id, ud.url, ud.subpages, ud.confidence,
                ud.status, ud.searched_at, ud.reviewed_at,
                r.first_name, r.last_name, r.affiliation
@@ -181,3 +201,4 @@ def get_recent_discoveries(limit: int = 20) -> list[dict]:
         ORDER BY ud.reviewed_at DESC
         LIMIT %s
     """, (limit,))
+    return [_with_parsed_subpages(row) for row in rows]
