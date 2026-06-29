@@ -4,7 +4,7 @@ import os
 import time
 
 from backend.database.discoveries import get_discovery_candidates, insert_discovery
-from backend.discovery.web_search import search_researcher, QuotaExhaustedError
+from backend.discovery.web_search import search_researcher, QuotaExhaustedError, SearchFailedError
 from backend.discovery.classifier import classify_search_results
 from backend.discovery.subpage_crawler import crawl_subpages
 
@@ -47,6 +47,11 @@ def run_discovery_batch(limit: int | None = None) -> dict:
             except QuotaExhaustedError:
                 logger.warning("Search quota exhausted after %d searches — stopping batch", stats["searched"])
                 break
+            except SearchFailedError as e:
+                logger.warning("Search failed for %s %s (id=%d): %s", first, last, rid, e)
+                stats["errors"] += 1
+                stats["searched"] += 1
+                continue
 
             if not results:
                 insert_discovery(rid, None, None, None, query or f"{first} {last}")
@@ -56,7 +61,10 @@ def run_discovery_batch(limit: int | None = None) -> dict:
                 continue
 
             classification = classify_search_results(first, last, affiliation, results)
-            if classification is None or classification.url is None:
+            if classification is None:
+                logger.warning("Classification failed for %s %s (id=%d)", first, last, rid)
+                stats["errors"] += 1
+            elif classification.url is None:
                 insert_discovery(rid, None, None, None, query)
                 stats["no_result"] += 1
             else:

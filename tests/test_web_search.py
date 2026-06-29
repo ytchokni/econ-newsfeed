@@ -2,6 +2,8 @@
 import os
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 os.environ.setdefault("CONTENT_MAX_CHARS", "20000")
 os.environ.setdefault("LLM_MODEL", "gemma-4-31b-it")
 os.environ.setdefault("GOOGLE_API_KEY", "test-google-key")
@@ -69,3 +71,13 @@ def test_search_researcher_accepts_organic_schema():
         _, results = search_researcher("John", "Smith")
 
     assert results[0]["url"] == "https://johnsmith.github.io"
+
+
+def test_search_researcher_raises_on_transient_failure():
+    """Failed Searlo requests must not look like successful empty results."""
+    from backend.discovery.web_search import SearchFailedError, search_researcher
+
+    with patch.dict(os.environ, {"SEARLO_API_KEY": "test-key"}), \
+         patch("backend.discovery.web_search.requests.get", side_effect=TimeoutError("timeout")), \
+         pytest.raises(SearchFailedError):
+        search_researcher("Jane", "Doe")

@@ -13,6 +13,10 @@ class QuotaExhaustedError(Exception):
     """Raised when search API quota/credits are exhausted."""
 
 
+class SearchFailedError(Exception):
+    """Raised when search fails before returning a trustworthy result set."""
+
+
 def _extract_result_items(data: dict) -> list[dict]:
     """Return organic result rows across Searlo's documented response aliases."""
     for key in ("organic", "organic_results", "items"):
@@ -31,11 +35,11 @@ def search_researcher(
 
     Returns (query_used, results) where each result is
     {"title": str, "url": str, "snippet": str}.
-    Returns (query, []) if API key not configured.
+    Raises SearchFailedError if the API key is missing or the search request fails.
     """
     api_key = os.environ.get("SEARLO_API_KEY")
     if not api_key:
-        return "", []
+        raise SearchFailedError("SEARLO_API_KEY is not configured")
 
     query = f'"{first_name} {last_name}" economist personal website'
     if affiliation:
@@ -67,4 +71,4 @@ def search_researcher(
         raise
     except Exception as e:
         logger.warning("Searlo search failed for %s %s: %s", first_name, last_name, e)
-        return query, []
+        raise SearchFailedError(str(e)) from e
