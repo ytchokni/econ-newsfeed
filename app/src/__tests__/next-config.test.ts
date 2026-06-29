@@ -1,5 +1,5 @@
 /**
- * Tests for next.config.mjs to prevent regressions that break `make dev`.
+ * Tests for next.config.mjs to prevent regressions that break local dev.
  *
  * These verify:
  * - API rewrite defaults to localhost (not Docker service name)

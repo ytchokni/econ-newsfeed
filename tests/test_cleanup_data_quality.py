@@ -1,7 +1,7 @@
 """Tests for the pure helpers in scripts/cleanup_data_quality.py.
 
 The DB-touching steps are exercised against the real mirror via
-`make check-data` before/after a run; these tests pin the text-repair and
+`pytest tests_data_quality` before/after a run; these tests pin the text-repair and
 duplicate-detection logic that decides WHAT gets rewritten.
 """
 import importlib.util

@@ -1,6 +1,5 @@
 import argparse
 import logging
-import os
 
 from backend.database import (
     create_tables,
@@ -12,6 +11,7 @@ from backend.database import (
     save_researcher_jel_codes,
 )
 from backend.researcher import Researcher
+
 
 from backend.pipeline.html_fetcher import HTMLFetcher
 
@@ -160,7 +160,7 @@ def discover_domains() -> None:
         "SELECT url_id FROM html_content WHERE raw_html IS NOT NULL"
     )
     if not url_ids:
-        logging.info("No raw HTML stored yet. Run 'make fetch' first.")
+        logging.info("No raw HTML stored yet. Run 'python -m backend.main download' first.")
         return
 
     totals = Counter()

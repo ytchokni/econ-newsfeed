@@ -159,13 +159,6 @@ def _get_cost_stats() -> dict:
         "FROM llm_usage GROUP BY model ORDER BY cost DESC"
     )
 
-    batch_totals = fetch_one(
-        "SELECT "
-        "COALESCE(SUM(CASE WHEN is_batch = 1 THEN estimated_cost_usd ELSE 0 END), 0) AS batch_cost, "
-        "COALESCE(SUM(CASE WHEN is_batch = 0 THEN estimated_cost_usd ELSE 0 END), 0) AS realtime_cost "
-        "FROM llm_usage"
-    )
-
     daily = fetch_all(
         "SELECT DATE(called_at) AS date, "
         "COALESCE(SUM(estimated_cost_usd), 0) AS cost, "
@@ -191,10 +184,6 @@ def _get_cost_stats() -> dict:
             {"model": r["model"], "cost": float(r["cost"]), "tokens": int(r["tokens"])}
             for r in by_model
         ],
-        "batch_vs_realtime": {
-            "batch_cost": float(batch_totals.get("batch_cost", 0)) if batch_totals else 0,
-            "realtime_cost": float(batch_totals.get("realtime_cost", 0)) if batch_totals else 0,
-        },
         "last_30_days": last_30_days,
     }
 

@@ -14,8 +14,7 @@ _LLM_PRICING = {
 
 
 def log_llm_usage(call_type: str, model: str, usage: object, context_url: str | None = None,
-                  researcher_id: int | None = None, scrape_log_id: int | None = None,
-                  is_batch: bool = False, batch_job_id: int | None = None) -> None:
+                  researcher_id: int | None = None, scrape_log_id: int | None = None) -> None:
     """Log an LLM API call with token counts and estimated cost. Failures are silenced."""
     try:
         prompt_tokens = getattr(usage, 'prompt_tokens', 0) or 0
@@ -24,8 +23,7 @@ def log_llm_usage(call_type: str, model: str, usage: object, context_url: str | 
         pricing = _LLM_PRICING.get(model)
         if pricing:
             prompt_rate, completion_rate = pricing
-            multiplier = 0.5 if is_batch else 1.0
-            estimated_cost = multiplier * (
+            estimated_cost = (
                 prompt_tokens * prompt_rate / 1_000_000
                 + completion_tokens * completion_rate / 1_000_000
             )
@@ -35,12 +33,12 @@ def log_llm_usage(call_type: str, model: str, usage: object, context_url: str | 
         execute_query(
             """INSERT INTO llm_usage
                (called_at, call_type, model, prompt_tokens, completion_tokens,
-                total_tokens, estimated_cost_usd, is_batch, context_url,
-                researcher_id, scrape_log_id, batch_job_id)
-               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+                total_tokens, estimated_cost_usd, context_url,
+                researcher_id, scrape_log_id)
+               VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)""",
             (datetime.now(timezone.utc), call_type, model, prompt_tokens,
-             completion_tokens, total_tokens, estimated_cost, is_batch,
-             context_url, researcher_id, scrape_log_id, batch_job_id),
+             completion_tokens, total_tokens, estimated_cost,
+             context_url, researcher_id, scrape_log_id),
         )
     except Exception as e:
         logging.warning(f"log_llm_usage failed (non-fatal): {e}")

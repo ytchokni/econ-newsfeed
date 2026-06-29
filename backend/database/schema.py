@@ -277,11 +277,9 @@ _TABLE_DEFINITIONS = {
             completion_tokens INT NOT NULL DEFAULT 0,
             total_tokens INT NOT NULL DEFAULT 0,
             estimated_cost_usd DECIMAL(10,6) DEFAULT NULL,
-            is_batch BOOLEAN NOT NULL DEFAULT FALSE,
             context_url VARCHAR(2048) DEFAULT NULL,
             researcher_id INT DEFAULT NULL,
             scrape_log_id INT DEFAULT NULL,
-            batch_job_id INT DEFAULT NULL,
             INDEX idx_called_at (called_at),
             INDEX idx_call_type (call_type),
             INDEX idx_scrape_log (scrape_log_id)
@@ -990,6 +988,28 @@ def create_tables() -> None:
                         logging.info("Migration: created url_discoveries table (if not exists)")
                     except Exception as e:
                         logging.warning("Migration: url_discoveries table: %s", e)
+
+                    # Drop deprecated batch_jobs table and batch columns from llm_usage
+                    try:
+                        cursor.execute("DROP TABLE IF EXISTS batch_jobs")
+                        conn.commit()
+                        logging.info("Migration: dropped batch_jobs table")
+                    except Exception as e:
+                        logging.warning("Migration: drop batch_jobs: %s", e)
+
+                    for col in ("is_batch", "batch_job_id"):
+                        try:
+                            cursor.execute(
+                                "SELECT COUNT(*) FROM information_schema.COLUMNS "
+                                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'llm_usage' "
+                                f"AND COLUMN_NAME = '{col}'"
+                            )
+                            if cursor.fetchone()[0] > 0:
+                                cursor.execute(f"ALTER TABLE llm_usage DROP COLUMN {col}")
+                                conn.commit()
+                                logging.info("Migration: dropped llm_usage.%s", col)
+                        except Exception as e:
+                            logging.warning("Migration: drop llm_usage.%s: %s", col, e)
 
                 finally:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")

@@ -26,7 +26,7 @@ class TestExpectedTablesExist:
     EXPECTED = [
         "researchers", "researcher_urls", "papers", "paper_snapshots",
         "html_content", "html_snapshots", "authorship", "feed_events",
-        "paper_links", "openalex_coauthors", "batch_jobs", "llm_usage",
+        "paper_links", "openalex_coauthors", "llm_usage",
         "scrape_log", "researcher_snapshots",
     ]
 
