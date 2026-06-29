@@ -212,6 +212,22 @@ class TestGetResearcherIdInitialTier:
         result = get_researcher_id("Robert", "Smith")
         assert result == 99
 
+    def test_supplied_connection_does_not_commit_insert(self):
+        """Caller-owned transactions should not be committed inside get_researcher_id."""
+        conn = MagicMock()
+        cursor = MagicMock()
+        cursor.fetchone.return_value = None  # Tier 1 exact match fails
+        cursor.fetchall.return_value = []  # no same-last-name candidates
+        cursor.lastrowid = 99
+        conn.cursor.return_value = cursor
+
+        result = get_researcher_id("Ada", "Lovelace", conn=conn)
+
+        assert result == 99
+        conn.commit.assert_not_called()
+        executed = [call[0][0] for call in cursor.execute.call_args_list]
+        assert any("INSERT INTO researchers" in q for q in executed)
+
 
 class TestMergeResearchers:
     """merge_researchers transfers authorship, JEL codes, metadata, then deletes duplicate."""
