@@ -303,21 +303,21 @@ _TABLE_DEFINITIONS = {
             INDEX idx_event_type (event_type)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
-    "batch_jobs": """
-        CREATE TABLE IF NOT EXISTS batch_jobs (
+    "review_batch_jobs": """
+        CREATE TABLE IF NOT EXISTS review_batch_jobs (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            openai_batch_id VARCHAR(255) NOT NULL,
+            openai_batch_id VARCHAR(255) NOT NULL UNIQUE,
             input_file_id VARCHAR(255) NOT NULL,
             output_file_id VARCHAR(255) DEFAULT NULL,
             status ENUM('submitted','validating','in_progress','finalizing','completed','failed','expired','cancelled') DEFAULT 'submitted',
-            url_count INT DEFAULT 0,
+            event_count INT DEFAULT 0,
+            model VARCHAR(100) NOT NULL,
             created_at DATETIME NOT NULL,
             completed_at DATETIME DEFAULT NULL,
-            prompt_tokens_total INT DEFAULT 0,
-            completion_tokens_total INT DEFAULT 0,
-            estimated_cost_usd DECIMAL(10,6) DEFAULT NULL,
+            prompt_tokens INT DEFAULT 0,
+            completion_tokens INT DEFAULT 0,
+            cost_usd DECIMAL(10,6) DEFAULT NULL,
             error_message TEXT DEFAULT NULL,
-            UNIQUE KEY uq_batch_id (openai_batch_id),
             INDEX idx_status (status)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
@@ -515,7 +515,7 @@ def create_tables() -> None:
                         "authorship", "research_fields", "researcher_fields",
                         "jel_codes", "researcher_jel_codes",
                         "scrape_log", "researcher_snapshots", "paper_snapshots",
-                        "paper_urls", "llm_usage", "feed_events", "batch_jobs",
+                        "paper_urls", "llm_usage", "feed_events", "review_batch_jobs",
                         "openalex_coauthors",
                         "paper_links",
                         "paper_topics",
@@ -896,6 +896,77 @@ def create_tables() -> None:
                             logging.info("Migration: backfilled has_top5_pub for %d researchers", backfilled)
                     except Exception as e:
                         logging.warning("Migration: has_top5_pub backfill: %s", e)
+
+                    # Create feed_event_reviews table for LLM quality review
+                    try:
+                        cursor.execute("""
+                            CREATE TABLE IF NOT EXISTS feed_event_reviews (
+                                id INT AUTO_INCREMENT PRIMARY KEY,
+                                feed_event_id INT NOT NULL UNIQUE,
+                                model VARCHAR(100) NOT NULL,
+                                issues JSON DEFAULT NULL,
+                                corrections_applied JSON DEFAULT NULL,
+                                reviewed_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                                INDEX idx_reviewed (reviewed_at),
+                                FOREIGN KEY (feed_event_id) REFERENCES feed_events(id) ON DELETE CASCADE
+                            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                        """)
+                        conn.commit()
+                        logging.info("Migration: created feed_event_reviews table (if not exists)")
+                    except Exception as e:
+                        logging.warning("Migration: feed_event_reviews table: %s", e)
+
+                    # Migrate feed_event_reviews: drop overall_quality, change unique key
+                    try:
+                        cursor.execute("SHOW COLUMNS FROM feed_event_reviews LIKE 'overall_quality'")
+                        if cursor.fetchone():
+                            cursor.execute("ALTER TABLE feed_event_reviews DROP COLUMN overall_quality")
+                            conn.commit()
+                            logging.info("Migration: dropped overall_quality from feed_event_reviews")
+                    except Exception as e:
+                        logging.warning("Migration: feed_event_reviews drop overall_quality: %s", e)
+
+                    try:
+                        cursor.execute("SHOW INDEX FROM feed_event_reviews WHERE Key_name = 'uq_event_model'")
+                        if cursor.fetchone():
+                            cursor.execute("ALTER TABLE feed_event_reviews DROP INDEX uq_event_model, ADD UNIQUE KEY (feed_event_id)")
+                            conn.commit()
+                            logging.info("Migration: changed feed_event_reviews unique key to feed_event_id only")
+                    except Exception as e:
+                        logging.warning("Migration: feed_event_reviews unique key change: %s", e)
+
+                    # Create review_batch_jobs table
+                    try:
+                        cursor.execute("""
+                            CREATE TABLE IF NOT EXISTS review_batch_jobs (
+                                id INT AUTO_INCREMENT PRIMARY KEY,
+                                openai_batch_id VARCHAR(255) NOT NULL UNIQUE,
+                                input_file_id VARCHAR(255) NOT NULL,
+                                output_file_id VARCHAR(255) DEFAULT NULL,
+                                status ENUM('submitted','validating','in_progress','finalizing','completed','failed','expired','cancelled') DEFAULT 'submitted',
+                                event_count INT DEFAULT 0,
+                                model VARCHAR(100) NOT NULL,
+                                created_at DATETIME NOT NULL,
+                                completed_at DATETIME DEFAULT NULL,
+                                prompt_tokens INT DEFAULT 0,
+                                completion_tokens INT DEFAULT 0,
+                                cost_usd DECIMAL(10,6) DEFAULT NULL,
+                                error_message TEXT DEFAULT NULL,
+                                INDEX idx_status (status)
+                            ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+                        """)
+                        conn.commit()
+                        logging.info("Migration: created review_batch_jobs table (if not exists)")
+                    except Exception as e:
+                        logging.warning("Migration: review_batch_jobs table: %s", e)
+
+                    # Drop deprecated batch_jobs table (was Gemini batch extraction, replaced by extraction worker)
+                    try:
+                        cursor.execute("DROP TABLE IF EXISTS batch_jobs")
+                        conn.commit()
+                        logging.info("Migration: dropped deprecated batch_jobs table")
+                    except Exception as e:
+                        logging.warning("Migration: drop batch_jobs: %s", e)
 
                     # Create url_discoveries table for URL discovery pipeline
                     try:

@@ -176,6 +176,7 @@ _enrichment_thread = None
 _enrichment_stop_event = threading.Event()
 
 EXTRACTION_WORKER_ENABLED = os.environ.get('EXTRACTION_WORKER_ENABLED', 'false').lower() == 'true'
+QUALITY_REVIEW_ENABLED = os.environ.get('QUALITY_REVIEW_ENABLED', 'false').lower() == 'true'
 DIGEST_ENABLED = os.environ.get('RESEND_API_KEY', '') != ''
 _EXTRACTION_DELAY_SECONDS = float(os.environ.get('EXTRACTION_DELAY_SECONDS', '2'))
 _EXTRACTION_IDLE_SECONDS = 300       # queue empty → re-poll every 5 min
@@ -729,6 +730,24 @@ def start_scheduler() -> None:
             id='url_discovery',
         )
         logger.info("URL discovery job scheduled for daily at 05:00 UTC")
+
+    if QUALITY_REVIEW_ENABLED:
+        from backend.enrichment.review_batch import submit_review_batch, check_review_batches
+        _scheduler.add_job(
+            submit_review_batch,
+            'cron',
+            hour=10,
+            minute=0,
+            id='review_batch_submit',
+            kwargs={'limit': 100},
+        )
+        _scheduler.add_job(
+            check_review_batches,
+            'interval',
+            hours=3,
+            id='review_batch_check',
+        )
+        logger.info("Quality review jobs scheduled: submit daily 10:00 UTC, check every 3h")
 
 
 def shutdown_scheduler() -> None:

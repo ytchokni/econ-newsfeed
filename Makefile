@@ -1,4 +1,4 @@
-.PHONY: setup dev kill seed reset-db scrape fetch extract batch-submit batch-check classify-jel enrich enrich-jel discover-domains discover-urls discover-research-pages backfill-normalize populate-fields backfill-affiliations audit-zero-pubs ingest-newsletters check
+.PHONY: setup dev kill seed reset-db scrape fetch extract classify-jel enrich enrich-jel discover-domains discover-urls discover-research-pages backfill-normalize populate-fields backfill-affiliations audit-zero-pubs ingest-newsletters check
 
 setup:
 	poetry install
@@ -37,11 +37,6 @@ fetch:
 extract:  ## Run LLM extraction for URLs with pending changes (no fetching)
 	poetry run python -m backend.main extract
 
-batch-submit:
-	poetry run python -m backend.main batch-submit
-
-batch-check:
-	poetry run python -m backend.main batch-check
 
 classify-jel:
 	poetry run python -c "from backend.main import classify_jel; classify_jel()"

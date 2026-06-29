@@ -1,6 +1,7 @@
 """FastAPI REST API for econ-newsfeed."""
 import asyncio
 import hmac
+import json
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -590,6 +591,91 @@ def bulk_approve_discoveries_endpoint(request: Request):
     count = db_bulk_approve_discoveries(min_confidence=0.8)
     _admin_dashboard_cache.clear()
     return {"status": "ok", "approved_count": count}
+
+
+@app.get("/api/admin/reviews")
+def get_reviews(
+    request: Request,
+    has_corrections: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+    since: str | None = None,
+):
+    """Quality review audit log with correction stats."""
+    _require_api_key(request)
+
+    where_clauses = []
+    params: list = []
+
+    if has_corrections:
+        where_clauses.append("r.corrections_applied IS NOT NULL")
+
+    if since:
+        where_clauses.append("r.reviewed_at >= %s")
+        params.append(since)
+
+    where_sql = " AND ".join(where_clauses) if where_clauses else "1=1"
+
+    items = fetch_all(
+        f"""
+        SELECT r.id, r.feed_event_id, r.model, r.issues, r.corrections_applied,
+               r.reviewed_at,
+               fe.event_type, p.id AS paper_id, p.title AS paper_title
+        FROM feed_event_reviews r
+        JOIN feed_events fe ON fe.id = r.feed_event_id
+        JOIN papers p ON p.id = fe.paper_id
+        WHERE {where_sql}
+        ORDER BY r.reviewed_at DESC
+        LIMIT %s OFFSET %s
+        """,
+        tuple(params + [limit, offset]),
+    )
+
+    count_row = fetch_one(
+        f"SELECT COUNT(*) AS cnt FROM feed_event_reviews r WHERE {where_sql}",
+        tuple(params) if params else None,
+    )
+    total = count_row["cnt"] if count_row else 0
+
+    for item in items:
+        if isinstance(item.get("issues"), str):
+            item["issues"] = json.loads(item["issues"])
+        if isinstance(item.get("corrections_applied"), str):
+            item["corrections_applied"] = json.loads(item["corrections_applied"])
+
+    stats_row = fetch_one(
+        """
+        SELECT
+            COUNT(*) AS total_reviewed,
+            SUM(CASE WHEN issues IS NOT NULL AND issues != '[]' THEN 1 ELSE 0 END) AS total_with_issues
+        FROM feed_event_reviews
+        """,
+    )
+
+    type_rows = fetch_all(
+        """
+        SELECT jt.correction_type, COUNT(*) AS cnt
+        FROM feed_event_reviews
+        CROSS JOIN JSON_TABLE(corrections_applied, '$[*]'
+            COLUMNS (correction_type VARCHAR(50) PATH '$.type')
+        ) AS jt
+        WHERE corrections_applied IS NOT NULL
+        GROUP BY jt.correction_type
+        """,
+    )
+    corrections_by_type = {r["correction_type"]: r["cnt"] for r in type_rows}
+    total_corrections = sum(corrections_by_type.values())
+
+    return {
+        "items": items,
+        "total": total,
+        "stats": {
+            "total_reviewed": stats_row["total_reviewed"] if stats_row else 0,
+            "total_with_issues": stats_row["total_with_issues"] if stats_row else 0,
+            "total_corrections": total_corrections,
+            "corrections_by_type": corrections_by_type,
+        },
+    }
 
 
 # ---------------------------------------------------------------------------

@@ -4,17 +4,15 @@ import os
 
 from backend.database import (
     create_tables,
-    execute_query,
     fetch_all,
     fetch_one,
     get_researchers_needing_classification,
     get_urls_needing_extraction,
     import_data_from_file,
-    log_llm_usage,
     save_researcher_jel_codes,
 )
 from backend.researcher import Researcher
-from backend.pipeline.publication import Publication, validate_publication
+
 from backend.pipeline.html_fetcher import HTMLFetcher
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -80,257 +78,6 @@ def classify_jel() -> None:
             )
 
     logging.info("JEL classification done: %d/%d classified", classified, total)
-
-
-def batch_submit(limit: int | None = None) -> None:
-    """Submit a batch job to the Gemini Batch API for URLs needing extraction."""
-    from backend.llm.client import get_client, get_genai_client, get_model
-    from google.genai import types
-    import json
-    import tempfile
-    from datetime import datetime, timezone
-
-    client = get_client()
-    genai_client = get_genai_client()
-    model = get_model()
-
-    researcher_urls = Researcher.get_all_researcher_urls()
-    urls_to_process = [
-        row for row in researcher_urls
-        if HTMLFetcher.needs_extraction(row['id'])
-    ]
-
-    if not urls_to_process:
-        logging.info("Nothing to extract")
-        return
-
-    if limit:
-        total_needing = len(urls_to_process)
-        urls_to_process = urls_to_process[:limit]
-        logging.info("Limiting batch to %d URLs (of %d needing extraction)", limit, total_needing)
-
-    # Warn if pending batches exist
-    pending = fetch_all(
-        """SELECT openai_batch_id FROM batch_jobs
-           WHERE status IN ('submitted','validating','in_progress','finalizing')"""
-    )
-    if pending:
-        ids = ", ".join(r['openai_batch_id'] for r in pending)
-        logging.warning("Warning: %d pending batch(es) already exist: %s", len(pending), ids)
-
-    # Build JSONL
-    lines = []
-    for row in urls_to_process:
-        url_id, researcher_id, url, page_type = row['id'], row['researcher_id'], row['url'], row['page_type']
-        text = HTMLFetcher.get_latest_text(url_id)
-        if not text:
-            continue
-        prompt = Publication.build_extraction_prompt(text, url)
-        request = {
-            "custom_id": f"url_{url_id}",
-            "method": "POST",
-            "url": "/v1/chat/completions",
-            "body": {
-                "model": model,
-                "messages": [{"role": "user", "content": prompt}],
-                "response_format": {"type": "json_object"},
-                "max_tokens": 8000,
-            },
-        }
-        lines.append(json.dumps(request))
-
-    if not lines:
-        logging.info("No URLs with downloadable content to batch")
-        return
-
-    jsonl_content = "\n".join(lines).encode("utf-8")
-
-    with tempfile.NamedTemporaryFile(suffix=".jsonl", delete=False) as tmp:
-        tmp.write(jsonl_content)
-        tmp_path = tmp.name
-
-    try:
-        uploaded = genai_client.files.upload(
-            file=tmp_path,
-            config=types.UploadFileConfig(display_name="batch-extract", mime_type="application/jsonl"),
-        )
-
-        batch = client.batches.create(
-            input_file_id=uploaded.name,
-            endpoint="/v1/chat/completions",
-            completion_window="24h",
-        )
-
-        execute_query(
-            """INSERT INTO batch_jobs
-               (openai_batch_id, input_file_id, status, url_count, created_at)
-               VALUES (%s, %s, 'submitted', %s, %s)""",
-            (batch.id, uploaded.name, len(lines), datetime.now(timezone.utc)),
-        )
-
-        logging.info("Batch submitted: %s (%d URLs)", batch.id, len(lines))
-    finally:
-        os.unlink(tmp_path)
-
-
-class _UsageDict:
-    """Thin wrapper so a dict from the Batch API response can be passed to log_llm_usage()."""
-    def __init__(self, d: dict) -> None:
-        self.prompt_tokens = d.get("prompt_tokens", 0)
-        self.completion_tokens = d.get("completion_tokens", 0)
-        self.total_tokens = d.get("total_tokens", self.prompt_tokens + self.completion_tokens)
-
-
-def batch_check() -> None:
-    """Check pending batch jobs and process completed results."""
-    from backend.llm.client import get_client, get_genai_client, get_model
-    from backend.pipeline.extraction import persist_extraction
-    from backend.pipeline.publication import PublicationExtraction, validate_publication
-    from pydantic import ValidationError
-    import json
-    from datetime import datetime, timezone
-
-    client = get_client()
-    genai_client = get_genai_client()
-    model = get_model()
-
-    pending = fetch_all(
-        """SELECT id, openai_batch_id FROM batch_jobs
-           WHERE status IN ('submitted','validating','in_progress','finalizing')"""
-    )
-
-    if not pending:
-        logging.info("No pending batches")
-        return
-
-    batch_index = {b.id: b for b in client.batches.list(limit=100)}
-
-    for row in pending:
-        db_id, openai_batch_id = row['id'], row['openai_batch_id']
-        batch = batch_index.get(openai_batch_id)
-        if not batch:
-            logging.warning("Batch %s not found in API — may have expired", openai_batch_id)
-            execute_query(
-                "UPDATE batch_jobs SET status = 'expired' WHERE id = %s", (db_id,)
-            )
-            continue
-        status = batch.status
-
-        if status == "completed":
-            output_file_id = batch.output_file_id
-            content_bytes = genai_client.files.download(file=output_file_id)
-            content = content_bytes.decode("utf-8") if isinstance(content_bytes, bytes) else content_bytes
-
-            total_prompt_tokens = 0
-            total_completion_tokens = 0
-            saved_pubs = 0
-            processed_urls = 0
-
-            for line in content.strip().splitlines():
-                result = json.loads(line)
-                custom_id = result.get("custom_id", "")
-                url_id = int(custom_id.replace("url_", "")) if custom_id.startswith("url_") else None
-                if url_id is None:
-                    continue
-
-                url_row = fetch_one(
-                    "SELECT url FROM researcher_urls WHERE id = %s", (url_id,)
-                )
-                if not url_row:
-                    continue
-                url = url_row['url']
-
-                response_body = result.get("response", {}).get("body", {})
-                usage_dict = response_body.get("usage", {})
-                usage = _UsageDict(usage_dict)
-                total_prompt_tokens += usage.prompt_tokens
-                total_completion_tokens += usage.completion_tokens
-
-                log_llm_usage(
-                    "publication_extraction", model, usage,
-                    context_url=url, is_batch=True, batch_job_id=db_id,
-                )
-
-                choices = response_body.get("choices", [])
-                if not choices:
-                    continue
-                raw_response = choices[0].get("message", {}).get("content", "")
-                if not raw_response:
-                    continue
-                # Strip markdown fences if present (LLM sometimes wraps output despite schema guidance)
-                stripped = raw_response.strip()
-                if stripped.startswith("```"):
-                    stripped = stripped.split("\n", 1)[1] if "\n" in stripped else stripped
-                    if stripped.endswith("```"):
-                        stripped = stripped.rsplit("```", 1)[0]
-                    stripped = stripped.strip()
-                try:
-                    parsed = json.loads(stripped)
-                except json.JSONDecodeError as e:
-                    logging.warning(f"Batch result not valid JSON for url_id={url_id}: {e}")
-                    continue
-                # Schema produces {"publications": [...]} — unwrap to the bare list
-                if isinstance(parsed, dict) and "publications" in parsed:
-                    parsed = parsed["publications"]
-                if not isinstance(parsed, list):
-                    continue
-
-                validated = []
-                for item in parsed:
-                    if not isinstance(item, dict):
-                        continue
-                    try:
-                        pub = PublicationExtraction(**item)
-                        d = pub.model_dump()
-                    except (ValidationError, TypeError) as e:
-                        logging.warning(f"Rejected malformed batch publication: {e}")
-                        continue
-                    if validate_publication(d):
-                        validated.append(d)
-                    else:
-                        logging.info("Batch validation dropped: %s", d.get("title", "<no title>"))
-
-                if validated:
-                    fetch_date = HTMLFetcher.get_fetch_timestamp(url_id)
-                    is_seed = HTMLFetcher.is_first_extraction(url_id)
-                    persist_extraction(url, url_id, validated, is_seed=is_seed, event_date=fetch_date)
-                    saved_pubs += len(validated)
-                HTMLFetcher.mark_extracted(url_id)
-                processed_urls += 1
-
-            # Aggregate cost from llm_usage rows logged above
-            cost_row = fetch_one(
-                """SELECT SUM(estimated_cost_usd) AS total_cost FROM llm_usage
-                   WHERE batch_job_id = %s""",
-                (db_id,),
-            )
-            batch_cost = cost_row['total_cost'] if cost_row else None
-
-            execute_query(
-                """UPDATE batch_jobs
-                   SET status = 'completed', output_file_id = %s, completed_at = %s,
-                       prompt_tokens_total = %s, completion_tokens_total = %s,
-                       estimated_cost_usd = %s
-                   WHERE id = %s""",
-                (output_file_id, datetime.now(timezone.utc),
-                 total_prompt_tokens, total_completion_tokens, batch_cost, db_id),
-            )
-            logging.info(
-                "Batch %s completed: %d URLs processed, %d publications saved",
-                openai_batch_id, processed_urls, saved_pubs,
-            )
-
-        elif status in ("failed", "expired", "cancelled"):
-            error_msg = getattr(batch, 'errors', None)
-            execute_query(
-                "UPDATE batch_jobs SET status = %s, error_message = %s WHERE id = %s",
-                (status, str(error_msg), db_id),
-            )
-            logging.warning("Batch %s %s: %s", openai_batch_id, status, error_msg)
-
-        else:
-            req_counts = getattr(batch, 'request_counts', None)
-            logging.info("Batch %s status: %s — %s", openai_batch_id, status, req_counts)
 
 
 def extract_only(limit: int | None = None) -> None:
@@ -449,13 +196,15 @@ def main() -> None:
     subparsers.add_parser('discover-domains', help='Scan stored HTML for untrusted domains with paper-title links')
     extract_parser = subparsers.add_parser('extract', help='Run LLM extraction for URLs with pending changes (no fetching)')
     extract_parser.add_argument('--limit', type=int, default=None, help='Max URLs to extract')
-    batch_submit_parser = subparsers.add_parser('batch-submit', help='Submit batch LLM extraction for URLs with new content')
-    batch_submit_parser.add_argument('--limit', type=int, default=None, help='Max URLs to include in the batch')
-    subparsers.add_parser('batch-check', help='Check pending batches and process completed results')
     newsletter_parser = subparsers.add_parser('ingest-newsletters', help='Ingest papers from newsletter emails')
     newsletter_parser.add_argument('--max-emails', type=int, default=50, help='Max emails to process')
     discover_parser = subparsers.add_parser('discover-urls', help='Search for personal websites for researchers without URLs')
     discover_parser.add_argument('--limit', type=int, default=None, help='Max researchers to search (default: DISCOVERY_DAILY_LIMIT)')
+
+    review_parser = subparsers.add_parser('review', help='LLM quality review of feed events (GPT 5.4 Mini)')
+    review_parser.add_argument('--limit', type=int, default=None, help='Max events to review')
+    review_parser.add_argument('--batch-size', type=int, default=100, help='Batch size (default: 100)')
+    review_parser.add_argument('--dry-run', action='store_true', help='Show corrections without applying')
 
     args = parser.parse_args()
 
@@ -477,10 +226,6 @@ def main() -> None:
         extract_only(limit=args.limit)
     elif args.command == 'discover-domains':
         discover_domains()
-    elif args.command == 'batch-submit':
-        batch_submit(limit=args.limit)
-    elif args.command == 'batch-check':
-        batch_check()
     elif args.command == 'ingest-newsletters':
         from backend.pipeline.newsletter_ingest import ingest_newsletters
         ingest_newsletters(max_emails=args.max_emails)
@@ -489,6 +234,19 @@ def main() -> None:
         from backend.discovery.engine import run_discovery_batch
         result = run_discovery_batch(limit=args.limit)
         logging.info("Discovery results: %s", result)
+    elif args.command == 'review':
+        create_tables()
+        from backend.enrichment.quality_review import review_events
+        result = review_events(
+            batch_size=args.batch_size,
+            dry_run=args.dry_run,
+            limit=args.limit,
+        )
+        logging.info(
+            "Review done: %d events, %d issues, %d corrections (%s)",
+            result["reviewed"], result["issues"], result["corrections"],
+            "dry-run" if result["dry_run"] else "applied",
+        )
 
 if __name__ == "__main__":
     main()
