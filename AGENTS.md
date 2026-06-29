@@ -1,20 +1,90 @@
 # AGENTS.md
 
-For a full architecture, command, and deployment reference see `CLAUDE.md`. This file only adds notes specific to running the project inside a Cursor Cloud agent VM.
+For full architecture, commands, and deployment details see `CLAUDE.md`. This file covers what cloud agents need to know beyond that.
 
-## Cursor Cloud specific instructions
+## Connecting to the production database
 
-### Services & how to run them
-This is a monorepo with three services (details and commands in `CLAUDE.md`):
-- **MySQL 8** — local server (installed via apt, not Docker here). Data persists in the VM snapshot.
-- **Backend API (FastAPI/uvicorn)** — local dev runs on **:8001** (`make dev`), not :8000.
-- **Frontend (Next.js)** — runs on **:3000** (`make dev`), proxies `/api/*` to `API_INTERNAL_URL`.
+Production runs on Hetzner (MySQL inside Docker). Cloud agents connect via SSH tunnel:
 
-Standard commands live in the `Makefile` (`make dev`, `make seed`, `make check`, etc.) and `app/package.json`. Don't duplicate them; use them.
+```bash
+mkdir -p ~/.ssh
+echo "$HETZNER_SSH_KEY" > ~/.ssh/hetzner && chmod 600 ~/.ssh/hetzner
+ssh -i ~/.ssh/hetzner -o StrictHostKeyChecking=no -L 3306:localhost:3306 root@167.233.132.217 -fN
+export DB_HOST=127.0.0.1
+```
 
-### Startup caveats (non-obvious)
-- **MySQL is not auto-started on boot.** Run `sudo service mysql start` at the beginning of a session before seeding or starting the API (Docker is not used in this environment).
-- **Injected secrets override `.env`.** The VM injects `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `GOOGLE_API_KEY`, and `SCRAPE_API_KEY` as environment variables. `backend/config.py` calls `load_dotenv()` which does **not** override existing env vars, so the injected values win over anything in `.env`. The local MySQL has been provisioned with a user/database matching the injected `DB_USER`/`DB_PASSWORD`/`DB_NAME` so the app connects locally. `DB_HOST` is read from `.env` (`127.0.0.1`). If injected DB credentials ever change and auth fails, re-provision the local user:
+Verify:
+```bash
+poetry run python -c "from backend.database.connection import get_connection; c = get_connection(); c.close(); print('OK')"
+```
+
+Required secrets (injected as env vars via Cursor secrets vault): `HETZNER_SSH_KEY`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `SCRAPE_API_KEY`, `GOOGLE_API_KEY`.
+
+## Querying the database
+
+No ORM — use the connection module directly:
+
+```python
+from backend.database.connection import fetch_all, fetch_one
+
+rows = fetch_all("SELECT id, title, venue, status FROM papers WHERE status = %s LIMIT 10", ("working_paper",))
+row = fetch_one("SELECT COUNT(*) AS n FROM feed_events")
+```
+
+Key tables: `papers`, `feed_events`, `authorship`, `researchers`, `researcher_urls`, `html_content`, `paper_snapshots`, `scrape_log`, `llm_usage`. See `backend/database/schema.py` for full DDL.
+
+## Running data quality checks
+
+The deterministic test suite checks invariants against whichever database is configured:
+
+```bash
+poetry run pytest tests_data_quality/ -v --tb=short
+```
+
+Each failure identifies bad rows (not code bugs). The tests cover: feed event integrity, paper field quality, enrichment hygiene, researcher duplicates, and pipeline liveness (when `DATA_QUALITY_LIVE=1`).
+
+## Hitting the production API
+
+The backend API is at `https://econ-newsfeed.duckdns.org`. Admin endpoints require the API key:
+
+```bash
+curl -H "X-API-Key: $SCRAPE_API_KEY" https://econ-newsfeed.duckdns.org/api/admin/dashboard
+```
+
+The feed is at `/api/publications` (public, no auth needed).
+
+## Domain knowledge for auditing
+
+This project tracks economics researchers' publications. Key concepts:
+
+- **Status progression**: working_paper → revise_and_resubmit → accepted → published. Status only moves forward.
+- **Venues** are either journals (peer-reviewed, where R&R/acceptance happens) or working paper series (NBER, CEPR, IZA, RIETI, SSRN, CESifo, IMF, ECB, World Bank — these distribute papers but don't peer-review).
+- A status of R&R or accepted **at a working paper series** is an extraction error — you can't R&R at a discussion paper series.
+- A status of "working_paper" **at a known journal** is suspicious — the paper is likely published or accepted there.
+- `feed_events` drive the newsfeed UI. Bogus events (wrong status, hallucinated papers, junk titles) are user-visible.
+
+## Local development (Cursor Cloud VM)
+
+For agents doing dev work (not prod auditing), a local MySQL is available:
+
+- **Start MySQL**: `sudo service mysql start` (not auto-started on boot; not Docker)
+- **Seed schema**: `poetry run python -c "from backend.database import create_database, create_tables; create_database(); create_tables()"`
+- **Start dev servers**: Backend on :8001, frontend on :3000
+  ```bash
+  poetry run uvicorn backend.api:app --reload --port 8001 &
+  cd app && API_INTERNAL_URL=http://localhost:8001 npm run dev &
+  ```
+- **Run tests**:
+  ```bash
+  # Python (unset injected secrets so test defaults apply)
+  env -u SCRAPE_API_KEY -u GOOGLE_API_KEY -u DB_USER -u DB_PASSWORD -u DB_NAME poetry run pytest
+  # Frontend
+  cd app && npx tsc --noEmit && npx jest
+  ```
+
+### Non-obvious caveats
+
+- **Injected secrets override `.env`**: `load_dotenv()` does not override existing env vars. The local MySQL user/database must match the injected `DB_USER`/`DB_PASSWORD`/`DB_NAME`. If auth fails after credential changes, re-provision:
   ```bash
   sudo mysql -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
     CREATE USER IF NOT EXISTS '${DB_USER}'@'127.0.0.1' IDENTIFIED BY '${DB_PASSWORD}';
@@ -25,13 +95,5 @@ Standard commands live in the `Makefile` (`make dev`, `make seed`, `make check`,
     GRANT ALL PRIVILEGES ON *.* TO '${DB_USER}'@'localhost' WITH GRANT OPTION;
     FLUSH PRIVILEGES;"
   ```
-  Then `make seed` (idempotent) to create tables.
-- **tmux sessions must inherit the injected secrets.** A pre-existing tmux server may have been started before secrets were injected; new sessions then inherit that stale env and the API fails with `Access denied for user ...`. If that happens, run `tmux kill-server` and recreate the session from a fresh shell (which has the injected secrets).
-- **`GOOGLE_API_KEY` powers the live LLM pipeline.** A valid Google AI Studio key has been provided as a secret and the live extraction pipeline (`make fetch` → `make extract` / `make scrape`) works end-to-end against `gemini-2.5-flash`. The API/frontend serve existing DB data even without a valid key; only the LLM extraction step needs it. If `make extract` ever fails with `400 ... Please pass a valid API key`, the `GOOGLE_API_KEY` secret needs refreshing.
-
-### Testing caveat (non-obvious)
-- `tests/conftest.py` sets its own test env via `os.environ.setdefault(...)`, so the **injected secrets override the test defaults** and break auth-sensitive tests (e.g. `test_admin_dashboard`). Run the Python suite with the injected vars unset:
-  ```bash
-  env -u SCRAPE_API_KEY -u GOOGLE_API_KEY -u DB_USER -u DB_PASSWORD -u DB_NAME poetry run pytest
-  ```
-  The API contract tests mock the DB, so unsetting these is safe. Frontend checks (`cd app && npx tsc --noEmit`, `npx next lint`, `npx jest`) need no special handling.
+- **tmux stale env**: If a tmux server predates secret injection, sessions have stale env. Fix: `tmux kill-server` and recreate from a fresh shell.
+- **`GOOGLE_API_KEY`** powers LLM extraction (Gemini). The API/frontend work without it; only extraction needs it.
