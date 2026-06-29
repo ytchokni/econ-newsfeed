@@ -127,7 +127,7 @@ def get_authors_for_papers(paper_ids: list[int]) -> dict[int, list[dict]]:
     placeholders = ",".join(["%s"] * len(paper_ids))
     rows = fetch_all(
         f"""
-        SELECT a.publication_id, r.id AS researcher_id, r.first_name, r.last_name
+        SELECT a.publication_id, r.id AS researcher_id, r.first_name, r.last_name, r.affiliation
         FROM authorship a
         JOIN researchers r ON r.id = a.researcher_id
         WHERE a.publication_id IN ({placeholders})
@@ -141,6 +141,7 @@ def get_authors_for_papers(paper_ids: list[int]) -> dict[int, list[dict]]:
             "id": row['researcher_id'],
             "first_name": row['first_name'],
             "last_name": row['last_name'],
+            "affiliation": row['affiliation'],
         })
     return result
 

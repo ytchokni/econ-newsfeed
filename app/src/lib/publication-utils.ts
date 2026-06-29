@@ -53,9 +53,11 @@ export function chipForStatus(label: string): { text: string; bg: string; border
   return map[label] || { text: "var(--ink2)", bg: "transparent", border: "var(--line2)" };
 }
 
-export function formatAuthor(author: { id: number; first_name: string; last_name: string }) {
-  const initial = author.first_name?.charAt(0);
-  return { display: initial ? `${initial}. ${author.last_name}` : author.last_name, id: author.id };
+export function formatAuthor(author: { id: number; first_name: string; last_name: string; affiliation?: string | null }) {
+  const name = author.first_name
+    ? `${author.first_name} ${author.last_name}`
+    : author.last_name;
+  return { display: name, affiliation: author.affiliation ?? null, id: author.id };
 }
 
 export function formatDate(iso: string): string {

@@ -23,7 +23,7 @@ const researcher: ResearcherDetail = {
     {
       id: 1,
       title: "Immigration and Wages",
-      authors: [{ id: 1, first_name: "Max Friedrich", last_name: "Steinhardt" }],
+      authors: [{ id: 1, first_name: "Max Friedrich", last_name: "Steinhardt", affiliation: "Freie Universität Berlin" }],
       year: "2024",
       venue: "JLE",
       source_url: null,
@@ -41,8 +41,8 @@ const researcher: ResearcherDetail = {
       id: 2,
       title: "Trade Shocks",
       authors: [
-        { id: 1, first_name: "Max Friedrich", last_name: "Steinhardt" },
-        { id: 2, first_name: "Jane", last_name: "Doe" },
+        { id: 1, first_name: "Max Friedrich", last_name: "Steinhardt", affiliation: "Freie Universität Berlin" },
+        { id: 2, first_name: "Jane", last_name: "Doe", affiliation: null },
       ],
       year: "2025",
       venue: "WP",
@@ -89,7 +89,7 @@ describe("ResearcherDetailContent", () => {
     });
 
     expect(screen.getByText(/Professor/)).toBeInTheDocument();
-    expect(screen.getByText(/Freie Universität Berlin/)).toBeInTheDocument();
+    expect(screen.getAllByText(/Freie Universität Berlin/).length).toBeGreaterThan(0);
     expect(screen.getByText("Immigration and Wages")).toBeInTheDocument();
     expect(screen.getByText("Trade Shocks")).toBeInTheDocument();
   });

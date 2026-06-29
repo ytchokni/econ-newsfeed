@@ -460,7 +460,7 @@ export default function NewsfeedContent() {
               : `Showing ${data.items.length.toLocaleString()} of ${data.total.toLocaleString()} updates`}
           </p>
         )}
-        {chips.length === 1 && (
+        {chips.length > 0 && (
           <button
             onClick={clearAll}
             className="text-xs text-[var(--accent)] bg-transparent border-none cursor-pointer p-0"

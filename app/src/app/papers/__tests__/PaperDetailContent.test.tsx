@@ -13,8 +13,8 @@ const mockPublication: PublicationDetail = {
   id: 1,
   title: "Trade and Wages: Evidence from Germany",
   authors: [
-    { id: 10, first_name: "Max", last_name: "Steinhardt" },
-    { id: 11, first_name: "Jane", last_name: "Doe" },
+    { id: 10, first_name: "Max", last_name: "Steinhardt", affiliation: "FU Berlin" },
+    { id: 11, first_name: "Jane", last_name: "Doe", affiliation: null },
   ],
   year: "2024",
   venue: "Journal of Labor Economics",

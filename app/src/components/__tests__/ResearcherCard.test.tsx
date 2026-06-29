@@ -34,13 +34,13 @@ describe("ResearcherCard", () => {
 
   it("renders publication count", () => {
     render(<ResearcherCard researcher={researcher} />);
-    expect(screen.getByText(/23 publications/)).toBeInTheDocument();
+    expect(screen.getByText(/23 papers/)).toBeInTheDocument();
   });
 
-  it("shows placeholder when affiliation and position are null", () => {
+  it("renders without affiliation when position and affiliation are null", () => {
     const noAffiliation = { ...researcher, position: null, affiliation: null };
     render(<ResearcherCard researcher={noAffiliation} />);
-    expect(screen.getByText("Affiliation unknown")).toBeInTheDocument();
+    expect(screen.getByText("Max Friedrich Steinhardt")).toBeInTheDocument();
   });
 
   it("links to the researcher detail page", () => {

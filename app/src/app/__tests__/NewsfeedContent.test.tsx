@@ -15,7 +15,7 @@ const page1: PaginatedResponse<Publication> = {
     {
       id: 1,
       title: "Immigration and Wages",
-      authors: [{ id: 1, first_name: "Max", last_name: "Steinhardt" }],
+      authors: [{ id: 1, first_name: "Max", last_name: "Steinhardt", affiliation: null }],
       year: "2024",
       venue: "JLE",
       source_url: null,
@@ -32,7 +32,7 @@ const page1: PaginatedResponse<Publication> = {
     {
       id: 2,
       title: "Trade Shocks",
-      authors: [{ id: 2, first_name: "Jane", last_name: "Doe" }],
+      authors: [{ id: 2, first_name: "Jane", last_name: "Doe", affiliation: null }],
       year: "2025",
       venue: "WP",
       source_url: null,
@@ -58,7 +58,7 @@ const page2: PaginatedResponse<Publication> = {
     {
       id: 3,
       title: "Fiscal Policy in Europe",
-      authors: [{ id: 1, first_name: "Max", last_name: "Steinhardt" }],
+      authors: [{ id: 1, first_name: "Max", last_name: "Steinhardt", affiliation: null }],
       year: "2023",
       venue: "QJE",
       source_url: null,

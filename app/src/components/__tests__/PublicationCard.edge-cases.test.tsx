@@ -15,7 +15,7 @@ jest.mock("next/navigation", () => ({
 const basePublication: Publication = {
   id: 1,
   title: "Test Paper Title",
-  authors: [{ id: 1, first_name: "Jane", last_name: "Doe" }],
+  authors: [{ id: 1, first_name: "Jane", last_name: "Doe", affiliation: null }],
   year: null,
   venue: null,
   source_url: null,

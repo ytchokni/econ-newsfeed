@@ -70,7 +70,7 @@ export default function PublicationCard({
       <p className="mt-[7px] m-0 text-sm leading-normal text-[var(--ink2)]">
         {authors.map((a, i) => (
           <span key={a.id}>
-            {i > 0 && ", "}
+            {i > 0 && <span className="text-[var(--muted)]">{" · "}</span>}
             <Link
               href={`/researchers/${a.id}`}
               className={primaryAuthorId != null && a.id === primaryAuthorId
@@ -80,6 +80,9 @@ export default function PublicationCard({
             >
               {a.display}
             </Link>
+            {a.affiliation && (
+              <span className="text-[var(--muted)]">{` (${a.affiliation})`}</span>
+            )}
           </span>
         ))}
         {!isStatusChange && venueYear && (
