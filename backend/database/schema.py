@@ -855,39 +855,6 @@ def create_tables() -> None:
                     except Exception as e:
                         logging.warning("Migration: feed_events status ENUMs: %s", e)
 
-                    # Backfill: flip working_paper → work_in_progress for papers with no links
-                    try:
-                        cursor.execute("""
-                            UPDATE papers p
-                            SET p.status = 'work_in_progress'
-                            WHERE p.status = 'working_paper'
-                              AND NOT EXISTS (
-                                  SELECT 1 FROM paper_links pl WHERE pl.paper_id = p.id
-                              )
-                              AND (p.draft_url IS NULL OR p.draft_url_status != 'valid')
-                        """)
-                        backfilled = cursor.rowcount
-                        conn.commit()
-                        logging.info("Migration: backfilled %d papers to work_in_progress", backfilled)
-                    except Exception as e:
-                        logging.warning("Migration: work_in_progress backfill: %s", e)
-
-                    # Update feed_events to reflect backfilled statuses
-                    try:
-                        cursor.execute("""
-                            UPDATE feed_events fe
-                            JOIN papers p ON p.id = fe.paper_id
-                            SET fe.new_status = 'work_in_progress'
-                            WHERE fe.event_type = 'new_paper'
-                              AND fe.new_status = 'working_paper'
-                              AND p.status = 'work_in_progress'
-                        """)
-                        events_updated = cursor.rowcount
-                        conn.commit()
-                        logging.info("Migration: updated %d feed_events to work_in_progress", events_updated)
-                    except Exception as e:
-                        logging.warning("Migration: feed_events backfill: %s", e)
-
                     # Add has_top5_pub denormalized flag to researchers
                     try:
                         cursor.execute("""
@@ -929,42 +896,6 @@ def create_tables() -> None:
                             logging.info("Migration: backfilled has_top5_pub for %d researchers", backfilled)
                     except Exception as e:
                         logging.warning("Migration: has_top5_pub backfill: %s", e)
-
-                    # Revert all work_in_progress → working_paper.
-                    # WIP/WP distinction is now LLM-determined at extraction time;
-                    # existing WIP data was set by a draft_url heuristic that is removed.
-                    try:
-                        cursor.execute(
-                            "SELECT EXISTS(SELECT 1 FROM papers WHERE status = 'work_in_progress' LIMIT 1)"
-                        )
-                        if cursor.fetchone()[0]:
-                            cursor.execute("""
-                                UPDATE papers SET status = 'working_paper'
-                                WHERE status = 'work_in_progress'
-                            """)
-                            papers_reverted = cursor.rowcount
-
-                            cursor.execute("""
-                                UPDATE paper_snapshots SET status = 'working_paper'
-                                WHERE status = 'work_in_progress'
-                            """)
-                            snapshots_reverted = cursor.rowcount
-
-                            cursor.execute("""
-                                DELETE FROM feed_events
-                                WHERE new_status = 'work_in_progress'
-                                   OR old_status = 'work_in_progress'
-                            """)
-                            events_deleted = cursor.rowcount
-                            conn.commit()
-
-                            logging.info(
-                                "Migration: reverted %d papers and %d snapshots from "
-                                "work_in_progress to working_paper, deleted %d WIP feed events",
-                                papers_reverted, snapshots_reverted, events_deleted,
-                            )
-                    except Exception as e:
-                        logging.warning("Migration: WIP revert: %s", e)
 
                     # Create url_discoveries table for URL discovery pipeline
                     try:
