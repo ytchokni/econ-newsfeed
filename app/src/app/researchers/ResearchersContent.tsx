@@ -247,7 +247,7 @@ export default function ResearchersContent() {
               : `Showing ${researchers.length.toLocaleString()} researcher${researchers.length === 1 ? "" : "s"}`}
           </p>
         )}
-        {chips.length === 1 && (
+        {chips.length > 0 && (
           <button
             onClick={clearAll}
             className="text-xs text-[var(--accent)] bg-transparent border-none cursor-pointer p-0"

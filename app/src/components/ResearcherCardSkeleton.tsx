@@ -1,9 +1,16 @@
 export default function ResearcherCardSkeleton() {
   return (
-    <div className="border-b border-[var(--line)] py-[var(--rowpad)] animate-pulse">
-      <div className="h-5 bg-[var(--line)] rounded-sm w-1/3" />
-      <div className="mt-2.5 h-4 bg-[var(--line)] rounded-sm w-2/3 opacity-60" />
-      <div className="mt-2 h-4 bg-[var(--line)] rounded-sm w-1/4 opacity-40" />
+    <div className="border-b border-[var(--line)] py-[18px] animate-pulse">
+      <div className="flex items-baseline justify-between gap-4">
+        <div className="flex items-baseline gap-2 flex-1">
+          <div className="h-5 bg-[var(--line)] rounded-sm w-36" />
+          <div className="h-4 bg-[var(--line)] rounded-sm w-48 opacity-60" />
+        </div>
+        <div className="flex items-center gap-4">
+          <div className="h-4 bg-[var(--line)] rounded-sm w-16 opacity-40" />
+          <div className="h-7 bg-[var(--line)] rounded-sm w-16 opacity-40" />
+        </div>
+      </div>
     </div>
   );
 }

@@ -28,19 +28,19 @@ class TestGetAuthorsForPapers:
 
     def test_groups_by_paper_id(self):
         rows = [
-            {"publication_id": 1, "researcher_id": 10, "first_name": "Alice", "last_name": "Smith"},
-            {"publication_id": 1, "researcher_id": 11, "first_name": "Bob", "last_name": "Jones"},
-            {"publication_id": 2, "researcher_id": 12, "first_name": "Carol", "last_name": "Lee"},
+            {"publication_id": 1, "researcher_id": 10, "first_name": "Alice", "last_name": "Smith", "affiliation": "MIT"},
+            {"publication_id": 1, "researcher_id": 11, "first_name": "Bob", "last_name": "Jones", "affiliation": None},
+            {"publication_id": 2, "researcher_id": 12, "first_name": "Carol", "last_name": "Lee", "affiliation": "Harvard"},
         ]
         with patch("backend.database.papers.fetch_all", return_value=rows) as mock_fetch:
             from backend.database.papers import get_authors_for_papers
             result = get_authors_for_papers([1, 2])
 
         assert len(result[1]) == 2
-        assert result[1][0] == {"id": 10, "first_name": "Alice", "last_name": "Smith"}
-        assert result[1][1] == {"id": 11, "first_name": "Bob", "last_name": "Jones"}
+        assert result[1][0] == {"id": 10, "first_name": "Alice", "last_name": "Smith", "affiliation": "MIT"}
+        assert result[1][1] == {"id": 11, "first_name": "Bob", "last_name": "Jones", "affiliation": None}
         assert len(result[2]) == 1
-        assert result[2][0] == {"id": 12, "first_name": "Carol", "last_name": "Lee"}
+        assert result[2][0] == {"id": 12, "first_name": "Carol", "last_name": "Lee", "affiliation": "Harvard"}
 
     def test_sql_uses_parameterized_in_clause(self):
         with patch("backend.database.papers.fetch_all", return_value=[]) as mock_fetch:
@@ -59,7 +59,7 @@ class TestGetAuthorsForPapers:
 
     def test_returns_id_field_from_researcher_id(self):
         rows = [
-            {"publication_id": 5, "researcher_id": 99, "first_name": "Dan", "last_name": "Brown"},
+            {"publication_id": 5, "researcher_id": 99, "first_name": "Dan", "last_name": "Brown", "affiliation": None},
         ]
         with patch("backend.database.papers.fetch_all", return_value=rows):
             from backend.database.papers import get_authors_for_papers

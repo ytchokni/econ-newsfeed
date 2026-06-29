@@ -1,5 +1,4 @@
 import Link from "next/link";
-import AffiliationLine from "@/components/AffiliationLine";
 import type { Researcher } from "@/lib/types";
 import FollowButton from "@/components/FollowButton";
 
@@ -8,55 +7,56 @@ export default function ResearcherCard({
 }: {
   researcher: Researcher;
 }) {
+  const affParts = [researcher.position, researcher.affiliation].filter(Boolean);
+
   return (
-    <article className="border-b border-[var(--line)] py-[var(--rowpad)]">
-      <div className="flex items-start justify-between gap-3">
-        <h3 className="font-serif font-semibold text-[var(--ink)] text-lg leading-snug">
-          <Link
-            href={`/researchers/${researcher.id}`}
-            className="hover:text-[var(--accent)] transition-colors"
-          >
-            {researcher.first_name} {researcher.last_name}
-          </Link>
-        </h3>
-        <FollowButton researcherId={researcher.id} size="sm" />
-      </div>
+    <article className="border-b border-[var(--line)] py-[18px]">
+      <div className="flex items-baseline justify-between gap-4 flex-wrap">
+        {/* Left: name + affiliation + fields */}
+        <div className="min-w-0">
+          <div className="flex items-baseline gap-2 flex-wrap">
+            <h3 className="font-serif font-semibold text-[var(--ink)] text-[17px] leading-snug">
+              <Link
+                href={`/researchers/${researcher.id}`}
+                className="hover:text-[var(--accent)] transition-colors"
+              >
+                {researcher.first_name} {researcher.last_name}
+              </Link>
+            </h3>
+            {affParts.length > 0 && (
+              <span className="text-sm text-[var(--ink2)]">
+                {affParts.join(" · ")}
+              </span>
+            )}
+          </div>
+          {researcher.fields?.length > 0 && (
+            <p className="mt-0.5 text-xs text-[var(--muted)]">
+              {researcher.fields.map((f) => f.name).join(" · ")}
+            </p>
+          )}
+        </div>
 
-      <AffiliationLine
-        position={researcher.position}
-        affiliation={researcher.affiliation}
-        className="mt-1 text-sm text-[var(--ink2)]"
-      />
-
-      <p className="mt-1 text-sm text-[var(--muted)]">
-        {researcher.publication_count} publications tracked
-        {researcher.website_url && (
-          <>
-            {" · "}
+        {/* Right: paper count + site link + follow */}
+        <div className="flex items-center gap-4 shrink-0 text-sm">
+          <span className="text-[var(--muted)] whitespace-nowrap">
+            {researcher.publication_count} {researcher.publication_count === 1 ? "paper" : "papers"}
+          </span>
+          {researcher.website_url && (
             <a
               href={researcher.website_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-[var(--accent)] hover:underline"
+              className="text-[11px] font-semibold tracking-[0.08em] uppercase text-[var(--ink2)] hover:text-[var(--accent)] transition-colors inline-flex items-center gap-1"
             >
-              Website &rarr;
+              Site
+              <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6M15 3h6v6M10 14L21 3" />
+              </svg>
             </a>
-          </>
-        )}
-      </p>
-
-      {researcher.fields?.length > 0 && (
-        <div className="mt-2.5 flex flex-wrap gap-1.5">
-          {researcher.fields.map((field) => (
-            <span
-              key={field.id}
-              className="text-[10px] font-semibold uppercase tracking-wider text-[var(--muted)] bg-[var(--line)] px-2 py-0.5 rounded-sm"
-            >
-              {field.name}
-            </span>
-          ))}
+          )}
+          <FollowButton researcherId={researcher.id} size="sm" />
         </div>
-      )}
+      </div>
     </article>
   );
 }

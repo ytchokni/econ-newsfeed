@@ -6,7 +6,7 @@ const mockPublicationsResponse: PaginatedResponse<Publication> = {
     {
       id: 1,
       title: "Immigration and Wages",
-      authors: [{ id: 1, first_name: "Max", last_name: "Steinhardt" }],
+      authors: [{ id: 1, first_name: "Max", last_name: "Steinhardt", affiliation: null }],
       year: "2024",
       venue: "Journal of Labor Economics",
       source_url: "https://example.com/paper",
@@ -61,7 +61,7 @@ const mockResearcherDetail: ResearcherDetail = {
     {
       id: 1,
       title: "Immigration and Wages",
-      authors: [{ id: 1, first_name: "Max", last_name: "Steinhardt" }],
+      authors: [{ id: 1, first_name: "Max", last_name: "Steinhardt", affiliation: null }],
       year: "2024",
       venue: "Journal of Labor Economics",
       source_url: null,

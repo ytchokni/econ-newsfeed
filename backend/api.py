@@ -166,6 +166,7 @@ class AuthorResponse(BaseModel):
     id: int
     first_name: str
     last_name: str
+    affiliation: str | None = None
 
 class CoAuthorResponse(BaseModel):
     display_name: str

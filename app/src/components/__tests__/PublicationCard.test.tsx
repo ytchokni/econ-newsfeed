@@ -10,8 +10,8 @@ const publication: Publication = {
   id: 1,
   title: "Immigration and Wages: Evidence from Germany",
   authors: [
-    { id: 1, first_name: "Max", last_name: "Steinhardt" },
-    { id: 2, first_name: "Jane", last_name: "Doe" },
+    { id: 1, first_name: "Max", last_name: "Steinhardt", affiliation: null },
+    { id: 2, first_name: "Jane", last_name: "Doe", affiliation: null },
   ],
   year: "2024",
   venue: "Journal of Labor Economics",
@@ -37,8 +37,8 @@ describe("PublicationCard", () => {
 
   it("renders author names", () => {
     render(<PublicationCard publication={publication} />);
-    expect(screen.getByText(/M\. Steinhardt/)).toBeInTheDocument();
-    expect(screen.getByText(/J\. Doe/)).toBeInTheDocument();
+    expect(screen.getByText(/Max Steinhardt/)).toBeInTheDocument();
+    expect(screen.getByText(/Jane Doe/)).toBeInTheDocument();
   });
 
   it("renders venue and year", () => {
@@ -71,7 +71,7 @@ describe("PublicationCard navigation", () => {
 
   it("has separate author links that don't point to the paper", () => {
     render(<PublicationCard publication={publication} />);
-    const authorLink = screen.getByText(/M\. Steinhardt/).closest("a");
+    const authorLink = screen.getByText(/Max Steinhardt/).closest("a");
     expect(authorLink).toHaveAttribute("href", "/researchers/1");
   });
 });
