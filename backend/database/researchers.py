@@ -374,14 +374,11 @@ def merge_researchers(canonical_id: int, duplicate_id: int, conn) -> None:
         (canonical_id, duplicate_id),
     )
 
-    # 3. Transfer user follows before deleting the duplicate researcher.
-    # INSERT IGNORE keeps the existing follow when a user already follows both profiles.
+    # 3. Transfer user follows (IGNORE skips duplicates; CASCADE cleans up leftovers)
     c.execute(
-        "INSERT IGNORE INTO user_follows (user_id, researcher_id, created_at) "
-        "SELECT user_id, %s, created_at FROM user_follows WHERE researcher_id = %s",
+        "UPDATE IGNORE user_follows SET researcher_id = %s WHERE researcher_id = %s",
         (canonical_id, duplicate_id),
     )
-    c.execute("DELETE FROM user_follows WHERE researcher_id = %s", (duplicate_id,))
 
     # 4. Upgrade first_name to the longer variant
     longer_name = _longer_first_name(canonical['first_name'], duplicate['first_name'])
