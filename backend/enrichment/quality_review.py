@@ -4,6 +4,7 @@ Reviews feed events in batches using GPT 5.4 Mini, checking for misclassificatio
 wrong venues, bad author names, false new-paper events, and other issues.
 Auto-applies high-severity corrections (status, venue, hide).
 """
+import hashlib
 import json
 import logging
 import re
@@ -13,6 +14,7 @@ from backend.database import (
     fetch_all, execute_query,
     get_authors_for_papers,
 )
+from backend.database.connection import get_connection
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +61,7 @@ VALID_STATUSES = frozenset({
     "published", "accepted", "revise_and_resubmit",
     "reject_and_resubmit", "working_paper", "work_in_progress",
 })
+FINGERPRINT_FIELDS = ("paper_id", "title", "year", "venue", "status", "source_url")
 
 
 _openai_client = None
@@ -97,6 +100,46 @@ def _extract_json(text: str) -> dict | None:
         return json.loads(text)
     except json.JSONDecodeError:
         return None
+
+
+def build_event_fingerprint(event: dict) -> str:
+    """Fingerprint mutable paper state that the review prompt was based on."""
+    payload = {
+        field: event.get(field)
+        for field in FINGERPRINT_FIELDS
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:12]
+
+
+def _execute_guarded_update(query: str, params: tuple) -> int:
+    """Execute an UPDATE and return rowcount for optimistic concurrency guards."""
+    conn = get_connection()
+    try:
+        with conn.cursor() as cursor:
+            cursor.execute(query, params)
+            rowcount = cursor.rowcount
+            conn.commit()
+            return rowcount
+    finally:
+        conn.close()
+
+
+def _batch_review_is_current(event: dict, expected_fingerprint: str | None) -> bool:
+    if expected_fingerprint is None:
+        logger.warning(
+            "Skipping paper mutation for event %s: batch item has no review fingerprint",
+            event.get("event_id"),
+        )
+        return False
+    current_fingerprint = build_event_fingerprint(event)
+    if current_fingerprint != expected_fingerprint:
+        logger.warning(
+            "Skipping stale review correction for event %s: fingerprint %s != %s",
+            event.get("event_id"), current_fingerprint, expected_fingerprint,
+        )
+        return False
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +286,14 @@ def save_review(event_id: int, review: dict,
 # Corrections
 # ---------------------------------------------------------------------------
 
-def apply_corrections(event: dict, review: dict, dry_run: bool = False) -> list[dict]:
+def apply_corrections(
+    event: dict,
+    review: dict,
+    dry_run: bool = False,
+    *,
+    expected_fingerprint: str | None = None,
+    require_fingerprint: bool = False,
+) -> list[dict]:
     """Apply high-severity corrections from a review. Returns actions taken."""
     actions = []
 
@@ -260,6 +310,8 @@ def apply_corrections(event: dict, review: dict, dry_run: bool = False) -> list[
         event_id = event["event_id"]
 
         if issue_type == "MISCLASSIFICATION" and correction in VALID_STATUSES:
+            if require_fingerprint and not _batch_review_is_current(event, expected_fingerprint):
+                continue
             action = {
                 "type": "update_status",
                 "paper_id": paper_id,
@@ -268,14 +320,23 @@ def apply_corrections(event: dict, review: dict, dry_run: bool = False) -> list[
             }
             actions.append(action)
             if not dry_run:
-                execute_query(
-                    "UPDATE papers SET status = %s WHERE id = %s",
-                    (correction, paper_id),
+                updated = _execute_guarded_update(
+                    "UPDATE papers SET status = %s WHERE id = %s AND status <=> %s",
+                    (correction, paper_id, event.get("status")),
                 )
-                logger.info("Corrected status: paper %d %s -> %s",
-                            paper_id, event.get("status"), correction)
+                if updated:
+                    logger.info("Corrected status: paper %d %s -> %s",
+                                paper_id, event.get("status"), correction)
+                else:
+                    actions.pop()
+                    logger.warning(
+                        "Skipped status correction for paper %d: status changed before update",
+                        paper_id,
+                    )
 
         elif issue_type == "WRONG_VENUE":
+            if require_fingerprint and not _batch_review_is_current(event, expected_fingerprint):
+                continue
             new_venue = None if correction.lower() == "none" else correction
             action = {
                 "type": "update_venue",
@@ -285,12 +346,19 @@ def apply_corrections(event: dict, review: dict, dry_run: bool = False) -> list[
             }
             actions.append(action)
             if not dry_run:
-                execute_query(
-                    "UPDATE papers SET venue = %s WHERE id = %s",
-                    (new_venue, paper_id),
+                updated = _execute_guarded_update(
+                    "UPDATE papers SET venue = %s WHERE id = %s AND venue <=> %s",
+                    (new_venue, paper_id, event.get("venue")),
                 )
-                logger.info("Corrected venue: paper %d '%s' -> '%s'",
-                            paper_id, event.get("venue"), new_venue)
+                if updated:
+                    logger.info("Corrected venue: paper %d '%s' -> '%s'",
+                                paper_id, event.get("venue"), new_venue)
+                else:
+                    actions.pop()
+                    logger.warning(
+                        "Skipped venue correction for paper %d: venue changed before update",
+                        paper_id,
+                    )
 
         elif issue_type == "NOT_NEW" and correction.lower() == "hide":
             action = {
