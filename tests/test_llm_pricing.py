@@ -32,17 +32,3 @@ class TestLlmPricing:
         # $0.30/M prompt + $2.50/M completion = $2.80 total
         assert abs(float(cost) - 2.80) < 1e-6
 
-    @patch("backend.database.llm.execute_query")
-    def test_batch_multiplier_is_half(self, mock_exec):
-        from backend.database.llm import log_llm_usage
-        usage = MagicMock()
-        usage.prompt_tokens = 1_000_000
-        usage.completion_tokens = 0
-        usage.total_tokens = 1_000_000
-
-        log_llm_usage("publication_extraction", "gemini-2.5-flash", usage, is_batch=True)
-
-        row = mock_exec.call_args[0][1]
-        cost = row[6]
-        # $0.30/M prompt × 0.5 batch discount = $0.15
-        assert abs(float(cost) - 0.15) < 1e-6

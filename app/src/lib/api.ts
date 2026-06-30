@@ -178,7 +178,6 @@ export interface AdminDashboardData {
       count: number;
     }[];
     by_model: { model: string; cost: number; tokens: number }[];
-    batch_vs_realtime: { batch_cost: number; realtime_cost: number };
     last_30_days: { date: string; cost: number; tokens: number }[];
   };
   scrapes: {

@@ -10,46 +10,44 @@ Econ Newsfeed monitors economics researchers' personal websites, detects new/cha
 
 ```bash
 # Setup
-make setup                # poetry install + npm install (in app/)
+poetry install && cd app && npm install
 
 # Development
-make dev                  # API on :8001 + frontend on :3000 (parallel)
-make kill                 # Kill processes on ports 8000/8001/3000/3001
+poetry run uvicorn backend.api:app --reload --port 8001  # API on :8001
+cd app && API_INTERNAL_URL=http://localhost:8001 npm run dev  # Frontend on :3000
 
 # Database
-make seed                 # Create tables + run migrations (idempotent)
-make reset-db             # Drop and recreate database from scratch
-make sync-prod            # DESTRUCTIVE: replace local DB with latest prod backup (downloads dump first, then recreates volume)
+poetry run python -c "from backend.database import create_database, create_tables; create_database(); create_tables()"  # seed (idempotent)
+./scripts/sync_prod_db.sh  # DESTRUCTIVE: replace local DB with latest prod backup
 
 # Scraping pipeline
-make scrape               # Fetch-only pipeline: download HTML + draft URL validation
-make fetch                # Stage 1: Download HTML from researcher URLs (hash-based change detection)
-make batch-submit         # Stage 2: Submit changed URLs to Gemini Batch API for extraction
-make batch-check          # Stage 3: Process completed batch results → save papers, snapshots, links
+poetry run python -c "from backend.pipeline.scheduler import run_scrape_job; run_scrape_job()"  # Fetch-only: download HTML + draft URL validation
+poetry run python -m backend.main extract          # LLM extraction for URLs with pending changes
+poetry run python -m backend.main extract --limit 5  # Extract a limited batch
 
 # Enrichment & classification
-make enrich               # Enrich papers via OpenAlex (DOI lookup first, title search fallback)
-make classify-jel         # Classify researchers into JEL codes via LLM
-make discover-domains     # Scan HTML for untrusted domains with paper-like links
+poetry run python -m backend.main enrich            # Enrich papers via OpenAlex
+poetry run python -m backend.main classify-jel      # Classify researchers into JEL codes via LLM
+poetry run python -m backend.main discover-domains  # Scan HTML for untrusted domains with paper-like links
 
 # Testing & validation
-make check                # Full suite: env check → pytest → tsc → jest
-make check-data           # Data-quality invariants against the real DB (tests_data_quality/) — failures are bad rows, not code bugs
-make check-data-live      # check-data + pipeline-liveness checks (scrape freshness, worker activity) — run on the server; meaningless on a synced mirror
-poetry run pytest                        # All Python tests
-poetry run pytest tests/test_api_publications.py  # Single test file
-poetry run pytest -k test_name           # Single test by name
-cd app && npx jest                       # All frontend tests
+poetry run python scripts/check_env.py && poetry run pytest && cd app && npx tsc --noEmit && npx next lint && npx jest  # Full suite
+poetry run pytest tests_data_quality -v             # Data-quality invariants against real DB
+DATA_QUALITY_LIVE=1 poetry run pytest tests_data_quality -v  # + pipeline-liveness checks (server only)
+poetry run pytest                                   # All Python tests
+poetry run pytest tests/test_api_publications.py    # Single test file
+poetry run pytest -k test_name                      # Single test by name
+cd app && npx jest                                  # All frontend tests
 cd app && npx jest --testPathPattern=ComponentName  # Single frontend test
 
 # One-time scripts
-poetry run python scripts/backfill_paper_links.py  # Populate paper_links from stored HTML + enrich
-poetry run python scripts/cleanup_data_quality.py  # Fix rows flagged by `make check-data` (dry-run; add --apply to write)
+poetry run python scripts/backfill_paper_links.py   # Populate paper_links from stored HTML + enrich
+poetry run python scripts/cleanup_data_quality.py   # Fix rows flagged by data-quality checks (dry-run; add --apply to write)
 
 # Docker
 docker compose up         # Full stack (db + api + frontend)
 
-# Production (Lightsail)
+# Production (Hetzner)
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build  # Start prod (no frontend)
 ./scripts/deploy.sh       # Pull latest + rebuild + health check
 ./scripts/backup.sh       # Manual DB backup (also runs daily via cron at 3am UTC)
@@ -57,30 +55,23 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build  #
 
 ### Pipeline Details
 
-**`make scrape`** runs the scheduler job (`backend.pipeline.scheduler.run_scrape_job()`), which is **fetch-only**:
+**Scrape job** (`run_scrape_job()`) is **fetch-only**:
 1. **Fetch phase** (all URLs): Download HTML for all researcher URLs, skip unchanged (content hash).
 2. **Draft URL validation**: HEAD-request validation of `draft_url` fields
 
 Extraction is owned by the extraction worker (below) — the scrape job only refreshes stored HTML and the `content_hash ≠ extracted_hash` queue.
 
-**Enrichment worker:** When `ENRICHMENT_WORKER_ENABLED=true`, a background thread in the API process continuously enriches unenriched papers via OpenAlex. Polls every 5 minutes, processes batches of 50, respects the daily budget. Backs off to 10-minute sleep after 5 consecutive failures. In local dev (worker disabled), run `make enrich` manually after scraping.
+**Enrichment worker:** When `ENRICHMENT_WORKER_ENABLED=true`, a background thread in the API process continuously enriches unenriched papers via OpenAlex. Polls every 5 minutes, processes batches of 50, respects the daily budget. Backs off to 10-minute sleep after 5 consecutive failures. In local dev (worker disabled), run `python -m backend.main enrich` manually after scraping.
 
-**Extraction worker:** When `EXTRACTION_WORKER_ENABLED=true`, a background thread in the API process continuously extracts publications from changed pages (`content_hash ≠ extracted_hash`) using synchronous free-tier Gemma calls. Calls are latency-bound (45–190s each, ~35 output tokens/s); `EXTRACTION_DELAY_SECONDS` (default 2) paces the fast tail under the 30 RPM free-tier cap. Polls every 5 minutes when idle, backs off 10 minutes after 10 consecutive failures (quota exhaustion), and skips a URL for the process lifetime after 3 failed attempts (poison-pill guard). In local dev (worker disabled), run `make extract` manually after fetching.
+**Extraction worker:** When `EXTRACTION_WORKER_ENABLED=true`, a background thread in the API process continuously extracts publications from changed pages (`content_hash ≠ extracted_hash`) using synchronous free-tier Gemma calls. Calls are latency-bound (45–190s each, ~35 output tokens/s); `EXTRACTION_DELAY_SECONDS` (default 2) paces the fast tail under the 30 RPM free-tier cap. Polls every 5 minutes when idle, backs off 10 minutes after 10 consecutive failures (quota exhaustion), and skips a URL for the process lifetime after 3 failed attempts (poison-pill guard). In local dev (worker disabled), run `python -m backend.main extract` manually after fetching.
 
-**Extraction circuit breaker (CLI):** The `make extract` CLI stops after 10 consecutive failed extractions (e.g. LLM quota exhausted). Fetched HTML is preserved — extraction resumes on the next run for URLs where `content_hash ≠ extracted_hash`. The continuous worker uses backoff + per-URL retry limits instead of stopping.
+**Extraction circuit breaker (CLI):** The `extract` CLI stops after 10 consecutive failed extractions (e.g. LLM quota exhausted). Fetched HTML is preserved — extraction resumes on the next run for URLs where `content_hash ≠ extracted_hash`. The continuous worker uses backoff + per-URL retry limits instead of stopping.
 
 **Paper merge:** `merge_duplicate_papers()` dedupes papers post-run.
 
 **Zombie scrape_log cleanup:** On scheduler start and hourly thereafter, `scrape_log` entries stuck in `'running'` are marked `'failed'` based on the scrape advisory lock: if no connection holds the lock, all running rows older than 5 minutes are zombies; if the lock is held, all but the newest running row are. Deploys that restart the container mid-scrape are swept on the next boot.
 
-**`make fetch`** runs stage 1 only (download HTML). Extraction is handled by the extraction worker (or `make extract` manually) — both use the shared `backend.pipeline.extraction.extract_one_url()`, which protects feed event integrity via `_title_in_previous_snapshot()` and the `_url_has_baseline()` check.
-
-**Granular batch pipeline** (run stages independently):
-1. `make fetch` — Download HTML, detect changes via content hash. Safe to run anytime.
-2. `make batch-submit` — Submit URLs where `content_hash ≠ extracted_hash` to Gemini Batch API. Requires fetch first.
-3. `make batch-check` — Poll pending batches, process results (save papers, snapshots, links, feed events). Idempotent for completed batches.
-
-Each stage is independently safe. Feed event integrity is protected by `_title_in_previous_snapshot()` and the `_url_has_baseline()` check regardless of which pipeline path is used.
+Feed event integrity is protected by `_title_in_previous_snapshot()` and the `_url_has_baseline()` check in `backend.pipeline.extraction.extract_one_url()`.
 
 ## Architecture
 
@@ -116,10 +107,10 @@ Researcher URLs (DB) → HTMLFetcher (fetch + hash-based change detection)
 | `backend/enrichment/paper_merge.py` | Deduplicates papers post-extraction |
 | `backend/researcher.py` | Researcher data access layer |
 | `backend/config.py` | Env var validation + encoding guard — raises `EnvironmentError` on import if required vars missing |
-| `scripts/check_env.py` | Validates required env vars (used by `make check`) |
+| `scripts/check_env.py` | Validates required env vars (used by the check suite) |
 | `scripts/deploy.sh` | Production deploy: git pull + docker-compose rebuild + health check |
-| `scripts/backup.sh` | Daily MySQL backup with gzip + 7-day retention (cron on Lightsail) |
-| `Caddyfile` | Reverse proxy config for auto-SSL on Lightsail |
+| `scripts/backup.sh` | Daily MySQL backup with gzip + 7-day retention (cron on Hetzner) |
+| `Caddyfile` | Reverse proxy config for auto-SSL on Hetzner |
 | `docker-compose.prod.yml` | Production override: no frontend, `restart: always`, 2 workers |
 
 No ORM — direct parameterized SQL via `mysql-connector-python`. All code imports `from backend.database import Database` — the facade preserves this API while submodules are organized by domain.
@@ -141,7 +132,7 @@ No ORM — direct parameterized SQL via `mysql-connector-python`. All code impor
 - `authorship` — researcher↔paper links with `author_order`
 - `researchers` — includes `openalex_author_id` for deterministic disambiguation (skips LLM)
 - `openalex_coauthors` — coauthor data from OpenAlex enrichment
-- `batch_jobs` / `llm_usage` — LLM cost tracking
+- `llm_usage` — LLM cost tracking
 
 All foreign keys use `ON DELETE CASCADE`. Tables use `utf8mb4` charset.
 
