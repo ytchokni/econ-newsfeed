@@ -13,6 +13,7 @@ from backend.database import (
     fetch_all, execute_query,
     get_authors_for_papers,
 )
+from backend.database.snapshots import _is_status_progression
 
 logger = logging.getLogger(__name__)
 
@@ -260,10 +261,18 @@ def apply_corrections(event: dict, review: dict, dry_run: bool = False) -> list[
         event_id = event["event_id"]
 
         if issue_type == "MISCLASSIFICATION" and correction in VALID_STATUSES:
+            old_status = event.get("status")
+            if not _is_status_progression(old_status, correction):
+                logger.warning(
+                    "Skipped non-forward status correction for paper %d: %s -> %s",
+                    paper_id, old_status, correction,
+                )
+                continue
+
             action = {
                 "type": "update_status",
                 "paper_id": paper_id,
-                "old_value": event.get("status"),
+                "old_value": old_status,
                 "new_value": correction,
             }
             actions.append(action)
@@ -273,7 +282,7 @@ def apply_corrections(event: dict, review: dict, dry_run: bool = False) -> list[
                     (correction, paper_id),
                 )
                 logger.info("Corrected status: paper %d %s -> %s",
-                            paper_id, event.get("status"), correction)
+                            paper_id, old_status, correction)
 
         elif issue_type == "WRONG_VENUE":
             new_venue = None if correction.lower() == "none" else correction
@@ -292,7 +301,11 @@ def apply_corrections(event: dict, review: dict, dry_run: bool = False) -> list[
                 logger.info("Corrected venue: paper %d '%s' -> '%s'",
                             paper_id, event.get("venue"), new_venue)
 
-        elif issue_type == "NOT_NEW" and correction.lower() == "hide":
+        elif (
+            issue_type == "NOT_NEW"
+            and event.get("event_type") == "new_paper"
+            and correction.lower() == "hide"
+        ):
             action = {
                 "type": "hide_event",
                 "event_id": event_id,
