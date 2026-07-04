@@ -20,6 +20,16 @@ updates:
       # request APIs). Upgrade manually, not via Dependabot.
       - dependency-name: "next"
         update-types: ["version-update:semver-major"]
+      # React 19 comes with the Next.js migration, not on its own — v19 types
+      # against the React 18 app fail npm ci with ERESOLVE.
+      - dependency-name: "react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "react-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "@types/react-dom"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
