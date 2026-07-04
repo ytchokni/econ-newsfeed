@@ -13,7 +13,7 @@ python-dotenv = "^1.0"
 beautifulsoup4 = "^4.12"
 mysql-connector-python = "^9.1"
 openai = "^2.30"
-fastapi = ">=0.135,<0.137"
+fastapi = ">=0.135,<0.140"
 uvicorn = {version = ">=0.42,<0.51", extras = ["standard"]}
 gunicorn = ">=25,<27"
 apscheduler = "^3.10"
