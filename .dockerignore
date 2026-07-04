@@ -9,5 +9,6 @@
 !scripts/backfill_page_owner_authorship.py
 !scripts/cleanup_data_quality.py
 !scripts/merge_fuzzy_duplicates.py
+!scripts/fix_researcher_names.py
 !pyproject.toml
 !poetry.lock

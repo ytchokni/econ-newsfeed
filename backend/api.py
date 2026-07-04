@@ -768,7 +768,7 @@ async def list_publications(
     page: int = Query(1, ge=1),
     per_page: int = Query(20, ge=1, le=100),
     year: str | None = Query(None),
-    researcher_id: int | None = Query(None),
+    researcher_id: str | None = Query(None),
     status: str | None = Query(None),
     since: str | None = Query(None),
     until: str | None = Query(None),
@@ -784,6 +784,12 @@ async def list_publications(
     non-published papers with known status generate events, so no
     include_seed parameter is needed.
     """
+    researcher_ids = None
+    if researcher_id:
+        try:
+            researcher_ids = [int(x) for x in researcher_id.split(",") if x.strip()]
+        except ValueError:
+            raise HTTPException(status_code=400, detail="researcher_id must be comma-separated integers")
     valid_presets = {"top20", "top5_rr_accepted", "has_top5", "following", "top5_journals", "top100_repec"}
     if preset and preset not in valid_presets:
         raise HTTPException(status_code=400, detail=f"Invalid preset value. Must be one of: {', '.join(sorted(valid_presets))}")
@@ -807,7 +813,7 @@ async def list_publications(
     offset = (page - 1) * per_page
     with connection_scope():
         rows, total, researcher_count = search_feed_events(
-            year=year, researcher_id=researcher_id,
+            year=year, researcher_ids=researcher_ids,
             status_list=status_list or None,
             since=since_dt, until=until_dt,
             institution_list=institution_list or None,
@@ -1074,10 +1080,14 @@ def get_filter_options(request: Request, response: Response):
         fields = fetch_all(
             "SELECT id, name, slug FROM research_fields ORDER BY name"
         )
+        researchers = fetch_all(
+            "SELECT id, first_name, last_name FROM researchers ORDER BY last_name, first_name"
+        )
         return {
             "institutions": [r['affiliation'] for r in institutions],
             "positions": [r['position'] for r in positions],
             "fields": [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in fields],
+            "researchers": [{"id": r['id'], "name": f"{r['first_name']} {r['last_name']}"} for r in researchers],
         }
 
     response.headers["Cache-Control"] = "public, max-age=600"

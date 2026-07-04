@@ -1,3 +1,8 @@
+"""Tests for quality-review auto-correction safeguards.
+
+Covers the forward-only status guard, NOT_NEW/hide event-type gating,
+stale-batch fingerprint checks, and optimistic (guarded) updates.
+"""
 import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -8,6 +13,7 @@ from backend.enrichment import quality_review, review_batch
 def _event(**overrides):
     base = {
         "event_id": 42,
+        "event_type": "new_paper",
         "paper_id": 7,
         "title": "Monetary Policy and Exchange Rates",
         "year": "2024",
@@ -32,10 +38,75 @@ def _status_review(new_status="published"):
     }
 
 
+def _review(issue_type: str, correction: str):
+    return {
+        "issues": [{
+            "type": issue_type,
+            "severity": "high",
+            "description": "test issue",
+            "correction": correction,
+        }],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Forward-only status guard
+# ---------------------------------------------------------------------------
+
+def test_apply_corrections_blocks_backward_status_regression(monkeypatch):
+    def fail_update(*args, **kwargs):
+        raise AssertionError("backward status correction must not update papers")
+
+    monkeypatch.setattr(quality_review, "_execute_guarded_update", fail_update)
+
+    actions = quality_review.apply_corrections(
+        _event(status="published"),
+        _status_review("working_paper"),
+    )
+
+    assert actions == []
+
+
+def test_apply_corrections_only_hides_not_new_for_new_paper_events(monkeypatch):
+    execute = MagicMock()
+    monkeypatch.setattr(quality_review, "execute_query", execute)
+
+    actions = quality_review.apply_corrections(
+        _event(event_type="status_change"),
+        _review("NOT_NEW", "hide"),
+    )
+
+    assert actions == []
+    execute.assert_not_called()
+
+
+def test_apply_corrections_hides_not_new_new_paper_events(monkeypatch):
+    execute = MagicMock()
+    monkeypatch.setattr(quality_review, "execute_query", execute)
+
+    actions = quality_review.apply_corrections(
+        _event(event_type="new_paper"),
+        _review("NOT_NEW", "hide"),
+    )
+
+    assert actions == [{
+        "type": "hide_event",
+        "event_id": 42,
+        "paper_title": "Monetary Policy and Exchange Rates",
+    }]
+    execute.assert_called_once_with(
+        "DELETE FROM feed_events WHERE id = %s", (42,),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Stale-batch fingerprint guard
+# ---------------------------------------------------------------------------
+
 def test_batch_correction_skips_stale_fingerprint(monkeypatch):
     submitted_event = _event(status="working_paper")
     stale_fingerprint = quality_review.build_event_fingerprint(submitted_event)
-    current_event = _event(status="published")
+    current_event = _event(status="accepted")
 
     def fail_update(*args, **kwargs):
         raise AssertionError("stale batch review must not update papers")
@@ -44,7 +115,7 @@ def test_batch_correction_skips_stale_fingerprint(monkeypatch):
 
     actions = quality_review.apply_corrections(
         current_event,
-        _status_review("accepted"),
+        _status_review("published"),
         expected_fingerprint=stale_fingerprint,
         require_fingerprint=True,
     )
@@ -66,6 +137,10 @@ def test_batch_correction_skips_legacy_unfingerprinted_items(monkeypatch):
 
     assert actions == []
 
+
+# ---------------------------------------------------------------------------
+# Guarded (optimistic) updates
+# ---------------------------------------------------------------------------
 
 def test_current_correction_uses_guarded_status_update(monkeypatch):
     calls = []
@@ -102,6 +177,10 @@ def test_raced_current_correction_reports_no_action(monkeypatch):
 
     assert actions == []
 
+
+# ---------------------------------------------------------------------------
+# Batch custom-id parsing and deleted-event handling
+# ---------------------------------------------------------------------------
 
 def test_review_batch_custom_id_preserves_event_id_and_fingerprint():
     assert review_batch._parse_custom_id("evt_123_abcdef123456") == (

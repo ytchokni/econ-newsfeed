@@ -23,6 +23,9 @@ interface FilterDrawerProps {
   jelOptions: { label: string; value: string }[];
   selectedJelCodes: string[];
   onJelChange: (selected: string[]) => void;
+  researcherOptions: { label: string; value: string }[];
+  selectedResearchers: string[];
+  onResearcherChange: (selected: string[]) => void;
   onResetAll: () => void;
   totalResults: number | null;
   minDate: string;
@@ -52,6 +55,9 @@ export default function FilterDrawer({
   jelOptions,
   selectedJelCodes,
   onJelChange,
+  researcherOptions,
+  selectedResearchers,
+  onResearcherChange,
   onResetAll,
   totalResults,
   minDate,
@@ -69,7 +75,8 @@ export default function FilterDrawer({
 
   const hasActiveFilters = !!(
     activePreset || selectedInstitutions.length > 0 ||
-    selectedJelCodes.length > 0 || datePreset || since || until
+    selectedJelCodes.length > 0 || selectedResearchers.length > 0 ||
+    datePreset || since || until
   );
 
   return (
@@ -190,6 +197,7 @@ export default function FilterDrawer({
               options={institutionOptions}
               selected={selectedInstitutions}
               onChange={onInstitutionChange}
+              requireSearch
             />
           </section>
 
@@ -203,6 +211,21 @@ export default function FilterDrawer({
               options={jelOptions}
               selected={selectedJelCodes}
               onChange={onJelChange}
+              requireSearch
+            />
+          </section>
+
+          {/* Researcher */}
+          <section>
+            <h3 className="text-[10px] font-bold tracking-[0.16em] uppercase text-[var(--muted)] mb-3">
+              Researcher
+            </h3>
+            <SearchableCheckboxDropdown
+              label={selectedResearchers.length > 0 ? `${selectedResearchers.length} selected` : "All"}
+              options={researcherOptions}
+              selected={selectedResearchers}
+              onChange={onResearcherChange}
+              requireSearch
             />
           </section>
         </div>

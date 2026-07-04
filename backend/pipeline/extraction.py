@@ -100,7 +100,7 @@ def persist_extraction(url: str, url_id: int, pubs: list[dict],
 
     Absorbs the full post-extraction sequence: save papers, emit feed events,
     reconcile title renames, match/save links, append snapshots.  Both
-    extract_one_url() and main.batch_check() delegate here.
+    extract_one_url() delegates here.
     """
     results = PaperSaver.save_publications(url, pubs, is_seed=is_seed)
     FeedEventEmitter.emit_new_paper_events(results, url, is_seed=is_seed, event_date=event_date)

@@ -7,6 +7,7 @@ interface SearchableCheckboxDropdownProps {
   options: { label: string; value: string }[];
   selected: string[];
   onChange: (selected: string[]) => void;
+  requireSearch?: boolean;
 }
 
 export default function SearchableCheckboxDropdown({
@@ -14,6 +15,7 @@ export default function SearchableCheckboxDropdown({
   options,
   selected,
   onChange,
+  requireSearch = false,
 }: SearchableCheckboxDropdownProps) {
   const [open, setOpen] = useState(false);
   const [search, setSearch] = useState("");
@@ -37,9 +39,12 @@ export default function SearchableCheckboxDropdown({
     }
   }, [open]);
 
-  const filtered = options.filter((opt) =>
-    opt.label.toLowerCase().includes(search.toLowerCase())
-  );
+  const showResults = !requireSearch || search.length > 0;
+  const filtered = showResults
+    ? options.filter((opt) =>
+        opt.label.toLowerCase().includes(search.toLowerCase())
+      )
+    : [];
 
   const toggle = (value: string) => {
     if (selected.includes(value)) {
@@ -79,7 +84,10 @@ export default function SearchableCheckboxDropdown({
                 className="w-full px-2.5 py-1.5 text-sm border border-[var(--line)] rounded-sm bg-white focus:outline-none placeholder:text-[var(--muted)]"
               />
             </div>
-            {filtered.length === 0 && (
+            {!showResults && (
+              <p className="px-2.5 py-2 text-sm text-[var(--muted)]">Type to search…</p>
+            )}
+            {showResults && filtered.length === 0 && (
               <p className="px-2.5 py-2 text-sm text-[var(--muted)]">No matches</p>
             )}
             {filtered.map((opt) => (

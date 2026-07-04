@@ -15,12 +15,12 @@ function formatTokens(n: number): string {
 }
 
 export default function CostsTab({ data }: Props) {
-  const { total_cost_usd, total_tokens, by_call_type, by_model, batch_vs_realtime, last_30_days } = data;
+  const { total_cost_usd, total_tokens, by_call_type, by_model, last_30_days } = data;
 
   return (
     <div className="space-y-6">
       {/* Totals */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-2 gap-4">
         <div className="bg-[#1a1d27] rounded-lg border border-[#2a2d3a] p-5">
           <p className="text-xs text-zinc-500 mb-1">Total Spend</p>
           <p className="text-2xl font-semibold text-zinc-100">{formatCost(total_cost_usd)}</p>
@@ -28,12 +28,6 @@ export default function CostsTab({ data }: Props) {
         <div className="bg-[#1a1d27] rounded-lg border border-[#2a2d3a] p-5">
           <p className="text-xs text-zinc-500 mb-1">Total Tokens</p>
           <p className="text-2xl font-semibold text-zinc-100">{formatTokens(total_tokens)}</p>
-        </div>
-        <div className="bg-[#1a1d27] rounded-lg border border-[#2a2d3a] p-5">
-          <p className="text-xs text-zinc-500 mb-1">Batch / Real-time</p>
-          <p className="text-sm text-zinc-200">
-            {formatCost(batch_vs_realtime.batch_cost)} / {formatCost(batch_vs_realtime.realtime_cost)}
-          </p>
         </div>
       </div>
 

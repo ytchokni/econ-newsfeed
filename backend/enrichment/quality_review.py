@@ -15,6 +15,7 @@ from backend.database import (
     get_authors_for_papers,
 )
 from backend.database.connection import get_connection
+from backend.database.snapshots import _is_status_progression
 
 logger = logging.getLogger(__name__)
 
@@ -312,21 +313,29 @@ def apply_corrections(
         if issue_type == "MISCLASSIFICATION" and correction in VALID_STATUSES:
             if require_fingerprint and not _batch_review_is_current(event, expected_fingerprint):
                 continue
+            old_status = event.get("status")
+            if not _is_status_progression(old_status, correction):
+                logger.warning(
+                    "Skipped non-forward status correction for paper %d: %s -> %s",
+                    paper_id, old_status, correction,
+                )
+                continue
+
             action = {
                 "type": "update_status",
                 "paper_id": paper_id,
-                "old_value": event.get("status"),
+                "old_value": old_status,
                 "new_value": correction,
             }
             actions.append(action)
             if not dry_run:
                 updated = _execute_guarded_update(
                     "UPDATE papers SET status = %s WHERE id = %s AND status <=> %s",
-                    (correction, paper_id, event.get("status")),
+                    (correction, paper_id, old_status),
                 )
                 if updated:
                     logger.info("Corrected status: paper %d %s -> %s",
-                                paper_id, event.get("status"), correction)
+                                paper_id, old_status, correction)
                 else:
                     actions.pop()
                     logger.warning(
@@ -360,7 +369,11 @@ def apply_corrections(
                         paper_id,
                     )
 
-        elif issue_type == "NOT_NEW" and correction.lower() == "hide":
+        elif (
+            issue_type == "NOT_NEW"
+            and event.get("event_type") == "new_paper"
+            and correction.lower() == "hide"
+        ):
             action = {
                 "type": "hide_event",
                 "event_id": event_id,

@@ -1,6 +1,6 @@
 """Tests for application startup requirements.
 
-These tests verify fixes for issues that prevented `make dev` from working:
+These tests verify fixes for issues that prevented local dev from working:
 - SCRAPE_API_KEY minimum length enforcement
 - Bio column migration tolerates pre-existing column (MySQL compat)
 - Rewrite destination defaults to localhost for local dev

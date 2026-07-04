@@ -467,7 +467,7 @@ class TestMarkExtractedWithHash:
         assert params[2] == 7
 
     def test_no_hash_falls_back_to_content_hash(self):
-        """Legacy callers (batch_check) keep the old copy-current-hash behavior."""
+        """Fallback copies current content_hash when no explicit hash given."""
         with patch("backend.pipeline.html_fetcher.execute_query") as mock_exec:
             HTMLFetcher.mark_extracted(7)
         query, params = mock_exec.call_args[0]

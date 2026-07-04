@@ -2,7 +2,7 @@
 
 A synced mirror is frozen at dump time, so freshness assertions would always
 fail there. These tests skip unless DATA_QUALITY_LIVE=1 (run them on the
-server: `make check-data-live` inside /opt/econ-newsfeed).
+server: `DATA_QUALITY_LIVE=1 poetry run pytest tests_data_quality -v`).
 
 Each check maps to a real outage class:
 - 2026-06-10: extraction silently stalled for hours (fenced-JSON change)
@@ -69,12 +69,3 @@ class TestExtractionWorkerLiveness:
         )
 
 
-class TestBatchJobHygiene:
-    def test_no_stale_pending_batches(self, db):
-        rows = db.fetch_all(
-            """SELECT id, openai_batch_id, status, created_at FROM batch_jobs
-               WHERE status IN ('submitted', 'validating', 'in_progress', 'finalizing')
-                 AND created_at < NOW() - INTERVAL 48 HOUR
-               LIMIT 20"""
-        )
-        assert not rows, "batch jobs stuck >48h:\n" + fmt_violations(rows)

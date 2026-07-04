@@ -131,6 +131,7 @@ export interface FeedFilters {
   jel_code?: string;
   since?: string;
   until?: string;
+  researcher_id?: string;
 }
 
 export interface ResearcherDetail extends Researcher {
@@ -141,6 +142,7 @@ export interface FilterOptions {
   institutions: string[];
   positions: string[];
   fields: ResearchField[];
+  researchers: { id: number; name: string }[];
 }
 
 export interface ResearcherFilters {

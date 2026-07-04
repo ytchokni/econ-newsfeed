@@ -42,6 +42,7 @@ const emptyFilterOptions = {
   institutions: [],
   positions: [],
   fields: [],
+  researchers: [],
 };
 
 function renderWithSWR(ui: React.ReactElement) {
@@ -70,10 +71,20 @@ function mockFetchResponses(
 beforeEach(() => {
   jest.resetAllMocks();
   global.fetch = jest.fn();
+  window.history.pushState({}, "", "/researchers");
 });
 
 describe("ResearchersContent", () => {
-  it("renders all researchers", async () => {
+  it("shows prompt when no filters are active", async () => {
+    mockFetchResponses({ items: researchers });
+
+    renderWithSWR(<ResearchersContent />);
+
+    expect(screen.getByText(/search by name or apply a filter/i)).toBeInTheDocument();
+  });
+
+  it("renders researchers when search is active", async () => {
+    window.history.pushState({}, "", "/researchers?search=Max");
     mockFetchResponses({ items: researchers });
 
     renderWithSWR(<ResearchersContent />);
@@ -86,7 +97,8 @@ describe("ResearchersContent", () => {
     expect(screen.getByText("Jane Doe")).toBeInTheDocument();
   });
 
-  it("shows loading state", () => {
+  it("shows loading state when filter is active", () => {
+    window.history.pushState({}, "", "/researchers?search=test");
     (global.fetch as jest.Mock).mockReturnValue(new Promise(() => {}));
 
     renderWithSWR(<ResearchersContent />);
@@ -94,7 +106,8 @@ describe("ResearchersContent", () => {
     expect(skeletons.length).toBeGreaterThan(0);
   });
 
-  it("shows error state", async () => {
+  it("shows error state when filter is active", async () => {
+    window.history.pushState({}, "", "/researchers?search=test");
     (global.fetch as jest.Mock).mockImplementation(async (url: string) => {
       if (url.includes("/api/filter-options")) {
         return { ok: true, json: async () => emptyFilterOptions };

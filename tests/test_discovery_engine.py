@@ -109,17 +109,30 @@ def test_subpage_crawler_finds_research():
     """Subpage crawler finds /research link from HTML."""
     html = '<html><body><nav><a href="/research">Research</a><a href="/cv">CV</a></nav></body></html>'
 
-    with patch("backend.discovery.subpage_crawler.requests.get") as mock_get:
-        mock_resp = MagicMock()
-        mock_resp.status_code = 200
-        mock_resp.text = html
-        mock_get.return_value = mock_resp
-
+    with patch("backend.discovery.subpage_crawler.HTMLFetcher.validate_url_with_pin", return_value=(True, "93.184.216.34")), \
+         patch("backend.discovery.subpage_crawler.HTMLFetcher.fetch_html", return_value=html) as mock_fetch:
         from backend.discovery.subpage_crawler import crawl_subpages
         result = crawl_subpages("https://example.com")
 
     page_types = {sp["page_type"] for sp in result}
     assert "research" in page_types
+    mock_fetch.assert_called_once_with(
+        "https://example.com",
+        timeout=15,
+        max_retries=1,
+        resolved_ip="93.184.216.34",
+    )
+
+
+def test_subpage_crawler_rejects_private_root_before_fetch():
+    """Subpage crawler must not fetch URLs that fail scraper SSRF validation."""
+    with patch("backend.discovery.subpage_crawler.HTMLFetcher.validate_url_with_pin", return_value=(False, None)), \
+         patch("backend.discovery.subpage_crawler.HTMLFetcher.fetch_html") as mock_fetch:
+        from backend.discovery.subpage_crawler import crawl_subpages
+        result = crawl_subpages("http://169.254.169.254/latest/meta-data/")
+
+    assert result == []
+    mock_fetch.assert_not_called()
 
 
 def test_run_discovery_batch_stops_on_quota_exhaustion():

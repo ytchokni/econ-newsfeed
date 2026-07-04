@@ -1,10 +1,10 @@
 """Data-quality invariant checks that run against the REAL database.
 
-Unlike tests/ (mocked, fast, run by `make check`), this suite connects to the
-database configured in .env and fails when stored data violates invariants
-that past production incidents established. Run with:
+Unlike tests/ (mocked, fast), this suite connects to the database configured
+in .env and fails when stored data violates invariants that past production
+incidents established. Run with:
 
-    make check-data            # or: poetry run pytest tests_data_quality -v
+    poetry run pytest tests_data_quality -v
 
 Each test names the incident it guards against (PR/issue number). A failure
 is not a code bug — it is a triage list of bad rows in the database.

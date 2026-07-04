@@ -2,7 +2,7 @@
 
 Catches syntax errors, missing dependencies, circular imports, and
 module-level code that crashes. This is the #1 safety net for
-"tests pass but make dev fails" regressions.
+"tests pass but dev fails" regressions.
 
 Requires conftest.py env vars (set via os.environ.setdefault).
 load_dotenv(override=False) won't overwrite them.

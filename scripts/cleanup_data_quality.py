@@ -10,7 +10,7 @@ merges before shared-URL dedup, title cleanup before near-dup merging).
     poetry run python scripts/cleanup_data_quality.py --steps null_bad_years,null_junk_abstracts --apply
 
 Safe to re-run: every step is idempotent (it selects current violations).
-After applying, `make check-data` should drop the corresponding failures.
+After applying, `poetry run pytest tests_data_quality` should drop the corresponding failures.
 """
 import argparse
 import logging

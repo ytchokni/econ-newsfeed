@@ -20,9 +20,6 @@ from pydantic import BaseModel, ValidationError
 _client: OpenAI | None = None
 _client_lock = threading.Lock()
 
-_genai_client = None
-_genai_client_lock = threading.Lock()
-
 GOOGLE_AI_STUDIO_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 DEFAULT_MODEL = "gemma-4-31b-it"
 
@@ -38,17 +35,6 @@ def get_client() -> OpenAI:
                     api_key=os.environ.get("GOOGLE_API_KEY"),
                 )
     return _client
-
-
-def get_genai_client():
-    """Return a shared google-genai Client for file upload/download (batch pipeline)."""
-    global _genai_client
-    if _genai_client is None:
-        with _genai_client_lock:
-            if _genai_client is None:
-                from google import genai
-                _genai_client = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
-    return _genai_client
 
 
 def get_model() -> str:
@@ -78,7 +64,7 @@ _SCHEMA_METADATA_KEYS = {"$defs", "title", "description", "default"}
 
 
 def _inline_refs(schema: dict) -> dict:
-    """Resolve $ref and strip metadata keys that Gemini Batch API rejects."""
+    """Resolve $ref and strip metadata keys unsupported by Google AI Studio."""
     defs = schema.pop("$defs", {})
 
     def resolve(node, inside_properties=False):

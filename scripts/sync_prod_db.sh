@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Refresh the local MySQL database from the latest production backup.
 #
-#   make sync-prod          # or: ./scripts/sync_prod_db.sh
+#   ./scripts/sync_prod_db.sh
 #
 # DESTRUCTIVE to local data: drops the local docker volume and rebuilds it
 # from the newest /backups/econ_newsfeed_*.sql.gz on the Lightsail host.
@@ -17,7 +17,7 @@ set -euo pipefail
 #   3. Recreate db via docker compose (pinned image, fresh volume)
 #   4. Import as root with a temporary memory bump (large imports OOM at
 #      the compose mem_limit — see CLAUDE.md gotchas)
-#   5. Apply schema migrations from the current checkout (make seed logic)
+#   5. Apply schema migrations from the current checkout (create_tables)
 #
 # Overrides: LIGHTSAIL_HOST, LIGHTSAIL_KEY, PYTHON_BIN (e.g. a venv python
 # when poetry is not set up in this checkout).
@@ -83,7 +83,7 @@ if docker ps --format '{{.Names}}' | grep -q '^econ-newsfeed-api'; then
     "${COMPOSE[@]}" stop api
 fi
 if pgrep -f "uvicorn.*api" >/dev/null 2>&1; then
-    echo "WARNING: a local API process appears to be running (make dev?) — stop it to avoid writes during import"
+    echo "WARNING: a local API process appears to be running — stop it to avoid writes during import"
 fi
 "${COMPOSE[@]}" rm -sf db 2>/dev/null || true
 # A repair container (e.g. econ-dq-mysql) may still hold the volume
