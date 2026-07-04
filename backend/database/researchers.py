@@ -60,6 +60,57 @@ def _tokenize_name(name: str) -> list[str]:
     return s.split()
 
 
+_LOWERCASE_PARTICLES = frozenset({
+    "de", "del", "della", "di", "du", "da", "das", "dos", "do",
+    "el", "al", "la", "le", "les", "lo", "los", "las",
+    "van", "von", "den", "der", "het", "ten", "ter",
+    "bin", "ibn", "ben", "bint",
+    "y", "e", "i",
+    "af", "av", "op",
+})
+
+
+def _capitalize_word(word: str) -> str:
+    """Capitalize a single word, handling Mc/Mac/O' prefixes."""
+    low = word.lower()
+    if low.startswith("mc") and len(word) > 2:
+        return "Mc" + word[2:].capitalize()
+    if low.startswith("mac") and len(word) > 3 and word[3:4].isalpha():
+        return "Mac" + word[3:].capitalize()
+    if len(word) >= 2 and word[1] == "'":
+        return word[0].upper() + "'" + word[2:].capitalize()
+    return word.capitalize()
+
+
+def normalize_name_case(name: str) -> str:
+    """Normalize capitalization of a researcher name component.
+
+    Handles: ALL CAPS, all lowercase, Mc/Mac/O' prefixes,
+    lowercase particles (van, de, von, …), hyphenated names.
+    Leaves already-mixed-case names unchanged (e.g. "LeBlanc").
+    """
+    if not name or not name.strip():
+        return name
+
+    stripped = name.strip()
+
+    if stripped == stripped.upper() or stripped == stripped.lower():
+        parts = stripped.split()
+        result = []
+        for idx, part in enumerate(parts):
+            hyph_parts = part.split("-")
+            capitalized_hyph = []
+            for hp in hyph_parts:
+                if idx > 0 and hp.lower() in _LOWERCASE_PARTICLES:
+                    capitalized_hyph.append(hp.lower())
+                else:
+                    capitalized_hyph.append(_capitalize_word(hp))
+            result.append("-".join(capitalized_hyph))
+        return " ".join(result)
+
+    return stripped
+
+
 def _strip_initial(name: str) -> str | None:
     """If name is a single letter optionally followed by '.', return that letter lowercase. Else None."""
     stripped = name.strip()
@@ -243,6 +294,10 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
         position, _ = fix_encoding(position)
     if affiliation:
         affiliation, _ = fix_encoding(affiliation)
+
+    # Normalize capitalization (fixes ALL CAPS / all lowercase from LLM / HTML)
+    first_name = normalize_name_case(first_name)
+    last_name = normalize_name_case(last_name)
 
     def _fetch_one(query, params):
         if conn is not None:
