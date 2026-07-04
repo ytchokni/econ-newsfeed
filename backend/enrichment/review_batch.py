@@ -13,6 +13,7 @@ from backend.database import fetch_all, execute_query
 from backend.enrichment.quality_review import (
     MODEL, get_unreviewed_events, build_review_payload,
     apply_corrections, save_review, _extract_json, _get_openai_client,
+    build_event_fingerprint,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,7 +34,7 @@ def submit_review_batch(limit: int = 100) -> str | None:
         prompt = build_review_payload(event)
         if prompt is None:
             continue
-        custom_id = f"evt_{event['event_id']}"
+        custom_id = f"evt_{event['event_id']}_{build_event_fingerprint(event)}"
         lines.append(json.dumps({
             "custom_id": custom_id,
             "method": "POST",
@@ -162,7 +163,7 @@ def _process_completed_batch(client, batch, db_id: int) -> int:
 
     for result in parsed_results:
         custom_id = result.get("custom_id", "")
-        event_id = _parse_event_id(custom_id)
+        event_id, expected_fingerprint = _parse_custom_id(custom_id)
         if event_id is None:
             continue
 
@@ -189,11 +190,15 @@ def _process_completed_batch(client, batch, db_id: int) -> int:
         event = events_by_id.get(event_id)
         if event is None:
             logger.warning("Event %d not found in DB (may have been deleted)", event_id)
-            save_review(event_id, review)
             processed += 1
             continue
 
-        corrections = apply_corrections(event, review)
+        corrections = apply_corrections(
+            event,
+            review,
+            expected_fingerprint=expected_fingerprint,
+            require_fingerprint=True,
+        )
         has_hide = any(c.get("type") == "hide_event" for c in corrections)
         if not has_hide:
             save_review(event_id, review, corrections or None)
@@ -230,7 +235,7 @@ def _load_events_for_batch(lines: list[str]) -> tuple[list[dict], dict[int, dict
         try:
             result = json.loads(line)
             parsed_results.append(result)
-            eid = _parse_event_id(result.get("custom_id", ""))
+            eid, _fingerprint = _parse_custom_id(result.get("custom_id", ""))
             if eid is not None:
                 event_ids.append(eid)
         except json.JSONDecodeError:
@@ -255,13 +260,28 @@ def _load_events_for_batch(lines: list[str]) -> tuple[list[dict], dict[int, dict
     return parsed_results, {r["event_id"]: r for r in rows}
 
 
+def _parse_custom_id(custom_id: str) -> tuple[int | None, str | None]:
+    """Parse evt_<event_id>[_<review_fingerprint>] custom IDs.
+
+    Older in-flight batches used evt_<event_id>; those intentionally return a
+    missing fingerprint so processing can avoid delayed paper mutations.
+    """
+    if not custom_id.startswith("evt_"):
+        return None, None
+    parts = custom_id.split("_", 2)
+    if len(parts) < 2:
+        return None, None
+    try:
+        event_id = int(parts[1])
+    except ValueError:
+        return None, None
+    fingerprint = parts[2] if len(parts) == 3 and parts[2] else None
+    return event_id, fingerprint
+
+
 def _parse_event_id(custom_id: str) -> int | None:
-    if custom_id.startswith("evt_"):
-        try:
-            return int(custom_id[4:])
-        except ValueError:
-            pass
-    return None
+    event_id, _fingerprint = _parse_custom_id(custom_id)
+    return event_id
 
 
 def _estimate_cost(prompt_tokens: int, completion_tokens: int,
