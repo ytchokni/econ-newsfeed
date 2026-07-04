@@ -54,7 +54,8 @@ export default function ResearchersContent() {
     filtersFromParams(searchParams)
   );
   const { data: filterOptions } = useFilterOptions();
-  const { data: researchers, error, isLoading } = useResearchersFiltered(filters);
+  const hasAnyFilter = !!(filters.search || filters.institution || filters.field || filters.position || filters.preset);
+  const { data: researchers, error, isLoading } = useResearchersFiltered(hasAnyFilter ? filters : undefined, !hasAnyFilter);
 
   const isInitialMount = useRef(true);
   useEffect(() => {
@@ -218,6 +219,7 @@ export default function ResearchersContent() {
           options={institutionOptions}
           selected={selectedInstitutions}
           onChange={handleInstitutionChange}
+          requireSearch
         />
 
         <SearchableCheckboxDropdown
@@ -225,6 +227,7 @@ export default function ResearchersContent() {
           options={fieldOptions}
           selected={selectedFields}
           onChange={handleFieldChange}
+          requireSearch
         />
 
         <SearchableCheckboxDropdown
@@ -232,6 +235,7 @@ export default function ResearchersContent() {
           options={positionOptions}
           selected={selectedPositions}
           onChange={handlePositionChange}
+          requireSearch
         />
       </div>
 
@@ -239,27 +243,35 @@ export default function ResearchersContent() {
       <ActiveFilterChips chips={chips} onClearAll={clearAll} />
 
       {/* Results line */}
-      <div className="mt-[18px] flex items-center gap-[14px]">
-        {!isLoading && researchers && (
-          <p className="m-0 text-[13px] text-[var(--muted)]">
-            {researchers.length === 0
-              ? "No researchers match the current filters"
-              : `Showing ${researchers.length.toLocaleString()} researcher${researchers.length === 1 ? "" : "s"}`}
-          </p>
-        )}
-        {chips.length > 0 && (
-          <button
-            onClick={clearAll}
-            className="text-xs text-[var(--accent)] bg-transparent border-none cursor-pointer p-0"
-          >
-            Clear filters
-          </button>
-        )}
-      </div>
+      {hasAnyFilter && (
+        <div className="mt-[18px] flex items-center gap-[14px]">
+          {!isLoading && researchers && (
+            <p className="m-0 text-[13px] text-[var(--muted)]">
+              {researchers.length === 0
+                ? "No researchers match the current filters"
+                : `Showing ${researchers.length.toLocaleString()} researcher${researchers.length === 1 ? "" : "s"}`}
+            </p>
+          )}
+          {chips.length > 0 && (
+            <button
+              onClick={clearAll}
+              className="text-xs text-[var(--accent)] bg-transparent border-none cursor-pointer p-0"
+            >
+              Clear filters
+            </button>
+          )}
+        </div>
+      )}
 
       {/* Content */}
       <div className="pb-[90px]">
-        {isLoading && (
+        {!hasAnyFilter && (
+          <p className="mt-10 text-center text-sm text-[var(--muted)]">
+            Search by name or apply a filter to find researchers.
+          </p>
+        )}
+
+        {hasAnyFilter && isLoading && (
           <div className="mt-8 space-y-0">
             {Array.from({ length: 3 }).map((_, i) => (
               <ResearcherCardSkeleton key={i} />
@@ -267,17 +279,17 @@ export default function ResearchersContent() {
           </div>
         )}
 
-        {error && !researchers && (
+        {hasAnyFilter && error && !researchers && (
           <div className="mt-8">
             <ErrorMessage message="Failed to load researchers." />
           </div>
         )}
 
-        {!isLoading && researchers && researchers.length === 0 && (
+        {hasAnyFilter && !isLoading && researchers && researchers.length === 0 && (
           <EmptyState message="No researchers match the current filters." onClear={clearAll} />
         )}
 
-        {researchers && researchers.length > 0 && (
+        {hasAnyFilter && researchers && researchers.length > 0 && (
           <div className="mt-2">
             {researchers.map((r) => (
               <ResearcherCard key={r.id} researcher={r} />

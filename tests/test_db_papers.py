@@ -272,12 +272,19 @@ class TestSearchFeedEvents:
         assert "p.year = %s" in sql
         assert "2023" in params
 
-    def test_researcher_id_filter_uses_exists_subquery(self):
-        (_, _, _rc), mock_fetch, _ = self._call(researcher_id=42)
+    def test_researcher_ids_filter_uses_exists_subquery(self):
+        (_, _, _rc), mock_fetch, _ = self._call(researcher_ids=[42])
         sql, params = mock_fetch.call_args[0]
         assert "EXISTS" in sql
         assert "authorship" in sql
         assert 42 in params
+
+    def test_researcher_ids_multiple_uses_in_clause(self):
+        (_, _, _rc), mock_fetch, _ = self._call(researcher_ids=[42, 99])
+        sql, params = mock_fetch.call_args[0]
+        assert "researcher_id IN (%s,%s)" in sql
+        assert 42 in params
+        assert 99 in params
 
     def test_status_list_single_uses_equals(self):
         (_, _, _rc), mock_fetch, _ = self._call(status_list=["published"])

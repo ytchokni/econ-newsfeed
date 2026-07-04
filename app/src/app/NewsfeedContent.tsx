@@ -32,7 +32,7 @@ function groupByDate(publications: Publication[]) {
   return groups;
 }
 
-const FILTER_PARAM_KEYS = ["institution", "preset", "search", "jel_code", "since", "until"] as const satisfies readonly (keyof Omit<FeedFilters, "event_type" | "status" | "year">)[];
+const FILTER_PARAM_KEYS = ["institution", "preset", "search", "jel_code", "since", "until", "researcher_id"] as const satisfies readonly (keyof Omit<FeedFilters, "event_type" | "status" | "year">)[];
 
 function filtersFromParams(params: URLSearchParams): FeedFilters {
   const filters: FeedFilters = {};
@@ -201,8 +201,6 @@ export default function NewsfeedContent() {
 
   const handleTabChange = useCallback((tab: TabValue) => {
     setActiveTab(tab);
-    setFilters({});
-    setDatePreset(null);
     setPage(1);
   }, []);
 
@@ -210,6 +208,7 @@ export default function NewsfeedContent() {
 
   const selectedInstitutions = filters.institution ? filters.institution.split(",") : [];
   const selectedJelCodes = filters.jel_code ? filters.jel_code.split(",") : [];
+  const selectedResearchers = filters.researcher_id ? filters.researcher_id.split(",") : [];
 
   const { data: jelCodes } = useJelCodes();
   const jelOptions = (jelCodes ?? []).map((jel) => ({
@@ -229,6 +228,17 @@ export default function NewsfeedContent() {
     label: inst,
     value: inst,
   }));
+  const researcherOptions = (filterOptions?.researchers ?? []).map((r) => ({
+    label: r.name,
+    value: String(r.id),
+  }));
+  const researcherLabelMap = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const r of filterOptions?.researchers ?? []) {
+      map[String(r.id)] = r.name;
+    }
+    return map;
+  }, [filterOptions]);
 
   const handleJelChange = useCallback(
     (selected: string[]) => {
@@ -242,6 +252,16 @@ export default function NewsfeedContent() {
       handleFilterChange({
         ...filters,
         institution: selected.length > 0 ? selected.join(",") : undefined,
+      });
+    },
+    [filters, handleFilterChange]
+  );
+
+  const handleResearcherChange = useCallback(
+    (selected: string[]) => {
+      handleFilterChange({
+        ...filters,
+        researcher_id: selected.length > 0 ? selected.join(",") : undefined,
       });
     },
     [filters, handleFilterChange]
@@ -299,7 +319,8 @@ export default function NewsfeedContent() {
 
   const hasAnyDrawerFilter = !!(
     filters.preset || filters.institution ||
-    filters.jel_code || filters.since || filters.until
+    filters.jel_code || filters.researcher_id ||
+    filters.since || filters.until
   );
 
   /* ---------- build chips ---------- */
@@ -343,6 +364,20 @@ export default function NewsfeedContent() {
       });
     }
 
+    for (const rid of selectedResearchers) {
+      result.push({
+        key: `researcher:${rid}`,
+        label: researcherLabelMap[rid] ?? `Researcher ${rid}`,
+        onRemove: () => {
+          const remaining = selectedResearchers.filter((r) => r !== rid);
+          handleFilterChange({
+            ...filters,
+            researcher_id: remaining.length > 0 ? remaining.join(",") : undefined,
+          });
+        },
+      });
+    }
+
     if (datePreset) {
       const presetDef = DATE_PRESETS.find((d) => d.key === datePreset);
       result.push({
@@ -379,7 +414,7 @@ export default function NewsfeedContent() {
     }
 
     return result;
-  }, [filters, selectedInstitutions, selectedJelCodes, jelLabelMap, datePreset, handleFilterChange]);
+  }, [filters, selectedInstitutions, selectedJelCodes, jelLabelMap, selectedResearchers, researcherLabelMap, datePreset, handleFilterChange]);
 
   return (
     <div className="max-w-[800px] mx-auto px-6">
@@ -562,6 +597,9 @@ export default function NewsfeedContent() {
         jelOptions={jelOptions}
         selectedJelCodes={selectedJelCodes}
         onJelChange={handleJelChange}
+        researcherOptions={researcherOptions}
+        selectedResearchers={selectedResearchers}
+        onResearcherChange={handleResearcherChange}
         onResetAll={clearAll}
         totalResults={data?.total ?? null}
         minDate={MIN_DATE}

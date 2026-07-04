@@ -43,6 +43,7 @@ function buildPublicationsUrl(
   if (filters?.jel_code) params.set("jel_code", filters.jel_code);
   if (filters?.since) params.set("since", filters.since);
   if (filters?.until) params.set("until", filters.until);
+  if (filters?.researcher_id) params.set("researcher_id", filters.researcher_id);
   return `/api/publications?${params.toString()}`;
 }
 
@@ -120,7 +121,7 @@ export function usePublication(id: number, fallbackData?: PublicationDetail) {
   );
 }
 
-export function useResearchersFiltered(filters?: ResearcherFilters) {
+export function useResearchersFiltered(filters?: ResearcherFilters, skip = false) {
   const params = new URLSearchParams({ per_page: "100" });
   if (filters?.institution) params.set("institution", filters.institution);
   if (filters?.field) params.set("field", filters.field);
@@ -128,7 +129,7 @@ export function useResearchersFiltered(filters?: ResearcherFilters) {
   if (filters?.search) params.set("search", filters.search);
   if (filters?.preset) params.set("preset", filters.preset);
   const url = `/api/researchers?${params.toString()}`;
-  return useSWR<Researcher[]>(url, async (u: string) => {
+  return useSWR<Researcher[]>(skip ? null : url, async (u: string) => {
     const data = await fetchJson<{ items: Researcher[]; total: number }>(u);
     return data.items;
   });

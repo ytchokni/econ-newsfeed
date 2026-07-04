@@ -111,6 +111,8 @@ from backend.database.search_helpers import (
     top5_venue_clause as _top5_venue_clause,
 )
 
+_FEED_VISIBLE_EVENT_TYPES = ("new_paper", "status_change")
+
 
 # ---------------------------------------------------------------------------
 # Batch-fetch helpers
@@ -230,7 +232,7 @@ def get_paper_history(paper_id: int) -> list[dict]:
 def search_feed_events(
     *,
     year=None,
-    researcher_id=None,
+    researcher_ids: list[int] | None = None,
     status_list=None,
     since: datetime | None = None,
     until: datetime | None = None,
@@ -249,7 +251,7 @@ def search_feed_events(
 
     Filters:
     - year: match p.year
-    - researcher_id: EXISTS subquery on authorship
+    - researcher_ids: EXISTS subquery on authorship (single or multi)
     - status_list: p.status IN (...)
     - since: fe.created_at >= datetime value
     - institution_list: affiliation LIKE match (ignored when preset is set)
@@ -265,11 +267,12 @@ def search_feed_events(
         conditions.append("p.year = %s")
         params.append(year)
 
-    if researcher_id:
+    if researcher_ids:
+        placeholders_r = ",".join(["%s"] * len(researcher_ids))
         conditions.append(
-            "EXISTS (SELECT 1 FROM authorship WHERE publication_id = p.id AND researcher_id = %s)"
+            f"EXISTS (SELECT 1 FROM authorship WHERE publication_id = p.id AND researcher_id IN ({placeholders_r}))"
         )
-        params.append(researcher_id)
+        params.extend(researcher_ids)
 
     if followed_ids:
         placeholders = ",".join(["%s"] * len(followed_ids))
@@ -375,6 +378,9 @@ def search_feed_events(
         conditions.append("fe.event_type = %s")
         params.append(event_type)
 
+    placeholders_evt = ",".join(["%s"] * len(_FEED_VISIBLE_EVENT_TYPES))
+    conditions.append(f"fe.event_type IN ({placeholders_evt})")
+    params.extend(_FEED_VISIBLE_EVENT_TYPES)
     conditions.append(
         "NOT (fe.event_type = 'status_change' AND fe.old_status = 'accepted' AND fe.new_status = 'published')"
     )
