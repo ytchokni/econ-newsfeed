@@ -16,6 +16,10 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "postcss"
         update-types: ["version-update:semver-major"]
+      # Next.js majors (14→15→16) are deliberate migrations (React 19, async
+      # request APIs). Upgrade manually, not via Dependabot.
+      - dependency-name: "next"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
