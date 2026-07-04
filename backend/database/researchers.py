@@ -70,7 +70,7 @@ _LOWERCASE_PARTICLES = frozenset({
 })
 
 
-_INITIALS_RE = re.compile(r'^([A-Za-z]\.)+[A-Za-z]?\.?$')
+_INITIALS_RE = re.compile(r'^([^\W\d_]\.)+[^\W\d_]?\.?$', re.UNICODE)
 
 
 def _capitalize_word(word: str) -> str:
