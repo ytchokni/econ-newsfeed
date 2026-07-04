@@ -72,6 +72,20 @@ class TestNormalizeNameCase:
         assert normalize_name_case("j.") == "J."
         assert normalize_name_case("J.") == "J."
 
+    @pytest.mark.parametrize("input_name,expected", [
+        ("A.B.", "A.B."),
+        ("a.b.", "A.B."),
+        ("J.L.", "J.L."),
+        ("j.l.", "J.L."),
+        ("A.S.S.", "A.S.S."),
+    ])
+    def test_multi_initials_uppercased(self, input_name, expected):
+        assert normalize_name_case(input_name) == expected
+
+    def test_cjk_names_untouched(self):
+        assert normalize_name_case("俊能") == "俊能"
+        assert normalize_name_case("博宇") == "博宇"
+
     def test_accented_all_caps(self):
         assert normalize_name_case("JOSÉ") == "José"
         assert normalize_name_case("MÜLLER") == "Müller"

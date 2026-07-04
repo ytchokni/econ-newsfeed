@@ -70,8 +70,13 @@ _LOWERCASE_PARTICLES = frozenset({
 })
 
 
+_INITIALS_RE = re.compile(r'^([A-Za-z]\.)+[A-Za-z]?\.?$')
+
+
 def _capitalize_word(word: str) -> str:
-    """Capitalize a single word, handling Mc/Mac/O' prefixes."""
+    """Capitalize a single word, handling Mc/Mac/O' prefixes and initials."""
+    if _INITIALS_RE.match(word):
+        return word.upper()
     low = word.lower()
     if low.startswith("mc") and len(word) > 2:
         return "Mc" + word[2:].capitalize()
@@ -93,6 +98,9 @@ def normalize_name_case(name: str) -> str:
         return name
 
     stripped = name.strip()
+
+    if any('一' <= c <= '鿿' or '぀' <= c <= 'ヿ' or '가' <= c <= '힯' for c in stripped):
+        return stripped
 
     if stripped == stripped.upper() or stripped == stripped.lower():
         parts = stripped.split()
