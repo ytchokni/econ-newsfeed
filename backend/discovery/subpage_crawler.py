@@ -4,11 +4,9 @@ import re
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 
-import requests
+from backend.pipeline.html_fetcher import HTMLFetcher
 
 logger = logging.getLogger(__name__)
-
-_HEADERS = {"User-Agent": "econ-newsfeed/1.0 (mailto:yogamtchokni@googlemail.com)"}
 
 _MULTI_TENANT_DOMAINS = (
     "sites.google.com", "github.io", "wixsite.com", "wordpress.com",
@@ -58,17 +56,23 @@ def crawl_subpages(root_url: str) -> list[dict]:
 
     Returns list of {"page_type": str, "url": str}.
     """
-    try:
-        resp = requests.get(root_url, timeout=15, headers=_HEADERS, allow_redirects=True)
-        if resp.status_code >= 400:
-            return []
-    except Exception as e:
-        logger.debug("Failed to crawl %s: %s", root_url, e)
+    safe, resolved_ip = HTMLFetcher.validate_url_with_pin(root_url)
+    if not safe:
+        logger.warning("Skipping unsafe discovery crawl URL: %s", root_url)
+        return []
+
+    html = HTMLFetcher.fetch_html(
+        root_url,
+        timeout=15,
+        max_retries=1,
+        resolved_ip=resolved_ip,
+    )
+    if html is None:
         return []
 
     parser = _LinkExtractor(root_url)
     try:
-        parser.feed(resp.text)
+        parser.feed(html)
     except Exception:
         return []
 
