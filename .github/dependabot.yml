@@ -30,6 +30,10 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "@types/react-dom"
         update-types: ["version-update:semver-major"]
+      # eslint 9+ requires the flat-config migration; do it with the Next.js
+      # toolchain upgrade, not as a routine bump.
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
