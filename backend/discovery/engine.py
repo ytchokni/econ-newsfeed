@@ -10,7 +10,9 @@ from backend.discovery.subpage_crawler import crawl_subpages
 
 logger = logging.getLogger(__name__)
 
-_SEARCH_DELAY_SECONDS = float(os.environ.get("DISCOVERY_SEARCH_DELAY", "6"))
+# Searlo limits: 5/s, 10/min, 200/hour, 1000/day. 18s spacing (+ request
+# latency) keeps a full-day batch under the per-minute and per-hour caps.
+_SEARCH_DELAY_SECONDS = float(os.environ.get("DISCOVERY_SEARCH_DELAY", "18"))
 
 
 def run_discovery_batch(limit: int | None = None) -> dict:
@@ -24,7 +26,7 @@ def run_discovery_batch(limit: int | None = None) -> dict:
 
     Returns summary: {"searched": int, "found": int, "no_result": int, "errors": int}
     """
-    daily_limit = limit or int(os.environ.get("DISCOVERY_DAILY_LIMIT", "100"))
+    daily_limit = limit or int(os.environ.get("DISCOVERY_DAILY_LIMIT", "1000"))
     candidates = get_discovery_candidates(daily_limit)
 
     if not candidates:
