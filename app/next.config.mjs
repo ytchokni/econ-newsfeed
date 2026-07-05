@@ -7,7 +7,7 @@ const nextConfig = {
   async rewrites() {
     return [
       {
-        source: "/api/:path((?!auth).*)",
+        source: "/api/:path((?!auth|admin).*)",
         destination: `${process.env.API_INTERNAL_URL || "http://localhost:8000"}/api/:path*`,
       },
     ];
