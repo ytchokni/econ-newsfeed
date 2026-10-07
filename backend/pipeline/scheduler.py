@@ -182,7 +182,8 @@ _EXTRACTION_DELAY_SECONDS = float(os.environ.get('EXTRACTION_DELAY_SECONDS', '2'
 _EXTRACTION_IDLE_SECONDS = 300       # queue empty → re-poll every 5 min
 _EXTRACTION_BACKOFF_THRESHOLD = 10   # consecutive failures before backing off
 _EXTRACTION_BACKOFF_SECONDS = 600    # 10 min (rides out free-tier quota exhaustion)
-_EXTRACTION_MAX_URL_FAILURES = 3     # poison-pill guard: skip URL until restart
+_EXTRACTION_MAX_URL_FAILURES = 3
+_EXTRACTION_URL_COOLDOWN_SECONDS = 3600  # retry failed pages without a restart
 
 _extraction_thread = None
 _extraction_stop_event = threading.Event()
@@ -554,11 +555,21 @@ def _extraction_worker_loop() -> None:
 
     logger.info("Extraction worker started")
     url_failures: dict[int, int] = {}
+    retry_at: dict[int, float] = {}
+    failed_hashes: dict[int, str | None] = {}
+    rate_limit_streak = 0
     consecutive_failures = 0
     processed = 0
     pubs_total = 0
 
     while not _extraction_stop_event.is_set():
+        # Expire all cooldowns, including rows found beyond the first batch.
+        now = time.monotonic()
+        for url_id in list(retry_at):
+            if now >= retry_at[url_id]:
+                retry_at.pop(url_id)
+                failed_hashes.pop(url_id, None)
+                url_failures.pop(url_id, None)
         try:
             queue = get_urls_needing_extraction()
         except Exception as e:
@@ -566,13 +577,29 @@ def _extraction_worker_loop() -> None:
             _extraction_stop_event.wait(_EXTRACTION_IDLE_SECONDS)
             continue
 
-        pending = [r for r in queue if url_failures.get(r['id'], 0) < _EXTRACTION_MAX_URL_FAILURES]
+        for row in queue:
+            url_id = row['id']
+            if url_id in retry_at and (
+                row.get('content_hash') != failed_hashes.get(url_id)
+            ):
+                retry_at.pop(url_id, None)
+                failed_hashes.pop(url_id, None)
+                url_failures.pop(url_id, None)
+        pending = [r for r in queue if r['id'] not in retry_at]
+        # Poisoned low IDs must not hide the rest of a queue larger than
+        # the database's 200-row batch limit.
+        if not pending and retry_at:
+            try:
+                pending = [r for r in get_urls_needing_extraction(exclude_url_ids=tuple(retry_at))
+                           if r['id'] not in retry_at]
+            except Exception:
+                logger.exception("Extraction worker could not query past deferred pages")
         if not pending:
             _extraction_stop_event.wait(_EXTRACTION_IDLE_SECONDS)
             continue
 
-        logger.info("Extraction worker: %d URLs pending (%d skipped as poison pills)",
-                    len(pending), len(queue) - len(pending))
+        logger.info("Extraction worker: %d URLs pending (%d temporarily cooling down)",
+                    len(pending), len(retry_at))
 
         for row in pending:
             if _extraction_stop_event.is_set():
@@ -588,19 +615,25 @@ def _extraction_worker_loop() -> None:
             processed += 1
             if outcome is not None and outcome.ok:
                 consecutive_failures = 0
+                rate_limit_streak = 0
                 url_failures.pop(url_id, None)
                 pubs_total += outcome.pubs_count
             elif outcome is not None and outcome.retry_after is not None:
-                logger.warning("Extraction worker: rate limited, sleeping %.0fs (retry_after)",
-                               outcome.retry_after)
-                _extraction_stop_event.wait(outcome.retry_after)
+                rate_limit_streak += 1
+                delay = max(outcome.retry_after, min(60 * 2 ** min(rate_limit_streak - 1, 4), _EXTRACTION_BACKOFF_SECONDS))
+                logger.warning("Extraction worker: quota limited (%d consecutive), sleeping %.0fs",
+                               rate_limit_streak, delay)
+                # Provider limits never count as a poisoned page.
+                _extraction_stop_event.wait(delay)
                 continue
             else:
                 consecutive_failures += 1
                 url_failures[url_id] = url_failures.get(url_id, 0) + 1
                 if url_failures[url_id] >= _EXTRACTION_MAX_URL_FAILURES:
-                    logger.warning("Extraction worker: skipping url_id=%s (%s) after %d failures "
-                                   "until next restart", url_id, row['url'], url_failures[url_id])
+                    retry_at[url_id] = time.monotonic() + _EXTRACTION_URL_COOLDOWN_SECONDS
+                    failed_hashes[url_id] = row.get('content_hash')
+                    logger.warning("Extraction worker: cooling down url_id=%s (%s) after %d failures for %ds",
+                                   url_id, row['url'], url_failures[url_id], _EXTRACTION_URL_COOLDOWN_SECONDS)
 
             if processed % 25 == 0:
                 logger.info("Extraction worker progress: %d processed, %d pubs total", processed, pubs_total)

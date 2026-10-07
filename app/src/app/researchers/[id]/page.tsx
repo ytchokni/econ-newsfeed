@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import ResearcherDetailContent from "./ResearcherDetailContent";
 import type { ResearcherDetail } from "@/lib/types";
 
-const API_BASE = process.env.API_INTERNAL_URL || "";
+const API_BASE = process.env.API_INTERNAL_URL || "http://localhost:8000";
 
 async function fetchResearcher(id: number): Promise<ResearcherDetail | null> {
   try {

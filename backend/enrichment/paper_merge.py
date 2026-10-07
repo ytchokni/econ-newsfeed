@@ -8,6 +8,7 @@ import logging
 import re
 from difflib import SequenceMatcher
 from backend.database import fetch_all, get_connection
+from backend.database.snapshots import STATUS_ORDER
 
 logger = logging.getLogger(__name__)
 
@@ -58,26 +59,46 @@ def find_duplicate_groups() -> list[list[int]]:
     return [sorted(g) for g in merged]
 
 
+def highest_known_status(statuses) -> str | None:
+    """Return the furthest valid current status among duplicate paper rows."""
+    known = set(statuses).intersection(STATUS_ORDER)
+    return next((status for status in reversed(STATUS_ORDER) if status in known), None)
+
+
 def merge_paper_group(paper_ids: list[int]) -> None:
-    """Merge duplicate papers into the earliest-discovered canonical record."""
-    papers = fetch_all(
-        f"""SELECT id, discovered_at, abstract, year, venue
-            FROM papers WHERE id IN ({','.join(['%s'] * len(paper_ids))})
-            ORDER BY discovered_at""",
-        tuple(paper_ids),
-    )
-    if len(papers) < 2:
+    """Merge into the earliest paper, preserving status and one announcement."""
+    paper_ids = sorted(set(paper_ids))
+    if len(paper_ids) < 2:
         return
-
-    canonical_id = papers[0]['id']
-    duplicates = papers[1:]
-    dup_ids = [p['id'] for p in duplicates]
-
-    logger.info("Merging papers %s into canonical %s", dup_ids, canonical_id)
-
     with get_connection() as conn:
-        cursor = conn.cursor()
+        cursor = conn.cursor(dictionary=True)
         try:
+            # Lock parents before reading history. Child inserts must acquire
+            # their FK parent lock, so they cannot race a merge of these papers.
+            placeholders = ','.join(['%s'] * len(paper_ids))
+            cursor.execute(
+                f"""SELECT id, discovered_at, abstract, year, venue, status
+                    FROM papers WHERE id IN ({placeholders}) ORDER BY id FOR UPDATE""",
+                tuple(paper_ids),
+            )
+            # Match MySQL's ascending NULL-first ordering for older rows whose
+            # discovery timestamp is missing, with a deterministic ID tie-break.
+            papers = sorted(cursor.fetchall(), key=lambda p: (
+                p['discovered_at'] is not None, p['discovered_at'], p['id'],
+            ))
+            if len(papers) < 2:
+                conn.rollback()
+                return
+            canonical_id = papers[0]['id']
+            duplicates = papers[1:]
+            dup_ids = [p['id'] for p in duplicates]
+            # Raw snapshots/events can contain incorrect conference/blog
+            # statuses. Preserve current paper states without reviving those
+            # historical extraction errors.
+            status = highest_known_status(p['status'] for p in papers)
+            if status is not None and status != papers[0]['status']:
+                cursor.execute("UPDATE papers SET status = %s WHERE id = %s", (status, canonical_id))
+
             for dup in duplicates:
                 cursor.execute(
                     """UPDATE papers SET
@@ -96,6 +117,17 @@ def merge_paper_group(paper_ids: list[int]) -> None:
                         f"UPDATE IGNORE `{table}` SET `{col}` = %s WHERE `{col}` = %s",
                         (canonical_id, dup_id),
                     )
+
+            # Reassignment can combine announcements from several duplicates.
+            # Preserve the first observed announcement, with an ID tie-break.
+            cursor.execute(
+                """SELECT id FROM feed_events
+                   WHERE paper_id = %s AND event_type = 'new_paper'
+                   ORDER BY created_at, id FOR UPDATE""",
+                (canonical_id,),
+            )
+            for event in cursor.fetchall()[1:]:
+                cursor.execute("DELETE FROM feed_events WHERE id = %s", (event['id'],))
 
             for dup_id in dup_ids:
                 cursor.execute("DELETE FROM papers WHERE id = %s", (dup_id,))

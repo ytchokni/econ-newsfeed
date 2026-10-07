@@ -34,7 +34,7 @@ class ExtractionOutcome:
 
     status values:
       'extracted'  — publications found and saved; URL marked extracted
-      'empty'      — LLM succeeded, page has no publications; URL marked extracted
+      'empty'      — no publications, or a decoded JPEG was skipped; URL marked extracted
       'failed'     — LLM call failed; URL NOT marked, will be retried
       'no_content' — no stored HTML/text; URL NOT marked
     """
@@ -71,6 +71,13 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
     if not text:
         return ExtractionOutcome("no_content")
     content_hash = payload['content_hash']
+    # Some researcher URLs serve a JPEG that was decoded and stored as text.
+    # Recognize its explicit header, without treating non-ASCII prose as binary.
+    header = text[:64]
+    if 'JFIF\x00' in header or 'Exif\x00\x00' in header:
+        logger.info("Skipping decoded JPEG for URL ID %s", url_id)
+        HTMLFetcher.mark_extracted(url_id, content_hash)
+        return ExtractionOutcome("empty")
     is_seed = payload['extracted_at'] is None
 
     ts = payload.get('timestamp')

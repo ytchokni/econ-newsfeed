@@ -6,7 +6,7 @@ SSRF protection and returns 'valid', 'invalid', or 'timeout'.
 PublicationExtraction is also tested here for the new 'working_paper' status and
 the 'abstract' field added in v2.
 """
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, patch, call
 from pydantic import ValidationError
 
 import pytest
@@ -125,6 +125,7 @@ class TestValidateDraftUrl:
     def _make_mock_response(self, status_code: int) -> MagicMock:
         resp = MagicMock()
         resp.status_code = status_code
+        resp.headers = {}
         return resp
 
     def _patch_for_valid_ssrf(self):
@@ -141,13 +142,38 @@ class TestValidateDraftUrl:
                 result = HTMLFetcher.validate_draft_url("https://ssrn.com/abstract=12345")
         assert result == "valid"
 
-    def test_301_redirect_returns_valid(self):
-        """Responses below 400 (including redirects) are considered valid."""
-        mock_resp = self._make_mock_response(301)
+    @pytest.mark.parametrize('status', [301, 302, 303, 307, 308])
+    def test_redirect_checks_final_destination(self, status):
+        redirect = self._make_mock_response(status)
+        redirect.headers = {'Location': '/final.pdf'}
+        final = self._make_mock_response(200)
         with self._patch_for_valid_ssrf():
-            with patch("requests.Session.head", return_value=mock_resp):
+            with patch("requests.Session.head", side_effect=[redirect, final]) as head:
                 result = HTMLFetcher.validate_draft_url("https://papers.nber.org/paper/123")
         assert result == "valid"
+        assert head.call_args_list == [
+            call('https://papers.nber.org/paper/123', timeout=10, allow_redirects=False),
+            call('https://papers.nber.org/final.pdf', timeout=10, allow_redirects=False),
+        ]
+
+    def test_redirect_to_missing_draft_returns_invalid(self):
+        redirect = self._make_mock_response(302)
+        redirect.headers = {'Location': 'https://example.com/missing.pdf'}
+        final = self._make_mock_response(404)
+        with self._patch_for_valid_ssrf(), \
+             patch('requests.Session.head', side_effect=[redirect, final]) as head:
+            result = HTMLFetcher.validate_draft_url('https://example.com/paper.pdf')
+        assert result == 'invalid'
+        assert head.call_count == 2
+
+    def test_redirect_loop_stops_at_limit(self):
+        redirect = self._make_mock_response(302)
+        redirect.headers = {'Location': '/paper.pdf'}
+        with self._patch_for_valid_ssrf(), \
+             patch('requests.Session.head', return_value=redirect) as head:
+            result = HTMLFetcher.validate_draft_url('https://example.com/paper.pdf', max_redirects=2)
+        assert result == 'invalid'
+        assert head.call_count == 3
 
     def test_404_response_returns_invalid(self):
         mock_resp = self._make_mock_response(404)

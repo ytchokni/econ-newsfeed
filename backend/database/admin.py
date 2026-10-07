@@ -286,7 +286,8 @@ def _get_extraction_stats() -> dict:
                    AND hc.extracted_hash != hc.content_hash) AS changed_pending
            FROM html_content hc
            JOIN researcher_urls ru ON ru.id = hc.url_id
-           WHERE ru.is_active = TRUE AND hc.content_hash IS NOT NULL"""
+           WHERE ru.is_active = TRUE AND hc.content_hash IS NOT NULL
+             AND (NULLIF(hc.content, '') IS NOT NULL OR NULLIF(hc.raw_html, '') IS NOT NULL)"""
     )
     never_extracted = _i(queue, "never_extracted")
     changed_pending = _i(queue, "changed_pending")
@@ -310,7 +311,7 @@ def _get_extraction_stats() -> dict:
                MAX(called_at) AS last_call_at,
                COALESCE(SUM(CASE WHEN called_at >= NOW() - INTERVAL 24 HOUR
                                  THEN total_tokens ELSE 0 END), 0) AS tokens_last_24h
-           FROM llm_usage WHERE call_type = 'publication_extraction'"""
+           FROM llm_usage WHERE call_type IN ('publication_extraction', 'diff_extraction')"""
     )
 
     last_extracted = fetch_one(
@@ -326,7 +327,7 @@ def _get_extraction_stats() -> dict:
 
     recent_calls = fetch_all(
         """SELECT called_at, context_url, model, total_tokens
-           FROM llm_usage WHERE call_type = 'publication_extraction'
+           FROM llm_usage WHERE call_type IN ('publication_extraction', 'diff_extraction')
            ORDER BY id DESC LIMIT 20"""
     )
 

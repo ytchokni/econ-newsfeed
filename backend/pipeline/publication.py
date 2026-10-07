@@ -44,7 +44,7 @@ def _coerce_year(v: object) -> str | None:
     m = re.search(r'(19|20)\d{2}', s)
     if m:
         return m.group(0)
-    return s[:4]
+    return None
 
 
 def _validate_url_scheme(v: object) -> str | None:
@@ -350,7 +350,8 @@ Content:
 {text_content[:CONTENT_MAX_CHARS]}"""
 
     _SEGMENT_RE = re.compile(
-        r'(?<=[.!?])\s+(?=[A-Z])'   # sentence boundary
+        r'(?<=[.!?])\s+(?=[^\W\d_])'  # sentence boundary before a Unicode letter
+        r'|(?<=[。！？；])\s*'          # CJK punctuation need not be followed by spaces
         r'|(?<=\n)'                  # existing newline
         r'|(?<=\s)(?=(?:'            # before common section headers
         r'Abstract|Working [Pp]aper|Publications?|Research'

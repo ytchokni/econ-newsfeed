@@ -124,6 +124,48 @@ class TestSegmentText:
         assert result != ""
         assert len(result) < len(new)
 
+    def test_cyrillic_status_change_keeps_paper_and_nearby_context(self):
+        papers = [
+            f"Статья {i} о международной торговле. Аннотация исследования региона {i}. "
+            "Статус: рабочий документ."
+            for i in range(80)
+        ]
+        old = ' '.join(papers)
+        papers[40] = papers[40].replace('рабочий документ', 'принята к публикации')
+        new = ' '.join(papers)
+
+        result = Publication._compute_compact_diff(old, new)
+
+        assert result is not None
+        assert len(result) < len(new) / 3
+        assert '-Статус: рабочий документ.' in result
+        assert '+Статус: принята к публикации.' in result
+        assert 'Статья 40 о международной торговле.' in result
+        assert 'Статья 39 о международной торговле.' in result
+        assert 'Статья 41 о международной торговле.' in result
+
+    def test_japanese_status_change_without_spaces_keeps_title_and_context(self):
+        papers = [
+            f"研究{i}：貿易と雇用の実証分析。要旨：第{i}地域の経済について検討する。掲載状況：執筆中。"
+            for i in range(80)
+        ]
+        old = ''.join(papers)
+        papers[40] = papers[40].replace('掲載状況：執筆中。', '掲載状況：掲載決定。')
+        new = ''.join(papers)
+
+        result = Publication._compute_compact_diff(old, new)
+
+        assert result is not None
+        assert len(result) < len(new) / 3
+        assert '-掲載状況：執筆中。' in result
+        assert '+掲載状況：掲載決定。' in result
+        assert '研究40：貿易と雇用の実証分析。' in result
+        assert '研究39：貿易と雇用の実証分析。' in result
+        assert '研究41：貿易と雇用の実証分析。' in result
+        prompt = Publication.build_diff_extraction_prompt(old, new, 'https://example.com/research')
+        assert 'unified diff' in prompt
+        assert 'OLD VERSION:' not in prompt
+
 
 class TestBuildDiffExtractionPrompt:
     """Tests for Publication.build_diff_extraction_prompt."""

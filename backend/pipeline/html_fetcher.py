@@ -690,9 +690,7 @@ class HTMLFetcher:
         try:
             # Disable auto-redirects to prevent SSRF via redirect to internal IPs
             response = HTMLFetcher._get_session().head(url, timeout=10, allow_redirects=False)
-            if response.status_code < 400:
-                return 'valid'
-            # Follow redirects manually with SSRF validation
+            # Check the destination before treating a redirect as a valid draft.
             if response.status_code in (301, 302, 303, 307, 308):
                 if max_redirects <= 0:
                     logging.warning(f"Redirect limit reached for URL: {url}")
@@ -701,6 +699,8 @@ class HTMLFetcher:
                 if redirect_url and HTMLFetcher.validate_url(redirect_url):
                     return HTMLFetcher.validate_draft_url(redirect_url, max_redirects=max_redirects - 1)
                 return 'invalid'
+            if response.status_code < 400:
+                return 'valid'
             return 'invalid'
         except requests.exceptions.Timeout:
             return 'timeout'
