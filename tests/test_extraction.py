@@ -89,6 +89,59 @@ class TestExtractOneUrl:
         mocks["mark"].assert_called_once_with(1, "h1")
         mocks["persist"].assert_not_called()
 
+    @pytest.mark.parametrize('header', [
+        '\ufffd\ufffd\ufffd\ufffd\x00\x10JFIF\x00\x01\x01',
+        '\ufffd\ufffd\ufffd\ufffd\x00\x10Exif\x00\x00MM\x00*',
+    ])
+    @pytest.mark.parametrize('is_seed', [True, False])
+    def test_decoded_jpeg_marks_exact_hash_without_llm_or_paper_changes(self, header, is_seed):
+        from backend.pipeline.extraction import extract_one_url
+        payload = {
+            'content': header + 'decoded image bytes', 'content_hash': 'jpeg-start-hash',
+            'timestamp': None, 'extracted_at': None if is_seed else '2026-01-01',
+        }
+        patches = _patches(payload=payload)
+        patches['prev_text'] = patch(
+            'backend.pipeline.extraction.HTMLFetcher.get_previous_text', return_value='Previous paper')
+        patches['try_changes'] = patch('backend.pipeline.extraction.Publication.try_extract_changes')
+        mocks = {k: p.start() for k, p in patches.items()}
+        try:
+            outcome = extract_one_url(_row(page_type='HOME'))
+        finally:
+            for p in patches.values():
+                p.stop()
+        assert outcome.status == 'empty'
+        assert outcome.ok
+        assert outcome.pubs_count == 0
+        mocks['mark'].assert_called_once_with(1, 'jpeg-start-hash')
+        for name in ('try_extract', 'try_changes', 'extract_desc', 'persist', 'researcher_snap', 'prev_text'):
+            mocks[name].assert_not_called()
+
+    @pytest.mark.parametrize('text', [
+        '研究論文：国際貿易と雇用。日本語の要旨。',
+        'Исследование международной торговли и занятости.',
+        'Research on JFIF and Exif image formats.',
+        'An ordinary academic publication about trade.',
+        'Résumé\x00Trade and wages',
+        'Ordinary publication text. ' * 4 + 'JFIF\x00',
+    ])
+    def test_unicode_and_ordinary_text_continue_through_extraction(self, text):
+        from backend.pipeline.extraction import extract_one_url
+        pubs = [{'title': 'Paper A'}]
+        payload = {'content': text, 'content_hash': 'text-hash', 'timestamp': None, 'extracted_at': None}
+        patches = _patches(payload=payload, pubs=pubs)
+        mocks = {k: p.start() for k, p in patches.items()}
+        try:
+            outcome = extract_one_url(_row())
+        finally:
+            for p in patches.values():
+                p.stop()
+        assert outcome.status == 'extracted'
+        assert outcome.pubs_count == 1
+        mocks['try_extract'].assert_called_once_with(text, 'https://example.com/pubs', scrape_log_id=None)
+        mocks['persist'].assert_called_once()
+        mocks['mark'].assert_called_once_with(1, 'text-hash')
+
     def test_no_stored_html_returns_no_content(self):
         from backend.pipeline.extraction import extract_one_url
         patches = _patches(pubs=[])

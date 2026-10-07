@@ -3,7 +3,7 @@ import type { Metadata } from "next";
 import PaperDetailContent from "./PaperDetailContent";
 import type { PublicationDetail } from "@/lib/types";
 
-const API_BASE = process.env.API_INTERNAL_URL || "";
+const API_BASE = process.env.API_INTERNAL_URL || "http://localhost:8000";
 
 async function fetchPaper(id: number): Promise<PublicationDetail | null> {
   try {

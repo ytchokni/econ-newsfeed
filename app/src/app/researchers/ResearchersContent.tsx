@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
-import { useFilterOptions, useResearchersFiltered } from "@/lib/api";
+import { useFilterOptions, useResearchersPage } from "@/lib/api";
 import type { ResearcherFilters } from "@/lib/types";
 import ResearcherCard from "@/components/ResearcherCard";
 import ResearcherCardSkeleton from "@/components/ResearcherCardSkeleton";
@@ -53,9 +53,20 @@ export default function ResearchersContent() {
   const [filters, setFilters] = useState<ResearcherFilters>(() =>
     filtersFromParams(searchParams)
   );
+  const [page, setPage] = useState(() => {
+    const requestedPage = Number(searchParams.get("page"));
+    return Number.isSafeInteger(requestedPage) && requestedPage > 0 ? requestedPage : 1;
+  });
   const { data: filterOptions } = useFilterOptions();
   const hasAnyFilter = !!(filters.search || filters.institution || filters.field || filters.position || filters.preset);
-  const { data: researchers, error, isLoading } = useResearchersFiltered(hasAnyFilter ? filters : undefined, !hasAnyFilter);
+  const { data, error, isLoading } = useResearchersPage(hasAnyFilter ? filters : undefined, page, !hasAnyFilter);
+  const researchers = data?.items;
+
+  useEffect(() => {
+    if (data && page > Math.max(1, data.pages)) {
+      setPage(Math.max(1, data.pages));
+    }
+  }, [data, page]);
 
   const isInitialMount = useRef(true);
   useEffect(() => {
@@ -64,18 +75,21 @@ export default function ResearchersContent() {
       return;
     }
     const params = filtersToParams(filters);
+    if (page > 1 && hasAnyFilter) params.set("page", String(page));
     const qs = params.toString();
     const next = qs ? `${pathname}?${qs}` : pathname;
     router.replace(next, { scroll: false });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters, pathname]);
+  }, [filters, pathname, page, hasAnyFilter]);
 
   const handleFilterChange = useCallback((next: ResearcherFilters) => {
     setFilters(next);
+    setPage(1);
   }, []);
 
   const clearAll = useCallback(() => {
     setFilters({});
+    setPage(1);
   }, []);
 
   const institutionOptions = (filterOptions?.institutions ?? []).map((i) => ({
@@ -96,6 +110,7 @@ export default function ResearchersContent() {
   const selectedFields = filters.field ? filters.field.split(",") : [];
 
   const handleInstitutionChange = useCallback((selected: string[]) => {
+    setPage(1);
     setFilters((prev) => ({
       ...prev,
       institution: selected.length > 0 ? selected.join(",") : undefined,
@@ -103,14 +118,17 @@ export default function ResearchersContent() {
   }, []);
 
   const handlePositionChange = useCallback((selected: string[]) => {
+    setPage(1);
     setFilters((prev) => ({ ...prev, position: selected.join(",") || undefined }));
   }, []);
 
   const handleFieldChange = useCallback((selected: string[]) => {
+    setPage(1);
     setFilters((prev) => ({ ...prev, field: selected.join(",") || undefined }));
   }, []);
 
   const handlePresetClick = useCallback((value: string) => {
+    setPage(1);
     setFilters((prev) => ({
       ...prev,
       preset: prev.preset === value ? undefined : value,
@@ -245,11 +263,11 @@ export default function ResearchersContent() {
       {/* Results line */}
       {hasAnyFilter && (
         <div className="mt-[18px] flex items-center gap-[14px]">
-          {!isLoading && researchers && (
-            <p className="m-0 text-[13px] text-[var(--muted)]">
+          {!isLoading && data && researchers && (
+            <p aria-live="polite" className="m-0 text-[13px] text-[var(--muted)]">
               {researchers.length === 0
                 ? "No researchers match the current filters"
-                : `Showing ${researchers.length.toLocaleString()} researcher${researchers.length === 1 ? "" : "s"}`}
+                : `Showing ${((data.page - 1) * data.per_page + 1).toLocaleString()}–${((data.page - 1) * data.per_page + researchers.length).toLocaleString()} of ${data.total.toLocaleString()} researchers`}
             </p>
           )}
           {chips.length > 0 && (
@@ -295,6 +313,26 @@ export default function ResearchersContent() {
               <ResearcherCard key={r.id} researcher={r} />
             ))}
           </div>
+        )}
+
+        {hasAnyFilter && data && data.pages > 1 && (
+          <nav aria-label="Researcher result pages" className="flex items-center justify-center gap-3 pt-8">
+            <button
+              onClick={() => setPage((current) => Math.max(1, current - 1))}
+              disabled={page <= 1 || isLoading}
+              className="px-5 py-2 text-sm border border-[var(--line2)] rounded-sm disabled:opacity-40"
+            >
+              Previous
+            </button>
+            <span className="text-sm text-[var(--muted)]">Page {data.page} of {data.pages}</span>
+            <button
+              onClick={() => setPage((current) => current + 1)}
+              disabled={page >= data.pages || isLoading}
+              className="px-5 py-2 text-sm border border-[var(--line2)] rounded-sm disabled:opacity-40"
+            >
+              Next
+            </button>
+          </nav>
         )}
       </div>
     </div>

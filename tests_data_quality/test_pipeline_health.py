@@ -53,7 +53,7 @@ class TestExtractionWorkerLiveness:
             """SELECT COUNT(*) AS n
                FROM html_content hc JOIN researcher_urls ru ON ru.id = hc.url_id
                WHERE ru.is_active = TRUE
-                 AND hc.content IS NOT NULL AND hc.content != ''
+                 AND (NULLIF(hc.content, '') IS NOT NULL OR NULLIF(hc.raw_html, '') IS NOT NULL)
                  AND hc.content_hash IS NOT NULL
                  AND (hc.extracted_hash IS NULL OR hc.extracted_hash != hc.content_hash)"""
         )
@@ -61,7 +61,7 @@ class TestExtractionWorkerLiveness:
             return
         last_call = db.fetch_one(
             """SELECT TIMESTAMPDIFF(HOUR, MAX(called_at), NOW()) AS hours
-               FROM llm_usage WHERE call_type = 'publication_extraction'"""
+               FROM llm_usage WHERE call_type IN ('publication_extraction', 'diff_extraction')"""
         )
         assert last_call and last_call["hours"] is not None and last_call["hours"] <= 6, (
             f"{queue['n']} URLs are extractable but the last extraction LLM call was "

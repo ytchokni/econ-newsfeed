@@ -121,14 +121,27 @@ export function usePublication(id: number, fallbackData?: PublicationDetail) {
   );
 }
 
-export function useResearchersFiltered(filters?: ResearcherFilters, skip = false) {
+function buildResearchersUrl(filters?: ResearcherFilters, page?: number) {
   const params = new URLSearchParams({ per_page: "100" });
+  if (page !== undefined) params.set("page", String(page));
   if (filters?.institution) params.set("institution", filters.institution);
   if (filters?.field) params.set("field", filters.field);
   if (filters?.position) params.set("position", filters.position);
   if (filters?.search) params.set("search", filters.search);
   if (filters?.preset) params.set("preset", filters.preset);
-  const url = `/api/researchers?${params.toString()}`;
+  return `/api/researchers?${params.toString()}`;
+}
+
+export function useResearchersPage(filters?: ResearcherFilters, page = 1, skip = false) {
+  return useSWR<PaginatedResponse<Researcher>>(
+    skip ? null : buildResearchersUrl(filters, page),
+    fetchJson,
+  );
+}
+
+// Preserve the array response for consumers that only need the first page.
+export function useResearchersFiltered(filters?: ResearcherFilters, skip = false) {
+  const url = buildResearchersUrl(filters);
   return useSWR<Researcher[]>(skip ? null : url, async (u: string) => {
     const data = await fetchJson<{ items: Researcher[]; total: number }>(u);
     return data.items;

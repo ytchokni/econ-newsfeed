@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import threading
@@ -33,6 +34,9 @@ def get_client() -> OpenAI:
                 _client = OpenAI(
                     base_url=GOOGLE_AI_STUDIO_BASE_URL,
                     api_key=os.environ.get("GOOGLE_API_KEY"),
+                    # The worker owns backoff; SDK retries otherwise issue
+                    # additional requests before it can respect the quota.
+                    max_retries=0,
                 )
     return _client
 
@@ -104,19 +108,32 @@ def _parse_retry_after(error: RateLimitError) -> float:
     'error.details[].retryDelay' as a string like "57s". Falls back
     to 60s if parsing fails.
     """
+    delays = []
+    # Google may wrap errors in a list, or the SDK may already unwrap
+    # the 'error' object. Inspect RetryInfo in all supported shapes.
+    def visit(value):
+        if isinstance(value, list):
+            for child in value:
+                visit(child)
+        elif isinstance(value, dict):
+            delay = value.get("retryDelay")
+            if isinstance(delay, str) and re.fullmatch(r"\d+(?:\.\d+)?s", delay):
+                parsed = float(delay[:-1])
+                if math.isfinite(parsed):
+                    delays.append(parsed)
+            for child in value.values():
+                if isinstance(child, (dict, list)):
+                    visit(child)
+    visit(error.body)
     try:
-        body = error.body
-        if isinstance(body, dict):
-            details = body.get("error", {}).get("details", [])
-            for detail in details:
-                delay_str = detail.get("retryDelay", "")
-                if delay_str:
-                    match = re.search(r"(\d+(?:\.\d+)?)", delay_str)
-                    if match:
-                        return float(match.group(1))
-    except Exception:
+        header = error.response.headers.get("retry-after")
+        if isinstance(header, (str, int, float)):
+            delay = float(header)
+            if math.isfinite(delay) and delay >= 0:
+                delays.append(delay)
+    except (AttributeError, TypeError, ValueError):
         pass
-    return 60.0
+    return max(delays) if delays else 60.0
 
 
 def extract_json(
