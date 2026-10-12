@@ -166,6 +166,41 @@ git pull origin main && docker compose -f docker-compose.yml -f docker-compose.p
 
 ## Configuration
 
+### Cheap website mining
+
+`backend.discovery.mining` discovers researcher websites from changed cached HTML
+and eight curated economics department/job-market directories. It makes no search
+or LLM calls. A full-name personal page plus a matching publication title is
+required before automatically adding an existing researcher's HOME and verified
+research/publication/working-paper sections. Unknown people, conflicting owners,
+and uncertain pages remain in `site_mining_candidates` for review. Explicit
+`evidence.identity_hold` records block unresolved researcher identities, including
+later candidates. Do not bypass the transactional miner to bulk-approve holds.
+
+```bash
+poetry run python -m backend.main mine-urls --mode cached --limit 10  # read-only dry run; fetches candidates
+poetry run python -m backend.main mine-urls --apply                  # bounded persistent run
+poetry run python -m backend.main mine-urls --status                 # runs, counts, review evidence
+```
+
+Production uses the optional `site-miner` Compose service. Set
+`COMPOSE_PROFILES=mining` in the server `.env`, leave `SITE_MINING_ENABLED=false`,
+then run `docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build --no-deps site-miner`.
+This worker mines hourly without restarting the API; directory seeds refresh
+weekly, and profile tasks resume from the durable queue. It has a 512 MB / 0.5 CPU
+limit. Defaults per batch: 500 cached pages, 30 candidate verifications, 200 HTTP
+requests (including robots and redirects), and 600 seconds. `SITE_MINING_*` env
+settings in `.env.example` control those budgets. Raw-HTML hashes avoid repeating
+unchanged pages and detect href-only changes. The `econ_site_mining` MySQL lock
+also protects simultaneous CLI runs. Each URL bundle and its approval commit
+together; existing URLs are never reassigned or reactivated.
+
+Alternatively, `SITE_MINING_ENABLED=true` schedules the same bounded job inside
+the API hourly and after a scrape. Use one scheduling mechanism at a time. The
+paid Searlo discovery job remains separate and its configuration is unchanged.
+To pause the production worker, stop `site-miner`; its persisted queue resumes
+when it starts again. Mining adds URLs for the normal crawl/extraction pipeline.
+
 Required env vars: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `GOOGLE_API_KEY`, `SCRAPE_API_KEY`. LLM model selection via `LLM_MODEL` (default: `gemini-2.5-flash`). See `.env.example` for all options with defaults.
 
 `ADMIN_PASSWORD` enables the `/admin` dashboard (must also be set in `app/.env.local` for local dev and as a Vercel env var for production). Auth uses HMAC-signed cookies with 7-day expiry.

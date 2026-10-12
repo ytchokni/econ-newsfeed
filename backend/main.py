@@ -1,4 +1,5 @@
 import argparse
+import json
 import logging
 
 from backend.database import (
@@ -200,6 +201,14 @@ def main() -> None:
     newsletter_parser.add_argument('--max-emails', type=int, default=50, help='Max emails to process')
     discover_parser = subparsers.add_parser('discover-urls', help='Search for personal websites for researchers without URLs')
     discover_parser.add_argument('--limit', type=int, default=None, help='Max researchers to search (default: DISCOVERY_DAILY_LIMIT)')
+    mining_parser = subparsers.add_parser('mine-urls', help='Mine cached links and department directories without paid search')
+    mining_parser.add_argument('--apply', action='store_true', help='Persist queue/checkpoints and add verified crawl URLs (default: dry run)')
+    mining_parser.add_argument('--mode', choices=['all', 'cached', 'directories'], default='all')
+    mining_parser.add_argument('--source-limit', type=int, default=None)
+    mining_parser.add_argument('--limit', type=int, default=None, help='Maximum candidates to verify')
+    mining_parser.add_argument('--max-requests', type=int, default=None)
+    mining_parser.add_argument('--max-seconds', type=int, default=None)
+    mining_parser.add_argument('--status', action='store_true', help='Read recent runs, queue counts and held candidates; no network requests')
 
     review_parser = subparsers.add_parser('review', help='LLM quality review of feed events (GPT 5.4 Mini)')
     review_parser.add_argument('--limit', type=int, default=None, help='Max events to review')
@@ -234,6 +243,17 @@ def main() -> None:
         from backend.discovery.engine import run_discovery_batch
         result = run_discovery_batch(limit=args.limit)
         logging.info("Discovery results: %s", result)
+    elif args.command == 'mine-urls':
+        if args.status:
+            from backend.discovery.mining_store import MiningStore
+            with MiningStore(apply=False) as store:
+                result = store.status(limit=args.limit or 30)
+        else:
+            from backend.discovery.mining import run_site_mining_batch
+            result = run_site_mining_batch(apply=args.apply, mode=args.mode,
+                source_limit=args.source_limit, candidate_limit=args.limit,
+                max_requests=args.max_requests, max_seconds=args.max_seconds)
+        print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
     elif args.command == 'review':
         create_tables()
         from backend.enrichment.quality_review import review_events

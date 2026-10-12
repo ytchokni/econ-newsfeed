@@ -48,8 +48,45 @@ services:
       SEARLO_API_KEY: ${SEARLO_API_KEY:-}
       DISCOVERY_DAILY_LIMIT: ${DISCOVERY_DAILY_LIMIT:-1000}
       DISCOVERY_SEARCH_DELAY: ${DISCOVERY_SEARCH_DELAY:-18}
+      SITE_MINING_ENABLED: ${SITE_MINING_ENABLED:-false}
+      SITE_MINING_SOURCE_LIMIT: ${SITE_MINING_SOURCE_LIMIT:-500}
+      SITE_MINING_CANDIDATE_LIMIT: ${SITE_MINING_CANDIDATE_LIMIT:-30}
+      SITE_MINING_MAX_REQUESTS: ${SITE_MINING_MAX_REQUESTS:-200}
+      SITE_MINING_MAX_SECONDS: ${SITE_MINING_MAX_SECONDS:-600}
     ports:
       - "127.0.0.1:8000:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+
+  site-miner:
+    profiles: [mining]
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: [python, -m, backend.discovery.mining_worker]
+    restart: unless-stopped
+    mem_limit: 512m
+    cpus: 0.5
+    stop_grace_period: 30s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    environment:
+      DB_HOST: db
+      DB_USER: ${DB_USER:-econ_app}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_NAME: ${DB_NAME:-econ_newsfeed}
+      DB_POOL_SIZE: 2
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:?GOOGLE_API_KEY is required}
+      SCRAPE_API_KEY: ${SCRAPE_API_KEY:?SCRAPE_API_KEY is required}
+      CONTENT_MAX_CHARS: ${CONTENT_MAX_CHARS:?CONTENT_MAX_CHARS is required}
+      SITE_MINING_SOURCE_LIMIT: ${SITE_MINING_SOURCE_LIMIT:-500}
+      SITE_MINING_CANDIDATE_LIMIT: ${SITE_MINING_CANDIDATE_LIMIT:-30}
+      SITE_MINING_MAX_REQUESTS: ${SITE_MINING_MAX_REQUESTS:-200}
+      SITE_MINING_MAX_SECONDS: ${SITE_MINING_MAX_SECONDS:-600}
     depends_on:
       db:
         condition: service_healthy

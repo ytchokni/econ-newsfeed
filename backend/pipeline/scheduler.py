@@ -454,6 +454,15 @@ def run_scrape_job() -> None:
         logger.error("Paper merge failed: %s: %s", type(e).__name__, e)
     merge_s = time.time() - t0
     logger.info(f"Paper merge: {merge_s:.1f}s")
+    if os.environ.get("SITE_MINING_ENABLED", "false").lower() == "true" and _scheduler:
+        _scheduler.add_job(run_site_mining_job, 'date', id='site_mining_after_scrape',
+                           replace_existing=True, max_instances=1)
+
+
+def run_site_mining_job() -> dict:
+    """Cheap mining owns a separate DB lock and bounded, durable work queue."""
+    from backend.discovery.mining import run_site_mining_batch
+    return run_site_mining_batch(apply=True)
 
 
 def _start_lock_keepalive() -> None:
@@ -730,6 +739,12 @@ def start_scheduler() -> None:
     logger.info(f"Scheduler started: scraping every {SCRAPE_INTERVAL_HOURS} hours")
 
     _start_lock_keepalive()
+
+    if os.environ.get("SITE_MINING_ENABLED", "false").lower() == "true":
+        _scheduler.add_job(run_site_mining_job, 'interval', hours=1,
+                           id='site_mining', max_instances=1, coalesce=True,
+                           misfire_grace_time=600)
+        logger.info("Cheap site mining scheduled hourly; department directories refresh weekly")
 
     if SCRAPE_ON_STARTUP:
         logger.info("SCRAPE_ON_STARTUP is true, triggering immediate scrape in background")
