@@ -115,6 +115,69 @@ describe("PublicationCard with null fields", () => {
 });
 
 describe("PublicationCard status change events", () => {
+  it.each([null, "", "   "])("omits 'at' for a missing venue (%p), even when the year is known", (venue) => {
+    render(
+      <PublicationCard publication={{
+        ...basePublication,
+        venue,
+        year: "2026",
+        event_type: "status_change",
+        old_status: "working_paper",
+        new_status: "revise_and_resubmit",
+      }} />
+    );
+    expect(screen.queryByText("at")).not.toBeInTheDocument();
+    expect(screen.getByText("Revise & Resubmit")).toBeInTheDocument();
+    expect(screen.getByText("(2026)")).toBeInTheDocument();
+  });
+
+  it("uses the venue recorded for the event and shows the year separately", () => {
+    render(
+      <PublicationCard publication={{
+        ...basePublication,
+        venue: "Current Journal",
+        event_venue: "Event Journal",
+        year: "2026",
+        event_type: "status_change",
+        old_status: "working_paper",
+        new_status: "accepted",
+      }} />
+    );
+    expect(screen.getByText("at")).toBeInTheDocument();
+    expect(screen.getByText("Event Journal")).toBeInTheDocument();
+    expect(screen.getByText("(2026)")).toBeInTheDocument();
+    expect(screen.queryByText(/Current Journal/)).not.toBeInTheDocument();
+  });
+
+  it("does not substitute the current venue when the event explicitly had none", () => {
+    render(
+      <PublicationCard publication={{
+        ...basePublication,
+        venue: "Current Journal",
+        event_venue: null,
+        event_type: "status_change",
+        old_status: "working_paper",
+        new_status: "revise_and_resubmit",
+      }} />
+    );
+    expect(screen.queryByText("at")).not.toBeInTheDocument();
+    expect(screen.queryByText(/Current Journal/)).not.toBeInTheDocument();
+  });
+
+  it("falls back to the paper venue for older API responses", () => {
+    render(
+      <PublicationCard publication={{
+        ...basePublication,
+        venue: "Journal of Labor Economics",
+        event_type: "status_change",
+        old_status: "working_paper",
+        new_status: "accepted",
+      }} />
+    );
+    expect(screen.getByText("at")).toBeInTheDocument();
+    expect(screen.getByText("Journal of Labor Economics")).toBeInTheDocument();
+  });
+
   it("renders status change transition chips", () => {
     render(
       <PublicationCard

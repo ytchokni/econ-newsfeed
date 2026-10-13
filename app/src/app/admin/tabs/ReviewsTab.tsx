@@ -114,7 +114,7 @@ function ReviewRow({ item }: { item: ReviewItem }) {
 const PAGE_SIZE = 50;
 
 export default function ReviewsTab() {
-  const [correctionsOnly, setCorrectionsOnly] = useState(true);
+  const [correctionsOnly, setCorrectionsOnly] = useState(false);
   const [page, setPage] = useState(0);
 
   const { data, isLoading } = useReviews({
@@ -127,6 +127,9 @@ export default function ReviewsTab() {
 
   return (
     <div className="space-y-6">
+      <p className="text-sm text-zinc-400">
+        Automated reviews flag possible issues. Verify the source before applying a correction.
+      </p>
       {/* Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <StatCard label="Events Reviewed" value={stats?.total_reviewed ?? 0} />

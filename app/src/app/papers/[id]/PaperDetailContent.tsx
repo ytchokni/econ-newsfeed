@@ -4,7 +4,7 @@ import { useState, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { usePublication } from "@/lib/api";
-import { statusPillConfig, formatAuthor, formatDate } from "@/lib/publication-utils";
+import { statusPillConfig, formatAuthor, formatDate, safeHttpUrl } from "@/lib/publication-utils";
 import ErrorMessage from "@/components/ErrorMessage";
 import type { FeedEvent, PaperSnapshot, PublicationDetail, PublicationStatus } from "@/lib/types";
 
@@ -47,6 +47,7 @@ function TimelineEntry({
   index: number;
 }) {
   const [diffOpen, setDiffOpen] = useState(false);
+  const sourceUrl = safeHttpUrl(event.event_source_url);
 
   const label =
     event.event_type === "new_paper"
@@ -72,6 +73,11 @@ function TimelineEntry({
       )}
       <p className="text-sm font-medium text-[var(--text-primary)]">{label}</p>
       <p className="text-xs text-[var(--text-muted)]">{formatDate(event.created_at)}</p>
+      {sourceUrl && (
+        <a href={sourceUrl} target="_blank" rel="noopener noreferrer" className="text-xs text-[var(--link)] hover:underline">
+          Source for this update
+        </a>
+      )}
       {hasSnapshotDiff && (
         <>
           <button
@@ -129,6 +135,7 @@ export default function PaperDetailContent({ id, initialData }: { id: number; in
 
   const authors = publication.authors.map(formatAuthor);
   const venueYear = [publication.venue, publication.year].filter(Boolean).join(", ");
+  const sourceUrl = safeHttpUrl(publication.source_url);
 
   const events = publication.feed_events;
 
@@ -225,6 +232,16 @@ export default function PaperDetailContent({ id, initialData }: { id: number; in
             </svg>
           </a>
         ))}
+        {sourceUrl && (
+          <a
+            href={sourceUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-[10px] font-bold uppercase tracking-wider rounded px-2.5 py-0.5 bg-[#faf8f4] text-[var(--link)] hover:underline"
+          >
+            Source page
+          </a>
+        )}
       </div>
 
       {publication.coauthors && publication.coauthors.length > 0 && (

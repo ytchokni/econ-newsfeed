@@ -52,6 +52,8 @@ export interface Publication {
   old_status?: PublicationStatus | null;
   new_status?: PublicationStatus | null;
   event_date?: string;
+  event_venue?: string | null;
+  event_source_url?: string | null;
 }
 
 export interface PaginatedResponse<T> {
@@ -100,6 +102,8 @@ export interface FeedEvent {
   old_status: PublicationStatus | null;
   new_status: PublicationStatus | null;
   created_at: string;
+  event_venue?: string | null;
+  event_source_url?: string | null;
 }
 
 export interface PaperSnapshot {

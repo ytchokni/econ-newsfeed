@@ -17,6 +17,9 @@ export default function PublicationCard({
 
   const isStatusChange = publication.event_type === "status_change";
   const venueYear = [publication.venue, publication.year].filter(Boolean).join(", ");
+  const eventVenue = (publication.event_venue !== undefined
+    ? publication.event_venue
+    : publication.venue)?.trim();
 
   const oldLabel = publication.old_status
     ? statusPillConfig[publication.old_status]?.label ?? publication.old_status
@@ -109,8 +112,13 @@ export default function PublicationCard({
           >
             {newLabel}
           </span>
-          <span>at</span>
-          <span className="italic text-[var(--ink2)] font-medium">{venueYear}</span>
+          {eventVenue && (
+            <>
+              <span>at</span>
+              <span className="italic text-[var(--ink2)] font-medium">{eventVenue}</span>
+            </>
+          )}
+          {publication.year && <span>({publication.year})</span>}
         </p>
       )}
 

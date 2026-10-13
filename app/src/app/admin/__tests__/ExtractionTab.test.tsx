@@ -43,10 +43,10 @@ describe("ExtractionTab", () => {
     expect(screen.queryByText(/stalled/i)).not.toBeInTheDocument();
   });
 
-  it("shows stalled warning when enabled, queue non-empty, no call in 30+ min", () => {
+  it("shows stalled warning despite recent calls when no extraction completed in 30+ min", () => {
     render(
       <ExtractionTab
-        data={fixture({ last_call_at: "2020-01-01T00:00:00Z" })}
+        data={fixture({ last_extracted_at: "2020-01-01T00:00:00Z" })}
       />
     );
     expect(screen.getByText(/stalled/i)).toBeInTheDocument();

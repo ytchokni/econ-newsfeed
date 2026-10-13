@@ -58,8 +58,8 @@ function filtersToParams(
   return params;
 }
 
-function toISODate(d: Date): string {
-  return d.toISOString().slice(0, 10);
+function toLocalDate(d: Date): string {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 }
 
 function quarterStart(d: Date): Date {
@@ -106,12 +106,12 @@ function datePresetToSince(key: DatePresetKey): string {
     case "7d": {
       const d = new Date(now);
       d.setDate(d.getDate() - 7);
-      return toISODate(d);
+      return toLocalDate(d);
     }
     case "month":
-      return toISODate(new Date(now.getFullYear(), now.getMonth(), 1));
+      return toLocalDate(new Date(now.getFullYear(), now.getMonth(), 1));
     case "quarter":
-      return toISODate(quarterStart(now));
+      return toLocalDate(quarterStart(now));
   }
 }
 

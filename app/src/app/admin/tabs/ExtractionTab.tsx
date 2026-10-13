@@ -25,8 +25,8 @@ function formatRelativeTime(isoDate: string): string {
 
 function isStalled(data: Props["data"]): boolean {
   if (!data.worker_enabled || data.queue.total === 0) return false;
-  if (!data.last_call_at) return true;
-  return Date.now() - new Date(data.last_call_at).getTime() > STALL_THRESHOLD_MS;
+  if (!data.last_extracted_at) return true;
+  return Date.now() - new Date(data.last_extracted_at).getTime() > STALL_THRESHOLD_MS;
 }
 
 export default function ExtractionTab({ data }: Props) {
@@ -48,7 +48,7 @@ export default function ExtractionTab({ data }: Props) {
         </span>
         {stalled && (
           <span className="inline-flex items-center px-2 py-0.5 text-xs font-medium rounded border bg-red-900/50 text-red-400 border-red-800">
-            Possibly stalled — no LLM call in 30+ min
+            Possibly stalled — no successful extraction in 30+ min
           </span>
         )}
         <span className="text-xs text-zinc-500">
@@ -93,7 +93,7 @@ export default function ExtractionTab({ data }: Props) {
             <tr className="text-xs text-zinc-500 border-b border-[#2a2d3a]">
               <th className="text-left py-2 font-medium">Window</th>
               <th className="text-right py-2 font-medium">Completed</th>
-              <th className="text-right py-2 font-medium">Attempts</th>
+              <th className="text-right py-2 font-medium">Recorded responses</th>
             </tr>
           </thead>
           <tbody>
@@ -113,7 +113,8 @@ export default function ExtractionTab({ data }: Props) {
           </tbody>
         </table>
         <p className="text-xs text-zinc-500 mt-2">
-          Attempts − completed ≈ failed/retried calls (quota exhaustion shows up here).
+          Recorded responses include invalid output, but exclude quota errors and timeouts.
+          Completed URLs measure successful processing.
         </p>
       </div>
 

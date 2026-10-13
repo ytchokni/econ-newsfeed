@@ -115,7 +115,30 @@ beforeEach(() => {
   global.fetch = jest.fn();
 });
 
+afterEach(() => {
+  jest.useRealTimers();
+});
+
 describe("NewsfeedContent", () => {
+  it.each([
+    ["This month", "2026-10-01"],
+    ["This quarter", "2026-10-01"],
+    ["Last 7 days", "2026-10-05"],
+  ])("uses the local calendar date for %s", async (label, expectedSince) => {
+    // Local midnight is the previous UTC day in Europe/Berlin.
+    jest.useFakeTimers().setSystemTime(new Date(2026, 9, 12, 0, 30));
+    mockFetch(page1);
+    renderWithSWR(<NewsfeedContent />);
+    await screen.findByText("Immigration and Wages");
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+    await user.click(screen.getByRole("button", { name: "Filters" }));
+    await user.click(screen.getByRole("button", { name: label }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining(`since=${expectedSince}`));
+    });
+  });
+
   it("renders publications grouped by discovery date", async () => {
     mockFetch(page1);
 

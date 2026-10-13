@@ -60,6 +60,16 @@ export function formatAuthor(author: { id: number; first_name: string; last_name
   return { display: name, affiliation: author.affiliation ?? null, id: author.id };
 }
 
+export function safeHttpUrl(value: string | null | undefined): string | null {
+  if (!value) return null;
+  try {
+    const url = new URL(value);
+    return url.protocol === "http:" || url.protocol === "https:" ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
 export function formatDate(iso: string): string {
   const d = new Date(iso);
   const now = new Date();

@@ -9,7 +9,7 @@ jest.mock("next/navigation", () => ({
 }));
 
 // Mock the usePublication hook
-const mockPublication: PublicationDetail = {
+const basePublication: PublicationDetail = {
   id: 1,
   title: "Trade and Wages: Evidence from Germany",
   authors: [
@@ -45,6 +45,12 @@ const mockPublication: PublicationDetail = {
   title_hash: "abc123def456",
   openalex_id: "W12345",
 };
+
+let mockPublication = basePublication;
+
+beforeEach(() => {
+  mockPublication = { ...basePublication };
+});
 
 jest.mock("@/lib/api", () => ({
   usePublication: () => ({
@@ -83,10 +89,55 @@ describe("PaperDetailContent", () => {
     expect(doiLink).toHaveAttribute("href", "https://doi.org/10.1257/aer.20181234");
   });
 
+  it("provides a public source link alongside existing paper links", () => {
+    render(<PaperDetailContent id={1} />);
+    const sourceLink = screen.getByRole("link", { name: "Source page" });
+    expect(sourceLink).toHaveAttribute("href", "https://example.com/pub");
+    expect(sourceLink).toHaveAttribute("target", "_blank");
+    expect(sourceLink).toHaveAttribute("rel", "noopener noreferrer");
+    expect(screen.getByRole("link", { name: "DOI" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "Draft" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: "SSRN" })).toBeInTheDocument();
+  });
+
+  it("provides the source page when no direct paper links are available", () => {
+    mockPublication = { ...basePublication, doi: null, draft_url: null, draft_available: false, links: [] };
+    render(<PaperDetailContent id={1} />);
+    expect(screen.getByRole("link", { name: "Source page" })).toHaveAttribute("href", "https://example.com/pub");
+  });
+
+  it.each([null, "javascript:alert(1)", "data:text/html,test", "ftp://example.com/pub", "/relative", "https://"])(
+    "does not link to a missing, unsafe or malformed source (%p)",
+    (source_url) => {
+      mockPublication = { ...basePublication, source_url };
+      render(<PaperDetailContent id={1} />);
+      expect(screen.queryByRole("link", { name: "Source page" })).not.toBeInTheDocument();
+    }
+  );
+
   it("renders history timeline with feed events", () => {
     render(<PaperDetailContent id={1} />);
     expect(screen.getByText(/Discovered/)).toBeInTheDocument();
     expect(screen.getByText(/Status changed/)).toBeInTheDocument();
+  });
+
+  it("links a historical update to its own source", () => {
+    mockPublication = {
+      ...basePublication,
+      feed_events: [{ ...basePublication.feed_events[0], event_source_url: "https://example.com/older-source" }],
+    };
+    render(<PaperDetailContent id={1} />);
+    expect(screen.getByRole("link", { name: "Source for this update" })).toHaveAttribute("href", "https://example.com/older-source");
+    expect(screen.getByRole("link", { name: "Source page" })).toHaveAttribute("href", "https://example.com/pub");
+  });
+
+  it("does not link an update to a non-web source", () => {
+    mockPublication = {
+      ...basePublication,
+      feed_events: [{ ...basePublication.feed_events[0], event_source_url: "javascript:alert(1)" }],
+    };
+    render(<PaperDetailContent id={1} />);
+    expect(screen.queryByRole("link", { name: "Source for this update" })).not.toBeInTheDocument();
   });
 
   it("renders back link", () => {
