@@ -95,6 +95,18 @@ def test_editorial_words_in_paper_title_are_not_decision_evidence():
     assert pub['status'] is None
 
 
+def test_explicit_rr_with_intervening_byline_preserves_undisclosed_journal():
+    title = 'A Validation Paper on Household Saving'
+    entry = f'{title}\nAuthors: Jane Example\nR&R. Journal not disclosed.'
+    pub = {'title': title, 'authors': [['Jane', 'Example']],
+           'status': 'revise_and_resubmit', 'venue': None,
+           'status_evidence': entry,
+           'authors_evidence': f'{title}\nAuthors: Jane Example'}
+    verify_publication_evidence(pub, f'Working Papers\n{entry}')
+    assert pub['status'] == 'revise_and_resubmit'
+    assert pub['venue'] is None
+
+
 def test_series_is_not_editorial_venue_but_explicit_decision_is_preserved():
     text = 'Trade and Growth. R&R. NBER Working Paper 1234'
     pub = {'title': 'Trade and Growth', 'status': 'revise_and_resubmit',
