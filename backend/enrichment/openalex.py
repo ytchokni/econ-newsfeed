@@ -7,6 +7,7 @@ from datetime import date
 import requests
 
 from backend.database import execute_query, fetch_all, get_unenriched_papers, update_openalex_data
+from backend.enrichment.doi_resolver import normalize_doi
 
 logger = logging.getLogger(__name__)
 
@@ -61,11 +62,16 @@ def reconstruct_abstract(inverted_index: dict) -> str:
 
 def _get_with_retry(session, url, params):
     """GET with one retry on 429, respecting Retry-After header."""
+    _increment_budget()
     resp = session.get(url, params=params, timeout=10)
-    if resp.status_code == 429:
-        retry_after = int(resp.headers.get("Retry-After", "5"))
+    if resp.status_code == 429 and _check_budget():
+        try:
+            retry_after = min(60, max(0, int(resp.headers.get("Retry-After", "5"))))
+        except (TypeError, ValueError):
+            retry_after = 5
         logger.info("OpenAlex rate limited, waiting %ds", retry_after)
         time.sleep(retry_after)
+        _increment_budget()
         resp = session.get(url, params=params, timeout=10)
     return resp
 
@@ -87,7 +93,6 @@ def search_work(title: str, author_name: str) -> dict | None:
     try:
         resp = _get_with_retry(session, f"{OPENALEX_BASE_URL}/works", params)
         resp.raise_for_status()
-        _increment_budget()
         results = resp.json().get("results", [])
     except (requests.RequestException, ValueError) as e:
         logger.warning("OpenAlex search failed for '%s': %s", title[:50], e)
@@ -116,6 +121,9 @@ def lookup_by_doi(doi: str) -> dict | None:
     Returns a dict with keys: doi, openalex_id, coauthors, abstract, title
     or None if not found. Does not consume the daily search budget.
     """
+    doi = normalize_doi(doi)
+    if not doi:
+        return None
     session = _get_session()
     try:
         resp = session.get(f"{OPENALEX_BASE_URL}/works/doi:{doi}", timeout=10)
@@ -285,11 +293,18 @@ def enrich_new_publications(limit=50):
     logger.info("Enriching %d papers via OpenAlex (budget: %d/%d used today)",
                 len(papers), _daily_counter["count"], DAILY_BUDGET)
     enriched = 0
+    attempted = 0
     for paper in papers:
         doi = paper.get("link_doi")
-        if not doi and not _check_budget():
+        if not _check_budget():
             logger.info("OpenAlex daily budget reached, stopping enrichment")
             break
+        # Persist before the request so poison rows also yield after process failures.
+        execute_query(
+            "UPDATE papers SET enrichment_attempted_at = UTC_TIMESTAMP() WHERE id = %s",
+            (paper["id"],),
+        )
+        attempted += 1
         success = enrich_publication(
             paper_id=paper["id"],
             title=paper["title"],
@@ -302,7 +317,7 @@ def enrich_new_publications(limit=50):
         if not doi:
             time.sleep(0.5)  # Only rate-limit title searches
 
-    logger.info("OpenAlex enrichment: %d/%d papers matched", enriched, len(papers))
+    logger.info("OpenAlex enrichment: %d/%d papers matched", enriched, attempted)
     return enriched
 
 
@@ -340,8 +355,6 @@ def fetch_topics_batch(openalex_ids: list[str]) -> dict[str, list[dict]]:
         try:
             resp = _get_with_retry(session, f"{OPENALEX_BASE_URL}/works", params)
             resp.raise_for_status()
-            _increment_budget()
-
             for work in resp.json().get("results", []):
                 oa_id = _strip_prefix(work.get("id"), _OPENALEX_PREFIX)
                 topics = _parse_topics(work)

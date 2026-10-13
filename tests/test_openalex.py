@@ -308,6 +308,7 @@ class TestEnrichNewPublications:
             patch("backend.enrichment.openalex.get_unenriched_papers", return_value=unenriched),
             patch("backend.enrichment.openalex.search_work", return_value=openalex_result),
             patch("backend.enrichment.openalex.update_openalex_data"),
+            patch("backend.enrichment.openalex.execute_query"),
             patch("backend.enrichment.openalex._backfill_researcher_openalex_ids"),
             patch("backend.enrichment.openalex.time.sleep"),  # skip rate-limit delay in tests
         ):
@@ -322,6 +323,58 @@ class TestEnrichNewPublications:
             count = enrich_new_publications()
 
         assert count == 0
+
+    def test_failed_match_is_marked_attempted_for_queue_cooldown(self):
+        paper = {"id": 13, "title": "No match", "author_name": "Jane Doe"}
+        with (
+            patch("backend.enrichment.openalex._check_budget", return_value=True),
+            patch("backend.enrichment.openalex.get_unenriched_papers", return_value=[paper]),
+            patch("backend.enrichment.openalex.enrich_publication", return_value=False),
+            patch("backend.enrichment.openalex.execute_query") as mark,
+            patch("backend.enrichment.openalex.time.sleep"),
+        ):
+            from backend.enrichment.openalex import enrich_new_publications
+            assert enrich_new_publications() == 0
+        assert 'enrichment_attempted_at' in mark.call_args.args[0]
+        assert mark.call_args.args[1] == (13,)
+
+    def test_budget_exhaustion_does_not_mark_unattempted_papers(self):
+        with (
+            patch("backend.enrichment.openalex._check_budget", return_value=False),
+            patch("backend.enrichment.openalex.execute_query") as mark,
+        ):
+            from backend.enrichment.openalex import enrich_new_publications
+            assert enrich_new_publications() == 0
+        mark.assert_not_called()
+
+
+def test_failed_search_consumes_budget():
+    import requests
+    from backend.enrichment import openalex
+    session = MagicMock()
+    session.get.side_effect = requests.RequestException("bad search")
+    with (
+        patch.object(openalex, '_get_session', return_value=session),
+        patch.object(openalex, '_check_budget', return_value=True),
+        patch.object(openalex, '_increment_budget') as increment,
+    ):
+        assert openalex.search_work('Bad query', 'Jane Doe') is None
+    increment.assert_called_once()
+
+
+def test_rate_limit_retry_cannot_exceed_remaining_budget():
+    from backend.enrichment import openalex
+    session = MagicMock()
+    session.get.return_value.status_code = 429
+    with (
+        patch.object(openalex, '_check_budget', return_value=False),
+        patch.object(openalex, '_increment_budget') as increment,
+        patch.object(openalex.time, 'sleep') as sleep,
+    ):
+        assert openalex._get_with_retry(session, 'https://example.com', {}).status_code == 429
+    session.get.assert_called_once()
+    increment.assert_called_once()
+    sleep.assert_not_called()
 
 
 SAMPLE_OPENALEX_WORK = {

@@ -5,7 +5,8 @@ Guards: issue #148 (lowercase titles), issue #146 (NULL years), PR #153
 """
 import re
 
-from conftest import STATUS_ORDER, fmt_violations, mojibake_condition
+from conftest import fmt_violations, mojibake_condition
+from backend.publication_rules import is_working_paper_series
 
 
 class TestTitleQuality:
@@ -98,30 +99,23 @@ class TestYearQuality:
         assert not rows, "papers with implausible years:\n" + fmt_violations(rows)
 
 
-class TestStatusDenormalizationIntegrity:
-    """papers.status must never be outranked by any of its snapshots (PR #153).
+class TestStatusVenueIntegrity:
+    """Editorial decisions cannot be attributed to a working-paper series.
 
-    append_paper_snapshot keeps the highest-ranked status on the papers table;
-    a paper whose snapshot outranks its current status means a regression was
-    applied (pre-#153 damage, or writes bypassing the guard).
+    Raw snapshots may contain errors subsequently corrected on the canonical paper.
     """
 
-    def test_paper_status_not_outranked_by_snapshots(self, db):
+    def test_editorial_status_has_no_series_only_venue(self, db):
         rows = db.fetch_all(
-            f"""
-            SELECT p.id, p.status AS paper_status,
-                   MAX(FIELD(ps.status, {STATUS_ORDER})) AS max_snapshot_rank,
-                   FIELD(p.status, {STATUS_ORDER}) AS paper_rank
-            FROM papers p
-            JOIN paper_snapshots ps ON ps.paper_id = p.id
-            WHERE ps.status IS NOT NULL AND p.status IS NOT NULL
-            GROUP BY p.id, p.status
-            HAVING paper_rank < max_snapshot_rank
-            LIMIT 50
+            """
+            SELECT id, status, venue FROM papers
+            WHERE status IN ('reject_and_resubmit', 'revise_and_resubmit', 'accepted')
+              AND venue IS NOT NULL
             """
         )
-        assert not rows, (
-            "papers whose status regressed below a snapshot status (PR #153):\n" + fmt_violations(rows)
+        bad = [row for row in rows if is_working_paper_series(row['venue'])]
+        assert not bad, (
+            "editorial status attributed to working-paper series:\n" + fmt_violations(bad)
         )
 
 

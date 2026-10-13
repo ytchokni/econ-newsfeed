@@ -7,6 +7,8 @@ import json
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+import pytest
+
 from backend.enrichment import quality_review, review_batch
 
 
@@ -229,3 +231,133 @@ def test_completed_batch_does_not_save_review_for_deleted_event(monkeypatch):
 
     assert processed == 1
     save_review.assert_not_called()
+
+
+def _high_severity_review():
+    return {'issues': [
+        {'type': 'MISCLASSIFICATION', 'severity': 'high', 'correction': 'published'},
+        {'type': 'WRONG_VENUE', 'severity': 'high', 'correction': 'none'},
+        {'type': 'NOT_NEW', 'severity': 'high', 'correction': 'hide'},
+    ]}
+
+
+def _forbid_source_mutations(monkeypatch):
+    def forbidden(*args, **kwargs):
+        raise AssertionError('Automatic model review must not mutate papers or feed events')
+    monkeypatch.setattr(quality_review, 'apply_corrections', forbidden)
+    monkeypatch.setattr(quality_review, '_execute_guarded_update', forbidden)
+    monkeypatch.setattr(quality_review, 'execute_query', forbidden)
+
+
+def test_realtime_review_saves_high_severity_findings_without_applying_them(monkeypatch):
+    _forbid_source_mutations(monkeypatch)
+    review = _high_severity_review()
+    monkeypatch.setattr(quality_review, 'get_unreviewed_events', lambda **kwargs: [_event()])
+    monkeypatch.setattr(quality_review, '_call_model', lambda prompt: review)
+    save_review = MagicMock()
+    monkeypatch.setattr(quality_review, 'save_review', save_review)
+
+    summary = quality_review.review_events(limit=1)
+
+    assert summary == {'reviewed': 1, 'issues': 3, 'corrections': 0, 'dry_run': False}
+    save_review.assert_called_once_with(42, review, None)
+
+
+@pytest.mark.parametrize('fingerprint', [None, 'stale', 'current'])
+def test_batch_review_saves_high_severity_findings_without_applying_them(monkeypatch, fingerprint):
+    _forbid_source_mutations(monkeypatch)
+    event = _event(status='working_paper', venue='Verified series')
+    if fingerprint == 'current':
+        fingerprint = quality_review.build_event_fingerprint(event)
+    custom_id = f'evt_42_{fingerprint}' if fingerprint else 'evt_42'
+    review = _high_severity_review()
+    result = {
+        'custom_id': custom_id,
+        'response': {'status_code': 200, 'body': {
+            'choices': [{'message': {'content': json.dumps(review)}}],
+        }},
+    }
+    client = MagicMock()
+    client.files.content.return_value = SimpleNamespace(text=json.dumps(result))
+    batch = SimpleNamespace(id='batch_1', output_file_id='file_1')
+    monkeypatch.setattr(review_batch, '_load_events_for_batch', lambda lines: ([result], {42: event}))
+    save_review = MagicMock()
+    monkeypatch.setattr(review_batch, 'save_review', save_review)
+    queries = MagicMock()
+    monkeypatch.setattr(review_batch, 'execute_query', queries)
+
+    assert review_batch._process_completed_batch(client, batch, db_id=1) == 1
+
+    save_review.assert_called_once_with(42, review, None)
+    assert queries.call_count == 1
+    assert 'UPDATE review_batch_jobs' in queries.call_args.args[0]
+
+
+def test_reviewer_client_uses_bounded_requests_without_hidden_retries(monkeypatch):
+    constructor = MagicMock()
+    monkeypatch.setattr('openai.OpenAI', constructor)
+    monkeypatch.setattr(quality_review, '_openai_client', None)
+    quality_review._get_openai_client()
+    constructor.assert_called_once_with(timeout=60.0, max_retries=0)
+
+
+def test_realtime_review_stops_when_all_model_calls_fail(monkeypatch):
+    events = MagicMock(return_value=[_event(), _event(event_id=43)])
+    model = MagicMock(return_value=None)
+    save_review = MagicMock()
+    monkeypatch.setattr(quality_review, 'get_unreviewed_events', events)
+    monkeypatch.setattr(quality_review, '_call_model', model)
+    monkeypatch.setattr(quality_review, 'save_review', save_review)
+
+    summary = quality_review.review_events(limit=100)
+
+    assert summary['reviewed'] == 0
+    assert events.call_count == 1
+    assert model.call_count == 2
+    save_review.assert_not_called()
+
+
+def test_realtime_dry_run_previews_one_batch_without_persisting_or_repeating(monkeypatch):
+    _forbid_source_mutations(monkeypatch)
+    events = MagicMock(return_value=[_event()])
+    model = MagicMock(return_value=_high_severity_review())
+    save_review = MagicMock()
+    monkeypatch.setattr(quality_review, 'get_unreviewed_events', events)
+    monkeypatch.setattr(quality_review, '_call_model', model)
+    monkeypatch.setattr(quality_review, 'save_review', save_review)
+
+    summary = quality_review.review_events(batch_size=1, limit=10, dry_run=True)
+
+    assert summary == {'reviewed': 1, 'issues': 3, 'corrections': 0, 'dry_run': True}
+    assert events.call_count == model.call_count == 1
+    save_review.assert_not_called()
+
+
+def test_advisory_upsert_preserves_previously_applied_corrections(monkeypatch):
+    import re
+    import sqlite3
+    conn = sqlite3.connect(':memory:')
+    conn.execute('''CREATE TABLE feed_event_reviews (
+        feed_event_id INTEGER PRIMARY KEY, model TEXT, issues TEXT,
+        corrections_applied TEXT, reviewed_at TEXT)''')
+
+    def execute(sql, params):
+        sql = sql.replace('%s', '?').replace(
+            'ON DUPLICATE KEY UPDATE', 'ON CONFLICT(feed_event_id) DO UPDATE SET')
+        sql = re.sub(r'VALUES\((\w+)\)', r'excluded.\1', sql)
+        conn.execute(sql, tuple(value.isoformat() if hasattr(value, 'isoformat') else value
+                                for value in params))
+
+    monkeypatch.setattr(quality_review, 'execute_query', execute)
+    applied = [{'type': 'update_venue', 'old_value': 'wrong', 'new_value': 'verified'}]
+    try:
+        quality_review.save_review(42, {'issues': []}, applied)
+        advisory = _high_severity_review()
+        quality_review.save_review(42, advisory, None)
+        quality_review.save_review(43, advisory, None)
+        rows = conn.execute('SELECT issues, corrections_applied FROM feed_event_reviews ORDER BY feed_event_id').fetchall()
+        assert json.loads(rows[0][0]) == advisory['issues']
+        assert json.loads(rows[0][1]) == applied
+        assert rows[1][1] is None
+    finally:
+        conn.close()

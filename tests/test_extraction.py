@@ -174,6 +174,57 @@ class TestExtractOneUrl:
         mocks["try_extract"].assert_called_once()
         assert mocks["try_extract"].call_args[0][0] == "from raw html"
 
+    def test_stored_raw_html_is_cleaned_even_when_cached_text_exists(self):
+        from backend.pipeline.extraction import extract_one_url
+        payload = {"content": "old text including footer", "raw_html": "<main>paper</main>",
+                   "content_hash": "h2", "timestamp": None, "extracted_at": "2026-01-01"}
+        patches = _patches(payload=payload, pubs=[])
+        mocks = {k: p.start() for k, p in patches.items()}
+        try:
+            outcome = extract_one_url(_row())
+        finally:
+            for p in patches.values():
+                p.stop()
+        assert outcome.ok
+        mocks["get_raw_html"].assert_not_called()  # raw HTML and queue hash came from one read
+        mocks["try_extract"].assert_called_once_with(
+            "from raw html", "https://example.com/pubs", scrape_log_id=None)
+        mocks["mark"].assert_called_once_with(1, "h2")
+
+    def test_cleaning_only_change_does_not_call_llm_or_generate_events(self):
+        from backend.pipeline.extraction import extract_one_url
+        patches = _patches(pubs=[])
+        patches['prev_text'] = patch(
+            'backend.pipeline.extraction.HTMLFetcher.get_previous_text', return_value='page   text')
+        patches['try_changes'] = patch('backend.pipeline.extraction.Publication.try_extract_changes')
+        mocks = {k: p.start() for k, p in patches.items()}
+        try:
+            outcome = extract_one_url(_row())
+        finally:
+            for p in patches.values():
+                p.stop()
+        assert outcome.ok
+        for key in ('try_extract', 'try_changes', 'persist'):
+            mocks[key].assert_not_called()
+        mocks['mark'].assert_called_once_with(1, 'h1')
+
+    def test_page_with_only_removed_boilerplate_is_completed_without_llm(self):
+        from backend.pipeline.extraction import extract_one_url
+        payload = {"content": "footer publication links", "raw_html": "<footer>links</footer>",
+                   "content_hash": "h2", "timestamp": None, "extracted_at": "2026-01-01"}
+        patches = _patches(payload=payload, pubs=[])
+        patches['extract_text'] = patch(
+            'backend.pipeline.extraction.HTMLFetcher.extract_text_content', return_value='')
+        mocks = {k: p.start() for k, p in patches.items()}
+        try:
+            outcome = extract_one_url(_row())
+        finally:
+            for p in patches.values():
+                p.stop()
+        assert outcome.ok
+        mocks['try_extract'].assert_not_called()
+        mocks['mark'].assert_called_once_with(1, 'h2')
+
     def test_seed_flag_passed_through(self):
         from backend.pipeline.extraction import extract_one_url
         payload = {

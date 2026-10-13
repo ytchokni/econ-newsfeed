@@ -47,8 +47,8 @@ class TestScrapePipelineFreshness:
 class TestExtractionWorkerLiveness:
     def test_worker_active_when_queue_nonempty(self, db):
         """If extractable work exists (pending hash + stored content), the
-        worker must have made an LLM call within the last 6 hours — silence
-        here is how the 2026-06-10 stall went unnoticed."""
+        worker must have successfully processed a URL within 6 hours.
+        Invalid JSON and failed LLM calls are not pipeline progress."""
         queue = db.fetch_one(
             """SELECT COUNT(*) AS n
                FROM html_content hc JOIN researcher_urls ru ON ru.id = hc.url_id
@@ -59,13 +59,12 @@ class TestExtractionWorkerLiveness:
         )
         if not queue or queue["n"] == 0:
             return
-        last_call = db.fetch_one(
-            """SELECT TIMESTAMPDIFF(HOUR, MAX(called_at), NOW()) AS hours
-               FROM llm_usage WHERE call_type IN ('publication_extraction', 'diff_extraction')"""
+        last_success = db.fetch_one(
+            """SELECT TIMESTAMPDIFF(HOUR, MAX(extracted_at), NOW()) AS hours
+               FROM html_content"""
         )
-        assert last_call and last_call["hours"] is not None and last_call["hours"] <= 6, (
-            f"{queue['n']} URLs are extractable but the last extraction LLM call was "
-            f"{last_call['hours'] if last_call else 'never'}h ago — worker stalled?"
+        assert last_success and last_success["hours"] is not None and last_success["hours"] <= 6, (
+            f"{queue['n']} URLs are extractable but the last successful extraction was "
+            f"{last_success['hours'] if last_success else 'never'}h ago — worker stalled?"
         )
-
 

@@ -83,18 +83,21 @@ def get_unenriched_papers(limit=50):
         """
         SELECT p.id, p.title, p.abstract, p.status,
                MIN(CONCAT(r.first_name, ' ', r.last_name)) AS author_name,
-               MAX(pl.doi) AS link_doi
+               COALESCE(p.doi, MAX(pl.doi)) AS link_doi
         FROM papers p
         JOIN authorship a ON a.publication_id = p.id
         JOIN researchers r ON r.id = a.researcher_id
         LEFT JOIN paper_links pl ON pl.paper_id = p.id AND pl.doi IS NOT NULL
         WHERE p.openalex_id IS NULL
+          AND (p.enrichment_attempted_at IS NULL
+               OR p.enrichment_attempted_at < UTC_TIMESTAMP() - INTERVAL 7 DAY)
           AND (
             EXISTS (SELECT 1 FROM paper_links pl2 WHERE pl2.paper_id = p.id)
+            OR p.doi IS NOT NULL
             OR p.status = 'published'
           )
-        GROUP BY p.id, p.title, p.abstract, p.status
-        ORDER BY link_doi IS NOT NULL DESC, p.id
+        GROUP BY p.id, p.title, p.abstract, p.status, p.doi, p.enrichment_attempted_at
+        ORDER BY p.enrichment_attempted_at, link_doi IS NOT NULL DESC, p.id
         LIMIT %s
         """,
         (limit,),
@@ -219,8 +222,11 @@ def get_paper_history(paper_id: int) -> list[dict]:
     Returns list of dicts with keys: id, event_type, old_status, new_status, created_at.
     """
     return fetch_all(
-        "SELECT id, event_type, old_status, new_status, created_at "
-        "FROM feed_events WHERE paper_id = %s ORDER BY created_at DESC",
+        "SELECT fe.id, fe.event_type, fe.old_status, fe.new_status, fe.created_at, "
+        "CASE WHEN fe.event_metadata_captured THEN fe.event_venue ELSE p.venue END AS event_venue, "
+        "CASE WHEN fe.event_metadata_captured THEN fe.event_source_url ELSE p.source_url END AS event_source_url "
+        "FROM feed_events fe JOIN papers p ON p.id = fe.paper_id "
+        "WHERE fe.paper_id = %s ORDER BY fe.created_at DESC",
         (paper_id,),
     )
 
@@ -424,6 +430,8 @@ def search_feed_events(
         f"""
         SELECT fe.id AS event_id, fe.event_type, fe.old_status, fe.new_status,
                fe.old_title, fe.new_title, fe.created_at,
+               CASE WHEN fe.event_metadata_captured THEN fe.event_venue ELSE p.venue END AS event_venue,
+               CASE WHEN fe.event_metadata_captured THEN fe.event_source_url ELSE p.source_url END AS event_source_url,
                p.id AS paper_id, p.title, p.year, p.venue, p.source_url, p.discovered_at,
                p.status, p.draft_url, p.abstract, p.draft_url_status, p.doi
         FROM feed_events fe

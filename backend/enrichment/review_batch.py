@@ -1,7 +1,7 @@
 """OpenAI Batch API integration for quality review of feed events.
 
 Submits unreviewed events as a batch job (50% cheaper than real-time),
-polls for completion, and processes results with auto-applied corrections.
+polls for completion, and saves advisory findings for source verification.
 """
 import json
 import logging
@@ -12,7 +12,7 @@ from pathlib import Path
 from backend.database import fetch_all, execute_query
 from backend.enrichment.quality_review import (
     MODEL, get_unreviewed_events, build_review_payload,
-    apply_corrections, save_review, _extract_json, _get_openai_client,
+    save_review, _extract_json, _get_openai_client,
     build_event_fingerprint,
 )
 
@@ -163,7 +163,7 @@ def _process_completed_batch(client, batch, db_id: int) -> int:
 
     for result in parsed_results:
         custom_id = result.get("custom_id", "")
-        event_id, expected_fingerprint = _parse_custom_id(custom_id)
+        event_id, _expected_fingerprint = _parse_custom_id(custom_id)
         if event_id is None:
             continue
 
@@ -193,19 +193,9 @@ def _process_completed_batch(client, batch, db_id: int) -> int:
             processed += 1
             continue
 
-        corrections = apply_corrections(
-            event,
-            review,
-            expected_fingerprint=expected_fingerprint,
-            require_fingerprint=True,
-        )
-        has_hide = any(c.get("type") == "hide_event" for c in corrections)
-        if not has_hide:
-            save_review(event_id, review, corrections or None)
+        # Even a fresh model-only suggestion may contradict source-verified repairs.
+        save_review(event_id, review, None)
         processed += 1
-
-        if corrections:
-            logger.info("Event %d: %d corrections applied", event_id, len(corrections))
 
     cost = _estimate_cost(total_prompt_tokens, total_completion_tokens, batch=True)
     execute_query(

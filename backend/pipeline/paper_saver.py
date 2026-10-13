@@ -14,6 +14,8 @@ from backend.database import (
     normalize_title,
 )
 from backend.database.researchers import is_abbreviation_of, is_compatible_name, merge_researchers, refresh_has_top5
+from backend.database.snapshots import _STATUS_RANK
+from backend.publication_rules import is_working_paper_series
 from backend.config import guard_text_fields
 from backend.pipeline.publication import clean_title
 from datetime import datetime, timezone
@@ -224,13 +226,17 @@ class PaperSaver:
                             continue
                         publication_id = row[0]
 
-                        cursor.execute("SELECT abstract, year, venue FROM papers WHERE id = %s", (publication_id,))
+                        cursor.execute("SELECT abstract, year, venue, status FROM papers WHERE id = %s FOR UPDATE", (publication_id,))
                         existing = cursor.fetchone()
                         if existing:
-                            existing_abstract, existing_year, existing_venue = existing
+                            existing_abstract, existing_year, existing_venue, existing_status = existing
                             new_abstract = pub.get('abstract')
                             new_year = pub.get('year')
                             new_venue = pub.get('venue')
+                            if (_STATUS_RANK.get(status, -1) < _STATUS_RANK.get(existing_status, -1)
+                                    or (_STATUS_RANK.get(existing_status, -1) > _STATUS_RANK['working_paper']
+                                        and is_working_paper_series(new_venue))):
+                                new_venue = None
                             needs_backfill = (
                                 (not existing_abstract and new_abstract)
                                 or (not existing_year and new_year)
@@ -312,11 +318,14 @@ class PaperSaver:
                                 if is_compatible_name(owner_first, resolved_first):
                                     already_represented = True
                                     break
-                        if not already_represented:
+                        if not already_represented and not pub.get('_authors_complete'):
                             cursor.execute(
                                 "INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order) VALUES (%s, %s, %s)",
                                 (owner_id, publication_id, 0),
                             )
+                        elif not already_represented:
+                            logging.info("Did not attach page owner %s to explicit byline for %s",
+                                         owner_id, title)
 
                     conn.commit()
 

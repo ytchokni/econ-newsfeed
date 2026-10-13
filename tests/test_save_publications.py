@@ -215,7 +215,7 @@ class TestAbstractBackfill:
         # fetchone for page owner → None
         cursor.fetchone.side_effect = [
             (10,),               # SELECT id FROM papers WHERE title_hash = ...
-            (None, None, None),  # SELECT abstract, year, venue FROM papers WHERE id = ...
+            (None, None, None, None),  # Current canonical metadata and status
             None,                # page owner lookup
         ]
         cursor.rowcount = 1  # new_to_this_url = True for paper_urls INSERT
@@ -247,7 +247,7 @@ class TestAbstractBackfill:
         cursor.lastrowid = 0
         cursor.fetchone.side_effect = [
             (10,),                                 # title_hash lookup
-            ("Existing abstract", "2023", "QJE"),  # all fields populated
+            ("Existing abstract", "2023", "QJE", "published"),  # all fields populated
             None,                                  # page owner lookup
         ]
         cursor.rowcount = 1

@@ -10,6 +10,8 @@ import logging
 import re
 import zlib
 
+_UNSET = object()
+
 
 def _url_has_baseline(cursor, url: str, min_snapshots: int = 2) -> bool:
     """Return True if the URL has accumulated at least min_snapshots archived HTML states.
@@ -118,9 +120,12 @@ class FeedEventEmitter:
                 cursor = conn.cursor(buffered=True)
                 if r.is_new:
                     cursor.execute(
-                        """INSERT INTO feed_events (paper_id, event_type, new_status, created_at)
-                           VALUES (%s, 'new_paper', %s, %s)""",
-                        (r.paper_id, r.status, created_at),
+                        """INSERT INTO feed_events
+                           (paper_id, event_type, new_status, created_at,
+                            event_venue, event_source_url, event_metadata_captured)
+                           VALUES (%s, 'new_paper', %s, %s,
+                                   (SELECT venue FROM papers WHERE id = %s), %s, TRUE)""",
+                        (r.paper_id, r.status, created_at, r.paper_id, url),
                     )
                     events_created += 1
                 elif r.new_to_this_url:
@@ -130,9 +135,12 @@ class FeedEventEmitter:
                     )
                     if cursor.fetchone()[0] == 0:
                         cursor.execute(
-                            """INSERT INTO feed_events (paper_id, event_type, new_status, created_at)
-                               VALUES (%s, 'new_paper', %s, %s)""",
-                            (r.paper_id, r.status, created_at),
+                            """INSERT INTO feed_events
+                               (paper_id, event_type, new_status, created_at,
+                                event_venue, event_source_url, event_metadata_captured)
+                               VALUES (%s, 'new_paper', %s, %s,
+                                       (SELECT venue FROM papers WHERE id = %s), %s, TRUE)""",
+                            (r.paper_id, r.status, created_at, r.paper_id, url),
                         )
                         events_created += 1
                 cursor.close()
@@ -141,31 +149,42 @@ class FeedEventEmitter:
         return events_created
 
     @staticmethod
-    def emit_status_change(paper_id: int, old_status: str, new_status: str, event_date: datetime | None = None) -> None:
+    def emit_status_change(paper_id: int, old_status: str, new_status: str,
+                           event_date: datetime | None = None, *, venue=_UNSET,
+                           source_url: str | None = None) -> None:
         """Create a status_change feed event."""
         created_at = event_date or datetime.now(timezone.utc)
         with get_connection() as conn:
             cursor = conn.cursor(buffered=True)
             cursor.execute(
                 """INSERT INTO feed_events
-                   (paper_id, event_type, old_status, new_status, created_at)
-                   VALUES (%s, 'status_change', %s, %s, %s)""",
-                (paper_id, old_status, new_status, created_at),
+                   (paper_id, event_type, old_status, new_status, created_at,
+                    event_venue, event_source_url, event_metadata_captured)
+                   SELECT %s, 'status_change', %s, %s, %s,
+                          CASE WHEN %s THEN %s ELSE venue END,
+                          COALESCE(%s, source_url), TRUE
+                   FROM papers WHERE id = %s""",
+                (paper_id, old_status, new_status, created_at, venue is not _UNSET,
+                 None if venue is _UNSET else venue, source_url, paper_id),
             )
             conn.commit()
             cursor.close()
 
     @staticmethod
-    def emit_title_change(paper_id: int, old_title: str, new_title: str, event_date: datetime | None = None) -> None:
+    def emit_title_change(paper_id: int, old_title: str, new_title: str,
+                          event_date: datetime | None = None, *, source_url: str | None = None) -> None:
         """Create a title_change feed event."""
         created_at = event_date or datetime.now(timezone.utc)
         with get_connection() as conn:
             cursor = conn.cursor(buffered=True)
             cursor.execute(
                 """INSERT INTO feed_events
-                   (paper_id, event_type, old_title, new_title, created_at)
-                   VALUES (%s, 'title_change', %s, %s, %s)""",
-                (paper_id, old_title, new_title, created_at),
+                   (paper_id, event_type, old_title, new_title, created_at,
+                    event_venue, event_source_url, event_metadata_captured)
+                   SELECT %s, 'title_change', %s, %s, %s,
+                          venue, COALESCE(%s, source_url), TRUE
+                   FROM papers WHERE id = %s""",
+                (paper_id, old_title, new_title, created_at, source_url, paper_id),
             )
             conn.commit()
             cursor.close()

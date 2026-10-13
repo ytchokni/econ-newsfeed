@@ -198,8 +198,8 @@ def test_append_snapshot_allows_wip_to_wp_promotion(mock_conn_ctx):
 
     # Previous snapshot exists with a different hash, paper is work_in_progress
     mock_cursor.fetchone.side_effect = [
-        {"content_hash": "old_hash"},       # prev snapshot check
         {"status": "work_in_progress"},      # current paper status
+        {"content_hash": "old_hash"},       # prev snapshot check
     ]
 
     from backend.database.snapshots import append_paper_snapshot

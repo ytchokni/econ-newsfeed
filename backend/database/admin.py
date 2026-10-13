@@ -302,7 +302,7 @@ def _get_extraction_stats() -> dict:
            FROM html_content"""
     )
 
-    # Attempts = every extraction LLM call (failures included), plus liveness + tokens.
+    # Usage-bearing responses only; quota errors/timeouts do not create usage rows.
     attempts = fetch_one(
         """SELECT
                SUM(called_at >= NOW() - INTERVAL 1 HOUR) AS last_hour,

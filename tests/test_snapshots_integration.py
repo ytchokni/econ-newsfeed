@@ -273,13 +273,13 @@ class TestAppendResearcherSnapshotDenormalization:
 
 
 def _make_two_read_mock_conn(snapshot_row, papers_row):
-    """Mock conn whose cursor returns snapshot_row, then papers_row, from fetchone().
+    """Mock conn whose cursor returns the locked paper, then its latest snapshot.
 
     snapshot_row : dict | None — previous paper_snapshots row (content_hash check)
     papers_row : dict | None — papers row read with FOR UPDATE (event baseline)
     """
     mock_conn, mock_cursor = _make_mock_conn()
-    mock_cursor.fetchone.side_effect = [snapshot_row, papers_row]
+    mock_cursor.fetchone.side_effect = [papers_row, snapshot_row]
     return mock_conn, mock_cursor
 
 

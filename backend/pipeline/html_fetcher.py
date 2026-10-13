@@ -412,14 +412,25 @@ class HTMLFetcher:
         return raw.decode("utf-8", errors="replace")
 
     @staticmethod
-    def extract_text_content(html_content: str) -> str:
-        """
-        Extract only the text content from HTML, ignoring scripts, styles, and HTML tags.
-        """
+    def extract_text_content(html_content: str, *, include_links: bool = False) -> str:
+        """Extract page content without site-wide navigation and recommendations."""
         soup = BeautifulSoup(html_content, 'html.parser')
-        for script in soup(["script", "style"]):
-            script.decompose()
-        return soup.get_text()
+        for element in soup.select(
+            'script, style, noscript, nav, header, footer, aside, '
+            '[role="navigation"], [role="contentinfo"], '
+            '#footer, .footer, .site-footer, .region-footer, '
+            '.cookie-banner, .cookie-consent'
+        ):
+            if element.name == 'header' and element.find_parent(['article', 'main']):
+                continue
+            element.decompose()
+        if include_links:
+            for anchor in soup.find_all('a', href=True):
+                href = anchor['href']
+                if href.startswith(('http://', 'https://')):
+                    label = anchor.get_text(' ', strip=True)
+                    anchor.replace_with(f"{label} ({href})" if label else href)
+        return soup.get_text(separator='\n', strip=True)
 
     @staticmethod
     def hash_text_content(text_content: str) -> str:
@@ -768,12 +779,9 @@ class HTMLFetcher:
 
     @staticmethod
     def get_extraction_payload(url_id: int) -> dict | None:
-        """Read content, content_hash, timestamp, and extracted_at in one query.
-
-        raw_html is excluded — use get_raw_html() as a fallback when content is NULL.
-        """
+        """Read raw HTML and its queue hash atomically, including legacy text."""
         return fetch_one(
-            "SELECT content, content_hash, timestamp, extracted_at"
+            "SELECT content, raw_html, content_hash, timestamp, extracted_at"
             " FROM html_content WHERE url_id = %s",
             (url_id,),
         )
@@ -828,5 +836,3 @@ class HTMLFetcher:
                 "UPDATE html_content SET extracted_at = %s, extracted_hash = %s WHERE url_id = %s",
                 (now, extracted_hash, url_id),
             )
-
-

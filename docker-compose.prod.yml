@@ -12,6 +12,7 @@ services:
 
   api:
     restart: always
+    mem_limit: 1g
     environment:
       FRONTEND_URL: ${FRONTEND_URL:?FRONTEND_URL is required}
       OPENALEX_API_KEY: ${OPENALEX_API_KEY:-}

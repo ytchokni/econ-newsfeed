@@ -55,7 +55,7 @@ class TestSavePublicationsReturnsResults:
         mock_get_conn.return_value = conn
         cursor.fetchone.side_effect = [
             (10,),
-            (None, None, None),
+            (None, None, None, None),
             None,
         ]
         cursor.rowcount = 1
@@ -126,6 +126,20 @@ class TestPageOwnerAuthorship:
     @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
     @patch("backend.pipeline.paper_saver.get_connection")
     @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
+    def test_verified_complete_byline_does_not_attach_unrelated_owner(self, mock_hash, mock_get_conn, mock_rid):
+        conn, cursor = _mock_conn()
+        mock_get_conn.return_value = conn
+        cursor.fetchone.return_value = (55, "Simeon", "Djankov")
+        PaperSaver.save_publications("http://example.com", [{
+            "title": "Paper", "authors": [["John", "Doe"]], "_authors_complete": True,
+        }])
+        author_ids = [call.args[1][0] for call in cursor.execute.call_args_list
+                      if "INSERT IGNORE INTO authorship" in call.args[0]]
+        assert author_ids == [42]
+
+    @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
     def test_owner_added_with_order_zero(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
@@ -149,7 +163,7 @@ class TestBackfill:
     def test_backfills_when_existing_has_nulls(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn(lastrowid=0)
         mock_get_conn.return_value = conn
-        cursor.fetchone.side_effect = [(10,), (None, None, None), None]
+        cursor.fetchone.side_effect = [(10,), (None, None, None, None), None]
         cursor.rowcount = 1
 
         PaperSaver.save_publications("http://example.com", [{
@@ -166,7 +180,7 @@ class TestBackfill:
     def test_skips_backfill_when_all_fields_present(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn(lastrowid=0)
         mock_get_conn.return_value = conn
-        cursor.fetchone.side_effect = [(10,), ("Existing", "2023", "QJE"), None]
+        cursor.fetchone.side_effect = [(10,), ("Existing", "2023", "QJE", "published"), None]
         cursor.rowcount = 1
 
         PaperSaver.save_publications("http://example.com", [{
@@ -176,6 +190,26 @@ class TestBackfill:
 
         backfill_calls = [c for c in cursor.execute.call_args_list if "COALESCE" in str(c)]
         assert len(backfill_calls) == 0
+
+    @pytest.mark.parametrize('status,venue', [
+        ('working_paper', 'QJE'), ('revise_and_resubmit', 'NBER Working Paper 1'),
+    ])
+    @patch("backend.pipeline.paper_saver.get_researcher_id", return_value=42)
+    @patch("backend.pipeline.paper_saver.get_connection")
+    @patch("backend.pipeline.paper_saver.compute_title_hash", return_value="abc123")
+    def test_stale_or_series_venue_cannot_backfill_editorial_venue(
+        self, mock_hash, mock_get_conn, mock_rid, status, venue,
+    ):
+        conn, cursor = _mock_conn(lastrowid=0)
+        mock_get_conn.return_value = conn
+        cursor.fetchone.side_effect = [(10,), (None, '2025', None, 'revise_and_resubmit'), None]
+        PaperSaver.save_publications('http://example.com', [{
+            'title': 'Paper', 'authors': [['John', 'Doe']],
+            'abstract': 'Missing abstract', 'status': status, 'venue': venue,
+        }])
+        backfill = [c for c in cursor.execute.call_args_list if 'COALESCE' in str(c)]
+        assert len(backfill) == 1
+        assert backfill[0].args[1] == ('Missing abstract', None, None, 10)
 
 
 class TestWithinPaperDedup:

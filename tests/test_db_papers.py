@@ -212,7 +212,7 @@ class TestGetPaperHistory:
 
         sql, params = mock_fetch.call_args[0]
         assert "paper_id = %s" in sql
-        assert "ORDER BY created_at DESC" in sql
+        assert "ORDER BY fe.created_at DESC" in sql
         assert params == (7,)
 
     def test_sql_selects_expected_columns(self):

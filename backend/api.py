@@ -197,6 +197,8 @@ class PublicationResponse(BaseModel):
     old_status: str | None = None
     new_status: str | None = None
     event_date: str | None = None
+    event_venue: str | None = None
+    event_source_url: str | None = None
     links: list[PaperLinkResponse] = []
 
 class PaginatedPublications(BaseModel):
@@ -495,6 +497,8 @@ def _format_feed_event(row: dict, authors: list[dict], coauthors: list[dict] | N
         "old_title": row.get('old_title'),
         "new_title": row.get('new_title'),
         "event_date": _iso_z(row.get('created_at')),
+        "event_venue": row.get('event_venue', row.get('venue')),
+        "event_source_url": row.get('event_source_url', row.get('source_url')),
     })
     return result
 
@@ -896,6 +900,8 @@ def _build_publication_detail(publication_id: int, include_history: bool) -> dic
                 "old_status": fe['old_status'],
                 "new_status": fe['new_status'],
                 "created_at": _iso_z(fe['created_at']),
+                "event_venue": fe.get('event_venue', row.get('venue')),
+                "event_source_url": fe.get('event_source_url', row.get('source_url')),
             }
             for fe in history_feed_events
         ]
@@ -963,8 +969,9 @@ def _build_atom_feed(items: list[dict], self_url: str) -> str:
             old = (item.get("old_status") or "unknown").replace("_", " ")
             new = (item.get("new_status") or "unknown").replace("_", " ")
             parts.append(f"Status changed: {old} → {new}")
-        if item.get("venue"):
-            parts.append(item["venue"])
+        event_venue = item.get("event_venue", item.get("venue"))
+        if event_venue:
+            parts.append(event_venue)
         if item.get("year"):
             parts.append(str(item["year"]))
         if item.get("abstract"):

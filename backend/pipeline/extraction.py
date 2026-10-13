@@ -20,7 +20,7 @@ from backend.database import (
     append_researcher_snapshot,
 )
 from backend.pipeline.feed_events import FeedEventEmitter
-from backend.pipeline.html_fetcher import HTMLFetcher
+from backend.pipeline.html_fetcher import CONTENT_MAX_CHARS, HTMLFetcher
 from backend.enrichment.link_extractor import match_and_save_paper_links
 from backend.pipeline.paper_saver import PaperSaver, validate_title_change
 from backend.pipeline.publication import Publication
@@ -64,13 +64,19 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
         return ExtractionOutcome("no_content")
 
     text = payload['content']
-    if not text:
+    raw_html = payload.get('raw_html')
+    if not raw_html and not text:
         raw_html = HTMLFetcher.get_raw_html(url_id)
-        if raw_html:
-            text = HTMLFetcher.extract_text_content(raw_html)
-    if not text:
-        return ExtractionOutcome("no_content")
+    if raw_html:
+        # Re-clean caches written before boilerplate filtering was introduced.
+        text = HTMLFetcher.extract_text_content(raw_html)
+        text = HTMLFetcher.normalize_text(text[:CONTENT_MAX_CHARS])
     content_hash = payload['content_hash']
+    if not text:
+        if raw_html:
+            HTMLFetcher.mark_extracted(url_id, content_hash)
+            return ExtractionOutcome("empty")
+        return ExtractionOutcome("no_content")
     # Some researcher URLs serve a JPEG that was decoded and stored as text.
     # Recognize its explicit header, without treating non-ASCII prose as binary.
     header = text[:64]
@@ -86,6 +92,11 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
     fetch_date = ts
 
     previous_text = None if is_seed else HTMLFetcher.get_previous_text(url_id)
+
+    if previous_text is not None and HTMLFetcher.normalize_text(previous_text) == HTMLFetcher.normalize_text(text):
+        # Cleaning/hash changes alone must not create fresh publication events.
+        HTMLFetcher.mark_extracted(url_id, content_hash)
+        return ExtractionOutcome("empty")
 
     if previous_text is not None:
         outcome = _extract_via_diff(url_id, url, text, previous_text, content_hash,
@@ -115,7 +126,8 @@ def persist_extraction(url: str, url_id: int, pubs: list[dict],
     if reconcile_titles:
         renames = PaperSaver.reconcile_title_renames(url, pubs)
         for r in renames:
-            FeedEventEmitter.emit_title_change(r.paper_id, r.old_title, r.new_title, event_date=event_date)
+            FeedEventEmitter.emit_title_change(r.paper_id, r.old_title, r.new_title,
+                                              event_date=event_date, source_url=url)
 
     match_and_save_paper_links(url_id, pubs)
     _append_snapshots(pubs, url, event_date)
@@ -180,6 +192,7 @@ def _append_snapshots(pubs: list[dict], source_url: str, event_date=None) -> Non
                 continue
             FeedEventEmitter.emit_status_change(
                 row['id'], result.old_status, result.new_status, event_date=event_date,
+                venue=result.venue, source_url=source_url,
             )
 
 
@@ -258,7 +271,8 @@ def _apply_title_change(change: dict, source_url: str, event_date) -> None:
 
     paper_id = row['id']
     PaperSaver.apply_title_rename(paper_id, old_title, new_title, change, source_url)
-    FeedEventEmitter.emit_title_change(paper_id, old_title, new_title, event_date=event_date)
+    FeedEventEmitter.emit_title_change(paper_id, old_title, new_title,
+                                      event_date=event_date, source_url=source_url)
 
 
 def _update_home_description(researcher_id: int, text: str, url: str,

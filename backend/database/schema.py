@@ -110,6 +110,8 @@ _TABLE_DEFINITIONS = {
             is_seed BOOLEAN NOT NULL DEFAULT FALSE,
             doi VARCHAR(255) DEFAULT NULL,
             openalex_id VARCHAR(255) DEFAULT NULL,
+            enrichment_attempted_at DATETIME DEFAULT NULL,
+            INDEX idx_enrichment_queue (openalex_id, enrichment_attempted_at),
             UNIQUE KEY uq_title_hash (title_hash),
             INDEX idx_discovered_at (discovered_at),
             INDEX idx_status (status),
@@ -294,6 +296,9 @@ _TABLE_DEFINITIONS = {
             new_status ENUM('published','accepted','revise_and_resubmit','reject_and_resubmit','working_paper','work_in_progress') DEFAULT NULL,
             old_title TEXT DEFAULT NULL,
             new_title TEXT DEFAULT NULL,
+            event_venue TEXT DEFAULT NULL,
+            event_source_url VARCHAR(2048) DEFAULT NULL,
+            event_metadata_captured BOOLEAN NOT NULL DEFAULT FALSE,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
             FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
             INDEX idx_paper_id (paper_id),
@@ -424,6 +429,10 @@ def create_tables() -> None:
                         ("papers", "is_seed", "BOOLEAN NOT NULL DEFAULT FALSE"),
                         ("papers", "doi", "VARCHAR(255) DEFAULT NULL"),
                         ("papers", "openalex_id", "VARCHAR(255) DEFAULT NULL"),
+                        ("papers", "enrichment_attempted_at", "DATETIME DEFAULT NULL"),
+                        ("feed_events", "event_venue", "TEXT DEFAULT NULL"),
+                        ("feed_events", "event_source_url", "VARCHAR(2048) DEFAULT NULL"),
+                        ("feed_events", "event_metadata_captured", "BOOLEAN NOT NULL DEFAULT FALSE"),
                     ]
                     for table, col, definition in _migrations:
                         try:
@@ -432,6 +441,13 @@ def create_tables() -> None:
                         except Exception as e:
                             if getattr(e, 'errno', None) != 1060:
                                 logging.warning("Migration warning for %s.%s: %s", table, col, e)
+
+                    try:
+                        cursor.execute("ALTER TABLE papers ADD INDEX idx_enrichment_queue (openalex_id, enrichment_attempted_at)")
+                        conn.commit()
+                    except Exception as e:
+                        if getattr(e, 'errno', None) != 1061:
+                            logging.warning("Migration warning for papers.idx_enrichment_queue: %s", e)
 
                     try:
                         cursor.execute("ALTER TABLE papers ADD INDEX idx_is_seed (is_seed)")
@@ -628,7 +644,7 @@ def create_tables() -> None:
                                 DECLARE v_snapshot_count INT DEFAULT 0;
 
                                 IF NEW.event_type = 'new_paper' THEN
-                                    SELECT source_url INTO v_source_url
+                                    SELECT COALESCE(NEW.event_source_url, source_url) INTO v_source_url
                                     FROM papers WHERE id = NEW.paper_id;
 
                                     IF v_source_url IS NOT NULL
@@ -747,8 +763,8 @@ def create_tables() -> None:
                     except Exception as e:
                         logging.warning("Migration: capitalize titles: %s", e)
 
-                    # Clean up status regression events and restore papers.status
-                    # to highest-ranked status seen across snapshots
+                    # Raw snapshots are evidence, never authority to undo a reviewed correction.
+                    # Clean up status regression events without rewriting canonical paper status.
                     _S = ",".join(f"'{s}'" for s in STATUS_ORDER)
                     try:
                         cursor.execute(f"""
@@ -759,25 +775,10 @@ def create_tables() -> None:
                             AND FIELD(old_status, {_S}) > 0
                         """)
                         deleted = cursor.rowcount
-                        cursor.execute(f"""
-                            UPDATE papers p
-                            JOIN (
-                                SELECT paper_id,
-                                       ELT(MAX(FIELD(status, {_S})), {_S}) AS best_status
-                                FROM paper_snapshots
-                                WHERE status IS NOT NULL
-                                GROUP BY paper_id
-                            ) best ON best.paper_id = p.id
-                            SET p.status = best.best_status
-                            WHERE FIELD(p.status, {_S}) < FIELD(best.best_status, {_S})
-                        """)
-                        restored = cursor.rowcount
                         conn.commit()
-                        if deleted or restored:
+                        if deleted:
                             logging.info(
-                                "Migration: cleaned %d status regression events, "
-                                "restored %d paper statuses to highest rank",
-                                deleted, restored,
+                                "Migration: cleaned %d status regression events", deleted,
                             )
                     except Exception as e:
                         logging.warning("Migration: status regression cleanup: %s", e)

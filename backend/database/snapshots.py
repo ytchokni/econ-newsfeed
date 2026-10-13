@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from backend.database.connection import get_connection, fetch_all
+from backend.publication_rules import is_working_paper_series
 
 
 # Canonical publication-status progression, lowest to highest rank.
@@ -28,6 +29,8 @@ class PaperSnapshotResult:
     changed: bool
     old_status: str | None = None
     new_status: str | None = None
+    venue: str | None = None
+    source_url: str | None = None
 
     @property
     def status_changed(self) -> bool:
@@ -111,9 +114,16 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
 
     with get_connection() as conn:
         with conn.cursor(dictionary=True) as cursor:
+            # Lock before checking history so simultaneous coauthor updates serialize.
+            cursor.execute(
+                "SELECT status, venue, abstract, draft_url, draft_url_status, "
+                "draft_url_checked_at, year FROM papers WHERE id = %s FOR UPDATE",
+                (paper_id,),
+            )
+            paper_row = cursor.fetchone() or {}
             cursor.execute(
                 "SELECT content_hash FROM paper_snapshots "
-                "WHERE paper_id = %s ORDER BY scraped_at DESC LIMIT 1",
+                "WHERE paper_id = %s ORDER BY scraped_at DESC, id DESC LIMIT 1",
                 (paper_id,),
             )
             prev = cursor.fetchone()
@@ -124,12 +134,7 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
             # snapshot: snapshots keep raw LLM output and flap when co-author
             # pages disagree, which would re-emit forward events every cycle.
             # FOR UPDATE serializes concurrent extractions of the same paper.
-            cursor.execute(
-                "SELECT status FROM papers WHERE id = %s FOR UPDATE",
-                (paper_id,),
-            )
-            paper_row = cursor.fetchone()
-            old_status = paper_row['status'] if paper_row else None
+            old_status = paper_row.get('status')
 
             # Always store raw LLM output in snapshots for audit
             cursor.execute(
@@ -145,17 +150,37 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
                 effective_status = status
             else:
                 effective_status = old_status
+            lower_status = _STATUS_RANK.get(status, -1) < _STATUS_RANK.get(old_status, -1)
+            incoming = {'venue': venue, 'abstract': abstract, 'draft_url': draft_url, 'year': year}
+            if (_STATUS_RANK.get(effective_status, -1) > _STATUS_RANK['working_paper']
+                    and is_working_paper_series(venue)):
+                incoming['venue'] = None
+            merged = {}
+            for field, value in incoming.items():
+                old_value = paper_row.get(field)
+                value = value if value is not None and str(value).strip() else None
+                merged[field] = (old_value or value) if lower_status else (value or old_value)
+            # A stale working-paper listing cannot establish a journal venue.
+            if lower_status:
+                merged['venue'] = paper_row.get('venue')
+            if (_STATUS_RANK.get(effective_status, -1) > _STATUS_RANK['working_paper']
+                    and is_working_paper_series(merged['venue'])):
+                merged['venue'] = None
+            url_changed = merged['draft_url'] != paper_row.get('draft_url')
             cursor.execute(
                 """UPDATE papers
                    SET status = %s, venue = %s, abstract = %s, draft_url = %s,
-                       draft_url_status = 'unchecked', year = %s
+                       draft_url_status = %s, draft_url_checked_at = %s, year = %s
                    WHERE id = %s""",
-                (effective_status, venue, abstract, draft_url, year, paper_id),
+                (effective_status, merged['venue'], merged['abstract'], merged['draft_url'],
+                 'unchecked' if url_changed else (paper_row.get('draft_url_status') or 'unchecked'),
+                 None if url_changed else paper_row.get('draft_url_checked_at'), merged['year'], paper_id),
             )
 
             conn.commit()
     logging.info(f"Paper snapshot appended for id={paper_id}")
-    return PaperSnapshotResult(changed=True, old_status=old_status, new_status=effective_status)
+    return PaperSnapshotResult(changed=True, old_status=old_status, new_status=effective_status,
+                               venue=merged['venue'], source_url=source_url)
 
 
 def get_paper_snapshots(paper_id: int, limit: int = 20) -> list[dict]:

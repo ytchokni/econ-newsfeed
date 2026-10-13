@@ -9,7 +9,20 @@ os.environ.setdefault("SCRAPE_API_KEY", "test-key")
 
 from unittest.mock import patch, MagicMock
 
-from backend.enrichment.doi_resolver import extract_doi_from_url, extract_pii_from_url, resolve_pii_via_crossref, resolve_doi
+from backend.enrichment.doi_resolver import extract_doi_from_url, extract_pii_from_url, resolve_pii_via_crossref, resolve_doi, normalize_doi
+
+
+def test_normalize_publisher_route_suffixes():
+    assert normalize_doi('10.1093/oep/gpag006/8559527') == '10.1093/oep/gpag006'
+    assert normalize_doi('10.1257/jel.20261582&from=f') == '10.1257/jel.20261582'
+    assert normalize_doi('https://doi.org/10.1515/jbnst-2024-0037/html') == '10.1515/jbnst-2024-0037'
+    assert normalize_doi('10.5555/valid/1234') == '10.5555/valid/1234'
+    assert normalize_doi('10.5555/html') == '10.5555/html'
+    assert normalize_doi('not-a-doi') is None
+
+
+def test_aea_query_suffix_is_not_part_of_doi():
+    assert extract_doi_from_url('https://www.aeaweb.org/articles?id=10.1257/jel.20261582&from=f') == '10.1257/jel.20261582'
 
 
 class TestExtractDoiFromUrl:

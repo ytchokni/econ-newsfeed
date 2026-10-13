@@ -37,6 +37,7 @@ def get_client() -> OpenAI:
                     # The worker owns backoff; SDK retries otherwise issue
                     # additional requests before it can respect the quota.
                     max_retries=0,
+                    timeout=300.0,
                 )
     return _client
 

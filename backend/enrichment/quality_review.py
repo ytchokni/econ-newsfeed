@@ -1,8 +1,8 @@
-"""LLM quality review for feed events — detects and corrects data quality issues.
+"""Advisory LLM quality review for feed events.
 
 Reviews feed events in batches using GPT 5.4 Mini, checking for misclassification,
 wrong venues, bad author names, false new-paper events, and other issues.
-Auto-applies high-severity corrections (status, venue, hide).
+Stores findings for source verification; model suggestions never mutate papers or events.
 """
 import hashlib
 import json
@@ -72,7 +72,7 @@ def _get_openai_client():
     global _openai_client
     if _openai_client is None:
         from openai import OpenAI
-        _openai_client = OpenAI()
+        _openai_client = OpenAI(timeout=60.0, max_retries=0)
     return _openai_client
 
 
@@ -271,7 +271,7 @@ def save_review(event_id: int, review: dict,
            ON DUPLICATE KEY UPDATE
              model = VALUES(model),
              issues = VALUES(issues),
-             corrections_applied = VALUES(corrections_applied),
+             corrections_applied = COALESCE(VALUES(corrections_applied), corrections_applied),
              reviewed_at = VALUES(reviewed_at)""",
         (
             event_id,
@@ -295,7 +295,7 @@ def apply_corrections(
     expected_fingerprint: str | None = None,
     require_fingerprint: bool = False,
 ) -> list[dict]:
-    """Apply high-severity corrections from a review. Returns actions taken."""
+    """Explicit correction helper; automatic review paths must not call this."""
     actions = []
 
     for issue in review.get("issues", []):
@@ -396,10 +396,9 @@ def apply_corrections(
 
 def review_events(batch_size: int = 100, dry_run: bool = False,
                   limit: int | None = None) -> dict:
-    """Review unreviewed feed events in batches. Returns summary stats."""
+    """Save advisory findings; a dry run previews one batch without writing."""
     total_reviewed = 0
     total_issues = 0
-    total_corrections = 0
     effective_limit = limit or 10_000
 
     while total_reviewed < effective_limit:
@@ -407,6 +406,7 @@ def review_events(batch_size: int = 100, dry_run: bool = False,
         events = get_unreviewed_events(limit=batch_limit)
         if not events:
             break
+        reviewed_before_batch = total_reviewed
 
         logger.info("Reviewing batch of %d events%s...",
                      len(events), " (dry-run)" if dry_run else "")
@@ -427,28 +427,29 @@ def review_events(batch_size: int = 100, dry_run: bool = False,
             issues = review.get("issues", [])
             high_issues = [x for x in issues if x.get("severity") == "high"]
 
-            corrections = apply_corrections(event, review, dry_run=dry_run)
-            # hide_event deletes the feed_event row; skip saving (FK would fail)
-            has_hide = any(c.get("type") == "hide_event" for c in corrections)
-            if not has_hide:
-                save_review(event["event_id"], review, corrections or None)
+            # Raw snapshot history is not sufficient evidence to change a paper.
+            if not dry_run:
+                save_review(event["event_id"], review, None)
 
             total_reviewed += 1
             total_issues += len(issues)
-            total_corrections += len(corrections)
 
             flag = " " if not issues else ("!" if high_issues else "~")
-            corr_str = f" [{len(corrections)} corrections]" if corrections else ""
             logger.info(
-                "  [%d/%d] %s issues=%d%s | %s",
-                i + 1, len(events), flag, len(issues),
-                corr_str, event.get("title", "")[:55],
+                "  [%d/%d] %s issues=%d (advisory) | %s",
+                i + 1, len(events), flag, len(issues), event.get("title", "")[:55],
             )
+
+        if total_reviewed == reviewed_before_batch:
+            logger.warning("Review batch made no progress; stopping instead of retrying the same failures")
+            break
+        if dry_run:
+            break
 
     summary = {
         "reviewed": total_reviewed,
         "issues": total_issues,
-        "corrections": total_corrections,
+        "corrections": 0,
         "dry_run": dry_run,
     }
     logger.info("Review complete: %s", summary)

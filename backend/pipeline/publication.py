@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from backend.database import log_llm_usage
-from bs4 import BeautifulSoup
 from backend.llm.client import get_model, extract_json
+from backend.publication_rules import is_working_paper_series
 from pydantic import BaseModel, field_validator
 from typing import Literal, Optional
 import difflib
@@ -67,6 +67,8 @@ class PublicationExtraction(BaseModel):
     status: Optional[_VALID_STATUSES] = None
     draft_url: Optional[str] = None
     abstract: Optional[str] = None
+    status_evidence: Optional[str] = None
+    authors_evidence: Optional[str] = None
 
     @field_validator('year', mode='before')
     @classmethod
@@ -96,6 +98,8 @@ class PublicationChange(BaseModel):
     abstract: Optional[str] = None
     old_status: Optional[str] = None
     old_title: Optional[str] = None
+    status_evidence: Optional[str] = None
+    authors_evidence: Optional[str] = None
 
     @field_validator('year', mode='before')
     @classmethod
@@ -295,15 +299,79 @@ def verify_title_in_html(title: str, html_text: str, *, _norm_html: str | None =
     return best_ratio >= 0.80
 
 
+_EDITORIAL_LABELS = {
+    'revise_and_resubmit': re.compile(
+        r'\br\s*&\s*r\b|\brevis(?:e|ed|ion)\s*(?:and|&)\s*resubmit\w*\b|'
+        r'\brevisions?\s+requested\b', re.I),
+    'reject_and_resubmit': re.compile(r'\breject(?:ed|ion)?\s*(?:and|&)\s*resubmit\w*\b', re.I),
+    'accepted': re.compile(r'\b(?:accepted|forthcoming|in\s+press)\b', re.I),
+}
+_NEGATED_EDITORIAL_LABEL = re.compile(
+    r'\b(?:not|never|no)\s+(?:(?:yet|received|given|been|invited|to|an?|for|under)\s+){0,5}'
+    r'(?:r\s*&\s*r\b|revis(?:e|ed|ion)\s*(?:and|&)\s*resubmit\w*\b|'
+    r'revisions?\s+requested\b|accepted\b|forthcoming\b|in\s+press\b)', re.I,
+)
+
+
+def _verified_entry_quote(pub: dict, key: str, source_text: str, other_titles: tuple[str, ...]) -> str:
+    """Evidence must quote a short source entry containing this paper's title."""
+    quote = pub.get(key) or ''
+    if not quote or len(quote) > 1200:
+        return ''
+    norm_quote = _normalize_for_token_match(quote)
+    norm_title = _normalize_for_token_match(pub.get('title') or '')
+    if not norm_title or norm_title not in norm_quote:
+        return ''
+    if any(title != norm_title and title in norm_quote for title in other_titles if title):
+        return ''
+    if norm_quote not in _normalize_for_token_match(source_text):
+        return ''
+    return quote
+
+
+def verify_publication_evidence(pub: dict, source_text: str, other_titles: tuple[str, ...] = ()) -> None:
+    """Discard unsupported editorial claims without lowering existing DB status."""
+    status = pub.get('status')
+    if status in _EDITORIAL_LABELS:
+        quote = _verified_entry_quote(pub, 'status_evidence', source_text, other_titles)
+        decision = re.sub(re.escape(pub['title']), '', quote, count=1, flags=re.I)
+        if not _EDITORIAL_LABELS[status].search(decision) or _NEGATED_EDITORIAL_LABEL.search(decision):
+            logging.info("Suppressed unsupported %s claim: %s", status, pub['title'])
+            pub['status'] = None
+    if is_working_paper_series(pub.get('venue')):
+        if pub.get('status') in _EDITORIAL_LABELS:
+            # An explicit editorial decision can coexist with a working-paper copy.
+            pub['venue'] = None
+        elif pub.get('status') == 'published':
+            pub['status'] = 'working_paper'
+
+    quote = _verified_entry_quote(pub, 'authors_evidence', source_text, other_titles)
+    norm_quote = _normalize_for_token_match(quote)
+    norm_title = _normalize_for_token_match(pub.get('title') or '')
+    after_title = norm_quote.partition(norm_title)[2].strip() if norm_title else ''
+    # "with X" lists coauthors and deliberately does not exclude the page owner.
+    if re.match(r'(?:(?:19|20)\d{2}\s+)?(?:by|authors)\s', after_title):
+        pub['_authors_complete'] = True
+        pub['authors'] = [
+            author for author in pub.get('authors', [])
+            if author and f" {_normalize_for_token_match(author[-1])} " in f" {after_title} "
+        ]
+
+
+_EVIDENCE_INSTRUCTIONS = """\
+- status_evidence: for accepted, revise_and_resubmit, or reject_and_resubmit, quote the shortest verbatim excerpt from THIS paper's entry containing BOTH its title and its explicit editorial decision. Otherwise null. Generic "under revision", "revised", "under review", or "submitted" is NOT an R&R decision. Never infer R&R from these phrases. A journal may legitimately be undisclosed; preserve an explicit R&R even then, with venue null. Working paper series distribute papers and cannot issue journal R&R or acceptance decisions; do not use their names as the editorial venue.
+- authors_evidence: quote a verbatim excerpt containing this paper's title and an explicit complete "Authors:" or "by" byline, if shown; otherwise null. A list introduced by "with" contains coauthors only, not a complete byline. Ignore unrelated publications in site navigation, footer recommendations, or news widgets."""
+
+
 _CHANGE_OUTPUT_FIELDS = """\
 For each change, provide:
 - change_type: one of "new_paper", "status_change", "title_change", "removed"
 - title: the publication title (current/new version), copied verbatim from the page
 - authors: a list of [first_name, last_name] pairs
 - year, venue, draft_url, abstract: from the NEW version (or OLD version for "removed")
-- status: one of "published", "accepted", "revise_and_resubmit", "reject_and_resubmit", "working_paper", "work_in_progress", or null. Use "work_in_progress" ONLY for early-stage research under explicit "Work in Progress" / "Research in Progress" sections without a working paper series. If a paper has a working paper series (e.g. "NBER WP", "CEPR Discussion Paper"), use "working_paper" regardless of section. Default to "working_paper" for unpublished papers when neither signal is present.
+- status: one of "published", "accepted", "revise_and_resubmit", "reject_and_resubmit", "working_paper", "work_in_progress", or null. Use "work_in_progress" ONLY for early-stage research under explicit "Work in Progress" / "Research in Progress" sections without a working paper series. If a paper has a working paper series (e.g. "NBER WP", "CEPR Discussion Paper"), use "working_paper" unless a separate explicit journal decision is stated. Default to "working_paper" for unpublished papers when neither signal is present.
 - old_status: previous status (for status_change only)
-- old_title: previous title (for title_change only)"""
+- old_title: previous title (for title_change only)""" + '\n' + _EVIDENCE_INSTRUCTIONS
 
 
 class Publication:
@@ -314,17 +382,8 @@ class Publication:
         Converts <a href="URL">text</a> to 'text (URL)' before stripping HTML,
         so the LLM can see draft/paper URLs that would otherwise be lost.
         """
-        soup = BeautifulSoup(html_content, 'html.parser')
-        for element in soup(['script', 'style', 'header', 'footer', 'nav', 'aside']):
-            element.decompose()
-        # Inline hyperlinks before stripping tags
-        for a in soup.find_all('a', href=True):
-            href = a['href']
-            text = a.get_text(strip=True)
-            if href and href.startswith(('http://', 'https://')):
-                a.replace_with(f"{text} ({href})" if text else href)
-        main_content = soup.body
-        return main_content.get_text(separator='\n', strip=True)
+        from backend.pipeline.html_fetcher import HTMLFetcher
+        return HTMLFetcher.extract_text_content(html_content, include_links=True)
 
     @staticmethod
     def build_extraction_prompt(text_content: str, url: str) -> str:
@@ -337,12 +396,13 @@ For each publication, extract:
 - year: the year associated with this paper as a 4-digit string. Use the publication year, working paper release year, revision date, or most recent year shown near the paper entry. Only return null if no year appears anywhere near the paper entry.
 - venue: journal or conference name, or null if unknown
 - status: one of "published", "accepted", "revise_and_resubmit", "reject_and_resubmit", "working_paper", "work_in_progress", or null if unknown. Determine status using these rules in priority order:
-  1. Paper-level labels FIRST (e.g., "Forthcoming" means "accepted", NOT "published"; "NBER Working Paper No. 12345" or "HBS Working Paper" means "working_paper").
+  1. Paper-level labels FIRST (e.g., "Forthcoming" means "accepted", NOT "published"; "NBER Working Paper No. 12345" or "HBS Working Paper" means "working_paper" unless a separate explicit journal decision is stated).
   2. Section headers as FALLBACK if no paper-level label exists: "Working Papers" or "Discussion Papers" → "working_paper". "Work in Progress", "Works in Progress", "Research in Progress", "Selected Work in Progress" → "work_in_progress".
   3. When NEITHER signal is present (no working paper series AND no clear section header), default to "working_paper" for unpublished papers.
-  Use "work_in_progress" ONLY for early-stage research that lacks a formal working paper series affiliation — papers listed under explicit "Work in Progress" sections, typically without a working paper number or institutional series. Use "reject_and_resubmit" ONLY if the page explicitly mentions rejection or R&R for this specific paper.
+  Use "work_in_progress" ONLY for early-stage research that lacks a formal working paper series affiliation — papers listed under explicit "Work in Progress" sections, typically without a working paper number or institutional series. Use "reject_and_resubmit" ONLY if the page explicitly says rejected and invited to resubmit. Ordinary "R&R" means "revise_and_resubmit".
 - draft_url: a URL to a PDF, SSRN, NBER, or working paper version, or null if not available
 - abstract: the paper abstract, or null if not shown on the page
+{_EVIDENCE_INSTRUCTIONS}
 
 IMPORTANT: Extract titles VERBATIM from the page content. Do not use your knowledge of papers to add subtitles, correct titles, or fill in information not present on the page. If no publications are found, return an empty list.
 
@@ -452,7 +512,7 @@ If a paper moved from "Working Papers" to "Refereed Publications", or from "Work
 
 IMPORTANT: Copy all titles EXACTLY as they appear on the page — verbatim. Do not use your prior knowledge of papers to add subtitles, correct titles, or fill in information not present. Do NOT report publications that are identical in both versions.
 
-Use "reject_and_resubmit" ONLY if the page explicitly mentions rejection or R&R for the specific paper.
+Use "reject_and_resubmit" ONLY if the page explicitly says rejected and invited to resubmit for the specific paper. Ordinary "R&R" means "revise_and_resubmit".
 
 OLD VERSION:
 {old_text[:CONTENT_MAX_CHARS]}
@@ -512,6 +572,7 @@ If no changes were detected, return an empty changes list."""
 
         validated = []
         norm_html = _normalize_for_token_match(new_text)
+        entry_titles = tuple(_normalize_for_token_match(change.title) for change in result.parsed.changes)
         for change in result.parsed.changes:
             d = change.model_dump()
             if d['change_type'] == 'removed':
@@ -521,6 +582,7 @@ If no changes were detected, return an empty changes list."""
                     logging.info("HTML verification dropped change: '%s'",
                                  d.get('title', '<no title>')[:80])
                     continue
+                verify_publication_evidence(d, new_text, entry_titles)
                 validated.append(d)
             else:
                 logging.info("Validation dropped change: %s", d.get('title', '<no title>'))
@@ -551,6 +613,7 @@ If no changes were detected, return an empty changes list."""
 
         validated = []
         norm_html = _normalize_for_token_match(text_content)
+        entry_titles = tuple(_normalize_for_token_match(pub.title) for pub in result.parsed.publications)
         for pub in result.parsed.publications:
             d = pub.model_dump()
             if not validate_publication(d):
@@ -560,6 +623,7 @@ If no changes were detected, return an empty changes list."""
                 logging.info("HTML verification dropped: '%s' (not found in source)",
                              d.get('title', '<no title>')[:80])
                 continue
+            verify_publication_evidence(d, text_content, entry_titles)
             validated.append(d)
         return ExtractionLLMResult(pubs=validated)
 
@@ -568,4 +632,3 @@ If no changes were detected, return an empty changes list."""
         """Legacy wrapper: failure collapses to [] (kept for scheduler/batch callers)."""
         result = Publication.try_extract_publications(text_content, url, scrape_log_id=scrape_log_id)
         return result.pubs if result.pubs is not None else []
-

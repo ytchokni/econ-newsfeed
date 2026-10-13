@@ -113,7 +113,8 @@ def get_feed_events_for_researchers(
     placeholders = ",".join(["%s"] * len(researcher_ids))
     return fetch_all(
         f"""SELECT fe.event_type, fe.old_status, fe.new_status, fe.created_at,
-                   p.id AS paper_id, p.title, p.status, p.year, p.venue,
+                   p.id AS paper_id, p.title, p.status, p.year,
+                   CASE WHEN fe.event_metadata_captured THEN fe.event_venue ELSE p.venue END AS venue,
                    r.id AS researcher_id, r.first_name, r.last_name
             FROM feed_events fe
             JOIN papers p ON p.id = fe.paper_id

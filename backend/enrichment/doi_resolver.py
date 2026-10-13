@@ -1,6 +1,7 @@
 """Resolve DOIs from publisher URLs via regex extraction and Crossref API."""
 import logging
 import re
+from urllib.parse import unquote
 
 import requests
 
@@ -8,6 +9,23 @@ logger = logging.getLogger(__name__)
 
 _CROSSREF_BASE = "https://api.crossref.org"
 _session = None
+
+
+def normalize_doi(value: str | None) -> str | None:
+    """Remove known publisher URL suffixes without truncating valid DOI paths."""
+    if not value:
+        return None
+    value = unquote(value).strip()
+    value = re.sub(r'^https?://(?:dx\.)?doi\.org/|^doi:\s*', '', value, flags=re.I)
+    value = re.split(r'[?#]|&[A-Za-z_][\w.-]*=', value, maxsplit=1)[0].rstrip('/')
+    if not re.fullmatch(r'10\.\d{4,9}/\S+', value):
+        return None
+    # OUP appends a numeric article-route ID after its DOI.
+    if value.lower().startswith('10.1093/'):
+        value = re.sub(r'/\d+$', '', value)
+    if re.match(r'^10\.(1515|1111|1086|1177|1080|1007|1016)/', value):
+        value = re.sub(r'/(html|abstract|pdf|epdf|full|fulltext)$', '', value, flags=re.I)
+    return value
 
 
 def _get_session():
@@ -46,8 +64,7 @@ def extract_doi_from_url(url: str) -> str | None:
     if not match:
         return None
 
-    doi = match.group(1).rstrip('/')
-    return doi
+    return normalize_doi(match.group(1))
 
 
 def extract_pii_from_url(url: str) -> str | None:

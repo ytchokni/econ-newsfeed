@@ -18,6 +18,7 @@ class FakeSnapshotResult:
     status_changed: bool
     old_status: str | None
     new_status: str | None
+    venue: str | None = None
 
 
 class TestStalenessGuard:

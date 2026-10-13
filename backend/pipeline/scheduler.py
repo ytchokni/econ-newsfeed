@@ -180,7 +180,6 @@ QUALITY_REVIEW_ENABLED = os.environ.get('QUALITY_REVIEW_ENABLED', 'false').lower
 DIGEST_ENABLED = os.environ.get('RESEND_API_KEY', '') != ''
 _EXTRACTION_DELAY_SECONDS = float(os.environ.get('EXTRACTION_DELAY_SECONDS', '2'))
 _EXTRACTION_IDLE_SECONDS = 300       # queue empty → re-poll every 5 min
-_EXTRACTION_BACKOFF_THRESHOLD = 10   # consecutive failures before backing off
 _EXTRACTION_BACKOFF_SECONDS = 600    # 10 min (rides out free-tier quota exhaustion)
 _EXTRACTION_MAX_URL_FAILURES = 3
 _EXTRACTION_URL_COOLDOWN_SECONDS = 3600  # retry failed pages without a restart
@@ -567,8 +566,8 @@ def _extraction_worker_loop() -> None:
     retry_at: dict[int, float] = {}
     failed_hashes: dict[int, str | None] = {}
     rate_limit_streak = 0
-    consecutive_failures = 0
     processed = 0
+    completed = 0
     pubs_total = 0
 
     while not _extraction_stop_event.is_set():
@@ -623,10 +622,12 @@ def _extraction_worker_loop() -> None:
 
             processed += 1
             if outcome is not None and outcome.ok:
-                consecutive_failures = 0
                 rate_limit_streak = 0
                 url_failures.pop(url_id, None)
+                completed += 1
                 pubs_total += outcome.pubs_count
+                logger.info("Extraction worker completed url_id=%s (%s): %d pubs; %d/%d attempts successful",
+                            url_id, outcome.status, outcome.pubs_count, completed, processed)
             elif outcome is not None and outcome.retry_after is not None:
                 rate_limit_streak += 1
                 delay = max(outcome.retry_after, min(60 * 2 ** min(rate_limit_streak - 1, 4), _EXTRACTION_BACKOFF_SECONDS))
@@ -636,7 +637,7 @@ def _extraction_worker_loop() -> None:
                 _extraction_stop_event.wait(delay)
                 continue
             else:
-                consecutive_failures += 1
+                rate_limit_streak = 0
                 url_failures[url_id] = url_failures.get(url_id, 0) + 1
                 if url_failures[url_id] >= _EXTRACTION_MAX_URL_FAILURES:
                     retry_at[url_id] = time.monotonic() + _EXTRACTION_URL_COOLDOWN_SECONDS
@@ -645,16 +646,15 @@ def _extraction_worker_loop() -> None:
                                    url_id, row['url'], url_failures[url_id], _EXTRACTION_URL_COOLDOWN_SECONDS)
 
             if processed % 25 == 0:
-                logger.info("Extraction worker progress: %d processed, %d pubs total", processed, pubs_total)
+                logger.info("Extraction worker progress: %d attempts, %d completed URLs, %d pubs total",
+                            processed, completed, pubs_total)
 
-            if consecutive_failures >= _EXTRACTION_BACKOFF_THRESHOLD:
-                logger.warning("Extraction worker backing off %ds after %d consecutive failures "
-                               "(likely quota exhausted)", _EXTRACTION_BACKOFF_SECONDS, consecutive_failures)
-                _extraction_stop_event.wait(_EXTRACTION_BACKOFF_SECONDS)
-            else:
-                _extraction_stop_event.wait(_EXTRACTION_DELAY_SECONDS)
+            # Invalid output/timeouts affect this page; only explicit quota errors
+            # pause the provider for every page.
+            _extraction_stop_event.wait(_EXTRACTION_DELAY_SECONDS)
 
-    logger.info("Extraction worker stopped (%d processed, %d pubs)", processed, pubs_total)
+    logger.info("Extraction worker stopped (%d attempts, %d completed URLs, %d pubs)",
+                processed, completed, pubs_total)
 
 
 def start_extraction_worker() -> None:

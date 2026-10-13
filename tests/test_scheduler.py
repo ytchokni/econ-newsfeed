@@ -771,7 +771,7 @@ class TestExtractionWorkerLoop:
         assert backend.pipeline.scheduler._EXTRACTION_IDLE_SECONDS in waits
 
     def test_skips_url_after_max_failures(self):
-        """A URL that fails 3 times is excluded until restart (poison-pill guard)."""
+        """A URL that fails 3 times is excluded until its cooldown expires."""
         rows = [_make_url_row(url_id=1)]
         attempts = [0]
         scans = [0]
@@ -789,20 +789,20 @@ class TestExtractionWorkerLoop:
         with patch("backend.pipeline.scheduler.get_urls_needing_extraction", side_effect=get_queue), \
              patch("backend.pipeline.extraction.extract_one_url", side_effect=failing), \
              patch.object(scheduler, "_EXTRACTION_DELAY_SECONDS", 0), \
-             patch.object(scheduler, "_EXTRACTION_IDLE_SECONDS", 0), \
-             patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 99):
+             patch.object(scheduler, "_EXTRACTION_IDLE_SECONDS", 0):
             _extraction_worker_loop()
 
         assert attempts[0] == 3  # 4th+ scans filter the URL out
 
-    def test_backs_off_after_threshold_consecutive_failures(self):
-        rows = [_make_url_row(url_id=i) for i in range(1, 5)]
+    def test_page_failures_do_not_pause_unrelated_successful_pages(self):
+        rows = [_make_url_row(url_id=i) for i in range(1, 13)]
         count = [0]
 
         def failing(row, scrape_log_id=None):
             count[0] += 1
-            if count[0] >= 4:
+            if count[0] >= 12:
                 backend.pipeline.scheduler._extraction_stop_event.set()
+                return _outcome("extracted", pubs_count=1)
             return _outcome("failed")
 
         waits = []
@@ -813,14 +813,14 @@ class TestExtractionWorkerLoop:
 
         with patch("backend.pipeline.scheduler.get_urls_needing_extraction", return_value=rows), \
              patch("backend.pipeline.extraction.extract_one_url", side_effect=failing), \
-             patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 3), \
              patch.object(scheduler, "_EXTRACTION_MAX_URL_FAILURES", 99), \
              patch.object(backend.pipeline.scheduler._extraction_stop_event, "wait", side_effect=record_wait):
             _extraction_worker_loop()
 
-        assert backend.pipeline.scheduler._EXTRACTION_BACKOFF_SECONDS in waits
+        assert count[0] == 12
+        assert waits == [backend.pipeline.scheduler._EXTRACTION_DELAY_SECONDS] * 12
 
-    def test_success_resets_consecutive_failures(self):
+    def test_successful_page_continues_without_global_backoff(self):
         rows = [_make_url_row(url_id=i) for i in range(1, 5)]
         count = [0]
 
@@ -840,13 +840,10 @@ class TestExtractionWorkerLoop:
 
         with patch("backend.pipeline.scheduler.get_urls_needing_extraction", return_value=rows), \
              patch("backend.pipeline.extraction.extract_one_url", side_effect=fail_fail_succeed), \
-             patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 3), \
              patch.object(scheduler, "_EXTRACTION_MAX_URL_FAILURES", 99), \
              patch.object(backend.pipeline.scheduler._extraction_stop_event, "wait", side_effect=record_wait):
             _extraction_worker_loop()
 
-        # Success at call 3 reset the counter, so the threshold (3) was never
-        # reached and no backoff wait happened.
         assert backend.pipeline.scheduler._EXTRACTION_BACKOFF_SECONDS not in waits
 
     def test_unexpected_exception_counts_as_failure(self):
@@ -863,8 +860,7 @@ class TestExtractionWorkerLoop:
              patch("backend.pipeline.extraction.extract_one_url", side_effect=exploding), \
              patch.object(scheduler, "_EXTRACTION_DELAY_SECONDS", 0), \
              patch.object(scheduler, "_EXTRACTION_IDLE_SECONDS", 0), \
-             patch.object(scheduler, "_EXTRACTION_MAX_URL_FAILURES", 99), \
-             patch.object(scheduler, "_EXTRACTION_BACKOFF_THRESHOLD", 99):
+             patch.object(scheduler, "_EXTRACTION_MAX_URL_FAILURES", 99):
             _extraction_worker_loop()  # must not raise
 
         assert count[0] == 2

@@ -26,6 +26,8 @@ class TestGetClient:
         llm_client._client = None  # reset module cache
         client = llm_client.get_client()
         assert str(client.base_url).rstrip("/") == "https://generativelanguage.googleapis.com/v1beta/openai"
+        assert client.timeout == 300.0
+        assert client.max_retries == 0
 
     def test_client_is_cached(self):
         import backend.llm.client as llm_client
