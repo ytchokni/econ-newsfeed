@@ -15,30 +15,41 @@ export default function ActiveFilterChips({ chips, onClearAll }: ActiveFilterChi
   if (chips.length === 0) return null;
 
   return (
-    <div className="mt-3 flex items-center gap-2 flex-wrap">
-      {chips.map((chip) => (
-        <span
-          key={chip.key}
-          className="inline-flex items-center gap-1.5 text-[11px] text-[var(--ink2)] bg-white border border-[var(--line2)] rounded-sm px-2 py-[3px]"
-        >
-          {chip.label}
-          <button
-            onClick={chip.onRemove}
-            aria-label={`Remove ${chip.label}`}
-            className="text-[var(--muted)] hover:text-[var(--ink)] transition-colors leading-none"
-          >
-            &times;
-          </button>
-        </span>
-      ))}
-      {chips.length >= 2 && (
+    <section
+      aria-label="Applied filters"
+      className="mt-3 rounded-md border border-[var(--accent)]/20 bg-[var(--accent)]/5 p-3"
+    >
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <p className="text-xs font-semibold text-[var(--accent)]" aria-live="polite">
+          {chips.length} {chips.length === 1 ? "filter" : "filters"} applied
+        </p>
         <button
+          type="button"
           onClick={onClearAll}
-          className="text-[11px] text-[var(--accent)] bg-transparent border-none cursor-pointer p-0 ml-1"
+          className="text-xs text-[var(--accent)] underline underline-offset-2 cursor-pointer hover:text-[var(--ink)] focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
         >
           Clear all
         </button>
-      )}
-    </div>
+      </div>
+      <ul className="flex flex-wrap gap-2">
+        {chips.map((chip) => (
+          <li
+            key={chip.key}
+            className="inline-flex max-w-full items-center gap-2 rounded-full border border-[var(--accent)]/30 bg-white py-1 pl-3 pr-1 text-xs font-medium text-[var(--ink)]"
+          >
+            <span className="min-w-0 break-words">{chip.label}</span>
+            <button
+              type="button"
+              onClick={chip.onRemove}
+              aria-label={`Remove ${chip.label}`}
+              title={`Remove ${chip.label}`}
+              className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-[var(--accent)]/10 text-xl leading-none text-[var(--accent)] cursor-pointer transition-colors hover:bg-[var(--accent)] hover:text-white focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-[var(--accent)]"
+            >
+              <span aria-hidden="true">&times;</span>
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }

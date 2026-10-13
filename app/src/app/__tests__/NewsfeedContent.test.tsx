@@ -4,8 +4,10 @@ import { SWRConfig } from "swr";
 import NewsfeedContent from "../NewsfeedContent";
 import type { PaginatedResponse, Publication } from "@/lib/types";
 
+const mockReplace = jest.fn();
+
 jest.mock("next/navigation", () => ({
-  useRouter: () => ({ push: jest.fn(), back: jest.fn(), replace: jest.fn() }),
+  useRouter: () => ({ push: jest.fn(), back: jest.fn(), replace: mockReplace }),
   useSearchParams: () => new URLSearchParams(window.location.search),
   usePathname: () => "/",
 }));
@@ -113,6 +115,7 @@ function mockFetch(publicationsResponse: unknown) {
 beforeEach(() => {
   jest.resetAllMocks();
   global.fetch = jest.fn();
+  window.history.replaceState({}, "", "/");
 });
 
 afterEach(() => {
@@ -131,7 +134,7 @@ describe("NewsfeedContent", () => {
     renderWithSWR(<NewsfeedContent />);
     await screen.findByText("Immigration and Wages");
     const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
-    await user.click(screen.getByRole("button", { name: "Filters" }));
+    await user.click(screen.getByRole("button", { name: "Filters (1)" }));
     await user.click(screen.getByRole("button", { name: label }));
 
     await waitFor(() => {
@@ -198,7 +201,7 @@ describe("NewsfeedContent", () => {
     });
   });
 
-  it("renders All, Work in Progress, Working Papers, and Publications tabs", async () => {
+  it("renders All as the last tab", async () => {
     mockFetch(page1);
 
     renderWithSWR(<NewsfeedContent />);
@@ -209,9 +212,13 @@ describe("NewsfeedContent", () => {
     expect(screen.getByRole("button", { name: /work in progress/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /working papers/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /publications/i })).toBeInTheDocument();
+    expect(
+      screen.getAllByRole("button", { name: /^(All|Work in Progress|Working Papers|Publications)$/i })
+        .map((button) => button.textContent)
+    ).toEqual(["Work in Progress", "Working Papers", "Publications", "All"]);
   });
 
-  it("defaults to All tab (no event_type/status filter)", async () => {
+  it("defaults to Publications filtered to Top-5 and top field journals", async () => {
     mockFetch(page1);
 
     renderWithSWR(<NewsfeedContent />);
@@ -224,11 +231,15 @@ describe("NewsfeedContent", () => {
       .map(([url]: [string]) => url)
       .filter((url: string) => url.includes("/api/publications"));
     expect(pubCalls.length).toBeGreaterThan(0);
-    expect(pubCalls[0]).not.toContain("event_type=");
-    expect(pubCalls[0]).not.toContain("status=");
+    const params = new URL(pubCalls[0], "http://localhost").searchParams;
+    expect(params.get("event_type")).toBe("status_change");
+    expect(params.get("status")).toBe("revise_and_resubmit,accepted,published");
+    expect(params.get("preset")).toBe("top5_and_field");
+    expect(screen.getByRole("button", { name: "Remove Top-5 & Top Field Journals" })).toBeInTheDocument();
   });
 
-  it("switches to Publications tab and resets filters", async () => {
+  it("switches from All to Publications", async () => {
+    window.history.replaceState({}, "", "?tab=all");
     mockFetch(page1);
 
     renderWithSWR(<NewsfeedContent />);
@@ -243,6 +254,92 @@ describe("NewsfeedContent", () => {
     await waitFor(() => {
       expect(global.fetch).toHaveBeenCalledWith(
         expect.stringContaining("event_type=status_change")
+      );
+    });
+  });
+
+  it("keeps an explicit All view unfiltered when opening a shared link", async () => {
+    window.history.replaceState({}, "", "?tab=all");
+    mockFetch(page1);
+
+    renderWithSWR(<NewsfeedContent />);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith("/api/publications?page=1&per_page=20");
+    });
+  });
+
+  it("removes only the selected filter when its bubble cross is clicked", async () => {
+    window.history.replaceState({}, "", "?preset=top5_journals&search=trade");
+    mockFetch(page1);
+    const user = userEvent.setup();
+
+    renderWithSWR(<NewsfeedContent />);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("preset=top5_journals"));
+    });
+    expect(screen.getByRole("button", { name: "Remove Top-5 Journals" })).toBeInTheDocument();
+    expect(screen.getByText("2 filters applied")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: "Remove Top-5 Journals" }));
+
+    expect(screen.queryByRole("button", { name: "Remove Top-5 Journals" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Remove Search: trade" })).toBeInTheDocument();
+    expect(screen.getByText("1 filter applied")).toBeInTheDocument();
+    expect(mockReplace).toHaveBeenLastCalledWith("/?tab=publications&search=trade", { scroll: false });
+  });
+
+  it("keeps a filter removed via its bubble cross cleared after reopening the URL", async () => {
+    mockFetch(page1);
+    const user = userEvent.setup();
+    const view = renderWithSWR(<NewsfeedContent />);
+
+    await user.click(screen.getByRole("button", { name: "Remove Top-5 & Top Field Journals" }));
+
+    expect(screen.queryByRole("region", { name: "Applied filters" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Filters" })).toBeInTheDocument();
+    expect(mockReplace).toHaveBeenLastCalledWith("/?tab=publications", { scroll: false });
+    view.unmount();
+    window.history.replaceState({}, "", mockReplace.mock.calls.at(-1)[0]);
+    (global.fetch as jest.Mock).mockClear();
+    renderWithSWR(<NewsfeedContent />);
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(expect.stringContaining("event_type=status_change"));
+    });
+    const pubCalls = (global.fetch as jest.Mock).mock.calls
+      .map(([url]: [string]) => url)
+      .filter((url: string) => url.includes("/api/publications"));
+    expect(pubCalls.every((url: string) => !url.includes("preset="))).toBe(true);
+  });
+
+  it("writes the All tab explicitly so it survives reopening the URL", async () => {
+    mockFetch(page1);
+    const user = userEvent.setup();
+    renderWithSWR(<NewsfeedContent />);
+
+    await user.click(screen.getByRole("button", { name: "All" }));
+
+    expect(mockReplace).toHaveBeenLastCalledWith(
+      "/?tab=all&preset=top5_and_field",
+      { scroll: false }
+    );
+  });
+
+  it.each([
+    ["Working Papers", "working_paper"],
+    ["Work in Progress", "work_in_progress"],
+  ])("removes the landing journal restriction when switching to %s", async (label, status) => {
+    mockFetch(page1);
+    const user = userEvent.setup();
+    renderWithSWR(<NewsfeedContent />);
+
+    await user.click(screen.getByRole("button", { name: label }));
+
+    await waitFor(() => {
+      expect(global.fetch).toHaveBeenCalledWith(
+        `/api/publications?page=1&per_page=20&status=${status}&event_type=new_paper`
       );
     });
   });

@@ -20,7 +20,7 @@ export default function ResearcherCard({
                 href={`/researchers/${researcher.id}`}
                 className="hover:text-[var(--accent)] transition-colors"
               >
-                {researcher.first_name} {researcher.last_name}
+                {[researcher.last_name, researcher.first_name].filter(Boolean).join(", ")}
               </Link>
             </h3>
             {affParts.length > 0 && (

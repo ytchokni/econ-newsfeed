@@ -270,14 +270,6 @@ export default function ResearchersContent() {
                 : `Showing ${((data.page - 1) * data.per_page + 1).toLocaleString()}–${((data.page - 1) * data.per_page + researchers.length).toLocaleString()} of ${data.total.toLocaleString()} researchers`}
             </p>
           )}
-          {chips.length > 0 && (
-            <button
-              onClick={clearAll}
-              className="text-xs text-[var(--accent)] bg-transparent border-none cursor-pointer p-0"
-            >
-              Clear filters
-            </button>
-          )}
         </div>
       )}
 

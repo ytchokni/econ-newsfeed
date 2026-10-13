@@ -94,10 +94,10 @@ describe("ResearchersContent", () => {
 
     await waitFor(() => {
       expect(
-        screen.getByText("Max Friedrich Steinhardt")
+        screen.getByText("Steinhardt, Max Friedrich")
       ).toBeInTheDocument();
     });
-    expect(screen.getByText("Jane Doe")).toBeInTheDocument();
+    expect(screen.getByText("Doe, Jane")).toBeInTheDocument();
   });
 
   it("shows loading state when filter is active", () => {
@@ -158,7 +158,7 @@ describe("ResearchersContent", () => {
     expect(screen.getByRole("button", { name: "Previous" })).toBeDisabled();
     fireEvent.click(screen.getByRole("button", { name: "Next" }));
 
-    expect(await screen.findByText("Researcher 101")).toBeInTheDocument();
+    expect(await screen.findByText("101, Researcher")).toBeInTheDocument();
     expect(screen.getByText("Showing 101–101 of 101 researchers")).toBeInTheDocument();
     expect(screen.getByText("Page 2 of 2")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Next" })).toBeDisabled();

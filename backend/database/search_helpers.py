@@ -65,6 +65,75 @@ def top5_venue_clause(
     params.extend(f"%{escape_like(kw)}%" for kw in TOP5_JOURNAL_EXCLUSIONS)
     return clause, params
 
+
+# Curated product selection, not an official journal ranking. Keep each journal
+# with its recognized aliases so that additions are explicit and reviewable.
+# Full-name equality matters: substring matching would admit, for example,
+# European Journal of Political Economy or Journal of Financial Econometrics.
+TOP5_AND_FIELD_JOURNALS = (
+    # Top 5
+    ("American Economic Review", "AER"),
+    ("Econometrica",),
+    ("Journal of Political Economy", "JPE"),
+    ("Quarterly Journal of Economics", "QJE"),
+    ("Review of Economic Studies", "REStud"),
+    # Other leading general-interest journals
+    ("American Economic Review: Insights", "AER: Insights", "AERI"),
+    ("Review of Economics and Statistics", "REStat"),
+    ("Journal of the European Economic Association", "JEEA"),
+    ("Economic Journal", "EJ"),
+    # Applied economics and macroeconomics
+    ("American Economic Journal: Applied Economics", "AEJ: Applied Economics", "AEJ: Applied"),
+    ("American Economic Journal: Economic Policy", "AEJ: Economic Policy", "AEJ: Policy"),
+    ("American Economic Journal: Macroeconomics", "AEJ: Macroeconomics", "AEJ: Macro"),
+    ("American Economic Journal: Microeconomics", "AEJ: Microeconomics", "AEJ: Micro"),
+    ("Journal of Monetary Economics", "JME"),
+    # Development, labor, public, and international economics
+    ("Journal of Development Economics", "JDE"),
+    ("Journal of Labor Economics", "JLE"),
+    ("Journal of Human Resources", "JHR"),
+    ("Journal of Public Economics", "JPubE"),
+    ("Journal of International Economics", "JIE"),
+    # Theory, econometrics, and industrial organization
+    ("Journal of Economic Theory", "JET"),
+    ("Theoretical Economics", "TE"),
+    ("Games and Economic Behavior", "Games & Economic Behavior", "GEB"),
+    ("Journal of Econometrics", "JoE"),
+    ("Quantitative Economics", "QE"),
+    ("Econometric Theory", "ET"),
+    ("RAND Journal of Economics", "RAND"),
+    # Finance
+    ("Journal of Finance", "JF"),
+    ("Journal of Financial Economics", "JFE"),
+    ("Review of Financial Studies", "RFS"),
+    # Health, environmental, and urban economics
+    ("Journal of Health Economics", "JHE"),
+    ("Journal of Environmental Economics and Management", "JEEM"),
+    ("Journal of the Association of Environmental and Resource Economists", "JAERE"),
+    ("Journal of Urban Economics", "JUE"),
+)
+
+
+def top5_and_field_venue_clause(col: str = "p.venue") -> tuple[str, list[str]]:
+    """Match curated journal identities, allowing common punctuation variants.
+
+    Periods/colons, capitalization, surrounding whitespace, and a leading
+    "The" do not change a journal's identity. Do not use substring matching:
+    a different journal containing a selected journal's name must stay out.
+    ``col`` is an internal SQL identifier, never a request parameter.
+    """
+    aliases = {
+        prefix + alias.lower().replace(".", "").replace(":", "")
+        for journal in TOP5_AND_FIELD_JOURNALS
+        for alias in journal
+        for prefix in ("", "the ")
+    }
+    params = sorted(aliases)
+    normalized_col = f"LOWER(TRIM(REPLACE(REPLACE({col}, '.', ''), ':', '')))"
+    placeholders = ", ".join(["%s"] * len(params))
+    return f"{normalized_col} IN ({placeholders})", params
+
+
 TOP100_REPEC_KEYWORDS = [
     # Top 5
     "Econometrica",

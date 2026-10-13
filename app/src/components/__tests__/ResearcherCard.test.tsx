@@ -17,10 +17,10 @@ const researcher: Researcher = {
 };
 
 describe("ResearcherCard", () => {
-  it("renders the researcher name", () => {
+  it("renders the researcher name as Last Name, First Name", () => {
     render(<ResearcherCard researcher={researcher} />);
     expect(
-      screen.getByText("Max Friedrich Steinhardt")
+      screen.getByText("Steinhardt, Max Friedrich")
     ).toBeInTheDocument();
   });
 
@@ -40,7 +40,7 @@ describe("ResearcherCard", () => {
   it("renders without affiliation when position and affiliation are null", () => {
     const noAffiliation = { ...researcher, position: null, affiliation: null };
     render(<ResearcherCard researcher={noAffiliation} />);
-    expect(screen.getByText("Max Friedrich Steinhardt")).toBeInTheDocument();
+    expect(screen.getByText("Steinhardt, Max Friedrich")).toBeInTheDocument();
   });
 
   it("links to the researcher detail page", () => {
