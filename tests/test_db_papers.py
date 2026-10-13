@@ -333,11 +333,12 @@ class TestSearchFeedEvents:
         # The TOP20 list has 24 keywords; verify a known one appears in params
         assert any("MIT" in str(p) for p in params)
 
-    def test_search_fulltext_for_long_terms(self):
+    def test_search_like_for_long_terms(self):
         (_, _, _rc), mock_fetch, _ = self._call(search="inflation")
         sql, params = mock_fetch.call_args[0]
-        assert "MATCH" in sql
-        assert "BOOLEAN MODE" in sql
+        assert "LIKE" in sql
+        assert "%inflation%" in params
+        assert "MATCH" not in sql
 
     def test_search_like_for_short_terms(self):
         (_, _, _rc), mock_fetch, _ = self._call(search="ab")  # 2 chars < default FT_MIN_TOKEN_SIZE=3

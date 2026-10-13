@@ -107,7 +107,6 @@ def get_unenriched_papers(limit=50):
 from backend.database.search_helpers import (
     escape_like as _escape_like,
     escape_fulltext as _escape_fulltext,
-    FT_MIN_TOKEN_SIZE as _FT_MIN_TOKEN_SIZE,
     TOP20_DEPT_KEYWORDS as _TOP20_DEPT_KEYWORDS,
     TOP5_JOURNAL_KEYWORDS as _TOP5_JOURNAL_KEYWORDS,
     TOP100_REPEC_KEYWORDS as _TOP100_REPEC_KEYWORDS,
@@ -262,7 +261,7 @@ def search_feed_events(
     - since: fe.created_at >= datetime value
     - institution_list: affiliation LIKE match (ignored when preset is set)
     - preset: 'top20' matches top-20 economics departments
-    - search: FULLTEXT for >= _FT_MIN_TOKEN_SIZE chars, LIKE fallback for shorter
+    - search: all literal words in title/abstract, or an author-name match
     - event_type: fe.event_type = ...
     - jel_code: comma-split, EXISTS on researcher_jel_codes
     """
@@ -367,18 +366,15 @@ def search_feed_events(
             "CONCAT(r_s.first_name, ' ', r_s.last_name) LIKE %s ESCAPE '\\\\')"
         )
         author_escaped = f"%{_escape_like(search_term)}%"
-        if len(search_term) >= _FT_MIN_TOKEN_SIZE:
-            conditions.append(
-                f"(MATCH(p.title, p.abstract) AGAINST (%s IN BOOLEAN MODE) OR {author_exists})"
-            )
-            params.append(_escape_fulltext(search_term))
-            params.append(author_escaped)
-        else:
-            escaped = f"%{_escape_like(search_term)}%"
-            conditions.append(
-                f"(p.title LIKE %s ESCAPE '\\\\' OR p.abstract LIKE %s ESCAPE '\\\\' OR {author_exists})"
-            )
-            params.extend([escaped, escaped, author_escaped])
+        # Feed-sized LIKE scans also find short words and MySQL fulltext stopwords.
+        words = _escape_fulltext(search_term).split() or [search_term]
+        word_matches = []
+        for word in words:
+            word_matches.append("(p.title LIKE %s ESCAPE '\\\\' OR p.abstract LIKE %s ESCAPE '\\\\')")
+            escaped = f"%{_escape_like(word)}%"
+            params.extend([escaped, escaped])
+        conditions.append(f"(({' AND '.join(word_matches)}) OR {author_exists})")
+        params.append(author_escaped)
 
     if event_type:
         conditions.append("fe.event_type = %s")
