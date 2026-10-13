@@ -326,12 +326,44 @@ class TestSearchFeedEvents:
         # but the institution_list branch is skipped; only one EXISTS block for top20
         assert sql.count("EXISTS") == 1
 
+    @pytest.mark.parametrize("preset", [
+        "top5_rr_accepted", "top5_journals", "top5_and_field", "top100_repec",
+    ])
+    def test_institution_composes_with_journal_presets(self, preset):
+        (_, _, _rc), mock_fetch, mock_count_fetch = self._call(
+            institution_list=["Example University"], preset=preset,
+        )
+        for call in [mock_fetch.call_args, *mock_count_fetch.call_args_list]:
+            sql, params = call[0]
+            assert "r.affiliation LIKE %s" in sql
+            assert "%Example University%" in params
+            assert sql.count("%s") == len(params)
+
     def test_preset_top20_adds_dept_keywords(self):
         (_, _, _rc), mock_fetch, _ = self._call(preset="top20")
         sql, params = mock_fetch.call_args[0]
         assert "EXISTS" in sql
         # The TOP20 list has 24 keywords; verify a known one appears in params
         assert any("MIT" in str(p) for p in params)
+
+    def test_preset_top5_and_field_filters_rows_and_both_counts(self):
+        from backend.database.search_helpers import top5_and_field_venue_clause
+
+        (_, _, _rc), mock_fetch, mock_count_fetch = self._call(
+            preset="top5_and_field", status_list=["published", "accepted"],
+        )
+        clause, venue_params = top5_and_field_venue_clause(
+            "CASE WHEN fe.event_type = 'status_change' AND fe.event_metadata_captured "
+            "THEN fe.event_venue ELSE p.venue END"
+        )
+        for call in [mock_fetch.call_args, *mock_count_fetch.call_args_list]:
+            sql, params = call[0]
+            assert clause in sql
+            assert "p.status IN (%s,%s)" in sql
+            assert "journal of development economics" not in sql
+            assert list(params[:2]) == ["published", "accepted"]
+            assert list(params[2:2 + len(venue_params)]) == venue_params
+            assert sql.count("%s") == len(params)
 
     def test_search_like_for_long_terms(self):
         (_, _, _rc), mock_fetch, _ = self._call(search="inflation")

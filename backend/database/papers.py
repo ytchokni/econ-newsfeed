@@ -111,6 +111,7 @@ from backend.database.search_helpers import (
     TOP5_JOURNAL_KEYWORDS as _TOP5_JOURNAL_KEYWORDS,
     TOP100_REPEC_KEYWORDS as _TOP100_REPEC_KEYWORDS,
     top5_venue_clause as _top5_venue_clause,
+    top5_and_field_venue_clause as _top5_and_field_venue_clause,
 )
 
 _FEED_VISIBLE_EVENT_TYPES = ("new_paper", "status_change")
@@ -259,7 +260,7 @@ def search_feed_events(
     - researcher_ids: EXISTS subquery on authorship (single or multi)
     - status_list: p.status IN (...)
     - since: fe.created_at >= datetime value
-    - institution_list: affiliation LIKE match (ignored when preset is set)
+    - institution_list: affiliation LIKE match (composes with journal presets)
     - preset: 'top20' matches top-20 economics departments
     - search: all literal words in title/abstract, or an author-name match
     - event_type: fe.event_type = ...
@@ -305,7 +306,9 @@ def search_feed_events(
         conditions.append("fe.created_at <= %s")
         params.append(until)
 
-    if institution_list and not preset:
+    if institution_list and (not preset or preset in {
+        "top5_rr_accepted", "top5_journals", "top5_and_field", "top100_repec",
+    }):
         if len(institution_list) == 1:
             conditions.append(
                 "EXISTS (SELECT 1 FROM authorship a "
@@ -349,6 +352,14 @@ def search_feed_events(
 
     if preset == "top5_journals":
         venue_clause, venue_params = _top5_venue_clause("p.venue")
+        conditions.append(venue_clause)
+        params.extend(venue_params)
+
+    if preset == "top5_and_field":
+        venue_clause, venue_params = _top5_and_field_venue_clause(
+            "CASE WHEN fe.event_type = 'status_change' AND fe.event_metadata_captured "
+            "THEN fe.event_venue ELSE p.venue END"
+        )
         conditions.append(venue_clause)
         params.extend(venue_params)
 

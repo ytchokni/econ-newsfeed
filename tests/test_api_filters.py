@@ -352,6 +352,23 @@ class TestPresetTop20Filter:
         assert body["error"]["code"] == "bad_request"
 
 
+def test_top5_and_field_preset_is_accepted_and_forwarded(client):
+    with (
+        patch("backend.api.search_feed_events", return_value=([], 0, 0)) as search,
+        patch("backend.api.get_authors_for_papers", return_value={}),
+        patch("backend.api.get_coauthors_for_papers", return_value={}),
+        patch("backend.api.get_links_for_papers", return_value={}),
+    ):
+        response = client.get(
+            "/api/publications?preset=top5_and_field&status=published,accepted"
+        )
+
+    assert response.status_code == 200
+    assert response.json()["items"] == []
+    assert search.call_args.kwargs["preset"] == "top5_and_field"
+    assert search.call_args.kwargs["status_list"] == ["published", "accepted"]
+
+
 # ---------------------------------------------------------------------------
 # Response shape -- abstract and draft_url_status fields
 # ---------------------------------------------------------------------------

@@ -40,6 +40,10 @@ function filtersFromParams(params: URLSearchParams): FeedFilters {
     const val = params.get(key);
     if (val) (filters as Record<string, string>)[key] = val;
   }
+  // Explicit tabs or filters describe a shared view, including cleared filters.
+  if (!params.has("tab") && Object.keys(filters).length === 0) {
+    filters.preset = "top5_and_field";
+  }
   return filters;
 }
 
@@ -49,7 +53,7 @@ function filtersToParams(
   page: number
 ): URLSearchParams {
   const params = new URLSearchParams();
-  if (tab !== "all") params.set("tab", tab);
+  params.set("tab", tab);
   if (page > 1) params.set("page", String(page));
   for (const key of FILTER_PARAM_KEYS) {
     const val = (filters as Record<string, string | undefined>)[key];
@@ -88,6 +92,7 @@ const PRESET_LABELS: Record<string, string> = {
   top20: "Top-20 Departments",
   has_top5: "Researchers with a Top-5",
   top5_journals: "Top-5 Journals",
+  top5_and_field: "Top-5 & Top Field Journals",
   top100_repec: "Top-100 RePEc Journals",
   following: "My Feed",
 };
@@ -122,15 +127,15 @@ type TabValue = "all" | "working_papers" | "publications" | "work_in_progress";
 const VALID_TABS: TabValue[] = ["all", "working_papers", "publications", "work_in_progress"];
 
 const TAB_DEFS: { key: TabValue; label: string }[] = [
-  { key: "all", label: "All" },
   { key: "work_in_progress", label: "Work in Progress" },
   { key: "working_papers", label: "Working Papers" },
   { key: "publications", label: "Publications" },
+  { key: "all", label: "All" },
 ];
 
 function parseTab(value: string | null): TabValue {
   if (value && VALID_TABS.includes(value as TabValue)) return value as TabValue;
-  return "all";
+  return "publications";
 }
 
 /* ---------- drawer presets per tab ---------- */
@@ -138,6 +143,7 @@ function parseTab(value: string | null): TabValue {
 function drawerPresetsForTab(tab: TabValue): { value: string; label: string }[] {
   if (tab === "publications") {
     return [
+      { value: "top5_and_field", label: "Top-5 & Top Field Journals" },
       { value: "top5_journals", label: "Top-5 Journals" },
       { value: "top100_repec", label: "Top-100 RePEc" },
       { value: "top20", label: "Top-20 Departments" },
@@ -201,6 +207,13 @@ export default function NewsfeedContent() {
 
   const handleTabChange = useCallback((tab: TabValue) => {
     setActiveTab(tab);
+    if (tab === "working_papers" || tab === "work_in_progress") {
+      setFilters((current) =>
+        current.preset === "top5_and_field"
+          ? { ...current, preset: undefined }
+          : current
+      );
+    }
     setPage(1);
   }, []);
 
@@ -317,18 +330,12 @@ export default function NewsfeedContent() {
     [activeTab]
   );
 
-  const hasAnyDrawerFilter = !!(
-    filters.preset || filters.institution ||
-    filters.jel_code || filters.researcher_id ||
-    filters.since || filters.until
-  );
-
   /* ---------- build chips ---------- */
 
   const chips = useMemo<FilterChip[]>(() => {
     const result: FilterChip[] = [];
 
-    if (filters.preset && filters.preset !== "following") {
+    if (filters.preset) {
       result.push({
         key: `preset:${filters.preset}`,
         label: PRESET_LABELS[filters.preset] ?? filters.preset,
@@ -466,7 +473,7 @@ export default function NewsfeedContent() {
         <button
           onClick={() => setDrawerOpen(true)}
           className={`inline-flex items-center gap-1.5 text-xs font-medium px-[13px] py-[7px] rounded-sm cursor-pointer border transition-colors ${
-            hasAnyDrawerFilter
+            chips.length > 0
               ? "bg-[var(--ink)] text-white border-[var(--ink)]"
               : "bg-transparent text-[var(--ink2)] border-[var(--line2)] hover:border-[var(--muted)]"
           }`}
@@ -479,7 +486,7 @@ export default function NewsfeedContent() {
             <circle cx="16" cy="12" r="2" fill="currentColor" />
             <circle cx="10" cy="18" r="2" fill="currentColor" />
           </svg>
-          Filters
+          {chips.length > 0 ? `Filters (${chips.length})` : "Filters"}
         </button>
       </div>
 
@@ -494,14 +501,6 @@ export default function NewsfeedContent() {
               ? "No updates"
               : `Showing ${data.items.length.toLocaleString()} of ${data.total.toLocaleString()} updates`}
           </p>
-        )}
-        {chips.length > 0 && (
-          <button
-            onClick={clearAll}
-            className="text-xs text-[var(--accent)] bg-transparent border-none cursor-pointer p-0"
-          >
-            Clear filters
-          </button>
         )}
       </div>
 

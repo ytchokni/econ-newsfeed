@@ -11,8 +11,15 @@ interface SearchInputProps {
 export default function SearchInput({ value, onChange, placeholder = "Search..." }: SearchInputProps) {
   const [local, setLocal] = useState(value);
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const onChangeRef = useRef(onChange);
 
   useEffect(() => {
+    onChangeRef.current = onChange;
+  }, [onChange]);
+
+  useEffect(() => {
+    if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
     setLocal(value);
   }, [value]);
 
@@ -23,13 +30,17 @@ export default function SearchInput({ value, onChange, placeholder = "Search..."
   const handleChange = (next: string) => {
     setLocal(next);
     if (timerRef.current) clearTimeout(timerRef.current);
-    timerRef.current = setTimeout(() => onChange(next), 300);
+    timerRef.current = setTimeout(() => {
+      timerRef.current = null;
+      onChangeRef.current(next);
+    }, 300);
   };
 
   const handleClear = () => {
     setLocal("");
-    onChange("");
     if (timerRef.current) clearTimeout(timerRef.current);
+    timerRef.current = null;
+    onChange("");
   };
 
   return (
