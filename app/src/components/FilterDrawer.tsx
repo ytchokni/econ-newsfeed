@@ -78,6 +78,7 @@ export default function FilterDrawer({
     ) ?? []);
     focusable()[0]?.focus();
     function handleKey(e: KeyboardEvent) {
+      if (e.defaultPrevented) return;
       if (e.key === "Escape") {
         e.preventDefault();
         closeRef.current();
