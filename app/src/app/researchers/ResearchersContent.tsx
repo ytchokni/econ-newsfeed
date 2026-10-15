@@ -62,11 +62,9 @@ export default function ResearchersContent() {
   const { data, error, isLoading } = useResearchersPage(hasAnyFilter ? filters : undefined, page, !hasAnyFilter);
   const researchers = data?.items;
 
-  useEffect(() => {
-    if (data && page > Math.max(1, data.pages)) {
-      setPage(Math.max(1, data.pages));
-    }
-  }, [data, page]);
+  if (data && data.page === page && page > Math.max(1, data.pages)) {
+    setPage(Math.max(1, data.pages));
+  }
 
   const isInitialMount = useRef(true);
   useEffect(() => {

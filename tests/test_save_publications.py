@@ -214,7 +214,7 @@ class TestAbstractBackfill:
         # fetchone for existing paper fields → abstract is NULL
         # fetchone for page owner → None
         cursor.fetchone.side_effect = [
-            (10,),               # SELECT id FROM papers WHERE title_hash = ...
+            (10, "Test Paper"),   # SELECT id FROM papers WHERE title_hash = ...
             (None, None, None, None),  # Current canonical metadata and status
             None,                # page owner lookup
         ]
@@ -246,7 +246,7 @@ class TestAbstractBackfill:
         mock_get_conn.return_value = conn
         cursor.lastrowid = 0
         cursor.fetchone.side_effect = [
-            (10,),                                 # title_hash lookup
+            (10, "Test Paper"),                     # title_hash lookup
             ("Existing abstract", "2023", "QJE", "published"),  # all fields populated
             None,                                  # page owner lookup
         ]

@@ -19,10 +19,8 @@ class TestOpenalexAuthorIdMatching:
     @patch("backend.database.researchers.fetch_one")
     def test_matches_by_openalex_id_skips_llm(self, mock_fetch_one, mock_fetch_all, mock_disambig):
         # No exact name match, but openalex_author_id match succeeds
-        mock_fetch_one.side_effect = [
-            None,  # exact name match fails
-            {"id": 42},  # openalex_author_id match succeeds
-        ]
+        mock_fetch_one.return_value = None
+        mock_fetch_all.return_value = [{"id": 42, "first_name": "Max", "last_name": "Steinhardt"}]
 
         result = get_researcher_id("M.", "Steinhardt", openalex_author_id="A5023888391")
 

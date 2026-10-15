@@ -76,14 +76,14 @@ async function proxyAdminRequest(
 
 export async function GET(
   request: NextRequest,
-  { params }: { params: { path: string[] } },
+  { params }: { params: Promise<{ path: string[] }> },
 ) {
-  return proxyAdminRequest(request, params);
+  return proxyAdminRequest(request, await params);
 }
 
 export async function POST(
   request: NextRequest,
-  { params }: { params: { path: string[] } },
+  { params }: { params: Promise<{ path: string[] }> },
 ) {
-  return proxyAdminRequest(request, params);
+  return proxyAdminRequest(request, await params);
 }

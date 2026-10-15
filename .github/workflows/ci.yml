@@ -50,7 +50,7 @@ jobs:
 
       - uses: actions/setup-node@v6
         with:
-          node-version: "20"
+          node-version: "24"
           cache: npm
           cache-dependency-path: app/package-lock.json
 
@@ -58,8 +58,7 @@ jobs:
         run: npm ci
 
       - name: Security audit (npm)
-        run: npm audit --audit-level=high || true
-        continue-on-error: true
+        run: npm audit --omit=dev --audit-level=high
 
       - name: TypeScript check
         run: npx tsc --noEmit

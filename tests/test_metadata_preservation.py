@@ -148,7 +148,8 @@ def test_enrichment_queue_defers_recent_attempts_and_uses_canonical_doi():
     sql, params = fetch.call_args.args
     assert 'enrichment_attempted_at < UTC_TIMESTAMP() - INTERVAL 7 DAY' in sql
     assert 'ORDER BY p.enrichment_attempted_at,' in sql
-    assert 'COALESCE(p.doi, MAX(pl.doi)) AS link_doi' in sql
+    assert 'p.doi AS link_doi' in sql
+    assert 'MAX(pl.doi)' not in sql
     assert params == (50,)
 
 

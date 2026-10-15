@@ -10,6 +10,11 @@ interface SearchInputProps {
 
 export default function SearchInput({ value, onChange, placeholder = "Search..." }: SearchInputProps) {
   const [local, setLocal] = useState(value);
+  const [previousValue, setPreviousValue] = useState(value);
+  if (value !== previousValue) {
+    setPreviousValue(value);
+    setLocal(value);
+  }
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onChangeRef = useRef(onChange);
 
@@ -20,7 +25,6 @@ export default function SearchInput({ value, onChange, placeholder = "Search..."
   useEffect(() => {
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = null;
-    setLocal(value);
   }, [value]);
 
   useEffect(() => {

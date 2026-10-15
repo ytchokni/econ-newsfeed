@@ -15,6 +15,7 @@ from backend.database import (
 )
 from backend.database.researchers import is_abbreviation_of, is_compatible_name, merge_researchers, refresh_has_top5
 from backend.database.snapshots import _STATUS_RANK
+from backend.database.papers import title_hash_candidates
 from backend.publication_rules import is_working_paper_series
 from backend.config import guard_text_fields
 from backend.pipeline.publication import clean_title
@@ -200,6 +201,20 @@ class PaperSaver:
 
                     cursor = conn.cursor(buffered=True)
 
+                    if not title.isascii():
+                        hashes = title_hash_candidates(title)
+                        cursor.execute(
+                            f"SELECT id, title, title_hash FROM papers WHERE title_hash IN ({','.join(['%s'] * len(hashes))}) FOR UPDATE",
+                            tuple(hashes),
+                        )
+                        matches = [row for row in cursor.fetchall()
+                                   if normalize_title(row[1]) == normalize_title(title)]
+                        if len(matches) > 1:
+                            raise ValueError('Ambiguous legacy title identity; repair duplicates first')
+                        if matches and matches[0][2] != title_hash:
+                            cursor.execute('UPDATE papers SET title_hash = %s WHERE id = %s',
+                                           (title_hash, matches[0][0]))
+
                     cursor.execute(
                         """INSERT IGNORE INTO papers
                            (source_url, title, title_hash, year, venue, abstract,
@@ -219,12 +234,14 @@ class PaperSaver:
                         is_new = True
                         new_to_this_url = True
                     else:
-                        cursor.execute("SELECT id FROM papers WHERE title_hash = %s", (title_hash,))
+                        cursor.execute("SELECT id, title FROM papers WHERE title_hash = %s", (title_hash,))
                         row = cursor.fetchone()
                         if not row:
                             logging.error(f"Could not find publication after INSERT IGNORE: {pub['title']}")
                             continue
                         publication_id = row[0]
+                        if normalize_title(row[1]) != normalize_title(title):
+                            raise ValueError('Title hash belongs to a different legacy title; repair identity first')
 
                         cursor.execute("SELECT abstract, year, venue, status FROM papers WHERE id = %s FOR UPDATE", (publication_id,))
                         existing = cursor.fetchone()
@@ -372,55 +389,35 @@ class PaperSaver:
     @staticmethod
     def apply_title_rename(paper_id: int, old_title: str, new_title: str,
                            metadata: dict, source_url: str) -> None:
-        """Apply a known title rename: snapshot, update, dedup collisions.
+        """Apply a known title rename; refuse collisions with another identity.
 
         metadata should contain status, venue, abstract, draft_url, year.
         """
         new_hash = compute_title_hash(new_title)
 
-        append_paper_snapshot(
-            paper_id=paper_id,
-            status=metadata.get('status'),
-            venue=metadata.get('venue'),
-            abstract=metadata.get('abstract'),
-            draft_url=metadata.get('draft_url'),
-            year=metadata.get('year'),
-            source_url=source_url,
-            title=old_title,
-        )
-
         with get_connection() as conn:
             cursor = conn.cursor(buffered=True)
             try:
                 # A paper with the target title may already exist (typically
-                # saved as "new" earlier in the same run). It must be absorbed
-                # BEFORE the title UPDATE — updating first violates
-                # uq_title_hash and crashed the extraction worker (#177).
+                # saved as "new" earlier in the same run). Abstain rather than
+                # deleting that record without validated title/author evidence.
+                hashes = title_hash_candidates(new_title)
                 cursor.execute(
-                    "SELECT id FROM papers WHERE title_hash = %s AND id != %s",
-                    (new_hash, paper_id),
+                    f"SELECT id FROM papers WHERE title_hash IN ({','.join(['%s'] * len(hashes))}) AND id != %s FOR UPDATE",
+                    (*hashes, paper_id),
                 )
                 dup = cursor.fetchone()
                 if dup:
-                    dup_id = dup[0]
-                    # Reassign children to the surviving paper; rows that would
-                    # violate a UNIQUE constraint are skipped (IGNORE) and
-                    # cleaned up by ON DELETE CASCADE. feed_events are deleted
-                    # instead — reassigning them would give the survivor a
-                    # duplicate new_paper event.
-                    from backend.enrichment.paper_merge import _CHILD_TABLES
-                    for table, col in _CHILD_TABLES:
-                        if table == 'feed_events':
-                            continue
-                        cursor.execute(
-                            f"UPDATE IGNORE `{table}` SET `{col}` = %s WHERE `{col}` = %s",
-                            (paper_id, dup_id),
-                        )
-                    cursor.execute("DELETE FROM feed_events WHERE paper_id = %s", (dup_id,))
-                    cursor.execute("DELETE FROM papers WHERE id = %s", (dup_id,))
+                    raise ValueError('Title rename collides with another paper; require a validated merge')
                 cursor.execute(
                     "UPDATE papers SET title = %s, title_hash = %s WHERE id = %s",
                     (new_title, new_hash, paper_id),
+                )
+                append_paper_snapshot(
+                    paper_id=paper_id, status=metadata.get('status'),
+                    venue=metadata.get('venue'), abstract=metadata.get('abstract'),
+                    draft_url=metadata.get('draft_url'), year=metadata.get('year'),
+                    source_url=source_url, title=old_title, conn=conn,
                 )
                 conn.commit()
             except Exception as e:

@@ -3,10 +3,12 @@ import logging
 import os
 from collections import defaultdict
 from datetime import datetime, timezone
+from html import escape
 
 import resend
 
 from backend.database import Database
+from backend.database.users import record_digest_delivery
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +28,7 @@ def _render_digest_html(events: list[dict], user_name: str | None,
 
     since_str = since.strftime("%B %d")
     until_str = until.strftime("%B %d, %Y")
-    greeting = f"Hi {user_name}" if user_name else "Hi"
+    greeting = f"Hi {escape(user_name)}" if user_name else "Hi"
 
     sections = []
     for researcher_name, researcher_events in sorted(by_researcher.items()):
@@ -36,17 +38,17 @@ def _render_digest_html(events: list[dict], user_name: str | None,
             if ev['paper_id'] in seen_papers:
                 continue
             seen_papers.add(ev['paper_id'])
-            status_label = (ev.get('status') or 'unknown').replace('_', ' ').title()
-            paper_url = f"{FRONTEND_URL}/papers/{ev['paper_id']}"
+            status_label = escape((ev.get('status') or 'unknown').replace('_', ' ').title())
+            paper_url = escape(f"{FRONTEND_URL}/papers/{int(ev['paper_id'])}", quote=True)
             items.append(
                 f'<li style="margin-bottom:8px;">'
-                f'<a href="{paper_url}" style="color:#2563eb;text-decoration:none;">{ev["title"]}</a>'
+                f'<a href="{paper_url}" style="color:#2563eb;text-decoration:none;">{escape(ev["title"])}</a>'
                 f' <span style="color:#6b7280;font-size:13px;">({status_label})</span>'
                 f'</li>'
             )
         if items:
             sections.append(
-                f'<h3 style="margin:16px 0 8px;color:#1a2332;font-size:16px;">{researcher_name}</h3>'
+                f'<h3 style="margin:16px 0 8px;color:#1a2332;font-size:16px;">{escape(researcher_name)}</h3>'
                 f'<ul style="padding-left:20px;margin:0;">{"".join(items)}</ul>'
             )
 
@@ -63,8 +65,8 @@ def _render_digest_html(events: list[dict], user_name: str | None,
   {body_html}
   <hr style="border:none;border-top:1px solid #e5e7eb;margin:24px 0;">
   <p style="font-size:12px;color:#9ca3af;">
-    <a href="{FRONTEND_URL}" style="color:#2563eb;">Manage your follows</a> ·
-    <a href="{unsubscribe_url}" style="color:#2563eb;">Unsubscribe</a>
+    <a href="{escape(FRONTEND_URL, quote=True)}" style="color:#2563eb;">Manage your follows</a> ·
+    <a href="{escape(unsubscribe_url, quote=True)}" style="color:#2563eb;">Unsubscribe</a>
   </p>
 </body>
 </html>"""
@@ -105,8 +107,14 @@ def run_weekly_digest() -> int:
         if since.tzinfo is None:
             since = since.replace(tzinfo=timezone.utc)
 
+        # Keep the display window, but query undelivered events since signup.
+        # A later insertion can carry an arbitrarily old source/fetch date.
+        created_at = user["created_at"]
+        if isinstance(created_at, str):
+            created_at = datetime.fromisoformat(created_at)
         events = Database.get_feed_events_for_researchers(
-            user["researcher_ids"], since
+            user["researcher_ids"], created_at, user_id=user["id"],
+            legacy_since=since,
         )
         if not events:
             continue
@@ -127,7 +135,7 @@ def run_weekly_digest() -> int:
         )
 
         if _send_email(user["email"], subject, html):
-            Database.update_last_digest_sent(user["id"], now)
+            record_digest_delivery(user["id"], [event["event_id"] for event in events], now)
             sent += 1
             logger.info("Digest sent to %s (%d events)", user["email"], len(events))
 

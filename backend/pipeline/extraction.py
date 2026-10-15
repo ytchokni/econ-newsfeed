@@ -20,6 +20,7 @@ from backend.database import (
     append_researcher_snapshot,
 )
 from backend.pipeline.feed_events import FeedEventEmitter
+from backend.database.papers import find_papers_by_titles
 from backend.pipeline.html_fetcher import CONTENT_MAX_CHARS, HTMLFetcher
 from backend.enrichment.link_extractor import match_and_save_paper_links
 from backend.pipeline.paper_saver import PaperSaver, validate_title_change
@@ -126,11 +127,12 @@ def persist_extraction(url: str, url_id: int, pubs: list[dict],
     if reconcile_titles:
         renames = PaperSaver.reconcile_title_renames(url, pubs)
         for r in renames:
-            FeedEventEmitter.emit_title_change(r.paper_id, r.old_title, r.new_title,
-                                              event_date=event_date, source_url=url)
+            if not is_seed:
+                FeedEventEmitter.emit_title_change(r.paper_id, r.old_title, r.new_title,
+                                                  event_date=event_date, source_url=url)
 
     match_and_save_paper_links(url_id, pubs)
-    _append_snapshots(pubs, url, event_date)
+    _append_snapshots(pubs, url, event_date, emit_events=not is_seed)
 
 
 _STALENESS_YEARS = 10
@@ -147,25 +149,20 @@ _INTERESTING_TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
 })
 
 
-def _append_snapshots(pubs: list[dict], source_url: str, event_date=None) -> None:
+def _append_snapshots(pubs: list[dict], source_url: str, event_date=None, *, emit_events=True) -> None:
     """Append paper snapshots and emit status_change events when detected."""
-    hash_to_pub = {}
+    title_to_pub = {}
     for pub in pubs:
         title = pub.get('title')
         if title:
-            hash_to_pub[compute_title_hash(title)] = pub
-    if not hash_to_pub:
+            title_to_pub[title] = pub
+    if not title_to_pub:
         return
 
     current_year = datetime.now(timezone.utc).year
 
-    placeholders = ",".join(["%s"] * len(hash_to_pub))
-    rows = fetch_all(
-        f"SELECT id, title_hash FROM papers WHERE title_hash IN ({placeholders})",
-        list(hash_to_pub.keys()),
-    )
-    for row in rows:
-        pub = hash_to_pub[row['title_hash']]
+    for title, row in find_papers_by_titles(list(title_to_pub)).items():
+        pub = title_to_pub[title]
         result = append_paper_snapshot(
             paper_id=row['id'],
             status=pub.get('status'),
@@ -176,7 +173,7 @@ def _append_snapshots(pubs: list[dict], source_url: str, event_date=None) -> Non
             source_url=source_url,
             title=pub.get('title'),
         )
-        if result.status_changed:
+        if result.status_changed and emit_events:
             pub_year = pub.get('year')
             if pub_year and pub_year.isdigit() and (current_year - int(pub_year)) > _STALENESS_YEARS:
                 logger.info(
@@ -263,8 +260,7 @@ def _apply_title_change(change: dict, source_url: str, event_date) -> None:
                      old_title[:50], new_title[:50])
         return
 
-    old_hash = compute_title_hash(old_title)
-    row = fetch_one("SELECT id FROM papers WHERE title_hash = %s", (old_hash,))
+    row = find_papers_by_titles([old_title]).get(old_title)
     if not row:
         logger.warning("Title change for unknown paper: %s -> %s", old_title, new_title)
         return

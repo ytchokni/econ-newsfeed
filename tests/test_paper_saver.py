@@ -54,7 +54,7 @@ class TestSavePublicationsReturnsResults:
         conn, cursor = _mock_conn(lastrowid=0)
         mock_get_conn.return_value = conn
         cursor.fetchone.side_effect = [
-            (10,),
+            (10, "Existing Paper"),
             (None, None, None, None),
             None,
         ]
@@ -163,7 +163,7 @@ class TestBackfill:
     def test_backfills_when_existing_has_nulls(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn(lastrowid=0)
         mock_get_conn.return_value = conn
-        cursor.fetchone.side_effect = [(10,), (None, None, None, None), None]
+        cursor.fetchone.side_effect = [(10, "Paper"), (None, None, None, None), None]
         cursor.rowcount = 1
 
         PaperSaver.save_publications("http://example.com", [{
@@ -180,7 +180,7 @@ class TestBackfill:
     def test_skips_backfill_when_all_fields_present(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn(lastrowid=0)
         mock_get_conn.return_value = conn
-        cursor.fetchone.side_effect = [(10,), ("Existing", "2023", "QJE", "published"), None]
+        cursor.fetchone.side_effect = [(10, "Paper"), ("Existing", "2023", "QJE", "published"), None]
         cursor.rowcount = 1
 
         PaperSaver.save_publications("http://example.com", [{
@@ -202,7 +202,7 @@ class TestBackfill:
     ):
         conn, cursor = _mock_conn(lastrowid=0)
         mock_get_conn.return_value = conn
-        cursor.fetchone.side_effect = [(10,), (None, '2025', None, 'revise_and_resubmit'), None]
+        cursor.fetchone.side_effect = [(10, 'Paper'), (None, '2025', None, 'revise_and_resubmit'), None]
         PaperSaver.save_publications('http://example.com', [{
             'title': 'Paper', 'authors': [['John', 'Doe']],
             'abstract': 'Missing abstract', 'status': status, 'venue': venue,
@@ -256,9 +256,7 @@ class TestAuthorLookupCache:
 
 
 class TestApplyTitleRenameCollision:
-    """apply_title_rename must absorb an existing paper with the target
-    title_hash BEFORE updating the title — updating first violates
-    uq_title_hash and crashes the extraction worker (#177)."""
+    """A rename collision must refuse without mutating either paper."""
 
     def _run(self, dup_id=None):
         """Run apply_title_rename with a mocked connection; return executed SQL list."""
@@ -279,31 +277,9 @@ class TestApplyTitleRenameCollision:
             )
         return [str(c[0][0]) for c in cursor.execute.call_args_list], conn
 
-    def test_collision_absorbed_before_title_update(self):
-        sqls, _ = self._run(dup_id=77)
-        update_idx = next(i for i, s in enumerate(sqls) if "UPDATE papers SET title" in s)
-        delete_idx = next(i for i, s in enumerate(sqls) if "DELETE FROM papers" in s)
-        assert delete_idx < update_idx, (
-            "duplicate paper must be removed BEFORE the title UPDATE, "
-            f"or the UPDATE violates uq_title_hash; order was: {sqls}"
-        )
-
-    def test_collision_moves_authorship_to_survivor(self):
-        sqls, _ = self._run(dup_id=77)
-        assert any("authorship" in s and "UPDATE IGNORE" in s for s in sqls), (
-            "dup paper's authorship rows must be reassigned, not dropped"
-        )
-
-    def test_collision_moves_links_and_snapshots(self):
-        sqls, _ = self._run(dup_id=77)
-        assert any("paper_links" in s for s in sqls)
-        assert any("paper_snapshots" in s for s in sqls)
-
-    def test_collision_deletes_dup_feed_events(self):
-        """Dup's feed events are deleted (not reassigned) to avoid duplicate
-        new_paper events on the surviving paper."""
-        sqls, _ = self._run(dup_id=77)
-        assert any("DELETE FROM feed_events" in s for s in sqls)
+    def test_collision_refused_without_deleting_history(self):
+        with pytest.raises(ValueError, match='require a validated merge'):
+            self._run(dup_id=77)
 
     def test_no_collision_single_update_no_deletes(self):
         sqls, conn = self._run(dup_id=None)

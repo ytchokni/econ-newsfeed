@@ -95,11 +95,12 @@ def _ensure_scrape_lock_held() -> None:
 
 
 def _lock_keepalive_loop() -> None:
-    """Ping idle lock connections every 60s and re-acquire if dead.
+    """Ping idle lock connections every 60s; exit on loss of scheduler ownership.
 
     Both _lock_conn (scrape) and _scheduler_lock_conn sit idle for hours/days.
     Connections can die from Docker networking, MySQL restarts, or disk pressure.
-    A periodic ping resets the idle timer; if dead, re-acquire on a new connection.
+    A periodic ping resets the idle timer. Scrapes use their existing recovery
+    path; a lost scheduler lease terminates all workers before they can overlap.
     """
     global _lock_conn, _scrape_lock_lost, _scheduler_lock_conn
     while not _keepalive_stop.wait(_LOCK_KEEPALIVE_SECONDS):
@@ -127,15 +128,27 @@ def _lock_keepalive_loop() -> None:
             try:
                 scheduler_conn.ping(reconnect=False)
             except Exception as e:
-                logger.warning("Lock keepalive ping failed (scheduler): %s — attempting re-acquire", e)
-                new_conn = _reacquire_lock("scheduler", _SCHEDULER_LOCK_NAME)
-                with _lock_conn_guard:
-                    if _scheduler_lock_conn is scheduler_conn:
-                        _scheduler_lock_conn = new_conn
-                        stale_conn = scheduler_conn
-                    else:
-                        stale_conn = new_conn
-                _close_lock_connection(stale_conn)
+                logger.critical("Scheduler lease connection lost: %s; restarting worker", type(e).__name__)
+                _exit_without_scheduler_lease()
+                return
+
+
+def _exit_without_scheduler_lease() -> None:
+    """Stop this worker before it can continue work without singleton ownership.
+
+    Reacquiring a lost connection cannot fence already-running threads against a
+    new owner. Gunicorn (or the production container restart policy) restarts the
+    process, and startup must acquire a fresh lease before launching any jobs.
+    Do not wait for in-flight jobs: they no longer have permission to write.
+    """
+    _enrichment_stop_event.set()
+    _extraction_stop_event.set()
+    _keepalive_stop.set()
+    try:
+        if _scheduler is not None:
+            _scheduler.pause()
+    finally:
+        os._exit(1)
 
 
 def _release_db_lock(conn: "mysql.connector.connection.MySQLConnection") -> None:

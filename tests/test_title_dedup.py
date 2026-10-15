@@ -66,11 +66,9 @@ class TestNormalizeTitle:
     def test_whitespace_only_returns_empty(self):
         assert normalize_title("   ") == ""
 
-    def test_unicode_letters_outside_az_removed(self):
-        """Only a-z, 0-9, and spaces remain after normalization."""
-        result = normalize_title("Café Economics")
-        # 'é' is not in [a-z0-9] so should be stripped
-        assert re.fullmatch(r'[a-z0-9 ]*', result), f"Unexpected chars in: {result!r}"
+    def test_unicode_letters_are_preserved(self):
+        assert normalize_title("Cafe\u0301 Economics") == "café economics"
+        assert normalize_title("日本の経済政策") == "日本の経済政策"
 
     def test_idempotent(self):
         """Normalizing an already-normalized string is a no-op."""
@@ -136,20 +134,7 @@ class TestComputeTitleHash:
         expected = hashlib.sha256(normalized.encode("utf-8")).hexdigest()
         assert compute_title_hash(title) == expected
 
-    def test_empty_title_returns_hash_of_empty_string(self):
-        """compute_title_hash('') should not raise and should hash ''."""
-        h = compute_title_hash("")
-        expected = hashlib.sha256(b"").hexdigest()
-        assert h == expected
-
-    def test_none_title_returns_hash_of_empty_string(self):
-        """compute_title_hash(None) delegates to normalize_title which returns ''."""
-        h = compute_title_hash(None)
-        expected = hashlib.sha256(b"").hexdigest()
-        assert h == expected
-
-    def test_punctuation_only_title_hashes_as_empty(self):
-        """A title that is purely punctuation normalizes to '' and hashes accordingly."""
-        h = compute_title_hash("!!!")
-        expected = hashlib.sha256(b"").hexdigest()
-        assert h == expected
+    @pytest.mark.parametrize('title', ['', None, '!!!', '2024', '１２３'])
+    def test_non_discriminative_title_is_rejected(self, title):
+        with pytest.raises(ValueError, match='must contain letters'):
+            compute_title_hash(title)

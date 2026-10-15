@@ -66,6 +66,7 @@ from backend.database import (
 )
 from backend.auth import get_current_user, get_optional_user
 from backend.database.snapshots import STATUS_ORDER
+from backend.database.researchers import search_researcher_options
 from backend.pipeline.publication import VALID_STATUSES
 
 FILTER_VALID_STATUSES = frozenset(STATUS_ORDER)
@@ -513,6 +514,29 @@ def health_check():
     return {"status": "ok"}
 
 
+@app.get("/api/ready")
+def readiness_check():
+    """Database and mandatory schema readiness, separate from process liveness."""
+    from backend.database.schema import REQUIRED_SCHEMA_QUERY, SNAPSHOT_GUARD_TRIGGER
+    try:
+        row = fetch_one(
+            REQUIRED_SCHEMA_QUERY,
+            (SNAPSHOT_GUARD_TRIGGER,),
+        )
+    except Exception:
+        raise HTTPException(status_code=503, detail="Database is unavailable")
+    if not row or row["schema_ready"] != 1:
+        raise HTTPException(status_code=503, detail="Required publication schema is unavailable")
+    return {"status": "ready"}
+
+
+@app.get("/api/capabilities")
+def capabilities(response: Response):
+    """Only advertise delivery features that this deployment can run."""
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return {"weekly_digest_available": scheduler.DIGEST_ENABLED}
+
+
 @app.get("/api/metrics")
 def metrics(request: Request, response: Response):
     """Basic application metrics for monitoring."""
@@ -743,6 +767,8 @@ async def update_notifications(
     user: dict = Depends(get_current_user),
 ):
     """Update notification preferences."""
+    if body.digest_enabled and not scheduler.DIGEST_ENABLED:
+        raise HTTPException(status_code=503, detail="Weekly email delivery is temporarily unavailable")
     with connection_scope():
         Database.update_notification_prefs(user["id"], body.digest_enabled)
     return {"digest_enabled": body.digest_enabled}
@@ -1087,18 +1113,42 @@ def get_filter_options(request: Request, response: Response):
         fields = fetch_all(
             "SELECT id, name, slug FROM research_fields ORDER BY name"
         )
-        researchers = fetch_all(
-            "SELECT id, first_name, last_name FROM researchers ORDER BY last_name, first_name"
-        )
         return {
             "institutions": [r['affiliation'] for r in institutions],
             "positions": [r['position'] for r in positions],
             "fields": [{"id": r['id'], "name": r['name'], "slug": r['slug']} for r in fields],
-            "researchers": [{"id": r['id'], "name": f"{r['first_name']} {r['last_name']}"} for r in researchers],
+            "researchers": [],  # Legacy shape; names are loaded by the capped chooser endpoint.
         }
 
     response.headers["Cache-Control"] = "public, max-age=600"
     return _filter_options_cache.get_or_set(_fetch)
+
+
+@app.get("/api/researcher-options")
+@limiter.limit("60/minute")
+def get_researcher_options(
+    request: Request,
+    response: Response,
+    search: str = Query("", max_length=200),
+    ids: str | None = Query(None, max_length=600),
+):
+    selected_ids = None
+    if ids:
+        try:
+            selected_ids = list(dict.fromkeys(int(value) for value in ids.split(",")))
+        except ValueError:
+            raise HTTPException(status_code=400, detail="ids must be comma-separated positive integers")
+        if len(selected_ids) > 50 or any(value <= 0 or value > 2147483647 for value in selected_ids):
+            raise HTTPException(status_code=400, detail="Choose at most 50 valid researcher IDs")
+    search = search.strip()
+    if selected_ids and search:
+        raise HTTPException(status_code=400, detail="Use search or ids, not both")
+    if not selected_ids and len(search) < 2:
+        return {"items": []}
+    with connection_scope():
+        rows = search_researcher_options(search=search, researcher_ids=selected_ids)
+    response.headers["Cache-Control"] = "public, max-age=60"
+    return {"items": rows}
 
 
 @app.get("/api/researchers", response_model=PaginatedResearchers)

@@ -95,14 +95,14 @@ class TestMatchLinkToPaper:
 
 class TestMatchAndSavePaperLinks:
     @patch("backend.enrichment.link_extractor.execute_query")
-    @patch("backend.enrichment.link_extractor.fetch_all")
+    @patch("backend.enrichment.link_extractor.find_papers_by_titles")
     @patch("backend.enrichment.link_extractor.compute_title_hash", return_value="abc123")
     @patch("backend.enrichment.link_extractor.HTMLFetcher.get_raw_html")
     def test_matches_and_saves(self, mock_get_raw, mock_hash, mock_fetch_all, mock_execute):
         html = '<div><a href="https://ssrn.com/1">Trade and Wages</a></div>'
         mock_get_raw.return_value = html
         # Batch query returns matching paper
-        mock_fetch_all.return_value = [{'id': 10, 'title_hash': 'abc123'}]
+        mock_fetch_all.return_value = {'Trade and Wages': {'id': 10}}
 
         match_and_save_paper_links(url_id=1, publications=[{'title': 'Trade and Wages'}])
 
@@ -156,7 +156,7 @@ class TestMatchAndSavePaperLinksWithDoi:
     """DOI-based matching: resolve DOI from URL, get canonical title, match to paper."""
 
     @patch("backend.enrichment.link_extractor.execute_query")
-    @patch("backend.enrichment.link_extractor.fetch_all")
+    @patch("backend.enrichment.link_extractor.find_papers_by_titles")
     @patch("backend.enrichment.link_extractor.fetch_one")
     @patch("backend.enrichment.link_extractor.compute_title_hash")
     @patch("backend.enrichment.link_extractor.HTMLFetcher.get_raw_html")
@@ -174,7 +174,7 @@ class TestMatchAndSavePaperLinksWithDoi:
              }):
             mock_hash.return_value = "abc123"
             mock_fetch_one.return_value = {"id": 10}
-            mock_fetch_all.return_value = []
+            mock_fetch_all.return_value = {'Extreme Air Pollution in Global Megacities': {'id': 10}}
 
             match_and_save_paper_links(url_id=1, publications=[])
 
@@ -185,7 +185,7 @@ class TestMatchAndSavePaperLinksWithDoi:
         assert "10.1007/s40641-016-0032-z" in params  # doi stored
 
     @patch("backend.enrichment.link_extractor.execute_query")
-    @patch("backend.enrichment.link_extractor.fetch_all")
+    @patch("backend.enrichment.link_extractor.find_papers_by_titles")
     @patch("backend.enrichment.link_extractor.compute_title_hash")
     @patch("backend.enrichment.link_extractor.HTMLFetcher.get_raw_html")
     def test_falls_back_to_anchor_text_when_no_doi(self, mock_get_raw, mock_hash,
@@ -196,7 +196,7 @@ class TestMatchAndSavePaperLinksWithDoi:
 
         with patch("backend.enrichment.link_extractor.resolve_doi", return_value=None):
             mock_hash.return_value = "abc123"
-            mock_fetch_all.return_value = [{'id': 10, 'title_hash': 'abc123'}]
+            mock_fetch_all.return_value = {'Trade and Innovation': {'id': 10}}
 
             match_and_save_paper_links(url_id=1, publications=[{'title': 'Trade and Innovation'}])
 

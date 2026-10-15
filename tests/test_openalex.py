@@ -8,6 +8,17 @@ os.environ.setdefault("GOOGLE_API_KEY", "test-google-key")
 os.environ.setdefault("SCRAPE_API_KEY", "test-key")
 
 from unittest.mock import patch, MagicMock
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def mock_durable_budget():
+    # API client tests never access the real daily ledger.
+    with (
+        patch("backend.enrichment.openalex.has_budget_remaining", return_value=True),
+        patch("backend.enrichment.openalex.reserve_request", return_value=True),
+    ):
+        yield
 
 
 class TestUpdateOpenalexData:
@@ -77,14 +88,14 @@ class TestGetUnenrichedPapers:
             {"id": 2, "title": "Immigration Effects", "abstract": "Existing abstract",
              "author_name": "Jane Doe"},
         ]
-        with patch("backend.database.papers.fetch_all", return_value=mock_rows) as mock_fetch:
+        with patch("backend.database.papers.fetch_all", side_effect=[mock_rows, []]) as mock_fetch:
             from backend.database.papers import get_unenriched_papers
             result = get_unenriched_papers(limit=50)
 
         assert len(result) == 2
         assert result[0]["id"] == 1
         # Verify SQL filters on openalex_id IS NULL
-        sql = mock_fetch.call_args[0][0]
+        sql = mock_fetch.call_args_list[0][0][0]
         assert "openalex_id IS NULL" in sql
 
 
@@ -132,7 +143,7 @@ class TestSearchWork:
         with patch("backend.enrichment.openalex._get_session") as mock_session:
             mock_session.return_value.get.return_value = mock_resp
             from backend.enrichment.openalex import search_work
-            result = search_work("Trade and Wages", "Steinhardt")
+            result = search_work("Trade and Wages", "Max Steinhardt")
 
         assert result is not None
         assert result["doi"] == "10.1257/aer.20181234"
@@ -218,6 +229,7 @@ class TestEnrichPublication:
     def test_enriches_new_paper(self):
         """Paper without openalex_id gets enriched with DOI and coauthors."""
         openalex_result = {
+            "title": "Trade and Wages",
             "doi": "10.1257/aer.20181234",
             "openalex_id": "W2741809807",
             "coauthors": [
@@ -252,6 +264,8 @@ class TestEnrichPublication:
     def test_skips_abstract_when_existing(self):
         """If paper already has an abstract from scraping, don't overwrite."""
         openalex_result = {
+            "title": "Test Paper",
+            "author_names": ["Alice Author"],
             "doi": "10.1234/test",
             "openalex_id": "W999",
             "coauthors": [],
@@ -267,7 +281,7 @@ class TestEnrichPublication:
             enrich_publication(
                 paper_id=1,
                 title="Test Paper",
-                author_name="Author",
+                author_name="Alice Author",
                 existing_abstract="Already have an abstract.",
             )
 
@@ -306,7 +320,10 @@ class TestEnrichNewPublications:
         }
         with (
             patch("backend.enrichment.openalex.get_unenriched_papers", return_value=unenriched),
-            patch("backend.enrichment.openalex.search_work", return_value=openalex_result),
+            patch("backend.enrichment.openalex.search_work", side_effect=lambda title, author: {
+                **openalex_result, "title": title,
+                "coauthors": [{"display_name": author, "openalex_author_id": "A123"}],
+            }),
             patch("backend.enrichment.openalex.update_openalex_data"),
             patch("backend.enrichment.openalex.execute_query"),
             patch("backend.enrichment.openalex._backfill_researcher_openalex_ids"),
@@ -341,6 +358,9 @@ class TestEnrichNewPublications:
     def test_budget_exhaustion_does_not_mark_unattempted_papers(self):
         with (
             patch("backend.enrichment.openalex._check_budget", return_value=False),
+            patch("backend.enrichment.openalex.get_unenriched_papers", return_value=[
+                {"id": 1, "title": "Test", "author_name": "John Smith"},
+            ]),
             patch("backend.enrichment.openalex.execute_query") as mark,
         ):
             from backend.enrichment.openalex import enrich_new_publications
@@ -356,7 +376,7 @@ def test_failed_search_consumes_budget():
     with (
         patch.object(openalex, '_get_session', return_value=session),
         patch.object(openalex, '_check_budget', return_value=True),
-        patch.object(openalex, '_increment_budget') as increment,
+        patch.object(openalex, '_reserve_budget', return_value=True) as increment,
     ):
         assert openalex.search_work('Bad query', 'Jane Doe') is None
     increment.assert_called_once()
@@ -368,7 +388,7 @@ def test_rate_limit_retry_cannot_exceed_remaining_budget():
     session.get.return_value.status_code = 429
     with (
         patch.object(openalex, '_check_budget', return_value=False),
-        patch.object(openalex, '_increment_budget') as increment,
+        patch.object(openalex, '_reserve_budget', return_value=True) as increment,
         patch.object(openalex.time, 'sleep') as sleep,
     ):
         assert openalex._get_with_retry(session, 'https://example.com', {}).status_code == 429
@@ -457,7 +477,7 @@ class TestEnrichWithDoiFirst:
             result = enrich_publication(
                 paper_id=1,
                 title="Extreme Air Pollution",
-                author_name="Author",
+                author_name="Alice Author",
                 existing_abstract=None,
                 doi="10.1007/s40641-016-0032-z",
             )
@@ -710,9 +730,11 @@ class TestEnrichPublicationYear:
     @patch("backend.enrichment.openalex.update_openalex_data")
     def test_passes_year_to_update(self, mock_update, mock_lookup):
         mock_lookup.return_value = {
+            "title": "Test Paper",
             "doi": "10.1234/test",
             "openalex_id": "W123",
             "coauthors": [],
+            "author_names": ["John Smith"],
             "abstract": None,
             "topics": [],
             "year": "2024",
@@ -722,7 +744,7 @@ class TestEnrichPublicationYear:
         enrich_publication(
             paper_id=1,
             title="Test Paper",
-            author_name="Smith",
+            author_name="John Smith",
             doi="10.1234/test",
         )
 

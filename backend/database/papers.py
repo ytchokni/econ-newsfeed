@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import hashlib
 import re
+import unicodedata
+import logging
 from datetime import datetime, timezone
 
 from backend.database.connection import execute_query, fetch_all, fetch_one, get_connection
@@ -10,19 +12,58 @@ from backend.config import fix_encoding
 
 
 def normalize_title(title: str | None) -> str:
-    """Normalize a title for dedup: lowercase, strip punctuation, collapse whitespace."""
+    """Keep Unicode letters/numbers/marks while preserving historical ASCII hashes."""
     if not title:
         return ''
-    t = title.lower().strip()
-    t = re.sub(r'[^a-z0-9\s]', '', t)
+    t = unicodedata.normalize('NFKC', title).casefold()
+    t = ''.join(c for c in t if c.isalnum() or c.isspace() or unicodedata.category(c).startswith('M'))
     t = re.sub(r'\s+', ' ', t).strip()
     return t
+
+
+def has_title_identity(title: str | None) -> bool:
+    return any(c.isalpha() for c in normalize_title(title))
 
 
 def compute_title_hash(title: str | None) -> str:
     """SHA-256 hash of normalized title for cross-researcher dedup."""
     normalized = normalize_title(title)
+    if not any(c.isalpha() for c in normalized):
+        raise ValueError('A paper title must contain letters; empty/numeric identity is unsafe')
     return hashlib.sha256(normalized.encode('utf-8')).hexdigest()
+
+
+def title_hash_candidates(title: str) -> list[str]:
+    """Look up safe legacy hashes during migration, then verify the stored title."""
+    hashes = [compute_title_hash(title)]
+    for text in (title, unicodedata.normalize('NFKC', title)):
+        legacy = re.sub(r'\s+', ' ', re.sub(r'[^a-z0-9\s]', '', text.lower())).strip()
+        # Empty/numeric legacy buckets are known collisions, never fallback identities.
+        if any(c.isalpha() for c in legacy):
+            digest = hashlib.sha256(legacy.encode('utf-8')).hexdigest()
+            if digest not in hashes:
+                hashes.append(digest)
+    return hashes
+
+
+def find_papers_by_titles(titles: list[str]) -> dict[str, dict]:
+    """Return unambiguous title-verified matches, including unmigrated Unicode rows."""
+    titles = list(dict.fromkeys(t for t in titles if has_title_identity(t)))
+    hashes = list(dict.fromkeys(h for title in titles for h in title_hash_candidates(title)))
+    if not hashes:
+        return {}
+    rows = fetch_all(
+        f"SELECT id, title, title_hash FROM papers WHERE title_hash IN ({','.join(['%s'] * len(hashes))})",
+        tuple(hashes),
+    )
+    matches = {}
+    for title in titles:
+        candidates = [row for row in rows if normalize_title(row['title']) == normalize_title(title)]
+        if len(candidates) == 1:
+            matches[title] = candidates[0]
+        elif candidates:
+            logging.warning('Ambiguous title identity; refusing automatic match: %s', title)
+    return matches
 
 
 def update_draft_url_status(paper_id: int, status: str) -> None:
@@ -54,7 +95,7 @@ def update_openalex_data(paper_id, doi, openalex_id, coauthors, abstract=None, y
             cursor.execute(
                 "UPDATE papers SET doi = %s, openalex_id = %s, "
                 "abstract = COALESCE(%s, abstract), "
-                "year = COALESCE(%s, year) "
+                "year = COALESCE(year, %s) "
                 "WHERE id = %s",
                 (doi, openalex_id, abstract, year, paper_id),
             )
@@ -76,18 +117,17 @@ def update_openalex_data(paper_id, doi, openalex_id, coauthors, abstract=None, y
 def get_unenriched_papers(limit=50):
     """Get papers that haven't been enriched via OpenAlex yet.
 
-    Returns list of dicts with keys: id, title, abstract, author_name, status, link_doi.
+    Return the canonical DOI and every linked candidate separately for validation.
     Papers with links get priority. Only published papers without links are included.
     """
-    return fetch_all(
+    papers = fetch_all(
         """
         SELECT p.id, p.title, p.abstract, p.status,
                MIN(CONCAT(r.first_name, ' ', r.last_name)) AS author_name,
-               COALESCE(p.doi, MAX(pl.doi)) AS link_doi
+               p.doi AS link_doi
         FROM papers p
         JOIN authorship a ON a.publication_id = p.id
         JOIN researchers r ON r.id = a.researcher_id
-        LEFT JOIN paper_links pl ON pl.paper_id = p.id AND pl.doi IS NOT NULL
         WHERE p.openalex_id IS NULL
           AND (p.enrichment_attempted_at IS NULL
                OR p.enrichment_attempted_at < UTC_TIMESTAMP() - INTERVAL 7 DAY)
@@ -97,11 +137,29 @@ def get_unenriched_papers(limit=50):
             OR p.status = 'published'
           )
         GROUP BY p.id, p.title, p.abstract, p.status, p.doi, p.enrichment_attempted_at
-        ORDER BY p.enrichment_attempted_at, link_doi IS NOT NULL DESC, p.id
+        ORDER BY p.enrichment_attempted_at,
+                 (p.doi IS NOT NULL OR EXISTS (
+                     SELECT 1 FROM paper_links pl WHERE pl.paper_id = p.id AND pl.doi IS NOT NULL
+                 )) DESC, p.id
         LIMIT %s
         """,
         (limit,),
     )
+    if not papers:
+        return []
+    by_id = {paper['id']: paper for paper in papers}
+    for paper in papers:
+        paper['doi_candidates'] = []
+    links = fetch_all(
+        f"SELECT paper_id, doi FROM paper_links WHERE paper_id IN ({','.join(['%s'] * len(papers))}) "
+        "AND doi IS NOT NULL ORDER BY id",
+        tuple(by_id),
+    )
+    for link in links:
+        candidates = by_id[link['paper_id']]['doi_candidates']
+        if link['doi'] not in candidates:
+            candidates.append(link['doi'])
+    return papers
 
 
 from backend.database.search_helpers import (

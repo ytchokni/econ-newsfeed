@@ -188,6 +188,21 @@ def is_abbreviation_of(name_a: str, name_b: str) -> bool:
     return a in b or b in a
 
 
+def matches_author_name(first_name: str, last_name: str, display_name: str) -> bool:
+    """Match given names and the complete surname, never a surname alone.
+
+    OpenAlex may include middle names or initials. Require its surname suffix
+    to agree with the local surname before comparing the remaining given names.
+    """
+    surname = [s.casefold() for s in _tokenize_name(last_name)]
+    display = _tokenize_name(display_name)
+    if not surname or len(display) <= len(surname):
+        return False
+    if [s.casefold() for s in display[-len(surname):]] != surname:
+        return False
+    return is_compatible_name(first_name, ' '.join(display[:-len(surname)]))
+
+
 def is_bad_researcher_name(first_name: str, last_name: str) -> bool:
     """Return True if the name is too malformed to create a researcher record.
 
@@ -283,7 +298,7 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
 
     Matching priority:
     1. Exact first_name + last_name match
-    2. OpenAlex author ID match (deterministic, free)
+    2. Unambiguous OpenAlex author ID match with compatible names
     2.5. Initial match — single-char initial matches full first name (same last name)
     3. LLM disambiguation for same-last-name candidates
     4. Insert new researcher
@@ -342,17 +357,26 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
     if result:
         return result['id']
 
-    # 2. OpenAlex author ID match (cheap, deterministic — check before querying candidates)
+    # Existing IDs can be contaminated by old surname-only backfills. Never
+    # treat an ID as stronger evidence than a conflicting person's name.
     if openalex_author_id:
-        result = _fetch_one(
-            "SELECT id FROM researchers WHERE openalex_author_id = %s",
+        id_candidates = _fetch_all(
+            "SELECT id, first_name, last_name FROM researchers WHERE openalex_author_id = %s",
             (openalex_author_id,),
         )
-        if result:
+        compatible = [c for c in id_candidates if matches_author_name(
+            first_name, last_name, f"{c['first_name']} {c['last_name']}"
+        )]
+        if len(compatible) == 1:
             logging.info(
-                f"OpenAlex ID matched '{first_name} {last_name}' to researcher id={result['id']}"
+                "OpenAlex ID and name matched '%s %s' to researcher id=%s",
+                first_name, last_name, compatible[0]['id'],
             )
-            return result['id']
+            return compatible[0]['id']
+        if id_candidates:
+            logging.warning("Ignoring conflicting or ambiguous OpenAlex author ID %s for %s %s",
+                            openalex_author_id, first_name, last_name)
+            openalex_author_id = None
 
     # Fetch same-last-name candidates (shared by Tier 2.5 and Tier 3)
     candidates = _fetch_all(
@@ -388,7 +412,8 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
                 f"LLM matched '{first_name} {last_name}' to existing researcher id={match_id}"
             )
             # Backfill openalex_author_id if we have it
-            if openalex_author_id:
+            matched = next((c for c in candidates if c['id'] == match_id), None)
+            if openalex_author_id and matched and is_compatible_name(first_name, matched['first_name']):
                 _execute(
                     "UPDATE researchers SET openalex_author_id = %s WHERE id = %s AND openalex_author_id IS NULL",
                     (openalex_author_id, match_id),
@@ -587,7 +612,7 @@ def get_urls_needing_extraction(exclude_url_ids: tuple[int, ...] = ()) -> list[d
         JOIN html_content hc ON hc.url_id = ru.id
         WHERE ru.is_active = TRUE
           AND hc.content_hash IS NOT NULL
-          AND (NULLIF(hc.content, '') IS NOT NULL OR NULLIF(hc.raw_html, '') IS NOT NULL)
+          AND hc.has_stored_content = TRUE
           AND (hc.extracted_hash IS NULL OR hc.extracted_hash != hc.content_hash)
     """
     if exclude_url_ids:
@@ -872,3 +897,24 @@ def search_researchers(
         (*params, limit, offset),
     )
     return rows, total
+
+
+def search_researcher_options(*, search: str = "", researcher_ids: list[int] | None = None) -> list[dict]:
+    """Return a bounded name chooser, or names for an existing selection."""
+    if researcher_ids:
+        placeholders = ",".join(["%s"] * len(researcher_ids))
+        return fetch_all(
+            f"SELECT id, CONCAT_WS(' ', first_name, last_name) AS name, affiliation "
+            f"FROM researchers WHERE id IN ({placeholders}) ORDER BY last_name, first_name LIMIT 50",
+            tuple(researcher_ids),
+        )
+    words = search.strip().split()
+    if len(search.strip()) < 2 or not words:
+        return []
+    conditions = " AND ".join(["CONCAT_WS(' ', first_name, last_name) LIKE %s"] * len(words))
+    return fetch_all(
+        f"SELECT id, CONCAT_WS(' ', first_name, last_name) AS name, affiliation "
+        f"FROM researchers WHERE {conditions} "
+        "ORDER BY CONCAT_WS(' ', first_name, last_name) = %s DESC, last_name, first_name, id LIMIT 20",
+        (*[f"%{_escape_like(word)}%" for word in words], search.strip()),
+    )

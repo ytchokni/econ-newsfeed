@@ -106,6 +106,19 @@ export function useFilterOptions() {
   return useSWR<FilterOptions>("/api/filter-options", fetchJson);
 }
 
+export function useResearcherOptions(search = "", ids?: string) {
+  const query = search.trim();
+  const params = ids ? new URLSearchParams({ ids }) : new URLSearchParams({ search: query });
+  return useSWR<{ items: { id: number; name: string; affiliation: string | null }[] }>(
+    ids || query.length >= 2 ? `/api/researcher-options?${params}` : null,
+    fetchJson,
+  );
+}
+
+export function useCapabilities() {
+  return useSWR<{ weekly_digest_available: boolean }>("/api/capabilities", fetchJson);
+}
+
 export function useJelCodes() {
   return useSWR<JelCode[]>("/api/jel-codes", async (url: string) => {
     const data = await fetchJson<{ items: JelCode[] }>(url);

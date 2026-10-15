@@ -31,7 +31,7 @@ poetry run python -m backend.main classify-jel      # Classify researchers into 
 poetry run python -m backend.main discover-domains  # Scan HTML for untrusted domains with paper-like links
 
 # Testing & validation
-poetry run python scripts/check_env.py && poetry run pytest && cd app && npx tsc --noEmit && npx next lint && npx jest  # Full suite
+poetry run python scripts/check_env.py && poetry run pytest && cd app && npx tsc --noEmit && npm run lint && npx jest  # Full suite
 poetry run pytest tests_data_quality -v             # Data-quality invariants against real DB
 DATA_QUALITY_LIVE=1 poetry run pytest tests_data_quality -v  # + pipeline-liveness checks (server only)
 poetry run pytest                                   # All Python tests
@@ -48,8 +48,7 @@ poetry run python scripts/cleanup_data_quality.py   # Fix rows flagged by data-q
 docker compose up         # Full stack (db + api + frontend)
 
 # Production (Hetzner)
-docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build  # Start prod (no frontend)
-./scripts/deploy.sh       # Pull latest + rebuild + health check
+./scripts/deploy.sh       # Pull latest; rebuild API + miner; verify revision and DB readiness
 ./scripts/backup.sh       # Manual DB backup (also runs daily via cron at 3am UTC)
 ```
 
@@ -72,6 +71,18 @@ Extraction is owned by the extraction worker (below) — the scrape job only ref
 **Zombie scrape_log cleanup:** On scheduler start and hourly thereafter, `scrape_log` entries stuck in `'running'` are marked `'failed'` based on the scrape advisory lock: if no connection holds the lock, all running rows older than 5 minutes are zombies; if the lock is held, all but the newest running row are. Deploys that restart the container mid-scrape are swept on the next boot.
 
 Feed event integrity is protected by `_title_in_previous_snapshot()` and the `_url_has_baseline()` check in `backend.pipeline.extraction.extract_one_url()`.
+
+Deployment waits for `/api/ready`, which checks the database, versioned snapshot
+guard, and required schema. `/api/health` is process liveness only. Losing the
+scheduler advisory-lock connection terminates that worker so its jobs cannot
+continue alongside a new owner. OpenAlex paid-request reservations are stored
+per UTC day in `enrichment_daily_budget` and survive restarts.
+
+Researcher filter choices are fetched on demand from `/api/researcher-options`
+(at most 50 results), rather than included in `/api/filter-options`. Weekly
+digest controls follow `/api/capabilities`; an unavailable delivery provider
+cannot be enabled through settings. Digest events use ingestion timestamps and
+a per-user delivery ledger so delayed extraction is not skipped.
 
 ## Architecture
 

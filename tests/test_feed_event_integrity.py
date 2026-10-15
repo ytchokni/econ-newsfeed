@@ -134,12 +134,8 @@ class TestTitleInPreviousSnapshotEdgeCases:
         result = _title_in_previous_snapshot("Monetary Policy Shocks", html)
         assert result is False
 
-    def test_empty_title_matches_anything(self):
-        """Empty string is a substring of everything — callers must never pass
-        empty titles (validate_publication drops them upstream)."""
-        html = "<p>anything</p>"
-        result = _title_in_previous_snapshot("", html)
-        assert result is True
+    def test_empty_title_never_matches(self):
+        assert not _title_in_previous_snapshot('', '<p>anything</p>')
 
     def test_none_html_returns_false(self):
         result = _title_in_previous_snapshot("Any Title", None)

@@ -195,7 +195,8 @@ class TestMigrationAdvisoryLock:
         with patch("backend.database.schema.get_connection", return_value=mock_conn):
             with patch("backend.database.schema.seed_research_fields"), \
                  patch("backend.database.schema.seed_jel_codes"):
-                create_tables()  # Must not raise
+                with pytest.raises(Exception, match="Some unexpected DB error"):
+                    create_tables()
 
         executed_sql = [
             str(call.args[0]) for call in mock_cursor.execute.call_args_list
@@ -203,6 +204,15 @@ class TestMigrationAdvisoryLock:
         assert any("RELEASE_LOCK" in s for s in executed_sql), (
             "RELEASE_LOCK must be called even when ALTER TABLE fails"
         )
+
+    def test_migration_lock_timeout_prevents_startup(self):
+        mock_conn, mock_cursor = _make_mock_conn()
+        mock_cursor.fetchone.return_value = (0,)
+        with patch("backend.database.schema.get_connection", return_value=mock_conn):
+            with pytest.raises(RuntimeError, match="Timed out waiting"):
+                create_tables()
+        assert not any("ALTER TABLE" in call.args[0]
+                       for call in mock_cursor.execute.call_args_list)
 
 
 # ---------------------------------------------------------------------------

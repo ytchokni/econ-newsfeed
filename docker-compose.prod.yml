@@ -5,14 +5,24 @@
 # - Sets restart: always (survive reboots)
 # - Passes FRONTEND_URL and OPENALEX env vars through
 # - Sets WEB_CONCURRENCY=1 (single async worker handles the traffic; saves ~150MB)
+# - Caps container logs at 3 x 50MB (json-file is unbounded by default; the api
+#   log reached ~1GB). Applies when a container is (re)created.
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "50m"
+    max-file: "3"
 
 services:
   db:
     restart: always
+    logging: *logging
 
   api:
     restart: always
     mem_limit: 1g
+    logging: *logging
     environment:
       FRONTEND_URL: ${FRONTEND_URL:?FRONTEND_URL is required}
       OPENALEX_API_KEY: ${OPENALEX_API_KEY:-}

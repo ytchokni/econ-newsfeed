@@ -108,7 +108,7 @@ export default function PaperDetailContent({ id, initialData }: { id: number; in
           (a, b) => new Date(b.scraped_at).getTime() - new Date(a.scraped_at).getTime()
         )
       : [],
-    [publication?.history]
+    [publication]
   );
 
   if (isLoading) {
