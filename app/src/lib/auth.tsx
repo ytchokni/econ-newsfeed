@@ -2,6 +2,7 @@
 
 import { createContext, useCallback, useContext, useState } from "react";
 import { SessionProvider, useSession, signIn } from "next-auth/react";
+import { useCapabilities } from "@/lib/api";
 import type { ReactNode } from "react";
 
 const LoginModalContext = createContext<{
@@ -28,6 +29,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 }
 
 function LoginModal({ onClose }: { onClose: () => void }) {
+  const { data: capabilities } = useCapabilities();
   return (
     <div
       className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm"
@@ -47,8 +49,8 @@ function LoginModal({ onClose }: { onClose: () => void }) {
           Stay in the loop
         </h2>
         <p className="text-sm text-[var(--text-muted)] mb-6 leading-relaxed">
-          Log in to follow researchers you care about and receive a weekly email
-          digest when they publish new work.
+          Log in to follow researchers you care about and see their updates in My Feed.
+          {capabilities?.weekly_digest_available && " You can also receive a weekly email digest of their new work."}
         </p>
         <button
           onClick={() => signIn("google")}

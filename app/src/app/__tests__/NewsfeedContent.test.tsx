@@ -389,3 +389,71 @@ describe("NewsfeedContent", () => {
     expect(screen.queryByText("Immigration and Wages")).not.toBeInTheDocument();
   });
 });
+
+describe("feed control regressions", () => {
+  it("clears both dates together when All time is selected", async () => {
+    window.history.replaceState({}, "", "?tab=all&since=2026-10-01&until=2026-10-10");
+    mockFetch(page1);
+    const user = userEvent.setup();
+    renderWithSWR(<NewsfeedContent />);
+    await screen.findByText("Immigration and Wages");
+    await user.click(screen.getByRole("button", { name: "Filters (2)" }));
+    await user.click(screen.getByRole("button", { name: "All time" }));
+    expect(screen.getByLabelText("From date")).toHaveValue("");
+    expect(screen.getByLabelText("To date")).toHaveValue("");
+    await waitFor(() => expect(global.fetch).toHaveBeenLastCalledWith("/api/publications?page=1&per_page=20"));
+    expect(mockReplace).toHaveBeenLastCalledWith("/?tab=all", { scroll: false });
+  });
+
+  it.each(["1.5", "-3", "Infinity", "NaN", "9007199254740992"])("uses page 1 for invalid page %s", async (page) => {
+    window.history.replaceState({}, "", `?tab=all&page=${page}`);
+    mockFetch(page1);
+    renderWithSWR(<NewsfeedContent />);
+    await screen.findByText("Immigration and Wages");
+    expect(global.fetch).toHaveBeenCalledWith("/api/publications?page=1&per_page=20");
+  });
+
+  it("recovers an out-of-range bookmark to the returned final page", async () => {
+    window.history.replaceState({}, "", "?tab=all&page=9999");
+    mockFetch((url: string) => Promise.resolve({ ok: true, json: async () => (
+      url.includes("page=9999") ? { ...page2, page: 9999, items: [] } : page2
+    ) }));
+    renderWithSWR(<NewsfeedContent />);
+    await screen.findByText("Fiscal Policy in Europe");
+    expect(screen.queryByText(/No updates match/)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Previous/ })).toBeInTheDocument();
+    expect(mockReplace).toHaveBeenLastCalledWith("/?tab=all&page=2", { scroll: false });
+  });
+
+  it("keeps closed filters out of keyboard navigation and traps/restores focus when open", async () => {
+    mockFetch(page1);
+    const user = userEvent.setup();
+    renderWithSWR(<NewsfeedContent />);
+    await screen.findByText("Immigration and Wages");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("From date")).not.toBeInTheDocument();
+    const trigger = screen.getByRole("button", { name: "Filters (1)" });
+    await user.click(trigger);
+    expect(screen.getByRole("dialog", { name: "Filters" })).toHaveAttribute("aria-modal", "true");
+    const close = screen.getByRole("button", { name: "Close filters" });
+    expect(close).toHaveFocus();
+    await user.tab({ shift: true });
+    expect(screen.getByRole("button", { name: "Show 3 results" })).toHaveFocus();
+    await user.tab();
+    expect(close).toHaveFocus();
+    await user.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    expect(trigger).toHaveFocus();
+  });
+
+  it("does not request researchers until the chooser has a name query", async () => {
+    mockFetch(page1);
+    const user = userEvent.setup();
+    renderWithSWR(<NewsfeedContent />);
+    await screen.findByText("Immigration and Wages");
+    await user.click(screen.getByRole("button", { name: "Filters (1)" }));
+    await user.click(screen.getByRole("button", { name: "Choose researchers" }));
+    await user.type(screen.getByRole("searchbox", { name: "Search researchers" }), "Y");
+    expect((global.fetch as jest.Mock).mock.calls.some(([url]) => url.includes("researcher-options"))).toBe(false);
+  });
+});

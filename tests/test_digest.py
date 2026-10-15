@@ -13,6 +13,7 @@ def _sample_events():
             "new_status": "working_paper",
             "created_at": datetime(2026, 6, 8, tzinfo=timezone.utc),
             "paper_id": 100,
+            "event_id": 10,
             "title": "Monetary Policy in Small Open Economies",
             "status": "working_paper",
             "year": "2026",
@@ -27,6 +28,7 @@ def _sample_events():
             "new_status": "published",
             "created_at": datetime(2026, 6, 9, tzinfo=timezone.utc),
             "paper_id": 101,
+            "event_id": 11,
             "title": "Trade and Development",
             "status": "published",
             "year": "2025",
@@ -81,7 +83,8 @@ def test_run_weekly_digest_sends_email():
         "researcher_ids": [1, 2],
     }
     with patch("backend.digest.Database") as mock_db, \
-         patch("backend.digest._send_email", return_value=True) as mock_send:
+         patch("backend.digest._send_email", return_value=True) as mock_send, \
+         patch("backend.digest.record_digest_delivery") as record_delivery:
         mock_db.get_digest_recipients.return_value = [recipient]
         mock_db.get_feed_events_for_researchers.return_value = _sample_events()
         mock_db.generate_unsubscribe_token.return_value = "1.abc123"
@@ -92,7 +95,11 @@ def test_run_weekly_digest_sends_email():
     call_args = mock_send.call_args
     assert call_args[0][0] == "user@example.com"
     assert "Weekly Digest" in call_args[0][1]
-    mock_db.update_last_digest_sent.assert_called_once()
+    record_delivery.assert_called_once_with(1, [10, 11], record_delivery.call_args.args[2])
+    mock_db.get_feed_events_for_researchers.assert_called_once_with(
+        [1, 2], recipient["created_at"], user_id=1,
+        legacy_since=recipient["created_at"],
+    )
 
 
 def test_run_weekly_digest_skips_empty_events():

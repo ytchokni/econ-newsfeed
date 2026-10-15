@@ -287,7 +287,7 @@ def _get_extraction_stats() -> dict:
            FROM html_content hc
            JOIN researcher_urls ru ON ru.id = hc.url_id
            WHERE ru.is_active = TRUE AND hc.content_hash IS NOT NULL
-             AND (NULLIF(hc.content, '') IS NOT NULL OR NULLIF(hc.raw_html, '') IS NOT NULL)"""
+             AND hc.has_stored_content = TRUE"""
     )
     never_extracted = _i(queue, "never_extracted")
     changed_pending = _i(queue, "changed_pending")
@@ -299,7 +299,7 @@ def _get_extraction_stats() -> dict:
                SUM(extracted_at >= NOW() - INTERVAL 1 HOUR) AS last_hour,
                SUM(extracted_at >= NOW() - INTERVAL 24 HOUR) AS last_24h,
                SUM(extracted_at >= NOW() - INTERVAL 7 DAY) AS last_7d
-           FROM html_content"""
+           FROM html_content WHERE extracted_at >= NOW() - INTERVAL 7 DAY"""
     )
 
     # Usage-bearing responses only; quota errors/timeouts do not create usage rows.

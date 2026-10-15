@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -104,15 +105,18 @@ def _compute_paper_content_hash(status: str | None, venue: str | None, abstract:
 
 def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
                           abstract: str | None, draft_url: str | None, year: str | None,
-                          source_url: str | None = None, title: str | None = None) -> PaperSnapshotResult:
+                          source_url: str | None = None, title: str | None = None,
+                          *, conn=None) -> PaperSnapshotResult:
     """Append a paper snapshot if metadata changed. Updates denormalized papers table.
     Returns PaperSnapshotResult with status change info for explicit event emission;
     old_status is the paper's effective (monotone) status, not the latest raw snapshot.
-    Hash check and insert run in a single transaction to prevent race conditions."""
+    Hash check and insert run in a single transaction to prevent race conditions.
+    When conn is supplied, the caller owns commit/rollback and connection lifetime."""
     content_hash = _compute_paper_content_hash(status, venue, abstract, draft_url, year, title=title)
     now = datetime.now(timezone.utc)
 
-    with get_connection() as conn:
+    owns_connection = conn is None
+    with (get_connection() if owns_connection else nullcontext(conn)) as conn:
         with conn.cursor(dictionary=True) as cursor:
             # Lock before checking history so simultaneous coauthor updates serialize.
             cursor.execute(
@@ -177,7 +181,8 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
                  None if url_changed else paper_row.get('draft_url_checked_at'), merged['year'], paper_id),
             )
 
-            conn.commit()
+            if owns_connection:
+                conn.commit()
     logging.info(f"Paper snapshot appended for id={paper_id}")
     return PaperSnapshotResult(changed=True, old_status=old_status, new_status=effective_status,
                                venue=merged['venue'], source_url=source_url)

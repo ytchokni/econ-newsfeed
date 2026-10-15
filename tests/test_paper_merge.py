@@ -61,20 +61,25 @@ class TestMergePaperGroup:
     def papers(canonical_status="working_paper", duplicate_status="accepted"):
         # SQL locks by ID, but canonical selection must use discovery time.
         return [
-            {"id": 2, "discovered_at": "2026-03-23", "abstract": "An abstract",
+            {"id": 2, "title": "Verified paper", "doi": "10.1234/same", "discovered_at": "2026-03-23", "abstract": "An abstract",
              "year": "2024", "venue": "AER", "status": duplicate_status},
-            {"id": 5, "discovered_at": "2026-03-20", "abstract": None,
+            {"id": 5, "title": "Verified paper", "doi": "10.1234/same", "discovered_at": "2026-03-20", "abstract": None,
              "year": None, "venue": None, "status": canonical_status},
         ]
 
+    @staticmethod
+    def authors():
+        return [{'publication_id': pid, 'researcher_id': 10} for pid in (2, 5)]
+
     def test_picks_earliest_and_backfills_metadata(self, connection):
         conn, cursor = connection
-        cursor.fetchall.side_effect = [self.papers(), []]
+        cursor.fetchall.side_effect = [self.papers(), self.authors(), []]
         merge_paper_group([2, 5])
         deletes = [c for c in cursor.execute.call_args_list if "DELETE FROM papers" in c.args[0]]
         assert deletes == [call("DELETE FROM papers WHERE id = %s", (2,))]
-        backfill = [c for c in cursor.execute.call_args_list if "COALESCE" in c.args[0]]
-        assert backfill[0].args[1] == ("An abstract", "2024", "AER", 5)
+        backfill = [c for c in cursor.execute.call_args_list if "UPDATE papers SET status" in c.args[0]]
+        assert backfill[0].args[1][:3] == ("accepted", "AER", "2024")
+        assert backfill[0].args[1][-1] == 5
         assert "FOR UPDATE" in cursor.execute.call_args_list[0].args[0]
         conn.commit.assert_called_once()
 
@@ -87,22 +92,23 @@ class TestMergePaperGroup:
     ])
     def test_preserves_highest_current_paper_status(self, connection, canonical, duplicate, expected):
         _, cursor = connection
-        cursor.fetchall.side_effect = [self.papers(canonical, duplicate), []]
+        cursor.fetchall.side_effect = [self.papers(canonical, duplicate), self.authors(), []]
         merge_paper_group([2, 5])
         updates = [c for c in cursor.execute.call_args_list if c.args[0].startswith("UPDATE papers SET status")]
-        assert updates == ([call("UPDATE papers SET status = %s WHERE id = %s", (expected, 5))] if expected else [])
+        assert len(updates) == 1
+        assert updates[0].args[1][0] == (expected or canonical)
 
     def test_does_not_rehydrate_raw_historical_statuses(self, connection):
         _, cursor = connection
-        cursor.fetchall.side_effect = [self.papers("working_paper", "working_paper"), []]
+        cursor.fetchall.side_effect = [self.papers("working_paper", "working_paper"), self.authors(), []]
         merge_paper_group([2, 5])
         selects = [c.args[0] for c in cursor.execute.call_args_list if c.args[0].startswith("SELECT")]
         assert not any("paper_snapshots" in sql or "old_status" in sql or "new_status" in sql for sql in selects)
-        assert not any(c.args[0].startswith("UPDATE papers SET status") for c in cursor.execute.call_args_list)
+        assert next(c.args[1][0] for c in cursor.execute.call_args_list if c.args[0].startswith("UPDATE papers SET status")) == "working_paper"
 
     def test_keeps_earliest_announcement_even_when_id_is_larger(self, connection):
         _, cursor = connection
-        cursor.fetchall.side_effect = [self.papers(), [{"id": 90}, {"id": 10}, {"id": 91}]]
+        cursor.fetchall.side_effect = [self.papers(), self.authors(), [{"id": 90}, {"id": 10}, {"id": 91}]]
         merge_paper_group([2, 5])
         event_query = next(c.args[0] for c in cursor.execute.call_args_list if "SELECT id FROM feed_events" in c.args[0])
         assert "ORDER BY created_at, id" in event_query
@@ -120,7 +126,7 @@ class TestMergePaperGroup:
         papers = self.papers()
         for paper, timestamp in zip(papers, timestamps):
             paper['discovered_at'] = timestamp
-        cursor.fetchall.side_effect = [papers, []]
+        cursor.fetchall.side_effect = [papers, self.authors(), []]
         merge_paper_group([2, 5])
         deletes = [c for c in cursor.execute.call_args_list if "DELETE FROM papers" in c.args[0]]
         assert deletes == [call("DELETE FROM papers WHERE id = %s", (deleted,))]
@@ -130,7 +136,7 @@ class TestMergePaperGroup:
 
     def test_rolls_back_if_history_write_fails(self, connection):
         conn, cursor = connection
-        cursor.fetchall.side_effect = [self.papers(), []]
+        cursor.fetchall.side_effect = [self.papers(), self.authors(), []]
         def execute(sql, args):
             if sql.startswith("UPDATE papers SET status"):
                 raise RuntimeError("write failed")
@@ -202,14 +208,13 @@ class TestFindFuzzyDuplicateGroups:
     """Fuzzy matching: same authors + similar titles."""
 
     @patch("backend.enrichment.paper_merge.fetch_all")
-    def test_finds_fuzzy_duplicates_with_same_authors(self, mock_fetch):
+    def test_loose_fuzzy_titles_need_review_even_with_same_authors(self, mock_fetch):
         mock_fetch.return_value = [
             {"id": 1, "title": "Ideas Have Consequences: The Impact of Law and Economics on American Justice", "author_ids": "2,6,141", "doi": None, "openalex_id": None},
             {"id": 2, "title": "Ideas Have Consequences: The Effect of Law and Economics on American Justice", "author_ids": "2,6,141", "doi": None, "openalex_id": None},
         ]
         groups = find_fuzzy_duplicate_groups()
-        assert len(groups) == 1
-        assert set(groups[0]) == {1, 2}
+        assert groups == []
 
     @patch("backend.enrichment.paper_merge.fetch_all")
     def test_no_match_when_titles_too_different(self, mock_fetch):

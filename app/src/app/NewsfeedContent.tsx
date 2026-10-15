@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
-import { usePublications, useJelCodes, useFilterOptions } from "@/lib/api";
+import { usePublications, useJelCodes, useFilterOptions, useResearcherOptions } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import { formatDate } from "@/lib/publication-utils";
 import type { FeedFilters, Publication } from "@/lib/types";
@@ -166,7 +166,10 @@ export default function NewsfeedContent() {
   const [activeTab, setActiveTab] = useState<TabValue>(() =>
     parseTab(searchParams.get("tab"))
   );
-  const [page, setPage] = useState(Math.max(1, Number(searchParams.get("page")) || 1));
+  const [page, setPage] = useState(() => {
+    const requested = Number(searchParams.get("page"));
+    return Number.isSafeInteger(requested) && requested > 0 ? requested : 1;
+  });
   const [filters, setFilters] = useState<FeedFilters>(() => filtersFromParams(searchParams));
   const [datePreset, setDatePreset] = useState<DatePresetKey | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -199,6 +202,11 @@ export default function NewsfeedContent() {
     mergedFilters,
     accessToken,
   );
+
+  // keepPreviousData can belong to an earlier page/filter; wait for this response.
+  if (data && !isLoading && !isValidating && data.page === page && page > Math.max(1, data.pages)) {
+    setPage(Math.max(1, data.pages));
+  }
 
   const handleFilterChange = useCallback((next: FeedFilters) => {
     setFilters(next);
@@ -241,17 +249,12 @@ export default function NewsfeedContent() {
     label: inst,
     value: inst,
   }));
-  const researcherOptions = (filterOptions?.researchers ?? []).map((r) => ({
-    label: r.name,
-    value: String(r.id),
-  }));
+  const { data: selectedResearcherOptions } = useResearcherOptions("", filters.researcher_id);
   const researcherLabelMap = useMemo(() => {
     const map: Record<string, string> = {};
-    for (const r of filterOptions?.researchers ?? []) {
-      map[String(r.id)] = r.name;
-    }
+    for (const r of selectedResearcherOptions?.items ?? []) map[String(r.id)] = r.name;
     return map;
-  }, [filterOptions]);
+  }, [selectedResearcherOptions]);
 
   const handleJelChange = useCallback(
     (selected: string[]) => {
@@ -319,6 +322,11 @@ export default function NewsfeedContent() {
     },
     [filters, handleFilterChange]
   );
+
+  const handleAllTime = useCallback(() => {
+    setDatePreset(null);
+    handleFilterChange({ ...filters, since: undefined, until: undefined });
+  }, [filters, handleFilterChange]);
 
   const clearAll = useCallback(() => {
     setDatePreset(null);
@@ -520,8 +528,11 @@ export default function NewsfeedContent() {
           </div>
         )}
 
-        {!isLoading && data && data.items.length === 0 && (
+        {!isLoading && data && data.total === 0 && (
           <EmptyState onClear={clearAll} />
+        )}
+        {data && data.total > 0 && data.items.length === 0 && (
+          <p role="status" className="mt-8 text-sm text-[var(--muted)]">Loading the last available page…</p>
         )}
 
         {data && data.items.length > 0 && (
@@ -547,7 +558,10 @@ export default function NewsfeedContent() {
               </section>
             ))}
 
-            {/* Pagination */}
+          </div>
+        )}
+        {data && (data.pages > 1 || page > 1) && (
+            /* Pagination */
             <div className="flex items-center justify-center gap-3 pt-8">
               {page > 1 ? (
                 <button
@@ -573,7 +587,6 @@ export default function NewsfeedContent() {
                 </button>
               )}
             </div>
-          </div>
         )}
       </div>
 
@@ -590,13 +603,13 @@ export default function NewsfeedContent() {
         until={filters.until}
         onSinceChange={handleSinceChange}
         onUntilChange={handleUntilChange}
+        onAllTime={handleAllTime}
         institutionOptions={institutionOptions}
         selectedInstitutions={selectedInstitutions}
         onInstitutionChange={handleInstitutionChange}
         jelOptions={jelOptions}
         selectedJelCodes={selectedJelCodes}
         onJelChange={handleJelChange}
-        researcherOptions={researcherOptions}
         selectedResearchers={selectedResearchers}
         onResearcherChange={handleResearcherChange}
         onResetAll={clearAll}

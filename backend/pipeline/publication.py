@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 from backend.database import log_llm_usage
+from backend.database.papers import has_title_identity
 from backend.llm.client import get_model, extract_json
 from backend.publication_rules import is_working_paper_series
 from pydantic import BaseModel, field_validator
@@ -195,6 +196,8 @@ def validate_publication(pub: dict) -> bool:
     draft_url = pub.get('draft_url') or ''
 
     title_lower = title.lower().strip()
+    if not has_title_identity(title):
+        return False
 
     # Reject empty or very short titles (< 5 chars) unless they have venue/status
     if len(title_lower) < 5 and not pub.get('venue') and not pub.get('status'):
@@ -274,7 +277,7 @@ def verify_title_in_html(title: str, html_text: str, *, _norm_html: str | None =
     norm_title = _normalize_for_token_match(title)
     norm_html = _norm_html if _norm_html is not None else _normalize_for_token_match(html_text)
 
-    if not norm_title:
+    if not has_title_identity(title):
         return False
 
     if norm_title in norm_html:

@@ -64,6 +64,91 @@ def _migrate_fk_cascade(cursor: object, table: str, column: str, ref_table: str,
     )
 
 
+SNAPSHOT_GUARD_TRIGGER = "trg_feed_events_snapshot_guard_v2"
+REQUIRED_SCHEMA_QUERY = """SELECT (
+    (SELECT COUNT(*) FROM information_schema.TRIGGERS
+     WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = %s) = 1
+    AND (SELECT COUNT(*) FROM information_schema.COLUMNS
+         WHERE TABLE_SCHEMA = DATABASE() AND
+           ((TABLE_NAME = 'feed_events' AND COLUMN_NAME = 'recorded_at') OR
+            (TABLE_NAME = 'html_content' AND COLUMN_NAME = 'has_stored_content'))) = 2
+    AND (SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS
+         WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'html_content'
+           AND INDEX_NAME IN ('idx_extraction_state', 'idx_extracted_at')) = 2
+    AND (SELECT COUNT(*) FROM information_schema.TABLES
+         WHERE TABLE_SCHEMA = DATABASE()
+           AND TABLE_NAME IN ('digest_deliveries', 'enrichment_daily_budget')) = 2
+) AS schema_ready"""
+
+
+def _ensure_snapshot_guard(cursor) -> None:
+    """Install the new guard before removing its predecessor; never fail open."""
+    cursor.execute(
+        "SELECT COUNT(*) FROM information_schema.TRIGGERS "
+        "WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = %s",
+        (SNAPSHOT_GUARD_TRIGGER,),
+    )
+    if cursor.fetchone()[0] != 1:
+        cursor.execute(f"""CREATE TRIGGER {SNAPSHOT_GUARD_TRIGGER}
+                            BEFORE INSERT ON feed_events
+                            FOR EACH ROW
+                            BEGIN
+                                DECLARE v_source_url VARCHAR(2048) CHARACTER SET utf8mb4
+                                    COLLATE utf8mb4_unicode_ci;
+                                DECLARE v_snapshot_count INT DEFAULT 0;
+
+                                IF NEW.event_type = 'new_paper' THEN
+                                    SELECT COALESCE(NEW.event_source_url, source_url) INTO v_source_url
+                                    FROM papers WHERE id = NEW.paper_id;
+
+                                    IF v_source_url IS NOT NULL
+                                       AND v_source_url NOT LIKE 'newsletter://%' THEN
+                                        SELECT COALESCE(MAX(cnt), 0) INTO v_snapshot_count
+                                        FROM (
+                                            SELECT COUNT(*) AS cnt
+                                            FROM html_snapshots
+                                            WHERE url_id IN (
+                                                SELECT id FROM researcher_urls
+                                                WHERE url = v_source_url
+                                                    COLLATE utf8mb4_unicode_ci
+                                            )
+                                            GROUP BY url_id
+                                        ) sub;
+                                    END IF;
+
+                                    IF v_snapshot_count < 2 THEN
+                                        SIGNAL SQLSTATE '45000'
+                                        SET MESSAGE_TEXT = 'new_paper blocked: source URL has < 2 snapshots';
+                                    END IF;
+                                END IF;
+                            END
+        """)
+    cursor.execute("DROP TRIGGER IF EXISTS trg_feed_events_snapshot_guard")
+
+
+def _ensure_content_metadata(cursor) -> None:
+    """Index content presence so queue counts never scan MEDIUMTEXT payloads."""
+    cursor.execute(
+        "SELECT COUNT(*) FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "
+        "AND TABLE_NAME = 'html_content' AND COLUMN_NAME = 'has_stored_content'"
+    )
+    if cursor.fetchone()[0] == 0:
+        cursor.execute("""ALTER TABLE html_content
+            ADD COLUMN has_stored_content BOOLEAN GENERATED ALWAYS AS
+            ((content IS NOT NULL AND OCTET_LENGTH(content) > 0)
+             OR (raw_html IS NOT NULL AND OCTET_LENGTH(raw_html) > 0)) VIRTUAL""")
+    for name, columns in (
+        ('idx_extraction_state', 'has_stored_content, url_id, content_hash, extracted_hash'),
+        ('idx_extracted_at', 'extracted_at'),
+    ):
+        cursor.execute(
+            "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() "
+            "AND TABLE_NAME = 'html_content' AND INDEX_NAME = %s", (name,),
+        )
+        if cursor.fetchone()[0] == 0:
+            cursor.execute(f"ALTER TABLE html_content ADD INDEX {name} ({columns}), ALGORITHM=INPLACE, LOCK=NONE")
+
+
 _TABLE_DEFINITIONS = {
     "researchers": """
         CREATE TABLE IF NOT EXISTS researchers (
@@ -300,6 +385,7 @@ _TABLE_DEFINITIONS = {
             event_source_url VARCHAR(2048) DEFAULT NULL,
             event_metadata_captured BOOLEAN NOT NULL DEFAULT FALSE,
             created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            recorded_at DATETIME(6) NULL DEFAULT CURRENT_TIMESTAMP(6),
             FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE,
             INDEX idx_paper_id (paper_id),
             INDEX idx_created_at (created_at),
@@ -379,6 +465,24 @@ _TABLE_DEFINITIONS = {
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "digest_deliveries": """
+        CREATE TABLE IF NOT EXISTS digest_deliveries (
+            user_id INT NOT NULL,
+            event_id INT NOT NULL,
+            sent_at DATETIME(6) NOT NULL,
+            PRIMARY KEY (user_id, event_id),
+            FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+            FOREIGN KEY (event_id) REFERENCES feed_events(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "enrichment_daily_budget": """
+        CREATE TABLE IF NOT EXISTS enrichment_daily_budget (
+            provider VARCHAR(32) NOT NULL,
+            budget_day DATE NOT NULL,
+            request_count INT UNSIGNED NOT NULL DEFAULT 0,
+            PRIMARY KEY (provider, budget_day)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
     "newsletter_emails": """
         CREATE TABLE IF NOT EXISTS newsletter_emails (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -419,7 +523,7 @@ def create_tables() -> None:
     # Migrations under advisory lock
     with get_connection() as conn:
         with conn.cursor(buffered=True) as cursor:
-            cursor.execute("SELECT GET_LOCK('econ_migrations', 10)")
+            cursor.execute("SELECT GET_LOCK('econ_migrations', 300)")
             got_lock = cursor.fetchone()[0]
             if got_lock == 1:
                 try:
@@ -433,6 +537,7 @@ def create_tables() -> None:
                         ("feed_events", "event_venue", "TEXT DEFAULT NULL"),
                         ("feed_events", "event_source_url", "VARCHAR(2048) DEFAULT NULL"),
                         ("feed_events", "event_metadata_captured", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                        ("feed_events", "recorded_at", "DATETIME(6) NULL DEFAULT NULL"),
                     ]
                     for table, col, definition in _migrations:
                         try:
@@ -441,6 +546,11 @@ def create_tables() -> None:
                         except Exception as e:
                             if getattr(e, 'errno', None) != 1060:
                                 logging.warning("Migration warning for %s.%s: %s", table, col, e)
+
+                    # Historical rows have no known ingestion time. Preserve NULL,
+                    # while future inserts record ingestion independently of source date.
+                    cursor.execute("ALTER TABLE feed_events MODIFY COLUMN recorded_at DATETIME(6) NULL DEFAULT CURRENT_TIMESTAMP(6)")
+                    conn.commit()
 
                     try:
                         cursor.execute("ALTER TABLE papers ADD INDEX idx_enrichment_queue (openalex_id, enrichment_attempted_at)")
@@ -628,53 +738,10 @@ def create_tables() -> None:
                         if "Duplicate column name" not in str(e):
                             logging.warning("Migration: researchers.openalex_author_id: %s", e)
 
-                    # DB-level safety net: checks snapshot count only (≥2 snapshots required).
-                    # Full validation (title-in-previous-snapshot) is in
-                    # publication._title_in_previous_snapshot() — MySQL triggers cannot
-                    # decompress zlib blobs, so this is a coarse guard only.
-                    try:
-                        cursor.execute("DROP TRIGGER IF EXISTS trg_feed_events_snapshot_guard")
-                        cursor.execute("""
-                            CREATE TRIGGER trg_feed_events_snapshot_guard
-                            BEFORE INSERT ON feed_events
-                            FOR EACH ROW
-                            BEGIN
-                                DECLARE v_source_url VARCHAR(2048) CHARACTER SET utf8mb4
-                                    COLLATE utf8mb4_unicode_ci;
-                                DECLARE v_snapshot_count INT DEFAULT 0;
-
-                                IF NEW.event_type = 'new_paper' THEN
-                                    SELECT COALESCE(NEW.event_source_url, source_url) INTO v_source_url
-                                    FROM papers WHERE id = NEW.paper_id;
-
-                                    IF v_source_url IS NOT NULL
-                                       AND v_source_url NOT LIKE 'newsletter://%' THEN
-                                        SELECT COALESCE(MAX(cnt), 0) INTO v_snapshot_count
-                                        FROM (
-                                            SELECT COUNT(*) AS cnt
-                                            FROM html_snapshots
-                                            WHERE url_id IN (
-                                                SELECT id FROM researcher_urls
-                                                WHERE url = v_source_url
-                                                    COLLATE utf8mb4_unicode_ci
-                                            )
-                                            GROUP BY url_id
-                                        ) sub;
-                                    END IF;
-
-                                    IF v_snapshot_count < 2 THEN
-                                        SIGNAL SQLSTATE '45000'
-                                        SET MESSAGE_TEXT = 'new_paper blocked: source URL has < 2 snapshots';
-                                    END IF;
-                                END IF;
-                            END
-                        """)
-                        conn.commit()
-                        logging.info("Migration: feed_events snapshot guard trigger created")
-                    except Exception as e:
-                        # Without the trigger the DB-level new_paper guard silently
-                        # does not exist (this hid MySQL error 1419 in prod for months)
-                        logging.error("Migration: feed_events trigger NOT created: %s", e)
+                    # Versioned trigger installs first; any failure aborts startup.
+                    _ensure_snapshot_guard(cursor)
+                    _ensure_content_metadata(cursor)
+                    conn.commit()
 
                     # Add title column to paper_snapshots for rename tracking
                     try:
@@ -1016,8 +1083,16 @@ def create_tables() -> None:
                     cursor.execute("SELECT RELEASE_LOCK('econ_migrations')")
                     cursor.fetchone()
             else:
-                logging.info("Skipping migrations — another pod holds the lock")
+                raise RuntimeError("Timed out waiting for required database migrations")
 
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                REQUIRED_SCHEMA_QUERY,
+                (SNAPSHOT_GUARD_TRIGGER,),
+            )
+            if cursor.fetchone()[0] != 1:
+                raise RuntimeError("Required publication schema is incomplete")
     logging.info("All tables created successfully")
     seed_research_fields()
     seed_jel_codes()

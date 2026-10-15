@@ -268,7 +268,7 @@ class TestExtractOneUrlDiffPath:
             "try_extract": patch("backend.pipeline.extraction.Publication.try_extract_publications"),
             "persist": patch("backend.pipeline.extraction.persist_extraction"),
             "snapshots": patch("backend.pipeline.extraction._append_snapshots"),
-            "fetch_one": patch("backend.pipeline.extraction.fetch_one", return_value=None),
+            "fetch_one": patch("backend.pipeline.extraction.find_papers_by_titles", return_value={}),
             "compute_hash": patch("backend.pipeline.extraction.compute_title_hash", return_value="hash1"),
             "researcher_snap": patch("backend.pipeline.extraction.append_researcher_snapshot"),
         }
@@ -405,7 +405,7 @@ class TestExtractOneUrlDiffPath:
 
         tc = _title_change()
         mocks["try_changes"].return_value = ExtractionLLMResult(pubs=[tc])
-        mocks["fetch_one"].return_value = {"id": 99}
+        mocks["fetch_one"].return_value = {"Old Title for My Paper": {"id": 99}}
 
         try:
             with patch("backend.pipeline.feed_events.FeedEventEmitter.emit_title_change") as mock_emit:

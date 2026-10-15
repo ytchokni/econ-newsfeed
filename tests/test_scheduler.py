@@ -180,21 +180,32 @@ class TestLockConnectionKeepalive:
             backend.pipeline.scheduler._lock_conn = None
             backend.pipeline.scheduler._scrape_lock_lost = False
 
-    def test_keepalive_replaces_dead_scheduler_lock_connection(self):
-        old_conn = MagicMock(name="old_scheduler_lock_conn")
-        new_conn = MagicMock(name="new_scheduler_lock_conn")
+    def test_scheduler_connection_loss_exits_without_reacquiring(self):
+        old_conn = MagicMock()
         old_conn.ping.side_effect = RuntimeError("connection died")
-        backend.pipeline.scheduler._scheduler_lock_conn = old_conn
+        with patch.object(scheduler, '_scheduler_lock_conn', old_conn), \
+             patch.object(scheduler, '_lock_conn', None), \
+             patch.object(scheduler._keepalive_stop, 'wait', return_value=False), \
+             patch.object(scheduler, '_exit_without_scheduler_lease') as exit_worker, \
+             patch.object(scheduler, '_reacquire_lock') as reacquire:
+            scheduler._lock_keepalive_loop()
+        exit_worker.assert_called_once()
+        reacquire.assert_not_called()
 
-        try:
-            with patch.object(backend.pipeline.scheduler._keepalive_stop, "wait", side_effect=[False, True]), \
-                 patch("backend.pipeline.scheduler._reacquire_lock", return_value=new_conn):
-                backend.pipeline.scheduler._lock_keepalive_loop()
-
-            assert backend.pipeline.scheduler._scheduler_lock_conn is new_conn
-            old_conn.close.assert_called_once()
-        finally:
-            backend.pipeline.scheduler._scheduler_lock_conn = None
+    def test_lease_loss_stops_workers_even_if_pausing_dispatch_fails(self):
+        fake_scheduler = MagicMock()
+        fake_scheduler.pause.side_effect = RuntimeError("dispatcher failed")
+        with patch.object(scheduler, '_scheduler', fake_scheduler), \
+             patch.object(scheduler, '_enrichment_stop_event') as enrichment, \
+             patch.object(scheduler, '_extraction_stop_event') as extraction, \
+             patch.object(scheduler, '_keepalive_stop') as keepalive, \
+             patch.object(scheduler.os, '_exit', side_effect=SystemExit(1)) as exit_process:
+            with pytest.raises(SystemExit):
+                scheduler._exit_without_scheduler_lease()
+        enrichment.set.assert_called_once()
+        extraction.set.assert_called_once()
+        keepalive.set.assert_called_once()
+        exit_process.assert_called_once_with(1)
 
 
 # ---------------------------------------------------------------------------

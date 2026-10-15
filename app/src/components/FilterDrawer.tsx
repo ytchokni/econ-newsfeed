@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import ResearcherDropdown from "@/components/ResearcherDropdown";
 import SearchableCheckboxDropdown from "@/components/SearchableCheckboxDropdown";
 
 type DatePresetKey = "7d" | "month" | "quarter";
@@ -17,13 +18,13 @@ interface FilterDrawerProps {
   until: string | undefined;
   onSinceChange: (value: string) => void;
   onUntilChange: (value: string) => void;
+  onAllTime: () => void;
   institutionOptions: { label: string; value: string }[];
   selectedInstitutions: string[];
   onInstitutionChange: (selected: string[]) => void;
   jelOptions: { label: string; value: string }[];
   selectedJelCodes: string[];
   onJelChange: (selected: string[]) => void;
-  researcherOptions: { label: string; value: string }[];
   selectedResearchers: string[];
   onResearcherChange: (selected: string[]) => void;
   onResetAll: () => void;
@@ -49,13 +50,13 @@ export default function FilterDrawer({
   until,
   onSinceChange,
   onUntilChange,
+  onAllTime,
   institutionOptions,
   selectedInstitutions,
   onInstitutionChange,
   jelOptions,
   selectedJelCodes,
   onJelChange,
-  researcherOptions,
   selectedResearchers,
   onResearcherChange,
   onResetAll,
@@ -63,15 +64,51 @@ export default function FilterDrawer({
   minDate,
 }: FilterDrawerProps) {
   const panelRef = useRef<HTMLDivElement>(null);
+  const closeRef = useRef(onClose);
+  useEffect(() => { closeRef.current = onClose; }, [onClose]);
 
   useEffect(() => {
     if (!open) return;
+    const trigger = document.activeElement as HTMLElement | null;
+    const panel = panelRef.current;
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    const focusable = () => Array.from(panel?.querySelectorAll<HTMLElement>(
+      'button:not([disabled]), input:not([disabled]), select:not([disabled]), a[href], [tabindex="0"]'
+    ) ?? []);
+    focusable()[0]?.focus();
     function handleKey(e: KeyboardEvent) {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeRef.current();
+      }
+      if (e.key === "Tab") {
+        const items = focusable();
+        const first = items[0];
+        const last = items[items.length - 1];
+        if (e.shiftKey && document.activeElement === first) {
+          e.preventDefault();
+          last?.focus();
+        } else if (!e.shiftKey && document.activeElement === last) {
+          e.preventDefault();
+          first?.focus();
+        }
+      }
+    }
+    function keepFocus(e: FocusEvent) {
+      if (!panel?.contains(e.target as Node)) focusable()[0]?.focus();
     }
     document.addEventListener("keydown", handleKey);
-    return () => document.removeEventListener("keydown", handleKey);
-  }, [open, onClose]);
+    document.addEventListener("focusin", keepFocus);
+    return () => {
+      document.removeEventListener("keydown", handleKey);
+      document.removeEventListener("focusin", keepFocus);
+      document.body.style.overflow = previousOverflow;
+      trigger?.focus();
+    };
+  }, [open]);
+
+  if (!open) return null;
 
   const hasActiveFilters = !!(
     activePreset || selectedInstitutions.length > 0 ||
@@ -92,13 +129,16 @@ export default function FilterDrawer({
       {/* Panel */}
       <div
         ref={panelRef}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="filter-drawer-title"
         className={`fixed top-0 right-0 h-full w-[380px] max-w-[90vw] bg-white z-50 shadow-[-4px_0_24px_rgba(0,0,0,0.08)] flex flex-col transition-transform duration-200 ease-out ${
           open ? "translate-x-0" : "translate-x-full"
         }`}
       >
         {/* Header */}
         <div className="flex items-center justify-between px-6 pt-6 pb-4">
-          <h2 className="text-xl font-bold text-[var(--ink)]">Filters</h2>
+          <h2 id="filter-drawer-title" className="text-xl font-bold text-[var(--ink)]">Filters</h2>
           <button
             onClick={onClose}
             className="text-[var(--muted)] hover:text-[var(--ink)] transition-colors text-xl leading-none cursor-pointer"
@@ -141,10 +181,7 @@ export default function FilterDrawer({
             </h3>
             <div className="flex flex-wrap gap-2 mb-4">
               <button
-                onClick={() => {
-                  onSinceChange("");
-                  onUntilChange("");
-                }}
+                onClick={onAllTime}
                 className={`text-xs font-medium px-[13px] py-[7px] rounded-sm cursor-pointer border transition-colors ${
                   !datePreset && !since && !until
                     ? "bg-[var(--accent)] text-white border-[var(--accent)]"
@@ -171,6 +208,7 @@ export default function FilterDrawer({
               <span>From</span>
               <input
                 type="date"
+                aria-label="From date"
                 value={since ?? ""}
                 min={minDate}
                 onChange={(e) => onSinceChange(e.target.value)}
@@ -179,6 +217,7 @@ export default function FilterDrawer({
               <span>to</span>
               <input
                 type="date"
+                aria-label="To date"
                 value={until ?? ""}
                 min={minDate}
                 onChange={(e) => onUntilChange(e.target.value)}
@@ -220,13 +259,7 @@ export default function FilterDrawer({
             <h3 className="text-[10px] font-bold tracking-[0.16em] uppercase text-[var(--muted)] mb-3">
               Researcher
             </h3>
-            <SearchableCheckboxDropdown
-              label={selectedResearchers.length > 0 ? `${selectedResearchers.length} selected` : "All"}
-              options={researcherOptions}
-              selected={selectedResearchers}
-              onChange={onResearcherChange}
-              requireSearch
-            />
+            <ResearcherDropdown selected={selectedResearchers} onChange={onResearcherChange} />
           </section>
         </div>
 

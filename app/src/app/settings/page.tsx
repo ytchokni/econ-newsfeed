@@ -4,28 +4,33 @@ import { useCallback, useState } from "react";
 import { useRouter } from "next/navigation";
 import { signOut } from "next-auth/react";
 import { useAuth } from "@/lib/auth";
-import { useNotificationPrefs, updateNotificationPrefs } from "@/lib/api";
+import { useNotificationPrefs, updateNotificationPrefs, useCapabilities } from "@/lib/api";
 
 export default function SettingsPage() {
   const { user, isAuthenticated, isLoading, accessToken } = useAuth();
   const router = useRouter();
   const { data: prefs, mutate } = useNotificationPrefs(accessToken);
   const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const { data: capabilities, error: capabilityError } = useCapabilities();
+  const digestAvailable = !capabilityError && capabilities?.weekly_digest_available === true;
 
   const toggleDigest = useCallback(async () => {
-    if (!accessToken || !prefs) return;
+    if (!accessToken || !prefs || !digestAvailable) return;
     const newValue = !prefs.digest_enabled;
     setSaving(true);
+    setSaveError(null);
     mutate({ ...prefs, digest_enabled: newValue }, false);
     try {
       await updateNotificationPrefs({ digest_enabled: newValue }, accessToken);
       mutate();
     } catch {
-      mutate();
+      setSaveError("Could not save your digest preference. Please try again.");
+      mutate({ ...prefs }, false);
     } finally {
       setSaving(false);
     }
-  }, [accessToken, prefs, mutate]);
+  }, [accessToken, prefs, mutate, digestAvailable]);
 
   if (isLoading) return null;
   if (!isAuthenticated) {
@@ -71,12 +76,17 @@ export default function SettingsPage() {
           <div>
             <p className="font-medium text-[var(--text-primary)]">Weekly digest</p>
             <p className="text-sm text-[var(--text-muted)]">
-              Email summary of new publications from researchers you follow
+              {digestAvailable
+                ? "Email summary of new publications from researchers you follow"
+                : "Weekly email digests are temporarily unavailable. Your preference is saved."}
             </p>
           </div>
           <button
             onClick={toggleDigest}
-            disabled={saving || !prefs}
+            role="switch"
+            aria-label="Weekly digest"
+            aria-checked={prefs?.digest_enabled ?? false}
+            disabled={saving || !prefs || !digestAvailable}
             className={`relative w-11 h-6 rounded-full transition-colors ${
               prefs?.digest_enabled
                 ? "bg-[var(--accent)]"
@@ -90,6 +100,7 @@ export default function SettingsPage() {
             />
           </button>
         </div>
+        {saveError && <p role="alert" className="mt-3 text-sm text-red-600">{saveError}</p>}
       </section>
 
       <section className="bg-[var(--bg-card)] rounded-xl border border-[var(--border)] p-6">

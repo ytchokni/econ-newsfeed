@@ -105,14 +105,33 @@ def get_digest_recipients() -> list[dict]:
 
 
 def get_feed_events_for_researchers(
-    researcher_ids: list[int], since: datetime
+    researcher_ids: list[int], since: datetime, *, user_id: int | None = None,
+    legacy_since: datetime | None = None,
 ) -> list[dict]:
-    """Get feed events for given researchers since a datetime, grouped for digest."""
+    """Get undelivered activity by ingestion time, including delayed extraction.
+
+    Source/fetch dates can precede insertion by days. A per-event ledger avoids
+    advancing a global timestamp past results committed after an earlier send.
+    Historical rows without ingestion metadata fall back to their source date.
+    """
     if not researcher_ids:
         return []
     placeholders = ",".join(["%s"] * len(researcher_ids))
+    delivery_filter = ""
+    legacy_filter = ""
+    params = (*researcher_ids, since)
+    if legacy_since is not None:
+        # Pre-migration events have no ledger entries. Retain their old send
+        # boundary without suppressing newly ingested, backdated events.
+        legacy_filter = "AND (fe.recorded_at IS NOT NULL OR fe.created_at >= %s)"
+        params += (legacy_since,)
+    if user_id is not None:
+        delivery_filter = """AND NOT EXISTS (
+            SELECT 1 FROM digest_deliveries dd
+            WHERE dd.event_id = fe.id AND dd.user_id = %s)"""
+        params += (user_id,)
     return fetch_all(
-        f"""SELECT fe.event_type, fe.old_status, fe.new_status, fe.created_at,
+        f"""SELECT fe.id AS event_id, fe.event_type, fe.old_status, fe.new_status, fe.created_at,
                    p.id AS paper_id, p.title, p.status, p.year,
                    CASE WHEN fe.event_metadata_captured THEN fe.event_venue ELSE p.venue END AS venue,
                    r.id AS researcher_id, r.first_name, r.last_name
@@ -121,10 +140,31 @@ def get_feed_events_for_researchers(
             JOIN authorship a ON a.publication_id = p.id
             JOIN researchers r ON r.id = a.researcher_id
             WHERE a.researcher_id IN ({placeholders})
-              AND fe.created_at >= %s
+              AND COALESCE(fe.recorded_at, fe.created_at) >= %s
+              {legacy_filter}
+              {delivery_filter}
             ORDER BY r.last_name, r.first_name, fe.created_at DESC""",
-        (*researcher_ids, since),
+        params,
     )
+
+
+def record_digest_delivery(user_id: int, event_ids: list[int], sent_at: datetime) -> None:
+    """Record exactly the sent events and the display timestamp in one commit."""
+    with get_connection() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.executemany(
+                    "INSERT IGNORE INTO digest_deliveries (user_id, event_id, sent_at) VALUES (%s, %s, %s)",
+                    [(user_id, event_id, sent_at) for event_id in sorted(set(event_ids))],
+                )
+                cursor.execute(
+                    "UPDATE user_notification_prefs SET last_digest_sent = %s WHERE user_id = %s",
+                    (sent_at, user_id),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
 
 
 def update_last_digest_sent(user_id: int, sent_at: datetime) -> None:

@@ -28,4 +28,6 @@ jobs:
           host: ${{ secrets.HETZNER_HOST }}
           username: root
           key: ${{ secrets.HETZNER_SSH_KEY }}
-          script: cd /opt/econ-newsfeed && ./scripts/deploy.sh
+          # Load the updated deploy script after pulling; a running shell keeps
+          # executing the previous script even when git replaces it on disk.
+          script: cd /opt/econ-newsfeed && git pull --ff-only origin main && ./scripts/deploy.sh

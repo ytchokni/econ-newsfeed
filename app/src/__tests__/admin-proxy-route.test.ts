@@ -70,7 +70,7 @@ describe("admin API proxy route", () => {
     });
 
     const response = await GET(request, {
-      params: { path: ["discoveries"] },
+      params: Promise.resolve({ path: ["discoveries"] }),
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -99,7 +99,7 @@ describe("admin API proxy route", () => {
     });
 
     const response = await POST(request, {
-      params: { path: ["discoveries", "123", "reject"] },
+      params: Promise.resolve({ path: ["discoveries", "123", "reject"] }),
     });
 
     expect(fetchMock).toHaveBeenCalledWith(
@@ -121,7 +121,7 @@ describe("admin API proxy route", () => {
     const request = makeRequest({ method: "GET" });
 
     const response = await GET(request, {
-      params: { path: ["discoveries"] },
+      params: Promise.resolve({ path: ["discoveries"] }),
     });
 
     expect(response.status).toBe(401);

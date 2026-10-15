@@ -13,6 +13,7 @@ from urllib.parse import urlparse
 from bs4 import BeautifulSoup, NavigableString
 
 from backend.database import compute_title_hash, execute_query, fetch_all, fetch_one
+from backend.database.papers import find_papers_by_titles, normalize_title
 from backend.enrichment.doi_resolver import resolve_doi
 from backend.pipeline.html_fetcher import HTMLFetcher
 from backend.enrichment.openalex import lookup_by_doi
@@ -135,18 +136,15 @@ def is_trusted_domain(url):
 # ---------------------------------------------------------------------------
 
 def _strip_to_alnum(text):
-    """Strip to alphanumeric, handling accented characters via transliteration."""
-    # Transliterate accents: é→e, ö→o, etc.
-    normalized = unicodedata.normalize('NFKD', text)
-    ascii_text = normalized.encode('ascii', 'ignore').decode('ascii')
-    return re.sub(r'[^a-z0-9]', '', ascii_text.lower())
+    """Keep letters from every script when comparing anchors and paper titles."""
+    text = ''.join(c for c in unicodedata.normalize('NFKD', text) if not unicodedata.combining(c))
+    return normalize_title(text).replace(' ', '')
 
 
 def _meaningful_words(text):
     """Non-stop words with length > 1."""
-    normalized = unicodedata.normalize('NFKD', text)
-    ascii_text = normalized.encode('ascii', 'ignore').decode('ascii')
-    return set(w for w in re.findall(r'\w+', ascii_text.lower()) if w not in STOP_WORDS and len(w) > 1)
+    text = ''.join(c for c in unicodedata.normalize('NFKD', text) if not unicodedata.combining(c))
+    return set(w for w in normalize_title(text).split() if w not in STOP_WORDS and len(w) > 1)
 
 
 # ---------------------------------------------------------------------------
@@ -423,21 +421,8 @@ def match_and_save_paper_links(url_id, publications):
         return
 
     # Build title lookup from passed publications (for anchor text fallback)
-    hash_to_title = {}
-    for pub in publications:
-        title = (pub.get('title') or '').strip()
-        if title:
-            hash_to_title[compute_title_hash(title)] = title
-
-    if hash_to_title:
-        placeholders = ",".join(["%s"] * len(hash_to_title))
-        rows = fetch_all(
-            f"SELECT id, title_hash FROM papers WHERE title_hash IN ({placeholders})",
-            tuple(hash_to_title.keys()),
-        )
-        paper_ids_by_title = {hash_to_title[r['title_hash']]: r['id'] for r in rows}
-    else:
-        paper_ids_by_title = {}
+    titles = [(pub.get('title') or '').strip() for pub in publications]
+    paper_ids_by_title = {title: row['id'] for title, row in find_papers_by_titles(titles).items()}
 
     for link in page_links:
         paper_id = None
@@ -449,10 +434,7 @@ def match_and_save_paper_links(url_id, publications):
             # Try to find paper by canonical title from OpenAlex
             openalex_data = lookup_by_doi(link_doi)
             if openalex_data and openalex_data.get('title'):
-                canonical_hash = compute_title_hash(openalex_data['title'])
-                paper_row = fetch_one(
-                    "SELECT id FROM papers WHERE title_hash = %s", (canonical_hash,)
-                )
+                paper_row = find_papers_by_titles([openalex_data['title']]).get(openalex_data['title'])
                 if paper_row:
                     paper_id = paper_row['id']
             time.sleep(0.2)  # Rate limit OpenAlex calls

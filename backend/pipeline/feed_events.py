@@ -4,6 +4,7 @@ Consolidates event logic previously scattered across publication.py
 (save_publications, reconcile_title_renames) and database/snapshots.py.
 """
 from backend.database import get_connection
+from backend.database.papers import normalize_title, has_title_identity
 from datetime import datetime, timezone
 import html as html_module
 import logging
@@ -29,7 +30,7 @@ def _url_has_baseline(cursor, url: str, min_snapshots: int = 2) -> bool:
 
 def _normalize_for_matching(text: str) -> str:
     """Collapse text to lowercase alphanumeric tokens separated by single spaces."""
-    return re.sub(r"[^a-z0-9]+", " ", text.lower()).strip()
+    return normalize_title(text)
 
 
 def _normalize_html_for_matching(raw_html: str) -> str:
@@ -87,7 +88,7 @@ def _title_in_previous_snapshot(title: str, prev_html_normalized: str | None) ->
     If the normalized title is found in the pre-fetched, normalized HTML, the
     paper was already on the page and should not generate a new_paper feed event.
     """
-    if not prev_html_normalized:
+    if not prev_html_normalized or not has_title_identity(title):
         return False
     return _normalize_for_matching(title) in prev_html_normalized
 
