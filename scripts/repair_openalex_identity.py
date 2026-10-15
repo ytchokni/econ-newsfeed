@@ -5,8 +5,10 @@ python scripts/repair_openalex_identity.py --apply --backup /backups/openalex-id
 If the old merger has already deleted 71119, recover its audited children first:
 python scripts/repair_openalex_identity.py --recover-merged survivor-export.json
 
-Only paper 71119 and three name-incompatible Huber IDs are writable. The
-primary metadata below was checked on 2026-10-15 using free DOI/author lookups.
+The correction mode writes only paper 71119 and three incompatible Huber IDs.
+Recovery recreates 71119 and reassigns its exact audited children from 71115;
+the NASA canonical row and paper 353074 remain unchanged. The primary metadata
+below was checked on 2026-10-15 using free DOI/author lookups.
 The abbreviated C Huber record is deliberately left for separate review.
 """
 from __future__ import annotations
@@ -167,7 +169,8 @@ def recovery_plan(rows, evidence):
             'move_event_id': 4698, 'event_values': event_values, 'event_evidence_snapshot_id': 79253,
             'copy_source_urls': sorted(SOURCE_URLS), 'copy_coauthors': coauthors,
             'earliest_retained_evidence': min(str(r['discovered_at']) for r in links.values()),
-            'discovery_note': 'Original paper discovery timestamp is unknown; restored as NULL.',
+            'discovery_note': 'Original discovery timestamp is unknown; restored as NULL. '
+                              'is_seed=True conservatively suppresses fresh announcements for this historical reconstruction.',
             'primary_evidence': PRIMARY_EVIDENCE}
 
 
