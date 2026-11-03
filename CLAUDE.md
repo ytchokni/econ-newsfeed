@@ -120,7 +120,7 @@ Researcher URLs (DB) → HTMLFetcher (fetch + hash-based change detection)
 | `backend/config.py` | Env var validation + encoding guard — raises `EnvironmentError` on import if required vars missing |
 | `scripts/check_env.py` | Validates required env vars (used by the check suite) |
 | `scripts/deploy.sh` | Production deploy: git pull + docker-compose rebuild + health check |
-| `scripts/backup.sh` | Daily MySQL backup with gzip + 7-day retention (cron on Hetzner) |
+| `scripts/backup.sh` | Daily MySQL backup with gzip, keeps newest 3 (`KEEP_BACKUPS`); skips with an ERROR in `/backups/backup.log` rather than fill the disk (cron on Hetzner) |
 | `Caddyfile` | Reverse proxy config for auto-SSL on Hetzner |
 | `docker-compose.prod.yml` | Production override: no frontend, `restart: always`, 2 workers |
 
@@ -157,7 +157,7 @@ Live MVP: **Vercel** (free frontend) + **Hetzner** (4GB VPS backend).
 | Backend API | `https://econ-newsfeed.duckdns.org` (Hetzner, manual deploy via SSH) |
 | SSH | `ssh -i ~/.ssh/hetzner root@167.233.132.217` |
 | App directory | `/opt/econ-newsfeed` on the Hetzner instance |
-| Backups | `/backups/` on Hetzner, daily at 3am UTC, 7-day retention |
+| Backups | `/backups/` on Hetzner, daily at 3am UTC, newest 3 kept (~2GB each) |
 
 **How it works:**
 - Vercel serves Next.js frontend via SSR, rewrites `/api/*` server-side to the Hetzner backend (env var `API_INTERNAL_URL`)
