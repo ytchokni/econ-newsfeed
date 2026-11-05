@@ -18,7 +18,7 @@ describe("Tailwind CSS build", () => {
 
     try {
       execSync(
-        `npx @tailwindcss/cli -i ${inputFile} -o ${outputFile}`,
+        `npx @tailwindcss/cli -i "${inputFile}" -o "${outputFile}"`,
         { cwd: appDir, timeout: 30000 }
       );
 
