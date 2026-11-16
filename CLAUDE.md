@@ -78,6 +78,25 @@ scheduler advisory-lock connection terminates that worker so its jobs cannot
 continue alongside a new owner. OpenAlex paid-request reservations are stored
 per UTC day in `enrichment_daily_budget` and survive restarts.
 
+**Monitoring and alerts:** `.github/workflows/monitor.yml` runs once a day
+(07:17 UTC) and sends at most one email per run. It probes
+the public API, frontend and TLS certificate from the runner, then streams
+`scripts/monitor.py` to the server over SSH (the deploy secrets) to check
+containers, disk, backups, scrape recency, extraction throughput against the
+backlog, feed freshness, enrichment, and LLM calls rejected for billing or
+credentials. A failure opens one GitHub issue labelled `monitor-alert` and asks
+Claude to fix it with an `@claude` comment (handled by `claude.yml`). The
+repository owner is only mentioned, which is what sends the alert email, when
+the checks still fail at the next daily run (the fix did not work or was not
+merged); the issue closes itself on recovery. The `@claude` comment is posted
+with the `MONITOR_GH_TOKEN` secret (a personal access token with Issues
+read/write), because GitHub starts no workflow for comments made with the
+workflow's own token; without that secret, or if it is rejected, the monitor
+alerts the owner straight away. Every other call uses the workflow token so the
+owner mention comes from a bot (a self-mention sends no email). The script is standard
+library only because it runs on the server's system Python. Run it by hand with
+`python3 scripts/monitor.py --external`, or `--host` on the server.
+
 Researcher filter choices are fetched on demand from `/api/researcher-options`
 (at most 50 results), rather than included in `/api/filter-options`. Weekly
 digest controls follow `/api/capabilities`; an unavailable delivery provider
@@ -120,6 +139,7 @@ Researcher URLs (DB) → HTMLFetcher (fetch + hash-based change detection)
 | `backend/config.py` | Env var validation + encoding guard — raises `EnvironmentError` on import if required vars missing |
 | `scripts/check_env.py` | Validates required env vars (used by the check suite) |
 | `scripts/deploy.sh` | Production deploy: git pull + docker-compose rebuild + health check |
+| `scripts/monitor.py` | Production health checks behind the daily Monitor workflow; opens/closes the `monitor-alert` issue |
 | `scripts/backup.sh` | Daily MySQL backup with gzip, keeps newest 3 (`KEEP_BACKUPS`); skips with an ERROR in `/backups/backup.log` rather than fill the disk (cron on Hetzner) |
 | `Caddyfile` | Reverse proxy config for auto-SSL on Hetzner |
 | `docker-compose.prod.yml` | Production override: no frontend, `restart: always`, 2 workers |
