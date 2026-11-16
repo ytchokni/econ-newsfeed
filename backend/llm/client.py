@@ -24,6 +24,12 @@ _client_lock = threading.Lock()
 GOOGLE_AI_STUDIO_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
 DEFAULT_MODEL = "gemma-4-31b-it"
 
+# Rejected credentials or depleted billing fail every request until a human
+# fixes the account, so they pause the provider like a quota error rather
+# than counting against individual pages.
+_ACCOUNT_ERROR_STATUS_CODES = frozenset({401, 402, 403})
+ACCOUNT_ERROR_RETRY_SECONDS = 600.0
+
 
 def get_client() -> OpenAI:
     """Return a shared OpenAI SDK instance pointed at Google AI Studio."""
@@ -57,8 +63,9 @@ class StructuredResponse(Generic[T]):
     `parsed` is None when the model output failed validation after all
     retries, or the API call raised. `usage` is the OpenAI-compat usage
     object from the final successful API response (or None if the API
-    call itself raised). `retry_after` is set when the API returned a
-    rate-limit error with a suggested wait duration.
+    call itself raised). `retry_after` is set when the failure affects the
+    whole provider rather than this prompt: a rate-limit error (with its
+    suggested wait) or an account error such as depleted billing.
     """
     parsed: T | None
     usage: object | None
@@ -184,6 +191,14 @@ def extract_json(
             logging.warning("LLM rate limited, retry after %.0fs: %s", retry_delay, e)
             return StructuredResponse(parsed=None, usage=None, retry_after=retry_delay)
         except OpenAIError as e:
+            if getattr(e, "status_code", None) in _ACCOUNT_ERROR_STATUS_CODES:
+                logging.error(
+                    "LLM account error (HTTP %s), pausing provider for %.0fs: %s",
+                    e.status_code, ACCOUNT_ERROR_RETRY_SECONDS, e,
+                )
+                return StructuredResponse(
+                    parsed=None, usage=None, retry_after=ACCOUNT_ERROR_RETRY_SECONDS,
+                )
             logging.error("LLM API call failed: %s: %s", type(e).__name__, e)
             return StructuredResponse(parsed=None, usage=None)
 

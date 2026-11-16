@@ -62,7 +62,7 @@ Extraction is owned by the extraction worker (below) — the scrape job only ref
 
 **Enrichment worker:** When `ENRICHMENT_WORKER_ENABLED=true`, a background thread in the API process continuously enriches unenriched papers via OpenAlex. Polls every 5 minutes, processes batches of 50, respects the daily budget. Backs off to 10-minute sleep after 5 consecutive failures. In local dev (worker disabled), run `python -m backend.main enrich` manually after scraping.
 
-**Extraction worker:** When `EXTRACTION_WORKER_ENABLED=true`, a background thread in the API process continuously extracts publications from changed pages (`content_hash ≠ extracted_hash`) using synchronous free-tier Gemma calls. Calls are latency-bound (45–190s each, ~35 output tokens/s); `EXTRACTION_DELAY_SECONDS` (default 2) paces the fast tail under the 30 RPM free-tier cap. Polls every 5 minutes when idle, backs off 10 minutes after 10 consecutive failures (quota exhaustion), and skips a URL for the process lifetime after 3 failed attempts (poison-pill guard). In local dev (worker disabled), run `python -m backend.main extract` manually after fetching.
+**Extraction worker:** When `EXTRACTION_WORKER_ENABLED=true`, a background thread in the API process continuously extracts publications from changed pages (`content_hash ≠ extracted_hash`) using synchronous free-tier Gemma calls. Calls are latency-bound (45–190s each, ~35 output tokens/s); `EXTRACTION_DELAY_SECONDS` (default 2) paces the fast tail under the 30 RPM free-tier cap. Polls every 5 minutes when idle, backs off 10 minutes after 10 consecutive failures (quota exhaustion), and skips a URL for the process lifetime after 3 failed attempts (poison-pill guard). Account errors from the provider (HTTP 401/402/403, e.g. depleted AI Studio billing) pause the whole worker for 10 minutes per attempt instead of counting against individual pages. In local dev (worker disabled), run `python -m backend.main extract` manually after fetching.
 
 **Extraction circuit breaker (CLI):** The `extract` CLI stops after 10 consecutive failed extractions (e.g. LLM quota exhausted). Fetched HTML is preserved — extraction resumes on the next run for URLs where `content_hash ≠ extracted_hash`. The continuous worker uses backoff + per-URL retry limits instead of stopping.
 
@@ -77,6 +77,25 @@ guard, and required schema. `/api/health` is process liveness only. Losing the
 scheduler advisory-lock connection terminates that worker so its jobs cannot
 continue alongside a new owner. OpenAlex paid-request reservations are stored
 per UTC day in `enrichment_daily_budget` and survive restarts.
+
+**Monitoring and alerts:** `.github/workflows/monitor.yml` runs once a day
+(07:17 UTC) and sends at most one email per run. It probes
+the public API, frontend and TLS certificate from the runner, then streams
+`scripts/monitor.py` to the server over SSH (the deploy secrets) to check
+containers, disk, backups, scrape recency, extraction throughput against the
+backlog, feed freshness, enrichment, and LLM calls rejected for billing or
+credentials. A failure opens one GitHub issue labelled `monitor-alert` and asks
+Claude to fix it with an `@claude` comment (handled by `claude.yml`). The
+repository owner is only mentioned, which is what sends the alert email, when
+the checks still fail at the next daily run (the fix did not work or was not
+merged); the issue closes itself on recovery. The `@claude` comment is posted
+with the `MONITOR_GH_TOKEN` secret (a personal access token with Issues
+read/write), because GitHub starts no workflow for comments made with the
+workflow's own token; without that secret, or if it is rejected, the monitor
+alerts the owner straight away. Every other call uses the workflow token so the
+owner mention comes from a bot (a self-mention sends no email). The script is standard
+library only because it runs on the server's system Python. Run it by hand with
+`python3 scripts/monitor.py --external`, or `--host` on the server.
 
 Researcher filter choices are fetched on demand from `/api/researcher-options`
 (at most 50 results), rather than included in `/api/filter-options`. Weekly
@@ -120,7 +139,8 @@ Researcher URLs (DB) → HTMLFetcher (fetch + hash-based change detection)
 | `backend/config.py` | Env var validation + encoding guard — raises `EnvironmentError` on import if required vars missing |
 | `scripts/check_env.py` | Validates required env vars (used by the check suite) |
 | `scripts/deploy.sh` | Production deploy: git pull + docker-compose rebuild + health check |
-| `scripts/backup.sh` | Daily MySQL backup with gzip + 7-day retention (cron on Hetzner) |
+| `scripts/monitor.py` | Production health checks behind the daily Monitor workflow; opens/closes the `monitor-alert` issue |
+| `scripts/backup.sh` | Daily MySQL backup with gzip, keeps newest 3 (`KEEP_BACKUPS`); skips with an ERROR in `/backups/backup.log` rather than fill the disk (cron on Hetzner) |
 | `Caddyfile` | Reverse proxy config for auto-SSL on Hetzner |
 | `docker-compose.prod.yml` | Production override: no frontend, `restart: always`, 2 workers |
 
@@ -157,7 +177,7 @@ Live MVP: **Vercel** (free frontend) + **Hetzner** (4GB VPS backend).
 | Backend API | `https://econ-newsfeed.duckdns.org` (Hetzner, manual deploy via SSH) |
 | SSH | `ssh -i ~/.ssh/hetzner root@167.233.132.217` |
 | App directory | `/opt/econ-newsfeed` on the Hetzner instance |
-| Backups | `/backups/` on Hetzner, daily at 3am UTC, 7-day retention |
+| Backups | `/backups/` on Hetzner, daily at 3am UTC, newest 3 kept (~2GB each) |
 
 **How it works:**
 - Vercel serves Next.js frontend via SSR, rewrites `/api/*` server-side to the Hetzner backend (env var `API_INTERNAL_URL`)

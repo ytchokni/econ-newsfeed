@@ -22,6 +22,35 @@ def test_retry_after_honors_longer_header():
     assert _parse_retry_after(error) == 600
 
 
+def _status_error(status_code):
+    from openai import APIStatusError
+    response = httpx.Response(status_code, request=httpx.Request("POST", "https://example.invalid"))
+    return APIStatusError("provider said no", response=response, body={})
+
+
+@pytest.mark.parametrize("status_code", [401, 402, 403])
+def test_account_errors_pause_the_provider(status_code):
+    """Depleted billing (402) must not be retried once per page."""
+    from backend.llm import client as llm_client
+    from backend.pipeline.publication import PublicationExtractionList
+    with patch.object(llm_client, "get_client") as get_client:
+        get_client.return_value.chat.completions.create.side_effect = _status_error(status_code)
+        result = llm_client.extract_json("prompt", PublicationExtractionList)
+    assert result.parsed is None
+    assert result.retry_after == llm_client.ACCOUNT_ERROR_RETRY_SECONDS
+
+
+@pytest.mark.parametrize("status_code", [400, 500, 503])
+def test_other_api_errors_stay_page_level(status_code):
+    from backend.llm import client as llm_client
+    from backend.pipeline.publication import PublicationExtractionList
+    with patch.object(llm_client, "get_client") as get_client:
+        get_client.return_value.chat.completions.create.side_effect = _status_error(status_code)
+        result = llm_client.extract_json("prompt", PublicationExtractionList)
+    assert result.parsed is None
+    assert result.retry_after is None
+
+
 @pytest.mark.parametrize("value", ["forthcoming", "TBD", "null", "0001", "03/2"])
 def test_extraction_does_not_save_garbage_years(value):
     assert PublicationExtraction(title="A paper", authors=[], year=value).year is None

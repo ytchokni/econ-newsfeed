@@ -1,0 +1,69 @@
+name: Monitor
+
+# Daily production health check. A failing check opens one GitHub issue and
+# asks Claude to fix it with an @claude comment (handled by claude.yml). The
+# repository owner is only mentioned, which is what sends the alert email, if
+# the checks still fail at the next daily run: the fix did not work or was not
+# merged. The issue closes itself when everything passes again.
+# One scheduled run a day, and each run notifies at most once.
+#
+# The @claude comment needs the MONITOR_GH_TOKEN secret: a personal access
+# token with Issues read/write on this repository. GitHub starts no workflow
+# for comments posted with the workflow's own token. Without the secret the
+# monitor skips Claude and alerts the owner straight away.
+
+on:
+  schedule:
+    # 07:17 UTC: after the 03:00 backup, before the 10:02 scrape.
+    - cron: '17 7 * * *'
+  workflow_dispatch:
+
+concurrency:
+  group: monitor-production
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    name: Check production
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Probe public endpoints from outside
+        run: python3 scripts/monitor.py --external --json > external.json || true
+
+      - name: Check the server over SSH
+        env:
+          HETZNER_HOST: ${{ secrets.HETZNER_HOST }}
+          HETZNER_SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+        # The script is streamed from this checkout so the checks do not depend
+        # on which revision is deployed. An empty result file means the server
+        # could not be reached, which the report step turns into an alert.
+        run: |
+          umask 077
+          printf '%s\n' "$HETZNER_SSH_KEY" > "$RUNNER_TEMP/monitor_key"
+          for attempt in 1 2 3; do
+            ssh -i "$RUNNER_TEMP/monitor_key" -o BatchMode=yes \
+              -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
+              "root@$HETZNER_HOST" 'python3 - --host --json' \
+              < scripts/monitor.py > host.json || true
+            [ -s host.json ] && break
+            sleep 20
+          done
+          rm -f "$RUNNER_TEMP/monitor_key"
+
+      - name: Open, update or close the alert issue
+        env:
+          # Everything except the @claude comment uses the workflow token, so
+          # the owner mention comes from a bot and GitHub emails it.
+          GH_TOKEN: ${{ github.token }}
+          MONITOR_ASK_TOKEN: ${{ secrets.MONITOR_GH_TOKEN }}
+          MONITOR_NOTIFY: ${{ github.repository_owner }}
+          MONITOR_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        # Fails only when reporting itself breaks, so a broken monitor is loud
+        # while an ongoing incident does not email again until it changes.
+        run: python3 scripts/monitor.py --report external.json host.json
