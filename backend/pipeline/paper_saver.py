@@ -13,7 +13,7 @@ from backend.database import (
     get_researcher_id,
     normalize_title,
 )
-from backend.database.researchers import is_abbreviation_of, is_compatible_name, merge_researchers, refresh_has_top5
+from backend.database.researchers import is_abbreviation_of, is_compatible_name, merge_researchers, refresh_has_top5_for
 from backend.database.snapshots import _STATUS_RANK
 from backend.database.papers import title_hash_candidates
 from backend.publication_rules import is_working_paper_series
@@ -374,13 +374,18 @@ class PaperSaver:
 
         if results:
             try:
-                owner_row = fetch_all(
+                owner_rows = fetch_all(
                     "SELECT r.id FROM researchers r "
                     "JOIN researcher_urls ru ON ru.researcher_id = r.id "
                     "WHERE ru.url = %s", (url,),
                 )
-                for row in owner_row:
-                    refresh_has_top5(row['id'])
+                paper_ids = sorted({r.paper_id for r in results})
+                author_rows = fetch_all(
+                    "SELECT DISTINCT researcher_id AS id FROM authorship "
+                    f"WHERE publication_id IN ({', '.join(['%s'] * len(paper_ids))})",
+                    tuple(paper_ids),
+                )
+                refresh_has_top5_for(row['id'] for row in [*owner_rows, *author_rows])
             except Exception as e:
                 logging.warning("Failed to refresh has_top5_pub for %s: %s", url, e)
 

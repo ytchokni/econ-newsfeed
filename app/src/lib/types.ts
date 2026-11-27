@@ -144,6 +144,7 @@ export interface FeedFilters {
 
 export interface ResearcherDetail extends Researcher {
   publications: Publication[];
+  openalex_author_id?: string | null;
 }
 
 export interface FilterOptions {

@@ -29,6 +29,7 @@ from backend.database import fetch_all, fetch_one, get_connection  # noqa: E402
 from backend.database.papers import compute_title_hash, normalize_title  # noqa: E402
 from backend.database.snapshots import _STATUS_RANK  # noqa: E402
 from backend.enrichment.paper_merge import _CHILD_TABLES, find_duplicate_groups  # noqa: E402
+from backend.pipeline.description import looks_like_reasoning, reasoning_sql_condition  # noqa: E402
 from backend.pipeline.publication import clean_title  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -769,6 +770,63 @@ def reset_hash_without_content():
     return row["n"]
 
 
+@step
+def restore_reasoning_descriptions():
+    """Bios that hold the LLM's <thought> reasoning instead of a description
+    (issue #258). Each affected researcher gets back the newest snapshot bio
+    that is clean, or NULL when no clean one exists. The polluted snapshots
+    are deleted: their position/affiliation were copied from the researcher
+    row, so the bio is the only thing they recorded, and history would keep
+    showing the reasoning text otherwise. Restoring makes the newest
+    remaining snapshot match the researcher row again."""
+    cond, params = reasoning_sql_condition("description")
+    researchers = [
+        r for r in fetch_all(
+            f"SELECT id, description FROM researchers WHERE description IS NOT NULL AND {cond}",
+            params)
+        if looks_like_reasoning(r["description"])
+    ]
+    bad_snapshot_ids = [
+        r["id"] for r in fetch_all(
+            f"SELECT id, description FROM researcher_snapshots "
+            f"WHERE description IS NOT NULL AND {cond}", params)
+        if looks_like_reasoning(r["description"])
+    ]
+
+    restores: list[tuple[int, str | None, str]] = []
+    for r in researchers:
+        clean = None
+        for snap in fetch_all(
+                """SELECT description FROM researcher_snapshots
+                   WHERE researcher_id = %s AND description IS NOT NULL AND description <> ''
+                   ORDER BY scraped_at DESC, id DESC""", (r["id"],)):
+            if not looks_like_reasoning(snap["description"]):
+                clean = snap["description"]
+                break
+        restores.append((r["id"], clean, r["description"]))
+
+    n_restore = sum(1 for _, clean, _ in restores if clean is not None)
+    log.info("  %d researchers with reasoning-text bios: %d restored from a clean snapshot, "
+             "%d set to NULL", len(restores), n_restore, len(restores) - n_restore)
+    log.info("  %d polluted researcher_snapshots rows -> delete", len(bad_snapshot_ids))
+    for rid, clean, bad in restores[:10]:
+        log.info("    #%d %r -> %r", rid, bad[:60], (clean or "NULL")[:60])
+
+    def write(cursor):
+        for rid, clean, bad in restores:
+            # Guarded on the bad value so a bio refreshed meanwhile is kept.
+            cursor.execute(
+                "UPDATE researchers SET description = %s WHERE id = %s AND description = %s",
+                (clean, rid, bad))
+        for i in range(0, len(bad_snapshot_ids), 500):
+            chunk = bad_snapshot_ids[i:i + 500]
+            ph = ",".join(["%s"] * len(chunk))
+            cursor.execute(f"DELETE FROM researcher_snapshots WHERE id IN ({ph})", tuple(chunk))
+
+    _run_writes("restore_reasoning_descriptions", write)
+    return len(restores) + len(bad_snapshot_ids)
+
+
 # ---------------------------------------------------------------- main
 
 # Dependency order (see module docstring).
@@ -794,6 +852,7 @@ STEP_ORDER = [
     "delete_seed_new_paper_events",
     "fix_orphan_papers",
     "reset_hash_without_content",
+    "restore_reasoning_descriptions",
 ]
 
 
