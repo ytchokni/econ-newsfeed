@@ -214,6 +214,7 @@ _TABLE_DEFINITIONS = {
             researcher_id INT,
             extracted_at DATETIME,
             extracted_hash VARCHAR(64),
+            content_changed_at DATETIME DEFAULT NULL,
             UNIQUE KEY uq_url_id (url_id),
             INDEX idx_url_id_ts (url_id, timestamp),
             FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
@@ -538,6 +539,9 @@ def create_tables() -> None:
                         ("feed_events", "event_source_url", "VARCHAR(2048) DEFAULT NULL"),
                         ("feed_events", "event_metadata_captured", "BOOLEAN NOT NULL DEFAULT FALSE"),
                         ("feed_events", "recorded_at", "DATETIME(6) NULL DEFAULT NULL"),
+                        # When content_hash last changed (html_content.timestamp moves on
+                        # every fetch). Orders the extraction queue; NULL on older rows.
+                        ("html_content", "content_changed_at", "DATETIME DEFAULT NULL"),
                     ]
                     for table, col, definition in _migrations:
                         try:

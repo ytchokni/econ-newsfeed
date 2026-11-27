@@ -18,6 +18,8 @@ from typing import Generic, TypeVar
 from openai import OpenAI, OpenAIError, RateLimitError
 from pydantic import BaseModel, ValidationError
 
+from backend.llm import throttle
+
 _client: OpenAI | None = None
 _client_lock = threading.Lock()
 
@@ -45,7 +47,34 @@ def get_client() -> OpenAI:
                     max_retries=0,
                     timeout=300.0,
                 )
+                _throttle_completions(_client)
     return _client
+
+
+def _throttle_completions(client: OpenAI) -> None:
+    """Route every chat completion of the shared client through the limiter.
+
+    Disambiguation and description calls use the client directly, so the
+    per-minute caps are enforced here rather than in extract_json.
+    """
+    completions = client.chat.completions
+    create = completions.create
+
+    def throttled_create(*args, **kwargs):
+        reservation = throttle.limiter.acquire(
+            throttle.estimate_prompt_tokens(kwargs.get("messages")), throttle.current_share(),
+        )
+        try:
+            response = create(*args, **kwargs)
+        except RateLimitError as e:
+            throttle.limiter.pause(_parse_retry_after(e))
+            raise
+        usage = getattr(response, "usage", None)
+        prompt_tokens = getattr(usage, "prompt_tokens", None)
+        throttle.limiter.settle(reservation, prompt_tokens if isinstance(prompt_tokens, int) else None)
+        return response
+
+    completions.create = throttled_create
 
 
 def get_model() -> str:
@@ -179,13 +208,15 @@ def extract_json(
             )
         message_content = prompt if attempt == 0 else clarified_prompt
         try:
-            completion = client.chat.completions.create(
-                model=model,
-                messages=[{"role": "user", "content": message_content}],
-                response_format=response_format,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
+            # An extraction worker lets the others save their pages meanwhile.
+            with throttle.extraction_gate.released():
+                completion = client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": message_content}],
+                    response_format=response_format,
+                    max_tokens=max_tokens,
+                    temperature=temperature,
+                )
         except RateLimitError as e:
             retry_delay = _parse_retry_after(e)
             logging.warning("LLM rate limited, retry after %.0fs: %s", retry_delay, e)

@@ -10,6 +10,7 @@ from scripts import monitor
 HEALTHY = {
     "scrape_age_h": 3, "stuck_scrapes": 0, "pending": 400,
     "extracted_6h": 300, "feed_recent": 250, "enrich_age_h": 12,
+    "never_extracted": 350, "oldest_changed_h": 10,
 }
 
 
@@ -30,6 +31,16 @@ class TestEvaluatePipeline:
         stats = {**HEALTHY, "pending": 14659, "extracted_6h": 360}
         assert _failing(monitor.evaluate_pipeline(stats)) == []
 
+    def test_no_changed_page_waiting_is_healthy(self):
+        stats = {**HEALTHY, "oldest_changed_h": None}
+        assert _failing(monitor.evaluate_pipeline(stats)) == []
+
+    def test_throughput_detail_reports_clear_time(self):
+        stats = {**HEALTHY, "pending": 12000, "extracted_6h": 600}
+        detail = next(r for r in monitor.evaluate_pipeline(stats)
+                      if r["name"] == "extraction_throughput")["detail"]
+        assert "350 never extracted" in detail and "clears in ~5.0 days" in detail
+
     def test_small_leftover_queue_does_not_alert(self):
         """A few hundred permanently failing pages are not an outage."""
         stats = {**HEALTHY, "pending": 280, "extracted_6h": 0}
@@ -42,6 +53,7 @@ class TestEvaluatePipeline:
         ({"feed_recent": 0}, "feed_fresh"),
         ({"enrich_age_h": 49}, "enrichment_active"),
         ({"enrich_age_h": None}, "enrichment_active"),
+        ({"oldest_changed_h": 73}, "extraction_backlog_age"),
     ])
     def test_each_stage_alerts_on_its_own(self, override, expected):
         assert _failing(monitor.evaluate_pipeline({**HEALTHY, **override})) == [expected]
@@ -49,10 +61,11 @@ class TestEvaluatePipeline:
 
 class TestParsePipelineRow:
     def test_parses_integers_and_nulls(self):
-        row = monitor.parse_pipeline_row("3\t0\t14658\t17\t29\tNULL\n")
+        row = monitor.parse_pipeline_row("3\t0\t14658\t17\t29\tNULL\t11594\tNULL\n")
         assert row == {
             "scrape_age_h": 3, "stuck_scrapes": 0, "pending": 14658,
             "extracted_6h": 17, "feed_recent": 29, "enrich_age_h": None,
+            "never_extracted": 11594, "oldest_changed_h": None,
         }
 
     def test_rejects_unexpected_shape(self):

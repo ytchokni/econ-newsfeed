@@ -50,6 +50,10 @@ STUCK_SCRAPE_HOURS = 24
 # success" age check stayed green for ten days. Compare throughput to backlog.
 EXTRACTION_BACKLOG_PAGES = 1000
 EXTRACTION_MIN_PER_6H = 30
+# The worker takes changed pages that waited 12h before anything else
+# (backend.database.extraction_queue), so a changed page waiting three days
+# means extraction is not keeping up with the pages that feed the newsfeed.
+EXTRACTION_CHANGED_MAX_WAIT_HOURS = 72
 FEED_WINDOW_HOURS = 72
 ENRICHMENT_MAX_AGE_HOURS = 48
 LLM_ACCOUNT_ERRORS_PER_HOUR = 3
@@ -67,18 +71,31 @@ CLAUDE_REQUEST = (
 
 PIPELINE_COLUMNS = (
     "scrape_age_h", "stuck_scrapes", "pending", "extracted_6h", "feed_recent", "enrich_age_h",
+    "never_extracted", "oldest_changed_h",
 )
+# Only idx_extraction_state columns: any other html_content column in these
+# filters makes MySQL read every stored page (~60 s on production).
+_PENDING = """FROM researcher_urls ru JOIN html_content hc ON hc.url_id = ru.id
+     WHERE ru.is_active = TRUE AND hc.content_hash IS NOT NULL AND hc.has_stored_content = TRUE
+       AND (hc.extracted_hash IS NULL OR hc.extracted_hash != hc.content_hash)"""
+# Wait of the oldest changed (previously extracted) page: index-only list
+# first, then row lookups for those few hundred pages. content_changed_at is
+# NULL on rows last changed before it existed; their last fetch stands in.
+_OLDEST_CHANGED = f"""SELECT /*+ NO_MERGE(p) */
+       TIMESTAMPDIFF(HOUR, MIN(COALESCE(h2.content_changed_at, h2.timestamp)), NOW())
+     FROM (SELECT hc.url_id {_PENDING} AND hc.extracted_hash IS NOT NULL) p
+     JOIN html_content h2 ON h2.url_id = p.url_id"""
 PIPELINE_SQL = f"""
 SELECT
   TIMESTAMPDIFF(HOUR, (SELECT MAX(started_at) FROM scrape_log), NOW()),
   (SELECT COUNT(*) FROM scrape_log
      WHERE status = 'running' AND started_at < NOW() - INTERVAL {STUCK_SCRAPE_HOURS} HOUR),
-  (SELECT COUNT(*) FROM researcher_urls ru JOIN html_content hc ON hc.url_id = ru.id
-     WHERE ru.is_active = TRUE AND hc.content_hash IS NOT NULL AND hc.has_stored_content = TRUE
-       AND (hc.extracted_hash IS NULL OR hc.extracted_hash != hc.content_hash)),
+  (SELECT COUNT(*) {_PENDING}),
   (SELECT COUNT(*) FROM html_content WHERE extracted_at >= NOW() - INTERVAL 6 HOUR),
   (SELECT COUNT(*) FROM feed_events WHERE recorded_at >= NOW() - INTERVAL {FEED_WINDOW_HOURS} HOUR),
-  TIMESTAMPDIFF(HOUR, (SELECT MAX(enrichment_attempted_at) FROM papers), NOW());
+  TIMESTAMPDIFF(HOUR, (SELECT MAX(enrichment_attempted_at) FROM papers), NOW()),
+  (SELECT COUNT(*) {_PENDING} AND hc.extracted_hash IS NULL),
+  ({_OLDEST_CHANGED});
 """
 
 
@@ -205,6 +222,7 @@ def parse_pipeline_row(output: str) -> dict:
 def evaluate_pipeline(stats: dict) -> list[dict]:
     scrape_age = stats["scrape_age_h"]
     enrich_age = stats["enrich_age_h"]
+    changed_wait = stats["oldest_changed_h"]
     stalled = (stats["pending"] > EXTRACTION_BACKLOG_PAGES
                and stats["extracted_6h"] < EXTRACTION_MIN_PER_6H)
     return [
@@ -214,7 +232,13 @@ def evaluate_pipeline(stats: dict) -> list[dict]:
         check("scrape_not_stuck", stats["stuck_scrapes"] == 0,
               f"{stats['stuck_scrapes']} scrape(s) running for over {STUCK_SCRAPE_HOURS}h"),
         check("extraction_throughput", not stalled,
-              f"{stats['pending']} pages waiting, {stats['extracted_6h']} extracted in the last 6h"),
+              f"{stats['pending']} pages waiting ({stats['never_extracted']} never extracted), "
+              f"{stats['extracted_6h']} extracted in the last 6h, "
+              + (f"clears in ~{stats['pending'] / (stats['extracted_6h'] * 4):.1f} days at that rate"
+                 if stats["extracted_6h"] else "no extraction in 6h")),
+        check("extraction_backlog_age", changed_wait is None or changed_wait <= EXTRACTION_CHANGED_MAX_WAIT_HOURS,
+              f"oldest changed page waiting {changed_wait}h" if changed_wait is not None
+              else "no changed page waiting"),
         check("feed_fresh", stats["feed_recent"] > 0,
               f"{stats['feed_recent']} feed events in the last {FEED_WINDOW_HOURS}h"),
         check("enrichment_active", enrich_age is not None and enrich_age <= ENRICHMENT_MAX_AGE_HOURS,

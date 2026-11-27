@@ -19,6 +19,7 @@ from backend.database import (
     fetch_one, fetch_all, compute_title_hash, append_paper_snapshot,
     append_researcher_snapshot,
 )
+from backend.pipeline.change_filter import is_insignificant_change
 from backend.pipeline.feed_events import FeedEventEmitter
 from backend.database.papers import find_papers_by_titles
 from backend.pipeline.html_fetcher import CONTENT_MAX_CHARS, HTMLFetcher
@@ -104,8 +105,10 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
 
     previous_text = None if is_seed else HTMLFetcher.get_previous_text(url_id)
 
-    if previous_text is not None and HTMLFetcher.normalize_text(previous_text) == HTMLFetcher.normalize_text(text):
-        # Cleaning/hash changes alone must not create fresh publication events.
+    if previous_text is not None and is_insignificant_change(
+            HTMLFetcher.normalize_text(previous_text), HTMLFetcher.normalize_text(text)):
+        # Cleaning/hash changes, spacing and counters alone must not cost a
+        # call or create fresh publication events.
         HTMLFetcher.mark_extracted(url_id, content_hash)
         return ExtractionOutcome("empty")
 

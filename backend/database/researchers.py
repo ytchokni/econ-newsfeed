@@ -10,6 +10,7 @@ import unicodedata
 
 from backend.database.connection import execute_query, fetch_one, fetch_all
 from backend.database.llm import log_llm_usage
+from backend.database.extraction_queue import prioritise
 from backend.config import fix_encoding
 
 
@@ -615,18 +616,24 @@ def get_at_risk_urls() -> list[dict]:
     )
 
 
-def get_urls_needing_extraction(exclude_url_ids: tuple[int, ...] = ()) -> list[dict]:
+def get_urls_needing_extraction(exclude_url_ids: tuple[int, ...] = (),
+                                limit: int | None = 200) -> list[dict]:
     """Active researcher URLs whose stored HTML changed since last extraction.
 
     A URL needs extraction when its content_hash differs from extracted_hash
     (changed since last LLM run, or never extracted). URLs with no stored
     HTML are excluded (nothing to extract).
 
-    Returns at most 200 rows — the worker processes them one at a time and
-    re-polls when the batch is done.
+    Returns at most `limit` rows (all of them for None) in priority order, see
+    backend.database.extraction_queue — the worker processes a batch and
+    re-polls when it is done, so the order is recomputed every batch.
     """
+    # Only columns of idx_extraction_state (plus researcher_urls): reading any
+    # other html_content column makes MySQL fetch every stored page (~60 s on
+    # production) instead of answering from the index (~0.2 s).
     query = """
-        SELECT ru.id, ru.researcher_id, ru.url, ru.page_type, hc.content_hash
+        SELECT ru.id, ru.researcher_id, ru.url, ru.page_type, hc.content_hash,
+               hc.extracted_hash IS NULL AS never_extracted
         FROM researcher_urls ru
         JOIN html_content hc ON hc.url_id = ru.id
         WHERE ru.is_active = TRUE
@@ -636,8 +643,25 @@ def get_urls_needing_extraction(exclude_url_ids: tuple[int, ...] = ()) -> list[d
     """
     if exclude_url_ids:
         query += " AND ru.id NOT IN (" + ",".join(["%s"] * len(exclude_url_ids)) + ")"
-    query += " ORDER BY ru.id LIMIT 200"
-    return fetch_all(query, exclude_url_ids) if exclude_url_ids else fetch_all(query)
+    query += " ORDER BY ru.id"
+    rows = fetch_all(query, exclude_url_ids) if exclude_url_ids else fetch_all(query)
+    _attach_pending_since([r for r in rows if not r.get('never_extracted')])
+    return prioritise(rows, limit=limit)
+
+
+def _attach_pending_since(rows: list[dict], chunk: int = 500) -> None:
+    """Add when each changed page's text changed (row lookups, so changed pages only)."""
+    by_id = {r['id']: r for r in rows}
+    ids = list(by_id)
+    for start in range(0, len(ids), chunk):
+        part = ids[start:start + chunk]
+        found = fetch_all(
+            "SELECT url_id, COALESCE(content_changed_at, timestamp) AS pending_since "
+            "FROM html_content WHERE url_id IN (" + ",".join(["%s"] * len(part)) + ")",
+            tuple(part),
+        )
+        for f in found:
+            by_id[f['url_id']]['pending_since'] = f['pending_since']
 
 
 def reactivate_url(url_id: int) -> None:
