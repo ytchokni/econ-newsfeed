@@ -170,6 +170,9 @@ from backend.database.search_helpers import (
     TOP100_REPEC_KEYWORDS as _TOP100_REPEC_KEYWORDS,
     top5_venue_clause as _top5_venue_clause,
     top5_and_field_venue_clause as _top5_and_field_venue_clause,
+    name_relevance_sql as _name_relevance_sql,
+    name_search_words as _name_search_words,
+    name_words_clause as _name_words_clause,
 )
 
 _FEED_VISIBLE_EVENT_TYPES = ("new_paper", "status_change")
@@ -320,7 +323,8 @@ def search_feed_events(
     - since: fe.created_at >= datetime value
     - institution_list: affiliation LIKE match (composes with journal presets)
     - preset: 'top20' matches top-20 economics departments
-    - search: all literal words in title/abstract, or an author-name match
+    - search: all literal words in title/abstract, or all words in an author's
+      name; papers by authors whose name matches the query rank first
     - event_type: fe.event_type = ...
     - jel_code: comma-split, EXISTS on researcher_jel_codes
     """
@@ -427,14 +431,19 @@ def search_feed_events(
         params.extend(f"%{_escape_like(kw)}%" for kw in _TOP100_REPEC_KEYWORDS)
 
     search_term = search.strip() if search else ""
+    order_sql = "fe.created_at DESC"
+    order_params: list = []
     if search_term:
+        # An author whose name has every query word, in any order.
+        author_words = _name_search_words(search_term) or [search_term]
+        author_clause, author_params = _name_words_clause(
+            "CONCAT_WS(' ', r_s.first_name, r_s.last_name)", author_words
+        )
         author_exists = (
             "EXISTS (SELECT 1 FROM authorship a_s "
             "JOIN researchers r_s ON r_s.id = a_s.researcher_id "
-            "WHERE a_s.publication_id = p.id AND "
-            "CONCAT(r_s.first_name, ' ', r_s.last_name) LIKE %s ESCAPE '\\\\')"
+            f"WHERE a_s.publication_id = p.id AND {author_clause})"
         )
-        author_escaped = f"%{_escape_like(search_term)}%"
         # Feed-sized LIKE scans also find short words and MySQL fulltext stopwords.
         words = _escape_fulltext(search_term).split() or [search_term]
         word_matches = []
@@ -443,7 +452,20 @@ def search_feed_events(
             escaped = f"%{_escape_like(word)}%"
             params.extend([escaped, escaped])
         conditions.append(f"(({' AND '.join(word_matches)}) OR {author_exists})")
-        params.append(author_escaped)
+        params.extend(author_params)
+        # Papers by an author named like the query come first, newest first
+        # within each tier; mere substrings ("Krieger" for "Rieger") and
+        # title/abstract matches stay in chronological order.
+        rank_sql, rank_params = _name_relevance_sql(
+            "r_o.first_name", "r_o.last_name", search_term, include_substring=False,
+        )
+        if rank_sql:
+            order_sql = (
+                f"(SELECT COALESCE(MAX({rank_sql}), 0) FROM authorship a_o "
+                "JOIN researchers r_o ON r_o.id = a_o.researcher_id "
+                f"WHERE a_o.publication_id = p.id) DESC, {order_sql}"
+            )
+            order_params = rank_params
 
     if event_type:
         conditions.append("fe.event_type = %s")
@@ -502,9 +524,9 @@ def search_feed_events(
         FROM feed_events fe
         JOIN papers p ON p.id = fe.paper_id
         {where}
-        ORDER BY fe.created_at DESC
+        ORDER BY {order_sql}, fe.id DESC
         LIMIT %s OFFSET %s
         """,
-        (*params, limit, offset),
+        (*params, *order_params, limit, offset),
     )
     return rows, total, researcher_count

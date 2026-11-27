@@ -43,7 +43,7 @@ def test_names_match_all_terms_and_results_are_capped(monkeypatch):
     db.create_function("CONCAT_WS", -1, lambda sep, *parts: sep.join(part for part in parts if part is not None))
     db.execute("CREATE TABLE researchers (id INTEGER, first_name TEXT, last_name TEXT, affiliation TEXT)")
     db.executemany("INSERT INTO researchers VALUES (?, ?, ?, NULL)", [(1, "Youngjin", "Yun"), (2, "Yun", "Liu"), (3, "Youngjin", "Kim")] + [(i, "Jane", f"Smith {i}") for i in range(4, 40)])
-    monkeypatch.setattr(researchers, "fetch_all", lambda sql, params: [dict(row) for row in db.execute(sql.replace("%s", "?"), params)])
+    monkeypatch.setattr(researchers, "fetch_all", lambda sql, params: [dict(row) for row in db.execute(sql.replace("%s", "?").replace("ESCAPE '\\\\'", "ESCAPE '\\'"), params)])
     assert [row["id"] for row in researchers.search_researcher_options(search="Youngjin Yun")] == [1]
     assert len(researchers.search_researcher_options(search="Jane")) == 20
     assert [row["id"] for row in researchers.search_researcher_options(researcher_ids=[2])] == [2]
