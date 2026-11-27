@@ -29,6 +29,7 @@ poetry run python -m backend.main extract --limit 5  # Extract a limited batch
 poetry run python -m backend.main enrich            # Enrich papers via OpenAlex
 poetry run python -m backend.main classify-jel      # One budgeted JEL batch (bio + papers + OpenAlex topics)
 poetry run python -m backend.main classify-jel --until-done  # Repeat batches until nothing is due, a limit is hit, or extraction needs the key
+poetry run python -m backend.main backfill-bios     # Regenerate missing bios from stored HOME pages (paced, budgeted)
 poetry run python -m backend.main discover-domains  # Scan HTML for untrusted domains with paper-like links
 
 # Testing & validation
@@ -74,6 +75,8 @@ Extraction is owned by the extraction worker (below) — the scrape job only ref
 **Extraction worker:** When `EXTRACTION_WORKER_ENABLED=true`, a background thread in the API process continuously extracts publications from changed pages (`content_hash ≠ extracted_hash`) using synchronous free-tier Gemma calls. Calls are latency-bound (45–190s each, ~35 output tokens/s); `EXTRACTION_DELAY_SECONDS` (default 2) paces the fast tail under the 30 RPM free-tier cap. Polls every 5 minutes when idle, backs off 10 minutes after 10 consecutive failures (quota exhaustion), and after 3 failed attempts on the same page version skips it for an hour, doubling per further failure up to a week (poison-pill guard; the count, hash and retry time live in `html_content.extraction_*`, so restarts do not reset it). An LLM answer cut off at `max_tokens` (32000 for full and diff calls) is not retried as is: the text is split in two (twice at most), and a cut-off diff falls back to chunked full extraction. Account errors from the provider (HTTP 401/402/403, e.g. depleted AI Studio billing) pause the whole worker for 10 minutes per attempt instead of counting against individual pages. In local dev (worker disabled), run `python -m backend.main extract` manually after fetching.
 
 **Extraction queue order and throughput:** `get_urls_needing_extraction()` orders the queue in Python (`backend/database/extraction_queue.py`): changed pages that have waited 12h first (diffs compare with the previous *fetched* version, so a second change before extraction would hide the first), then never-extracted pages, then fresh changes. Within each tier, researchers with a top-5 paper or a feed event in the last year and publication/research pages get a head start of a few hours' waiting. `html_content.content_changed_at` records when the text last changed (`timestamp` moves on every fetch). `EXTRACTION_CONCURRENCY` (default 2; raise once 429s and pool use look fine) loops run in parallel, never two pages of one researcher at once; they hold `throttle.extraction_gate` while saving, so papers/events are written one page at a time and only model calls overlap. Every LLM call in the process goes through `backend/llm/throttle.py`, which keeps input tokens and requests per minute under `LLM_INPUT_TOKENS_PER_MINUTE` (14000; the gemma-4-31b Tier 1 key allows 16k) and `LLM_REQUESTS_PER_MINUTE` (25); extraction runs in its own lane with 80% of that and the JEL job in a lane with 20%, so neither crowds out the other. The limiter is per process: don't run the `extract` or `classify-jel` CLI while the worker runs, or the two processes together can exceed the key's cap. Page changes that are only spacing or counters (`backend/pipeline/change_filter.py`) are marked extracted without a call.
+
+**Bio backfill:** `BIO_BACKFILL_ENABLED=true` (off by default) schedules an hourly job that regenerates missing researcher bios (`description IS NULL`) from stored HOME page text, e.g. after the #258 cleanup NULLed ~3,500 bios. It shares the free-tier key with extraction, so it is small and yields: `BIO_BACKFILL_BATCH_CALLS` (10) calls per run, `BIO_BACKFILL_DAILY_LIMIT` (150) per UTC day, `BIO_BACKFILL_DELAY_SECONDS` (30) between calls, a run stops at the first quota refusal, and, like the JEL job, it yields to extraction: no run within `BIO_BACKFILL_YIELD_AFTER_QUOTA_MINUTES` (15) of an extraction quota refusal (`llm_quota_signals`) and none while more than `BIO_BACKFILL_MAX_BACKLOG` (50) pages wait for extraction. `researcher_bio_backfill` records the page hash per attempt, so a page with no bio is not retried until it changes. Run by hand with `python -m backend.main backfill-bios [--max-calls N]`. Bio answers are structured JSON and must pass `backend.pipeline.description.clean_description()`; a rejected answer never replaces a stored bio.
 
 **Extraction circuit breaker (CLI):** The `extract` CLI stops after 10 consecutive failed extractions (e.g. LLM quota exhausted). Fetched HTML is preserved — extraction resumes on the next run for URLs where `content_hash ≠ extracted_hash`. The continuous worker uses backoff + per-URL retry limits instead of stopping.
 
@@ -341,7 +344,12 @@ Required env vars: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `GOOGLE_API_K
 not under `/api/auth/`, which NextAuth owns). Codes are 6 digits, HMAC-hashed in
 `email_login_codes`, valid 10 minutes, single use, 5 wrong tries, 60 s resend
 cooldown, 5 per address per hour plus a deployment-wide hourly cap
-(`EMAIL_LOGIN_HOURLY_LIMIT`). Per-IP limits use `api_protection`'s client key (strict per
+(`EMAIL_LOGIN_HOURLY_LIMIT`). After 15 wrong codes in a day an address is
+"guarded" (not locked out): 2 codes an hour, one try each. 100 wrong codes in an
+hour across all addresses (`EMAIL_LOGIN_MAX_FAILURES_PER_HOUR`) pause email
+sign-in until they age out of that rolling hour (up to an hour) and log `email_login_circuit_open`, which the daily monitor's
+`api_traffic` check reports. An hourly scheduler job deletes code rows older
+than a day. Per-IP limits use `api_protection`'s client key (strict per
 visitor; coarse in the keyless fail-open tier, where visitors share Vercel IPs);
 the credentials provider forwards the visitor with `internalApiHeaders`. Email
 login is offered only with a Resend key and an explicit `LOGIN_FROM_EMAIL` or

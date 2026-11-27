@@ -121,6 +121,17 @@ class TestApiTraffic:
         lines = ["rate_limited ip=203.0.113.9 tier=visitor"] * monitor.API_RATE_LIMITED_PER_DAY
         assert not monitor.evaluate_api_traffic(monitor.summarize_api_traffic(lines))["ok"]
 
+    def test_email_login_circuit_open_fails(self):
+        lines = self.LINES + [
+            "2026-11-27 10:05:00 backend.email_login ERROR email_login_circuit_open failures=104 "
+            "limit=100 window=1h: email sign-in paused (possible code guessing)",
+        ]
+        stats = monitor.summarize_api_traffic(lines)
+        assert stats["email_login_paused"] == 1
+        result = monitor.evaluate_api_traffic(stats)
+        assert not result["ok"]
+        assert "email sign-in paused 1x" in result["detail"]
+
     def test_wrong_frontend_key_fails(self):
         lines = ["internal_key_invalid ip=76.76.21.21"] * monitor.API_INVALID_KEY_WARNINGS
         assert not monitor.evaluate_api_traffic(monitor.summarize_api_traffic(lines))["ok"]

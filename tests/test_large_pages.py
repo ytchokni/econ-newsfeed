@@ -347,6 +347,30 @@ class TestMergePublications:
         assert merged[0]["status"] == "revise_and_resubmit"
         assert merged[0]["status_evidence"] == "Trade and Jobs R&R"
 
+    def test_tie_prefers_status_with_evidence(self):
+        """On equal richness the status backed by an evidence quote wins,
+        whichever chunk returned it first."""
+        bare = _pub("Trade and Jobs", year="2024", status="working_paper")
+        backed = _pub("Trade and Jobs", year="2024", status="accepted",
+                      status_evidence="Trade and Jobs. Accepted at the AER")
+        for order in ([bare, backed], [backed, bare]):
+            merged = merge_publications(order)
+            assert len(merged) == 1
+            assert merged[0]["status"] == "accepted"
+            assert merged[0]["status_evidence"] == "Trade and Jobs. Accepted at the AER"
+
+    def test_tie_without_evidence_prefers_venue(self):
+        no_venue = _pub("Trade and Jobs", year="2024", status="working_paper", abstract="A")
+        with_venue = _pub("Trade and Jobs", status="accepted", venue="AER", abstract="A")
+        for order in ([no_venue, with_venue], [with_venue, no_venue]):
+            assert merge_publications(order)[0]["status"] == "accepted"
+
+    def test_richer_record_still_wins_over_evidence(self):
+        backed = _pub("Trade and Jobs", status="accepted", status_evidence="Trade and Jobs accepted")
+        fuller = _pub("Trade and Jobs", status="working_paper", year="2024", venue="NBER WP",
+                      abstract="Long abstract")
+        assert merge_publications([backed, fuller])[0]["status"] == "working_paper"
+
     def test_key_fields_keep_change_types_apart(self):
         changes = [dict(_pub("Paper"), change_type="new_paper"),
                    dict(_pub("Paper"), change_type="status_change")]

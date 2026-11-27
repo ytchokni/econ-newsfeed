@@ -385,9 +385,18 @@ def verify_publication_evidence(pub: dict, source_text: str, other_titles: tuple
 _MERGE_FILL_FIELDS = ('year', 'venue', 'draft_url', 'abstract')
 
 
-def _richness(pub: dict) -> int:
+def _richness(pub: dict) -> tuple[int, int, int]:
+    """Sort key for the record to keep: filled fields first, then on a tie
+    a status backed by a verified evidence quote, then one with a venue.
+
+    Without the tie-breaks the first record won a tie, so an extraction
+    from a chunk that cut the entry before its "Accepted at ..." line could
+    replace the supported status of the same paper from the next chunk.
+    """
     fields = ('year', 'venue', 'status', 'draft_url', 'abstract')
-    return sum(1 for f in fields if pub.get(f)) + (1 if pub.get('authors') else 0)
+    filled = sum(1 for f in fields if pub.get(f)) + (1 if pub.get('authors') else 0)
+    evidenced = 1 if pub.get('status') and pub.get('status_evidence') else 0
+    return filled, evidenced, 1 if pub.get('venue') else 0
 
 
 def merge_publications(pubs: list[dict], key_fields: tuple[str, ...] = ()) -> list[dict]:
