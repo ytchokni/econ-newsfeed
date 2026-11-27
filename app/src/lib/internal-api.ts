@@ -3,9 +3,9 @@
 // when X-Internal-Api-Key matches its INTERNAL_API_KEY. Server-side only: the key
 // must never reach the browser, so it is read from a non-NEXT_PUBLIC env var.
 
-export const INTERNAL_KEY_HEADER = "x-internal-api-key";
-export const VISITOR_IP_HEADER = "x-visitor-ip";
-export const VISITOR_SOURCE_HEADER = "x-visitor-source";
+export const INTERNAL_KEY_HEADER = "X-Internal-Api-Key";
+export const VISITOR_IP_HEADER = "X-Visitor-IP";
+export const VISITOR_SOURCE_HEADER = "X-Visitor-Source";
 
 export type VisitorSource = "proxy" | "ssr";
 
@@ -13,8 +13,8 @@ interface HeaderReader {
   get(name: string): string | null;
 }
 
-export function internalApiKey(): string {
-  return (process.env.INTERNAL_API_KEY || "").trim();
+export function internalApiKey(env: NodeJS.ProcessEnv = process.env): string {
+  return (env.INTERNAL_API_KEY || "").trim();
 }
 
 /** The visitor's IP as Vercel reports it (Vercel overwrites both headers). */
@@ -33,8 +33,9 @@ export function visitorIp(headers: HeaderReader): string {
  */
 export function internalApiHeaders(
   visitor?: { ip: string; source: VisitorSource },
+  env: NodeJS.ProcessEnv = process.env,
 ): Record<string, string> {
-  const key = internalApiKey();
+  const key = internalApiKey(env);
   if (!key) return {};
   const headers: Record<string, string> = { [INTERNAL_KEY_HEADER]: key };
   if (visitor) {

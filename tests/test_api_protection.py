@@ -149,6 +149,11 @@ class TestClientIp:
             _resolve({"X-Internal-Api-Key": "wrong-key-of-some-length"})
         assert any("internal_key_invalid" in r.getMessage() for r in caplog.records)
 
+    def test_short_backend_key_is_ignored(self, protection_env):
+        protection_env(INTERNAL_API_KEY="short")
+        info = _resolve({"X-Internal-Api-Key": "short", "X-Visitor-IP": "6.6.6.6", "X-Forwarded-For": "203.0.113.9"})
+        assert (info.tier, info.ip) == (api_protection.LEGACY, "203.0.113.9")
+
     def test_direct_limited(self, protection_env):
         protection_env(INTERNAL_API_KEY=KEY, API_DIRECT_ACCESS="limited")
         assert _resolve({"X-Forwarded-For": "203.0.113.9"}).tier == api_protection.DIRECT

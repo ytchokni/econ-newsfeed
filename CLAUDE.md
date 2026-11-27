@@ -97,6 +97,20 @@ owner mention comes from a bot (a self-mention sends no email). The script is st
 library only because it runs on the server's system Python. Run it by hand with
 `python3 scripts/monitor.py --external`, or `--host` on the server.
 
+**Search engines:** the canonical host is `https://www.econnewsfeed.org`
+(`SITE_URL` on Vercel overrides it). `next.config.mjs` 308-redirects pages on
+`econ-newsfeed.vercel.app` and the apex to it (not `/api/*`, so auth callbacks
+and unsubscribe POSTs keep working); preview deployments get `noindex` and a
+`Disallow: /` robots.txt. Per-page titles, descriptions, canonicals and JSON-LD
+come from `app/src/lib/seo.ts`. `/sitemap.xml` is an index over
+`/sitemaps/{pages,researchers-N,papers-N}.xml`, built from `/api/sitemap` and
+`/api/sitemap/{kind}?page=N` (10k ids per chunk). Researcher profiles are
+indexed only if tracked (have a URL) and have papers; keep
+`isIndexableResearcher` and `backend/database/sitemap.py` in sync. Detail
+pages 404 only on a backend 404 and error (5xx) on other failures, so crawlers
+retry. The sitemap fetches send `INTERNAL_API_KEY` without a visitor, so they
+are exempt from rate limits and paging caps (see API scrape protection below).
+
 Researcher filter choices are fetched on demand from `/api/researcher-options`
 (at most 50 results), rather than included in `/api/filter-options`. Weekly
 digest controls follow `/api/capabilities`; an unavailable delivery provider
@@ -107,7 +121,7 @@ a per-user delivery ledger so delayed extraction is not skipped.
 `app/src/proxy.ts` (Next 16's name for middleware) adds `X-Internal-Api-Key`
 (`INTERNAL_API_KEY`, same value on Vercel and the API) and the visitor's IP to
 proxied `/api/*` calls; the SSR detail pages do the same via
-`app/src/lib/ssr-api.ts`. The API trusts `X-Visitor-IP` only with a valid
+`fetchBackend(path, revalidate, { forVisitor: true })` in `app/src/lib/server-api.ts`. The API trusts `X-Visitor-IP` only with a valid
 key, otherwise it uses the rightmost `X-Forwarded-For` entry that Caddy writes.
 Rate limits key on that IP (or the signed-in user) per tier; publication and
 researcher lists/details share one "data" budget. Anonymous callers get
@@ -117,8 +131,8 @@ scraper/HTTP-library User-Agents and empty UAs get 403 on data endpoints.
 the duckdns host. 429s carry `Retry-After` and log `rate_limited ip=... path=...`;
 the monitor's `api_traffic` check counts them. Without `INTERNAL_API_KEY` the
 API fails open to per-edge-IP per-minute limits. New server-side calls from
-the frontend to the backend should send `internalApiHeaders()` from
-`app/src/lib/internal-api.ts`.
+the frontend to the backend should go through `fetchBackend` or send
+`internalApiHeaders()` from `app/src/lib/internal-api.ts`.
 
 ## Architecture
 

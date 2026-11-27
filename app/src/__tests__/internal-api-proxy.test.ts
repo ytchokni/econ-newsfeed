@@ -96,7 +96,9 @@ describe("visitorIp", () => {
 describe("server-rendered detail pages", () => {
   beforeEach(() => {
     delete process.env.API_INTERNAL_URL;
-    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({ id: 42 }) });
+    global.fetch = jest.fn().mockResolvedValue({
+      ok: true, status: 200, json: async () => ({ id: 42, first_name: "A", last_name: "B", title: "T", authors: [] }),
+    });
   });
 
   it("send the internal key and the visitor IP with SSR fetches", async () => {
@@ -106,7 +108,7 @@ describe("server-rendered detail pages", () => {
     expect(global.fetch).toHaveBeenCalledWith(
       "http://localhost:8000/api/researchers/42",
       expect.objectContaining({
-        headers: { "x-internal-api-key": KEY, "x-visitor-ip": "198.51.100.77", "x-visitor-source": "ssr" },
+        headers: { "X-Internal-Api-Key": KEY, "X-Visitor-IP": "198.51.100.77", "X-Visitor-Source": "ssr" },
       }),
     );
   });
@@ -127,6 +129,14 @@ describe("server-rendered detail pages", () => {
     process.env.INTERNAL_API_KEY = KEY;
     global.fetch = jest.fn().mockResolvedValue({ ok: false, status: 429, json: async () => ({}) });
     const { default: Page } = await import("../app/papers/[id]/page");
-    await expect(Page({ params: Promise.resolve({ id: "42" }) })).rejects.toThrow("rate limit");
+    await expect(Page({ params: Promise.resolve({ id: "42" }) })).rejects.toThrow("Backend returned 429");
+  });
+});
+
+describe("backendHeaders (sitemap and other visitor-less calls)", () => {
+  it("send only the key, so the backend treats them as the frontend itself", async () => {
+    const { backendHeaders } = await import("../lib/server-api");
+    expect(backendHeaders({ INTERNAL_API_KEY: KEY } as unknown as NodeJS.ProcessEnv)).toEqual({ "X-Internal-Api-Key": KEY });
+    expect(backendHeaders({} as NodeJS.ProcessEnv)).toEqual({});
   });
 });
