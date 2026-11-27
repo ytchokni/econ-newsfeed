@@ -1,9 +1,21 @@
 "use client";
 
+import { useSyncExternalStore } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth, useLoginModal } from "@/lib/auth";
 import UserMenu from "@/components/UserMenu";
+
+const noopSubscribe = () => () => {};
+
+/**
+ * Today's date in the visitor's time zone. Rendered only on the client: the
+ * server (UTC, build or cache time) would produce a different string and a
+ * hydration mismatch (React error #418).
+ */
+function useHeaderDate(): string {
+  return useSyncExternalStore(noopSubscribe, formatHeaderDate, () => "");
+}
 
 function formatHeaderDate() {
   return new Date().toLocaleDateString("en-US", {
@@ -19,6 +31,7 @@ export default function Header() {
   const { isAuthenticated, isLoading } = useAuth();
   const { openLoginModal } = useLoginModal();
   const isAdmin = pathname?.startsWith("/admin");
+  const headerDate = useHeaderDate();
 
   if (isAdmin) {
     return (
@@ -37,8 +50,9 @@ export default function Header() {
       {/* Top bar */}
       <div className="border-b border-[var(--line)]">
         <div className="max-w-[800px] mx-auto px-6 py-[11px] flex items-center justify-between">
-          <span className="text-[11px] font-semibold tracking-[0.14em] uppercase text-[var(--muted)]">
-            {formatHeaderDate()}
+          {/* Hidden on narrow screens, where it ran into the nav (#273). */}
+          <span className="hidden sm:inline text-[11px] font-semibold tracking-[0.14em] uppercase text-[var(--muted)]">
+            {headerDate}
           </span>
           <div className="flex items-center gap-[26px]">
             <nav className="flex gap-[22px] text-[11px] font-semibold tracking-[0.14em] uppercase">
