@@ -30,6 +30,28 @@ class ResponseTooLarge(Exception):
     pass
 
 
+class LoginRequired(Exception):
+    """Raised when a page redirects to a sign-in page instead of serving content.
+
+    Classic Google Sites (sites.google.com/site/...) that Google retired, and
+    private new Sites, 302 to accounts.google.com. That sign-in page is 1.25 MB,
+    so these URLs used to fail as response_too_large; once compaction let it
+    fit, it would have been stored as the researcher's page.
+    """
+    pass
+
+
+# Sign-in hosts a redirect can land on. Public pages never redirect there, so
+# the hop is not followed and the URL is recorded as login_required.
+_LOGIN_HOSTS = frozenset({'accounts.google.com'})
+
+
+def is_login_redirect(url: str) -> bool:
+    """True if url is a sign-in page (see LoginRequired)."""
+    host = (urlparse(url).hostname or '').lower()
+    return host in _LOGIN_HOSTS
+
+
 # Serialises access to the urllib3 create_connection monkey-patch so
 # concurrent threads (e.g. parse-fast via ThreadPoolExecutor) don't race.
 # Per-hostname locking allows concurrent fetches to different hosts.
@@ -444,6 +466,9 @@ class HTMLFetcher:
                                     logging.warning("Redirect with no Location header from %s", current_url)
                                     return None
                                 redirect_url = urljoin(current_url, location)
+                                if is_login_redirect(redirect_url):
+                                    logging.warning("Redirect to sign-in page from %s: %s", current_url, redirect_url)
+                                    raise LoginRequired(redirect_url)
                                 safe, redirect_ip = HTMLFetcher.validate_url_with_pin(redirect_url)
                                 if not safe:
                                     logging.warning(f"Blocked redirect to unsafe URL from {current_url}: {redirect_url}")
@@ -772,6 +797,9 @@ class HTMLFetcher:
             raw_html = HTMLFetcher.fetch_html(url, resolved_ip=resolved_ip)
         except ResponseTooLarge:
             record_url_fetch_failure(url_id, "response_too_large")
+            return False
+        except LoginRequired:
+            record_url_fetch_failure(url_id, "login_required")
             return False
         if not raw_html:
             logging.warning(f"Failed to fetch HTML content for URL ID: {url_id}, URL: {url}")
