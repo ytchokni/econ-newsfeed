@@ -66,10 +66,14 @@ class StructuredResponse(Generic[T]):
     call itself raised). `retry_after` is set when the failure affects the
     whole provider rather than this prompt: a rate-limit error (with its
     suggested wait) or an account error such as depleted billing.
+    `truncated` is set when the output hit max_tokens (finish_reason
+    "length") and did not parse; repeating the same prompt would only be
+    cut off again, so the caller should send less input per call instead.
     """
     parsed: T | None
     usage: object | None
     retry_after: float | None = None
+    truncated: bool = False
 
 
 _SCHEMA_METADATA_KEYS = {"$defs", "title", "description", "default"}
@@ -203,12 +207,17 @@ def extract_json(
             return StructuredResponse(parsed=None, usage=None)
 
         last_usage = completion.usage
-        content = completion.choices[0].message.content or ""
+        choice = completion.choices[0]
+        content = choice.message.content or ""
 
         try:
             parsed = _validate_content(model_class, content)
             return StructuredResponse(parsed=parsed, usage=last_usage)
         except (ValidationError, json.JSONDecodeError) as e:
+            if getattr(choice, "finish_reason", None) == "length":
+                logging.warning("LLM output cut off at max_tokens=%d; not retrying the same prompt",
+                                max_tokens)
+                return StructuredResponse(parsed=None, usage=last_usage, truncated=True)
             logging.warning(
                 "LLM JSON validation failed (attempt %d/%d): %s",
                 attempt + 1, attempts, e,

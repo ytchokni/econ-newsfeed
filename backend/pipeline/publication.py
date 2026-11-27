@@ -21,6 +21,11 @@ EXTRACTION_DELAY_SECONDS = float(os.environ.get('EXTRACTION_DELAY_SECONDS', '2')
 # A chunk rejected by a per-minute quota is retried once within the page if
 # the provider asks for at most this long a wait.
 _CHUNK_RATE_LIMIT_WAIT_SECONDS = 90
+# Output budget for extraction calls (full and diff). A call whose output is
+# still cut off is split, up to this many times, rather than retried as is.
+EXTRACTION_MAX_OUTPUT_TOKENS = 32000
+_MAX_TRUNCATION_SPLITS = 2
+_MIN_SPLIT_CHARS = 2000
 
 
 @dataclass
@@ -30,12 +35,14 @@ class ExtractionLLMResult:
     pubs is None on failure, [] on success with no publications.
     retry_after is set when the failure was a rate limit.
     needs_full_extraction is set (with pubs None) when a page was rewritten
-    and is too long to compare as old + new text in one call; the caller
-    extracts the new page in chunks instead.
+    and is too long to compare as old + new text in one call, or when the
+    change list did not fit the output budget; the caller extracts the new
+    page in chunks instead. truncated marks output cut off at max_tokens.
     """
     pubs: list[dict] | None
     retry_after: float | None = None
     needs_full_extraction: bool = False
+    truncated: bool = False
 
 
 VALID_STATUSES = frozenset({
@@ -643,7 +650,8 @@ If no changes were detected, return an empty changes list."""
         for index, prompt in enumerate(prompts):
             if index and EXTRACTION_DELAY_SECONDS > 0:
                 time.sleep(EXTRACTION_DELAY_SECONDS)
-            result = extract_json(prompt, PublicationChangeList)
+            result = extract_json(prompt, PublicationChangeList,
+                                  max_tokens=EXTRACTION_MAX_OUTPUT_TOKENS)
 
             if result.usage is not None:
                 log_llm_usage(
@@ -651,6 +659,11 @@ If no changes were detected, return an empty changes list."""
                     context_url=url, scrape_log_id=scrape_log_id,
                 )
 
+            if result.parsed is None and result.truncated:
+                # The change list does not fit the output budget: re-extract
+                # the new page in (smaller) parts instead of looping on it.
+                logging.warning("Diff extraction output cut off for %s; extracting the page instead", url)
+                return ExtractionLLMResult(pubs=None, needs_full_extraction=True)
             if result.parsed is None:
                 logging.warning("Diff extraction returned no parsed result for %s", url)
                 return ExtractionLLMResult(pubs=None, retry_after=result.retry_after)
@@ -763,7 +776,7 @@ If no changes were detected, return an empty changes list."""
         when the page genuinely has no publications.
         """
         if not chunks or len(chunks) == 1:
-            return Publication._extract_publications_call(text_content, url, scrape_log_id)
+            return Publication._extract_part(text_content, url, scrape_log_id, part=None)
 
         total = len(chunks)
         logging.info("Extracting %s in %d chunks", url, total)
@@ -771,8 +784,8 @@ If no changes were detected, return an empty changes list."""
         for index, chunk in enumerate(chunks, start=1):
             if index > 1 and EXTRACTION_DELAY_SECONDS > 0:
                 time.sleep(EXTRACTION_DELAY_SECONDS)
-            result = Publication._extract_publications_call(
-                chunk.text, url, scrape_log_id, part=(index, total, chunk.section))
+            part = (index, total, chunk.section)
+            result = Publication._extract_part(chunk.text, url, scrape_log_id, part)
             if (result.pubs is None and result.retry_after is not None
                     and result.retry_after <= _CHUNK_RATE_LIMIT_WAIT_SECONDS):
                 # A per-minute token limit hit mid-page: wait once rather than
@@ -780,12 +793,42 @@ If no changes were detected, return an empty changes list."""
                 logging.info("Chunk %d/%d rate limited for %s; retrying in %.0fs",
                              index, total, url, result.retry_after)
                 time.sleep(result.retry_after)
-                result = Publication._extract_publications_call(
-                    chunk.text, url, scrape_log_id, part=(index, total, chunk.section))
+                result = Publication._extract_part(chunk.text, url, scrape_log_id, part)
             if result.pubs is None:
                 logging.warning("Chunk %d/%d failed for %s; page will be retried", index, total, url)
                 return result
             pubs.extend(result.pubs)
+        return ExtractionLLMResult(pubs=merge_publications(pubs))
+
+    @staticmethod
+    def _extract_part(text: str, url: str, scrape_log_id: int | None,
+                      part: tuple[int, int, str | None] | None, depth: int = 0) -> ExtractionLLMResult:
+        """One extraction call; if its output is cut off at max_tokens, split
+        the text in two between sentences and extract both halves.
+
+        Retrying the same input would be cut off again (the audit found pages
+        retried 50-60 times this way). Each half is verified against its own
+        text; the halves' results are merged by title.
+        """
+        result = Publication._extract_publications_call(text, url, scrape_log_id, part=part)
+        if not result.truncated or depth >= _MAX_TRUNCATION_SPLITS or len(text) < _MIN_SPLIT_CHARS:
+            return result
+        from backend.pipeline.chunking import split_in_two
+        halves = split_in_two(text)
+        if len(halves) < 2:
+            return result
+        logging.info("Output cut off for %s (%d chars); extracting in %d smaller parts",
+                     url, len(text), len(halves))
+        section = part[2] if part else None
+        pubs: list[dict] = []
+        for index, half in enumerate(halves, start=1):
+            if EXTRACTION_DELAY_SECONDS > 0:
+                time.sleep(EXTRACTION_DELAY_SECONDS)
+            sub_part = (index, len(halves), section)
+            sub = Publication._extract_part(half, url, scrape_log_id, sub_part, depth + 1)
+            if sub.pubs is None:
+                return sub
+            pubs.extend(sub.pubs)
         return ExtractionLLMResult(pubs=merge_publications(pubs))
 
     @staticmethod
@@ -796,7 +839,7 @@ If no changes were detected, return an empty changes list."""
         model = get_model()
         logging.info(f"Extracting publications from {url} using LLM ({model})")
 
-        result = extract_json(prompt, PublicationExtractionList, max_tokens=32000)
+        result = extract_json(prompt, PublicationExtractionList, max_tokens=EXTRACTION_MAX_OUTPUT_TOKENS)
 
         if result.usage is not None:
             log_llm_usage(
@@ -806,7 +849,8 @@ If no changes were detected, return an empty changes list."""
 
         if result.parsed is None:
             logging.warning(f"Publication extraction returned no parsed result for {url}")
-            return ExtractionLLMResult(pubs=None, retry_after=result.retry_after)
+            return ExtractionLLMResult(pubs=None, retry_after=result.retry_after,
+                                       truncated=result.truncated)
 
         validated = []
         norm_html = _normalize_for_token_match(text_content)

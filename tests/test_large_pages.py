@@ -296,7 +296,7 @@ def _llm_result(titles):
     pubs = [PublicationExtraction(title=t, authors=[["Jane", "Doe"]], year="2020",
                                   venue=None, status="working_paper", draft_url=None, abstract=None)
             for t in titles]
-    return SimpleNamespace(parsed=PublicationExtractionList(publications=pubs), usage=None, retry_after=None)
+    return SimpleNamespace(parsed=PublicationExtractionList(publications=pubs), usage=None, retry_after=None, truncated=False)
 
 
 class TestChunkedExtraction:
@@ -330,7 +330,7 @@ class TestChunkedExtraction:
         assert [p["title"] for p in result.pubs] == ["Alpha Paper on Trade"]
 
     def test_failed_chunk_fails_page(self):
-        failed = SimpleNamespace(parsed=None, usage=None, retry_after=None)
+        failed = SimpleNamespace(parsed=None, usage=None, retry_after=None, truncated=False)
         with patch("backend.pipeline.publication.extract_json",
                    side_effect=[_llm_result(["Alpha Paper on Trade"]), failed]), \
              patch("backend.pipeline.publication.time.sleep"), \
@@ -339,7 +339,7 @@ class TestChunkedExtraction:
         assert result.pubs is None
 
     def test_rate_limited_chunk_is_retried_once_in_page(self):
-        limited = SimpleNamespace(parsed=None, usage=None, retry_after=11.0)
+        limited = SimpleNamespace(parsed=None, usage=None, retry_after=11.0, truncated=False)
         results = [_llm_result(["Alpha Paper on Trade"]), limited, _llm_result(["Gamma Paper on Growth"])]
         with patch("backend.pipeline.publication.extract_json", side_effect=results) as ej, \
              patch("backend.pipeline.publication.time.sleep") as sleep, \
@@ -350,7 +350,7 @@ class TestChunkedExtraction:
         assert [p["title"] for p in result.pubs] == ["Alpha Paper on Trade", "Gamma Paper on Growth"]
 
     def test_long_rate_limit_fails_page_for_worker_backoff(self):
-        limited = SimpleNamespace(parsed=None, usage=None, retry_after=600.0)
+        limited = SimpleNamespace(parsed=None, usage=None, retry_after=600.0, truncated=False)
         with patch("backend.pipeline.publication.extract_json",
                    side_effect=[_llm_result(["Alpha Paper on Trade"]), limited]) as ej, \
              patch("backend.pipeline.publication.time.sleep"), \
@@ -417,7 +417,7 @@ class TestDiffOnLongPages:
         change = PublicationChange(change_type="new_paper", title="Brand new paper about growth",
                                    authors=[["New", "Coauthor"]], year=None, venue=None,
                                    status="working_paper", draft_url=None, abstract=None)
-        reply = SimpleNamespace(parsed=PublicationChangeList(changes=[change]), usage=None, retry_after=None)
+        reply = SimpleNamespace(parsed=PublicationChangeList(changes=[change]), usage=None, retry_after=None, truncated=False)
         with patch.object(Publication, "_diff_prompts", return_value=["p1", "p2"]), \
              patch("backend.pipeline.publication.extract_json", side_effect=[reply, reply]) as ej, \
              patch("backend.pipeline.publication.time.sleep"):
@@ -502,3 +502,136 @@ class TestExtractOneUrlLongPages:
 def test_chunk_limit_default_covers_sampled_pages():
     """The longest sampled page (141k chars) needs 8 chunks."""
     assert chunking.EXTRACTION_MAX_CHUNKS >= 8
+
+
+# ---------------------------------------------------------------------------
+# Output cut off at max_tokens (audit: pages retried 50-60 times)
+# ---------------------------------------------------------------------------
+
+_CUT_OFF = SimpleNamespace(parsed=None, usage=None, retry_after=None, truncated=True)
+
+
+class TestTruncatedOutput:
+    TEXT = " ".join(f"Paper title number {i} about growth and trade." for i in range(200))
+
+    def test_cut_off_page_is_split_and_merged(self):
+        results = [_CUT_OFF, _llm_result(["Paper title number 1 about growth and trade"]),
+                   _llm_result(["Paper title number 150 about growth and trade"])]
+        with patch("backend.pipeline.publication.extract_json", side_effect=results) as ej, \
+             patch("backend.pipeline.publication.time.sleep"), \
+             patch("backend.pipeline.publication.log_llm_usage"):
+            result = Publication.try_extract_publications(self.TEXT, "https://x.org")
+        assert ej.call_count == 3
+        halves = [c.args[0].split("Content:\n", 1)[1] for c in ej.call_args_list[1:]]
+        assert all(len(h) < len(self.TEXT) * 0.6 for h in halves)
+        assert " ".join(halves) == self.TEXT
+        assert [p["title"] for p in result.pubs] == [
+            "Paper title number 1 about growth and trade", "Paper title number 150 about growth and trade"]
+
+    def test_splitting_stops_after_two_levels(self):
+        with patch("backend.pipeline.publication.extract_json", return_value=_CUT_OFF) as ej, \
+             patch("backend.pipeline.publication.time.sleep"), \
+             patch("backend.pipeline.publication.log_llm_usage"):
+            result = Publication.try_extract_publications(self.TEXT, "https://x.org")
+        assert result.pubs is None and result.truncated
+        assert ej.call_count == 3  # whole page, first half (cut off), its first quarter (cut off)
+
+    def test_diff_uses_full_output_budget(self):
+        reply = SimpleNamespace(parsed=PublicationChangeList(changes=[]), usage=None,
+                                retry_after=None, truncated=False)
+        with patch("backend.pipeline.publication.extract_json", return_value=reply) as ej:
+            Publication.try_extract_changes("Paper A.", "Paper A. Paper B.", "u")
+        assert ej.call_args.kwargs["max_tokens"] == 32000
+
+    def test_cut_off_diff_falls_back_to_full_extraction(self):
+        with patch("backend.pipeline.publication.extract_json", return_value=_CUT_OFF) as ej:
+            result = Publication.try_extract_changes("Paper A.", "Paper A. Paper B.", "u")
+        assert result.needs_full_extraction and result.pubs is None
+        assert ej.call_count == 1
+
+    def test_extract_one_url_runs_full_extraction_after_cut_off_diff(self):
+        from backend.pipeline.extraction import extract_one_url
+        html = _page("<p>Paper A. Paper B.</p>")
+        patches = _extraction_patches(_text(html), "Paper A.", html)
+        patches["changes"] = patch("backend.pipeline.extraction.Publication.try_extract_changes",
+                                   return_value=ExtractionLLMResult(pubs=None, needs_full_extraction=True))
+        patches["full"] = patch("backend.pipeline.extraction.Publication.try_extract_publications",
+                                return_value=ExtractionLLMResult(pubs=[_pub("Paper B")]))
+        mocks = {k: p.start() for k, p in patches.items()}
+        try:
+            outcome = extract_one_url({"id": 1, "researcher_id": 2, "url": "https://x.org",
+                                       "page_type": "PUBLICATIONS"})
+        finally:
+            for p in patches.values():
+                p.stop()
+        assert outcome.status == "extracted"
+        mocks["full"].assert_called_once()
+        assert mocks["persist"].call_args.kwargs["is_seed"] is False
+
+
+# ---------------------------------------------------------------------------
+# Persisted extraction poison-pill guard
+# ---------------------------------------------------------------------------
+
+class TestPersistedExtractionFailures:
+    def test_failure_count_is_per_version_and_cooldown_escalates(self):
+        from backend.database import researchers as r
+        with patch.object(r, "execute_query") as ex, patch.object(r, "fetch_one", return_value=None):
+            r.record_extraction_failure(7, "hash1")
+        sql, params = ex.call_args.args
+        flat = " ".join(sql.split())
+        assert "extraction_failures = IF(extraction_failed_hash <=> %s, extraction_failures + 1, 1)" in flat
+        assert "POW(2, extraction_failures - %s)" in flat
+        # The count is assigned before retry_at reads it (MySQL SET is left to right).
+        assert flat.index("extraction_failures = IF") < flat.index("extraction_retry_at = IF")
+        assert params == ("hash1", "hash1", r.EXTRACTION_MAX_FAILURES, r.EXTRACTION_COOLDOWN_SECONDS,
+                          r.EXTRACTION_MAX_FAILURES, r.EXTRACTION_MAX_COOLDOWN_SECONDS, 7)
+
+    def test_queue_skips_cooled_down_version_only(self):
+        from backend.database import researchers as r
+        with patch.object(r, "fetch_all", return_value=[]) as fa:
+            r.get_urls_needing_extraction()
+        flat = " ".join(fa.call_args.args[0].split())
+        assert ("(hc.extraction_retry_at IS NULL OR hc.extraction_retry_at <= NOW() "
+                "OR NOT (hc.extraction_failed_hash <=> hc.content_hash))") in flat
+
+    @pytest.mark.parametrize("extracted_hash", [None, "h1"])
+    def test_successful_extraction_clears_failure_state(self, extracted_hash):
+        with patch("backend.pipeline.html_fetcher.execute_query") as ex:
+            HTMLFetcher.mark_extracted(1, extracted_hash)
+        sql = ex.call_args.args[0]
+        for clause in ("extraction_failures = 0", "extraction_failed_hash = NULL", "extraction_retry_at = NULL"):
+            assert clause in sql
+
+    def test_worker_persists_page_failures_not_rate_limits(self):
+        from backend.pipeline import scheduler
+        from backend.pipeline.extraction import ExtractionOutcome
+        outcomes = [ExtractionOutcome("failed"), ExtractionOutcome("failed", retry_after=30)]
+        scheduler._extraction_stop_event.clear()
+
+        def extract(row):
+            outcome = outcomes.pop(0)
+            if not outcomes:
+                scheduler._extraction_stop_event.set()
+            return outcome
+
+        rows = [{"id": 1, "url": "https://x.org/1", "content_hash": "h1"},
+                {"id": 2, "url": "https://x.org/2", "content_hash": "h2"}]
+        try:
+            with patch.object(scheduler, "get_urls_needing_extraction", return_value=rows), \
+                 patch("backend.pipeline.extraction.extract_one_url", side_effect=extract), \
+                 patch.object(scheduler, "record_extraction_failure", return_value=None) as rec, \
+                 patch.object(scheduler._extraction_stop_event, "wait"):
+                scheduler._extraction_worker_loop()
+        finally:
+            scheduler._extraction_stop_event.clear()
+        rec.assert_called_once_with(1, "h1")
+
+    def test_worker_survives_failure_persistence_errors(self):
+        from backend.pipeline import scheduler
+        with patch.object(scheduler, "record_extraction_failure", side_effect=RuntimeError("db down")):
+            scheduler._persist_extraction_failure({"id": 1, "url": "u", "content_hash": "h"})
+
+    def test_ready_check_requires_failure_columns(self):
+        from backend.database.schema import REQUIRED_SCHEMA_QUERY
+        assert "extraction_retry_at" in REQUIRED_SCHEMA_QUERY

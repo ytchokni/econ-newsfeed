@@ -7,6 +7,15 @@ from backend.llm.client import _parse_retry_after
 from backend.pipeline.publication import PublicationExtraction
 
 
+
+@pytest.fixture(autouse=True)
+def _no_persisted_extraction_failures():
+    """The worker persists page failures (record_extraction_failure); these
+    tests exercise the in-process guard without a database."""
+    with patch("backend.pipeline.scheduler.record_extraction_failure", return_value=None):
+        yield
+
+
 @pytest.mark.parametrize("body", [
     {"error": {"details": [{"retryDelay": "120.5s"}]}},
     [{"error": {"details": [{"retryDelay": "120.5s"}]}}],

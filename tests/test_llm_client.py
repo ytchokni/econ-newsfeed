@@ -250,3 +250,31 @@ class TestExtractJsonFenceSalvage:
         ]
         result = llm_client.extract_json("prompt", _ItemList, retries=1)
         assert result.parsed is None
+
+
+class TestTruncatedOutput:
+    """finish_reason 'length': the same prompt would be cut off again."""
+
+    @patch("backend.llm.client.get_client")
+    def test_cut_off_output_is_flagged_and_not_retried(self, mock_get_client):
+        import backend.llm.client as llm_client
+        cut = _mock_completion('{"items":[{"name":"a","count":1},{"name":"b"')
+        cut.choices[0].finish_reason = "length"
+        mock_client = mock_get_client.return_value
+        mock_client.chat.completions.create.return_value = cut
+
+        result = llm_client.extract_json("prompt", _ItemList, retries=1)
+
+        assert result.parsed is None and result.truncated is True
+        assert mock_client.chat.completions.create.call_count == 1
+
+    @patch("backend.llm.client.get_client")
+    def test_complete_output_at_the_limit_still_parses(self, mock_get_client):
+        import backend.llm.client as llm_client
+        done = _mock_completion('{"items":[]}')
+        done.choices[0].finish_reason = "length"
+        mock_get_client.return_value.chat.completions.create.return_value = done
+
+        result = llm_client.extract_json("prompt", _ItemList)
+
+        assert result.parsed is not None and result.truncated is False

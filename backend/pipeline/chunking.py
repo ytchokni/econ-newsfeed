@@ -125,6 +125,18 @@ def text_to_blocks(text: str) -> list[Block]:
     return blocks
 
 
+def split_in_two(text: str) -> list[str]:
+    """Split text at the sentence boundary nearest its middle (or a space)."""
+    middle = len(text) // 2
+    cuts = [m.end() for m in _SENTENCE_SPLIT.finditer(text)] or \
+           [i + 1 for i, ch in enumerate(text) if ch == ' ']
+    if not cuts:
+        return [text]
+    cut = min(cuts, key=lambda c: abs(c - middle))
+    halves = [text[:cut].strip(), text[cut:].strip()]
+    return [h for h in halves if h]
+
+
 def _hard_split(line: str, budget: int) -> list[str]:
     """Split one over-long line at spaces, overlapping consecutive pieces."""
     overlap = min(_SEAM_OVERLAP_MAX_CHARS, budget // 4)

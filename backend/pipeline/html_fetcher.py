@@ -928,13 +928,17 @@ class HTMLFetcher:
         fetch and extraction cannot overlap).
         """
         now = datetime.now(timezone.utc)
+        # A successful extraction also clears the persisted failure state
+        # (record_extraction_failure).
+        reset = ("extraction_failures = 0, extraction_failed_hash = NULL, "
+                 "extraction_retry_at = NULL")
         if extracted_hash is None:
             execute_query(
-                "UPDATE html_content SET extracted_at = %s, extracted_hash = content_hash WHERE url_id = %s",
+                f"UPDATE html_content SET extracted_at = %s, extracted_hash = content_hash, {reset} WHERE url_id = %s",
                 (now, url_id),
             )
         else:
             execute_query(
-                "UPDATE html_content SET extracted_at = %s, extracted_hash = %s WHERE url_id = %s",
+                f"UPDATE html_content SET extracted_at = %s, extracted_hash = %s, {reset} WHERE url_id = %s",
                 (now, extracted_hash, url_id),
             )
