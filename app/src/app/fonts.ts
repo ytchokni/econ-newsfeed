@@ -1,10 +1,11 @@
-// Self-hosted copies of the Google Fonts files (OFL) so production builds
-// never fetch fonts.googleapis.com. One localFont() per subset, because
-// next/font/local cannot give each file its own unicode-range; the subsets
-// are chained in --font-source-serif / --font-dm-sans in globals.css, which
-// gives per-character fallback across them. Only the last subset of each
-// family carries the metric-adjusted fallback face (adjusted for the system
-// font), so a loaded latin face is never pre-empted by the fallback.
+// Self-hosted copies of the Google Fonts files (SIL OFL 1.1, see OFL-*.txt in
+// ./fonts) so production builds never fetch fonts.googleapis.com. One
+// localFont() per subset, because next/font/local cannot give each file its
+// own unicode-range; globals.css chains the subsets in --font-source-serif /
+// --font-dm-sans, which gives per-character fallback across them.
+// adjustFontFallback is off everywhere: Next would derive the metrics from a
+// subset without a-z. The metric-adjusted fallback faces are declared in
+// globals.css instead, with the values the Google font loader computed before.
 // Files and ranges are the ones the Google Fonts loader produced before.
 
 import localFont from "next/font/local";
@@ -71,7 +72,7 @@ export const sourceSerifCyrillicExt = localFont({
   display: "swap",
   variable: "--font-source-serif-cyrillic-ext",
   preload: false,
-  adjustFontFallback: "Times New Roman",
+  adjustFontFallback: false,
   declarations: [{ prop: "unicode-range", value: "U+460-52F,U+1C80-1C8A,U+20B4,U+2DE0-2DFF,U+A640-A69F,U+FE2E-FE2F" }],
 });
 
@@ -93,6 +94,6 @@ export const dmSansLatinExt = localFont({
   display: "swap",
   variable: "--font-dm-sans-latin-ext",
   preload: false,
-  adjustFontFallback: "Arial",
+  adjustFontFallback: false,
   declarations: [{ prop: "unicode-range", value: "U+100-2BA,U+2BD-2C5,U+2C7-2CC,U+2CE-2D7,U+2DD-2FF,U+304,U+308,U+329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C4,U+2113,U+2C60-2C7F,U+A720-A7FF" }],
 });

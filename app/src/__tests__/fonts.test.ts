@@ -32,3 +32,24 @@ it("keeps the CSS variables the styles use", () => {
   expect(css).toMatch(/--font-source-serif: var\(--font-source-serif-latin\)/);
   expect(css).toMatch(/--font-dm-sans: var\(--font-dm-sans-latin\), var\(--font-dm-sans-latin-ext\)/);
 });
+
+it("uses metric-matched fallbacks with a-z metrics, not per-subset ones", () => {
+  const fontsTs = readFileSync(join(SRC, "app/fonts.ts"), "utf-8");
+  expect(fontsTs).not.toMatch(/adjustFontFallback: "/);
+  const css = readFileSync(join(SRC, "app/globals.css"), "utf-8");
+  expect(css).toMatch(/font-family: "Source Serif 4 Fallback";\s*src: local\("Times New Roman"\);[\s\S]*?size-adjust: 117\.91%/);
+  expect(css).toMatch(/font-family: "DM Sans Fallback";\s*src: local\("Arial"\);[\s\S]*?size-adjust: 104\.53%/);
+  expect(css).toMatch(/--font-source-serif: [^;]*"Source Serif 4 Fallback";/);
+  expect(css).toMatch(/--font-dm-sans: [^;]*"DM Sans Fallback";/);
+});
+
+it("ships the OFL licence for each bundled font", () => {
+  const serif = readFileSync(join(SRC, "app/fonts/OFL-SourceSerif4.txt"), "utf-8");
+  const sans = readFileSync(join(SRC, "app/fonts/OFL-DMSans.txt"), "utf-8");
+  expect(serif).toMatch(/Adobe[\s\S]*Reserved Font Name .Source./);
+  expect(sans).toContain("The DM Sans Project Authors");
+  for (const text of [serif, sans]) {
+    expect(text).toContain("SIL OPEN FONT LICENSE Version 1.1");
+    expect(text).toContain("TERMINATION");
+  }
+});
