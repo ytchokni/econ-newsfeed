@@ -39,25 +39,67 @@ def unsubscribe_headers(unsubscribe_url: str) -> dict[str, str]:
     }
 
 
-def _group_events(events: list[dict]) -> list[tuple[str, list[dict]]]:
-    """Group events by researcher, one entry per paper, sorted by name."""
-    by_researcher: dict[str, list[dict]] = defaultdict(list)
-    seen: dict[str, set] = defaultdict(set)
+def _group_events(events: list[dict]) -> list[tuple[str, list[list[dict]]]]:
+    """Group events by researcher, then by paper (events keep their newest-first
+    order), sorted by researcher name. Each paper becomes one digest item."""
+    by_researcher: dict[str, dict[int, list[dict]]] = defaultdict(dict)
     for ev in events:
         key = f"{ev['first_name']} {ev['last_name']}"
-        if ev['paper_id'] in seen[key]:
-            continue
-        seen[key].add(ev['paper_id'])
-        by_researcher[key].append(ev)
-    return sorted(by_researcher.items())
-
-
-def _status_label(ev: dict) -> str:
-    return (ev.get('status') or 'unknown').replace('_', ' ').title()
+        by_researcher[key].setdefault(ev['paper_id'], []).append(ev)
+    return sorted(((name, list(papers.values())) for name, papers in by_researcher.items()),
+                  key=lambda item: item[0])
 
 
 def _paper_url(ev: dict) -> str:
     return f"{FRONTEND_URL}/papers/{int(ev['paper_id'])}"
+
+
+# Same wording as the feed's status pills (app/src/lib/publication-utils.ts).
+_STATUS_LABELS = {
+    "work_in_progress": "Work in Progress",
+    "working_paper": "Working Paper",
+    "revise_and_resubmit": "Revise & Resubmit",
+    "reject_and_resubmit": "Reject & Resubmit",
+    "accepted": "Accepted",
+    "published": "Published",
+}
+# Statuses that belong to a journal, so "at <venue>" reads correctly.
+_VENUE_STATUSES = {"revise_and_resubmit", "reject_and_resubmit", "accepted", "published"}
+
+
+def _status_text(status: str | None) -> str:
+    if not status:
+        return "Unknown"
+    return _STATUS_LABELS.get(status, status.replace("_", " ").title())
+
+
+def _with_venue(text: str, status: str | None, venue: str | None) -> str:
+    venue = (venue or "").strip()
+    if venue and status in _VENUE_STATUSES:
+        return f"{text} at {venue}"
+    return text
+
+
+def _event_label(paper_events: list[dict]) -> str:
+    """Describe what happened to one paper, from its events (newest first).
+
+    The label comes from the events, never from the paper's current status,
+    which may have moved on since. A paper that appeared and changed status
+    within one digest is shown once, as new, at its latest event's status.
+    """
+    latest = paper_events[0]
+    is_new = any(ev.get("event_type") == "new_paper" for ev in paper_events)
+    # new_status is the event's status; old rows without it fall back to the paper's.
+    status = latest.get("new_status") or latest.get("status")
+    venue = latest.get("venue")
+    if is_new:
+        if status in (None, "working_paper", "work_in_progress"):
+            return f"New {_status_text(status or 'working_paper').lower()}"
+        return _with_venue(f"New paper · {_status_text(status)}", status, venue)
+    old_status = latest.get("old_status")
+    change = f"{_status_text(old_status)} → {_status_text(status)}" if old_status \
+        else f"Now {_status_text(status)}"
+    return _with_venue(change, status, venue)
 
 
 def _render_digest_html(events: list[dict], user_name: str | None,
@@ -70,13 +112,14 @@ def _render_digest_html(events: list[dict], user_name: str | None,
     sections = []
     for researcher_name, researcher_events in _group_events(events):
         items = []
-        for ev in researcher_events:
-            status_label = escape(_status_label(ev))
+        for paper_events in researcher_events:
+            ev = paper_events[0]
+            event_label = escape(_event_label(paper_events))
             paper_url = escape(_paper_url(ev), quote=True)
             items.append(
                 f'<li style="margin-bottom:8px;">'
                 f'<a href="{paper_url}" style="color:#2563eb;text-decoration:none;">{escape(ev["title"])}</a>'
-                f' <span style="color:#6b7280;font-size:13px;">({status_label})</span>'
+                f' <span style="color:#6b7280;font-size:13px;">({event_label})</span>'
                 f'</li>'
             )
         sections.append(
@@ -151,8 +194,9 @@ def _render_digest_text(events: list[dict], user_name: str | None,
         lines += ["", "No new activity this week."]
     for researcher_name, researcher_events in groups:
         lines += ["", researcher_name]
-        for ev in researcher_events:
-            lines.append(f"- {ev['title']} ({_status_label(ev)})")
+        for paper_events in researcher_events:
+            ev = paper_events[0]
+            lines.append(f"- {ev['title']} ({_event_label(paper_events)})")
             lines.append(f"  {_paper_url(ev)}")
     lines += [
         "",

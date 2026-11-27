@@ -178,6 +178,21 @@ from backend.database.search_helpers import (
 _FEED_VISIBLE_EVENT_TYPES = ("new_paper", "status_change")
 
 
+def feed_visible_event_sql(alias: str = "fe") -> tuple[str, tuple]:
+    """SQL condition and params for the feed events users are shown.
+
+    The newsfeed and the weekly digest both use this, so an event hidden from
+    the feed (title changes, accepted -> published) never reaches an email.
+    """
+    placeholders = ",".join(["%s"] * len(_FEED_VISIBLE_EVENT_TYPES))
+    sql = (
+        f"{alias}.event_type IN ({placeholders}) "
+        f"AND NOT ({alias}.event_type = 'status_change' "
+        f"AND {alias}.old_status = 'accepted' AND {alias}.new_status = 'published')"
+    )
+    return sql, _FEED_VISIBLE_EVENT_TYPES
+
+
 # ---------------------------------------------------------------------------
 # Batch-fetch helpers
 # ---------------------------------------------------------------------------
@@ -471,12 +486,9 @@ def search_feed_events(
         conditions.append("fe.event_type = %s")
         params.append(event_type)
 
-    placeholders_evt = ",".join(["%s"] * len(_FEED_VISIBLE_EVENT_TYPES))
-    conditions.append(f"fe.event_type IN ({placeholders_evt})")
-    params.extend(_FEED_VISIBLE_EVENT_TYPES)
-    conditions.append(
-        "NOT (fe.event_type = 'status_change' AND fe.old_status = 'accepted' AND fe.new_status = 'published')"
-    )
+    visible_sql, visible_params = feed_visible_event_sql("fe")
+    conditions.append(f"({visible_sql})")
+    params.extend(visible_params)
 
     jel_list = [j.strip().upper() for j in jel_code.split(",") if j.strip()] if jel_code else []
     if jel_list:
