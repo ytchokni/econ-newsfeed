@@ -200,12 +200,87 @@ def test_run_dry_run_does_not_store():
     store.assert_not_called()
 
 
-def test_run_never_raises():
+def test_run_never_raises_and_records_the_failed_attempt():
     conn = _lock_conn(1)
     with (patch.object(job, "is_due", return_value=True),
           patch.object(job, "get_connection", return_value=conn),
           patch.object(job, "compute_coverage", side_effect=RuntimeError("crossref down")),
-          patch.object(job, "store_run") as store):
+          patch.object(job, "store_run") as store,
+          patch.object(job, "store_failure") as failure):
         assert job.run_top5_coverage_job() is None
     store.assert_not_called()
+    failure.assert_called_once()
+    assert failure.call_args.args[0] == "RuntimeError: crossref down"
     conn.close.assert_called_once()
+
+
+def test_dry_run_failure_is_not_recorded():
+    with (patch.object(job, "get_connection", return_value=_lock_conn(1)),
+          patch.object(job, "compute_coverage", side_effect=RuntimeError("x")),
+          patch.object(job, "store_failure") as failure):
+        assert job.run_top5_coverage_job(force=True, store=False) is None
+    failure.assert_not_called()
+
+
+def test_store_failure_inserts_a_failed_row():
+    with patch.object(job, "execute_query") as eq:
+        job.store_failure("HTTPError: 503 " + "x" * 600, 12, attempted_at=datetime(2026, 11, 29, 4, 30))
+    sql, params = eq.call_args.args
+    assert "'failed'" in sql
+    assert params[0] == datetime(2026, 11, 29, 4, 30)
+    assert len(params[1]) == 500 and params[1].startswith("HTTPError: 503")
+    assert params[4] == 12
+
+
+def test_latest_run_ignores_failed_attempts():
+    with patch.object(job, "fetch_one", return_value=None) as fo:
+        job.latest_run()
+    assert "status = 'ok'" in fo.call_args.args[0]
+
+
+NOW = datetime(2026, 11, 29, 12, 0)
+
+
+@pytest.mark.parametrize("latest_ok, last_attempt, due", [
+    (None, None, True),                                    # never ran
+    (None, NOW - timedelta(hours=3), False),               # failed 3 h ago: back off
+    (None, NOW - timedelta(hours=25), True),               # failed yesterday: retry
+    (NOW - timedelta(days=9), NOW - timedelta(hours=1), False),  # stale, but a retry failed an hour ago
+    (NOW - timedelta(days=9), NOW - timedelta(days=9), True),    # stale, nothing tried since
+    (NOW - timedelta(days=2), NOW - timedelta(days=2), False),   # fresh result
+])
+def test_catchup_due(latest_ok, last_attempt, due):
+    latest = {"computed_at": latest_ok} if latest_ok else None
+    with (patch.object(job, "latest_run", return_value=latest),
+          patch.object(job, "last_attempt_at", return_value=last_attempt)):
+        assert job.catchup_due(NOW) is due
+
+
+def test_catchup_skips_after_a_recent_failed_attempt():
+    with (patch.object(job, "latest_run", return_value=None),
+          patch.object(job, "last_attempt_at", return_value=datetime.now() - timedelta(hours=2)),
+          patch.object(job, "get_connection") as gc,
+          patch.object(job, "compute_coverage") as cc):
+        assert job.run_top5_coverage_job(catchup=True) is None
+    gc.assert_not_called()
+    cc.assert_not_called()
+
+
+def test_forced_run_ignores_recent_results_and_attempts():
+    with (patch.object(job, "latest_run", return_value={"computed_at": datetime.now()}),
+          patch.object(job, "last_attempt_at", return_value=datetime.now()),
+          patch.object(job, "get_connection", return_value=_lock_conn(1)),
+          patch.object(job, "compute_coverage", return_value=summary()),
+          patch.object(job, "store_run") as store):
+        assert job.run_top5_coverage_job(force=True) is not None
+    store.assert_called_once()
+
+
+def test_scheduler_cron_forces_and_boot_catches_up():
+    import backend.pipeline.scheduler as sched
+
+    with patch("backend.coverage.top5_job.run_top5_coverage_job") as run:
+        sched.run_top5_coverage_job()
+        sched.run_top5_coverage_job(catchup=True)
+    assert run.call_args_list[0].kwargs == {"force": True, "catchup": False}
+    assert run.call_args_list[1].kwargs == {"force": False, "catchup": True}

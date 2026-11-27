@@ -573,10 +573,11 @@ def run_jel_classification_job() -> dict:
         return {"stopped": "error"}
 
 
-def run_top5_coverage_job() -> None:
-    """Weekly top-5 coverage comparison; skips itself when a recent run is stored."""
+def run_top5_coverage_job(catchup: bool = False) -> None:
+    """Top-5 coverage comparison. The weekly run always runs; the boot-time
+    catch-up only when no result is a week old and nothing was tried in a day."""
     from backend.coverage.top5_job import run_top5_coverage_job as _run
-    _run()
+    _run(force=not catchup, catchup=catchup)
 
 
 def run_bio_backfill_job() -> dict:
@@ -988,9 +989,10 @@ def start_scheduler() -> None:
         logger.info("Bio backfill scheduled every %d minutes", _BIO_BACKFILL_INTERVAL_MINUTES)
 
     if TOP5_COVERAGE_ENABLED:
-        # Sundays at a quiet hour, after the 03:00 UTC backup. The boot-time run
-        # catches up when no result is newer than a week (fresh deploys, outages);
-        # it waits 15 minutes so it does not compete with startup work.
+        # Sundays at a quiet hour, after the 03:00 UTC backup (always runs). The
+        # boot-time run catches up when no result is newer than 8 days and nothing
+        # was attempted in the last 24 h (failed attempts are recorded); it waits
+        # 15 minutes so it does not compete with startup work.
         _scheduler.add_job(
             run_top5_coverage_job,
             'cron',
@@ -1006,6 +1008,7 @@ def start_scheduler() -> None:
             run_top5_coverage_job,
             'date',
             run_date=datetime.now(timezone.utc) + timedelta(minutes=15),
+            kwargs={'catchup': True},
             id='top5_coverage_catchup',
         )
         logger.info("Top-5 coverage job scheduled for Sundays 04:30 UTC (catch-up check in 15 min)")

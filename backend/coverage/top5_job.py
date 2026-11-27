@@ -61,6 +61,8 @@ FROM_YEAR = int(os.environ.get("TOP5_COVERAGE_FROM_YEAR", "2020"))
 USE_OPENALEX = os.environ.get("TOP5_COVERAGE_OPENALEX", "true").lower() == "true"
 # A run is due when the latest stored one is older than this (weekly cron + catch-up at boot).
 STALE_AFTER = timedelta(days=8)
+# A boot-time catch-up is skipped when any attempt (even a failed one) is this recent.
+CATCHUP_RETRY_AFTER = timedelta(hours=24)
 _LOCK_NAME = "econ_top5_coverage"
 _STREAM_BATCH = 5000
 
@@ -299,9 +301,9 @@ def store_run(summary: dict, duration_seconds: int | None = None,
     keep = {k: summary[k] for k in ("overall", "by_journal", "by_year", "params") if k in summary}
     execute_query(
         """INSERT INTO top5_coverage_runs
-               (computed_at, from_year, until_year, articles, observed, tracked_articles,
+               (computed_at, status, from_year, until_year, articles, observed, tracked_articles,
                 tracked_observed, summary, duration_seconds)
-           VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
+           VALUES (%s, 'ok', %s, %s, %s, %s, %s, %s, %s, %s)""",
         (
             (computed_at or datetime.now(timezone.utc)).replace(tzinfo=None),
             summary["params"]["from_year"], summary["params"]["until_year"],
@@ -311,12 +313,27 @@ def store_run(summary: dict, duration_seconds: int | None = None,
     )
 
 
+def store_failure(error: str, duration_seconds: int | None = None,
+                  attempted_at: datetime | None = None, from_year: int = FROM_YEAR) -> None:
+    """Record a failed attempt, so boot-time catch-ups don't repeat it on every restart."""
+    execute_query(
+        """INSERT INTO top5_coverage_runs
+               (computed_at, status, error, from_year, until_year, duration_seconds)
+           VALUES (%s, 'failed', %s, %s, %s, %s)""",
+        (
+            (attempted_at or datetime.now(timezone.utc)).replace(tzinfo=None),
+            error[:500], from_year, date.today().year, duration_seconds,
+        ),
+    )
+
+
 def latest_run() -> dict | None:
-    """The newest stored run, or None."""
+    """The newest successful run, or None."""
     row = fetch_one(
         """SELECT computed_at, from_year, until_year, articles, observed, tracked_articles,
                   tracked_observed, summary
-           FROM top5_coverage_runs ORDER BY computed_at DESC, id DESC LIMIT 1"""
+           FROM top5_coverage_runs WHERE status = 'ok'
+           ORDER BY computed_at DESC, id DESC LIMIT 1"""
     )
     if not row:
         return None
@@ -329,25 +346,56 @@ def latest_run() -> dict | None:
     return row
 
 
+def last_attempt_at() -> datetime | None:
+    """When the newest run, successful or not, started."""
+    row = fetch_one("SELECT MAX(computed_at) AS t FROM top5_coverage_runs")
+    return (row or {}).get("t")
+
+
+def _naive_utc(now: datetime | None) -> datetime:
+    now = now or datetime.now(timezone.utc)
+    return now.astimezone(timezone.utc).replace(tzinfo=None) if now.tzinfo else now
+
+
 def is_due(now: datetime | None = None) -> bool:
+    """No successful result newer than STALE_AFTER."""
     row = latest_run()
     if not row or not row.get("computed_at"):
         return True
-    now = (now or datetime.now(timezone.utc)).replace(tzinfo=None)
-    return now - row["computed_at"] >= STALE_AFTER
+    return _naive_utc(now) - row["computed_at"] >= STALE_AFTER
 
 
-def run_top5_coverage_job(*, force: bool = False, store: bool = True,
+def catchup_due(now: datetime | None = None) -> bool:
+    """Boot-time catch-up: the result is stale and nothing was attempted in the last day.
+
+    Without the second condition, a Crossref/OpenAlex outage would make every deploy
+    or restart re-run the full comparison."""
+    if not is_due(now):
+        return False
+    last = last_attempt_at()
+    return last is None or _naive_utc(now) - last >= CATCHUP_RETRY_AFTER
+
+
+def run_top5_coverage_job(*, force: bool = False, store: bool = True, catchup: bool = False,
                           source: CoverageSource | None = None) -> dict | None:
-    """Compute and store coverage unless a recent run exists. Never raises (scheduler job)."""
+    """Compute and store coverage. Never raises (scheduler job).
+
+    force: run regardless (weekly cron, ``--force``). catchup: run only if catchup_due()
+    (boot). Otherwise: run only if no successful result is newer than STALE_AFTER.
+    Failed attempts are recorded (when storing) so catch-ups back off for a day."""
     try:
-        if not force and not is_due():
+        if catchup and not catchup_due():
+            logger.info("top5 coverage: recent result or attempt, skipping catch-up")
+            return None
+        if not force and not catchup and not is_due():
             logger.info("top5 coverage: latest run is recent, skipping")
             return None
     except Exception:
         logger.exception("top5 coverage: could not read previous runs")
         return None
     lock_conn = get_connection()
+    started_at = datetime.now(timezone.utc)
+    t0 = time.monotonic()
     try:
         cur = lock_conn.cursor()
         cur.execute("SELECT GET_LOCK(%s, 0)", (_LOCK_NAME,))
@@ -366,8 +414,13 @@ def run_top5_coverage_job(*, force: bool = False, store: bool = True,
         if store:
             store_run(summary, duration)
         return summary
-    except Exception:
+    except Exception as exc:
         logger.exception("top5 coverage run failed")
+        if store:
+            try:
+                store_failure(f"{type(exc).__name__}: {exc}", int(time.monotonic() - t0), attempted_at=started_at)
+            except Exception:
+                logger.exception("top5 coverage: could not record the failed attempt")
         return None
     finally:
         try:

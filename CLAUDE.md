@@ -163,8 +163,9 @@ skipped when nothing new fails.
 per worker, aggregates only, not a `DATA_PATHS` endpoint): researchers with an
 active page, papers by status, feed events per UTC week (12 weeks), last crawl,
 and the latest row of `top5_coverage_runs`. That row is written by the weekly
-`top5_coverage` job (`backend/coverage/top5_job.py`, Sundays 04:30 UTC plus a
-catch-up 15 min after boot when nothing is newer than 8 days;
+`top5_coverage` job (`backend/coverage/top5_job.py`, every Sunday 04:30 UTC,
+plus a catch-up 15 min after boot when no result is newer than 8 days and no
+attempt, failed ones included (`status='failed'` rows), was made in 24 h;
 `TOP5_COVERAGE_ENABLED`, default true): Crossref research articles in
 AER/Econometrica/JPE/QJE/REStud since `TOP5_COVERAGE_FROM_YEAR` (2020) are
 matched with the classification of `backend/coverage/top5_validation.py` (the
