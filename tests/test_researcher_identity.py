@@ -284,7 +284,6 @@ def test_short_pages_and_profile_registries_are_not_judged():
     ("Juan", "Piedra-Peña", "Juan A. Piedra Pena welcome", None),
     ("Konstantin", "Häusler", "", "https://hu.berlin/haeusler/publications"),
     ("Hans J.M.", "Peters", "", "https://sites.google.com/view/hanspeters/publications"),
-    ("Nikhil", "Rahangdale", "Home Research Papers", "https://nikhil.quest"),
     ("Wei", "Li", "Wei Li, Professor of Economics", None),
 ])
 def test_owner_named_in(first, last, text, url):
@@ -346,15 +345,43 @@ def test_assign_does_not_merge_lookalike_surname_holder():
 
 
 @pytest.mark.parametrize("owner,url,page_type,text", [
-    (("Christopher A.", "Hartwell"), "https://sites.google.com/view/institutionaleconomist/research", "research", LONG),
+    (("Jane", "Doe"), "https://sites.google.com/view/janedoe/research", "research", LONG),
     (("Hao", "Dong"), "https://sites.google.com/view/haod/research", "research", LONG),
-    (("Immanuel", "Lampe"), "https://soegampars.github.io/", "research", LONG),
-    (("Karol J.", "Borowiecki"), "https://example.org/~kjb/research", "research", LONG),
+    (("Karol J.", "Borowiecki"), "https://example.org/~kborowiecki/research", "research", LONG),
     (("Antonis", "Ragkousis"), "https://www.kcl.ac.uk/people/antonis-ragkousis", "research", LONG),
-    (("Javier", "Valbuena"), "https://example.org/research", "home", LONG),
+    (("Jane", "Doe"), "https://jdoe.github.io/", "home", LONG),
     (("Olga", "Makeeva"), "https://www.hse.ru/org/hse/123", "research", LONG + " Ольга Макеева"),
-    (("Immanuel", "Satya"), "https://example.org/research", "research", LONG + " Immanuel"),
+    (("Immanuel", "Satya"), "https://example.org/research", "research", LONG + " Immanuel S. Lab"),
 ])
 def test_personal_pages_are_not_flagged(owner, url, page_type, text):
     owners = _owners(owner)
     assert page_ownership_problem(owners, text, None, url, page_type) is None
+
+
+@pytest.mark.parametrize("url,page_type", [
+    # The reviewer's probes: a personal-looking host or path, or HOME, that
+    # does not name the owner is still judged on its content.
+    ("https://econ.uni.edu/people/faculty", "research"),
+    ("https://econ.uni.edu/staff/directory", "research"),
+    ("https://sites.google.com/view/econdept/papers", "research"),
+    ("https://econ.uni.edu/research", "HOME"),
+    ("https://econ.uni.edu/~econ/papers", "research"),
+])
+def test_personal_looking_urls_without_owner_name_are_flagged(url, page_type):
+    owners = _owners(("Jane", "Doe"))
+    assert page_ownership_problem(owners, LONG, None, url, page_type) == OWNER_NOT_NAMED
+
+
+def test_given_name_alone_does_not_name_owner():
+    assert not owner_named_in("Immanuel", "Satya", "Welcome, Immanuel Kant reading group", None)
+    assert owner_named_in("Immanuel", "Satya", "Immanuel S. — research", None)
+    assert not owner_named_in("Nikhil", "Rahangdale", "Home Research", "https://nikhil.quest")
+
+
+@pytest.mark.parametrize("url,expected", [
+    ("https://x.edu/people/publications", False),   # "li" inside a word
+    ("https://x.edu/people/wei-li", True),
+    ("https://x.edu/~wli/", True),
+])
+def test_short_surname_needs_name_around_it_in_url(url, expected):
+    assert identity.url_names_owner("Wei", "Li", url) is expected

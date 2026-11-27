@@ -271,17 +271,54 @@ def _distinctive(tokens: list[str]) -> list[str]:
     return [t for t in kept if len(t) >= 3] or kept
 
 
+def _url_slugs(url: str) -> list[str]:
+    """Host labels and path segments, folded and with separators removed
+    ("/people/Jane-Doe" -> "janedoe", "/view/haod" -> "haod")."""
+    parts = re.split(r'[/?#&=.]+', re.sub(r'^https?://', '', (url or '').strip(), flags=re.I))
+    return [s for s in (''.join(_norm_text(p).split()) for p in parts) if s]
+
+
+def url_names_owner(first_name: str, last_name: str, url: str | None) -> bool:
+    """A URL slug contains the owner's folded surname ("jane-doe", "janedoe",
+    "hanspeters"), initial + surname ("jdoe") or given name + surname initial
+    ("haod" for Hao Dong)."""
+    if not url:
+        return False
+    given, surname = split_name(first_name, last_name)
+    core = [t for t in _core(surname) if '?' not in t]
+    if not core:
+        return False
+    joined = ''.join(core)
+    first = next((g for g in given if '?' not in g), '')
+    if len(joined) >= 4:
+        keys = {joined, _undigraph(joined)} | {t for t in core if len(t) >= 4}
+    else:  # "li", "wu", "doe" occur inside ordinary words: need a name around them
+        keys = {joined + first, first + joined} if first else {joined}
+        keys |= {first[:1] + joined} if first else set()
+    for slug in _url_slugs(url):
+        if slug == joined or any(k in slug or k in _undigraph(slug) for k in keys):
+            return True
+        if first and len(first) >= 2 and slug == first + joined[0]:
+            return True
+    return False
+
+
 def owner_named_in(first_name: str, last_name: str, text: str, url: str | None = None) -> bool:
     """True if a page plausibly names its owner.
 
-    The page text (or HTML, which includes the title) contains a distinctive
-    surname token as a word ("Adamecz" for Adamecz-Völgyi, "Peña" for
-    Piedra-Peña), accent-, case- and hyphen-insensitive, also as German
-    transliteration (Häusler/Haeusler) or run together (hanspeters.com);
-    or the URL contains the surname or a given name ("nikhil.quest").
-    Never flags an empty surname.
+    - the text (or HTML, which includes the title) contains a distinctive
+      surname token as a word ("Adamecz" for Adamecz-Völgyi, "Peña" for
+      Piedra-Peña, "Макеева" for Makeeva), accent-, case- and
+      hyphen-insensitive, also as German transliteration (Häusler/Haeusler)
+      or run together (hanspeters.com);
+    - or the text has the given name followed by the surname initial
+      ("Immanuel S.");
+    - or the URL names the owner (see url_names_owner; a bare surname word in
+      the path also counts: ".../Professoren/Wey").
+    A given name alone is not enough. Never flags an empty surname.
     """
-    surname = _distinctive(split_name(first_name, last_name)[1] or _tokens(last_name))
+    given_tokens, surname_tokens = split_name(first_name, last_name)
+    surname = _distinctive(surname_tokens or _tokens(last_name))
     if not surname:
         return True
     hay = ' ' + _norm_text(text or '') + ' '
@@ -297,19 +334,14 @@ def owner_named_in(first_name: str, last_name: str, text: str, url: str | None =
             return True
         if len(tok) >= 5 and tok in hay_joined:
             return True
-    # The owner's own given name on the page ("Nikhil", "Immanuel").
-    given_words = [t for t in _tokens(first_name) if len(t) >= 4 and '?' not in t]
-    if any(f' {t} ' in hay for t in given_words):
+    initial = next((t for t in surname if '?' not in t), '')[:1]
+    if initial and any(len(g) >= 3 and f' {g} {initial}' in hay for g in given_tokens if '?' not in g):
         return True
     if url:
-        url_words = _norm_text(url).split()
-        if any(tok in url_words for tok in surname):  # ".../Professoren/Wey"
+        if any(tok in _norm_text(url).split() for tok in surname):
             return True
-        url_hay = ''.join(url_words)
-        given = [t for t in _tokens(first_name) if len(t) >= 4]
-        for tok in surname + given:
-            if len(tok) >= 4 and '?' not in tok and (tok in url_hay or _undigraph(tok) in _undigraph(url_hay)):
-                return True
+        if url_names_owner(first_name, last_name, url):
+            return True
     return False
 
 
@@ -620,9 +652,10 @@ def page_ownership_problem(owners: list[dict], text: str | None, raw_html: str |
       owner (see owner_named_in). The page is kept but flagged for review,
       and its owner is not attached to items without a byline.
     Returns None when the page looks like the owner's own, when there is no
-    stored page to judge, for pages under MIN_JUDGED_TEXT characters, profile
-    registries (ORCID…), personal-site hosts (Google Sites, github.io…),
-    per-person paths (/~x, /people/x, /profile) and home/personal page types.
+    stored page to judge, for pages under MIN_JUDGED_TEXT characters and
+    profile registries (ORCID…). Personal-site hosts (Google Sites,
+    github.io…), per-person paths (/~x, /people/x, /profile) and home/personal
+    page types are trusted only when the URL slug names the owner.
     """
     if len(owners) > 1:
         for i, a in enumerate(owners):
@@ -634,7 +667,13 @@ def page_ownership_problem(owners: list[dict], text: str | None, raw_html: str |
     raw_html = raw_html if isinstance(raw_html, str) else None
     if not owners or not ((text or '').strip() or (raw_html or '').strip()):
         return None
-    if _is_profile_registry(url) or _is_personal_page(url, page_type):
+    if _is_profile_registry(url):
+        return None
+    # A personal-site host or per-person path (Google Sites, github.io,
+    # /people/x, /~x) or a HOME page counts only when its slug names the owner:
+    # sites.google.com/view/janedoe yes, /people/faculty or /view/econdept no.
+    if _is_personal_page(url, page_type) and any(
+            url_names_owner(o['first_name'], o['last_name'], url) for o in owners):
         return None
     # Error, login and bot-check pages are short; judge only real content.
     if len(_norm_text(text or raw_html)) < MIN_JUDGED_TEXT:
