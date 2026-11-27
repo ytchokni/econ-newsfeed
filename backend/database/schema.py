@@ -178,6 +178,8 @@ _TABLE_DEFINITIONS = {
             consecutive_failures INT NOT NULL DEFAULT 0,
             deactivated_at DATETIME DEFAULT NULL,
             deactivation_reason VARCHAR(255) DEFAULT NULL,
+            ownership_flag VARCHAR(32) DEFAULT NULL,
+            ownership_flagged_at DATETIME DEFAULT NULL,
             UNIQUE KEY uq_researcher_url (researcher_id, url(500)),
             FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
             INDEX idx_is_active (is_active)
@@ -858,6 +860,15 @@ def create_tables() -> None:
                         if "Duplicate column name" not in str(e):
                             logging.warning("Migration: researchers.openalex_author_id: %s", e)
 
+                    # Lookups by OpenAlex author ID (one record per ID, issue #259)
+                    try:
+                        cursor.execute("ALTER TABLE researchers ADD INDEX idx_openalex_author "
+                                       "(openalex_author_id), ALGORITHM=INPLACE, LOCK=NONE")
+                        conn.commit()
+                    except Exception as e:
+                        if getattr(e, 'errno', None) != 1061:
+                            logging.warning("Migration: researchers.idx_openalex_author: %s", e)
+
                     # Versioned trigger installs first; any failure aborts startup.
                     _ensure_snapshot_guard(cursor)
                     _ensure_content_metadata(cursor)
@@ -917,6 +928,10 @@ def create_tables() -> None:
                         ("researcher_urls", "consecutive_failures", "INT NOT NULL DEFAULT 0"),
                         ("researcher_urls", "deactivated_at", "DATETIME DEFAULT NULL"),
                         ("researcher_urls", "deactivation_reason", "VARCHAR(255) DEFAULT NULL"),
+                        # Page that never names its owner: kept active, owner not
+                        # credited, listed for review (issue #262)
+                        ("researcher_urls", "ownership_flag", "VARCHAR(32) DEFAULT NULL"),
+                        ("researcher_urls", "ownership_flagged_at", "DATETIME DEFAULT NULL"),
                     ]
                     for table, col, definition in _url_deactivation_columns:
                         try:

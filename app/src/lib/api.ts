@@ -323,6 +323,24 @@ export function useAtRiskUrls() {
   );
 }
 
+/** Active pages that never name their owner (#262): owner not credited, review. */
+export interface OwnershipReviewUrl {
+  id: number;
+  url: string;
+  page_type: string;
+  ownership_flag: string;
+  ownership_flagged_at: string | null;
+  researcher_name: string;
+  researcher_id: number;
+}
+
+export function useOwnershipReviewUrls() {
+  return useSWR<OwnershipReviewUrl[]>(
+    "/api/admin/ownership-review-urls",
+    fetchJsonWithAuth,
+  );
+}
+
 export async function reactivateUrl(urlId: number): Promise<void> {
   await fetchJsonWithAuth(`/api/admin/reactivate-url/${urlId}`, {
     method: "POST",

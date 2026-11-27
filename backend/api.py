@@ -641,6 +641,14 @@ def get_at_risk_urls(request: Request):
     return db_get_at_risk_urls()
 
 
+@app.get("/api/admin/ownership-review-urls")
+def get_ownership_review_urls(request: Request):
+    """Active pages that never name their owner (owner not credited; review)."""
+    _require_api_key(request)
+    from backend.database.researchers import get_ownership_review_urls as db_review
+    return db_review()
+
+
 @app.post("/api/admin/reactivate-url/{url_id}")
 def reactivate_url(url_id: int, request: Request):
     """Re-activate a deactivated URL."""

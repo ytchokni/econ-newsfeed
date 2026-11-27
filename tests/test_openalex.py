@@ -499,13 +499,14 @@ class TestBackfillResearcherOpenalexIds:
             patch("backend.enrichment.openalex.fetch_all", return_value=[
                 {"id": 1, "first_name": "Max", "last_name": "Steinhardt", "openalex_author_id": None},
             ]),
-            patch("backend.enrichment.openalex.execute_query") as mock_exec,
+            patch("backend.enrichment.openalex.get_connection"),
+            patch("backend.enrichment.openalex.assign_openalex_author_id") as mock_assign,
         ):
             from backend.enrichment.openalex import _backfill_researcher_openalex_ids
             _backfill_researcher_openalex_ids(paper_id=10, coauthors=coauthors)
 
-        mock_exec.assert_called_once()
-        assert mock_exec.call_args[0][1] == ("A5023888391", 1)
+        mock_assign.assert_called_once()
+        assert mock_assign.call_args[0][1:] == (1, "A5023888391")
 
     def test_skips_when_no_openalex_ids(self):
         coauthors = [{"display_name": "Author", "openalex_author_id": None}]

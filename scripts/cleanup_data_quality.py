@@ -139,39 +139,13 @@ def merge_paper_pair(cursor, canonical_id: int, dup_id: int) -> None:
     cursor.execute("DELETE FROM papers WHERE id = %s", (dup_id,))
 
 
-_RESEARCHER_CHILD_TABLES = [
-    ("authorship", "researcher_id"),
-    ("html_content", "researcher_id"),
-    ("researcher_fields", "researcher_id"),
-    ("researcher_jel_codes", "researcher_id"),
-    ("researcher_snapshots", "researcher_id"),
-    ("researcher_urls", "researcher_id"),
-]
-
-
 def merge_researcher_pair(cursor, canonical_id: int, dup_id: int) -> None:
-    """Merge dup researcher into canonical: coalesce profile, reassign, delete."""
-    cursor.execute(
-        "SELECT position, affiliation, description, openalex_author_id, bio "
-        "FROM researchers WHERE id = %s", (dup_id,))
-    dup = cursor.fetchone()
-    if dup is None:
-        return
-    position, affiliation, description, oa_id, bio = dup
+    """Merge dup researcher into canonical: coalesce profile, reassign, delete.
 
-    for table, col in _RESEARCHER_CHILD_TABLES:
-        cursor.execute(
-            f"UPDATE IGNORE `{table}` SET `{col}` = %s WHERE `{col}` = %s",
-            (canonical_id, dup_id))
-
-    cursor.execute("DELETE FROM researchers WHERE id = %s", (dup_id,))
-    cursor.execute(
-        """UPDATE researchers SET
-             position = COALESCE(position, %s), affiliation = COALESCE(affiliation, %s),
-             description = COALESCE(description, %s), bio = COALESCE(bio, %s),
-             openalex_author_id = COALESCE(openalex_author_id, %s)
-           WHERE id = %s""",
-        (position, affiliation, description, bio, oa_id, canonical_id))
+    Delegates to identity.merge_researcher_into, which also moves follows,
+    URL discoveries and mining candidates."""
+    from backend.database.identity import merge_researcher_into
+    merge_researcher_into(cursor, canonical_id, dup_id)
 
 
 def _researcher_weight(row: dict) -> tuple:
@@ -290,18 +264,27 @@ def fix_researcher_url_schemes():
 
 @step
 def merge_researchers_shared_openalex():
-    """Two researcher rows with the same OpenAlex author ID are one person."""
-    groups = fetch_all(
-        """SELECT openalex_author_id, GROUP_CONCAT(id ORDER BY id) ids
-           FROM researchers WHERE openalex_author_id IS NOT NULL
-           GROUP BY openalex_author_id HAVING COUNT(*) > 1""")
+    """Researcher rows with the same OpenAlex author ID and agreeing names are
+    one person. IDs shared by people with other names (stale surname-only
+    backfills) are left to scripts/repair_researcher_identity.py."""
+    from backend.database.identity import cluster_same_person
+
+    rows = fetch_all(
+        """SELECT r.id, r.first_name, r.last_name, r.openalex_author_id
+           FROM researchers r
+           JOIN (SELECT openalex_author_id FROM researchers WHERE openalex_author_id IS NOT NULL
+                 GROUP BY openalex_author_id HAVING COUNT(*) > 1) g
+             ON g.openalex_author_id = r.openalex_author_id""")
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(r["openalex_author_id"], []).append(r)
     merges = []
-    for g in groups:
-        ids = [int(x) for x in g["ids"].split(",")]
-        weights = sorted(_fetch_researcher_weights(ids), key=_researcher_weight)
-        canonical = weights[0]["id"]
-        for w in weights[1:]:
-            merges.append((canonical, w["id"]))
+    for recs in groups.values():
+        for cluster in cluster_same_person(recs, strong=True):
+            weights = sorted(_fetch_researcher_weights([r["id"] for r in cluster]), key=_researcher_weight)
+            canonical = weights[0]["id"]
+            for w in weights[1:]:
+                merges.append((canonical, w["id"]))
     log.info("  %d groups -> %d merges", len(groups), len(merges))
 
     def writes(cur):

@@ -27,6 +27,8 @@ from backend.database import (
 )
 from backend.pipeline.change_filter import is_insignificant_change
 from backend.pipeline.feed_events import FeedEventEmitter
+from backend.database.identity import SHARED_PAGE, page_ownership_problem
+from backend.database.researchers import deactivate_unowned_url, flag_url_ownership, page_owners
 from backend.database.papers import find_papers_by_titles
 from backend.pipeline.chunking import chunk_page
 from backend.pipeline.html_fetcher import CONTENT_MAX_CHARS, HTMLFetcher
@@ -110,6 +112,22 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
         logger.info("Skipping decoded JPEG for URL ID %s", url_id)
         HTMLFetcher.mark_extracted(url_id, content_hash)
         return ExtractionOutcome("empty")
+    # Department, institute and news pages are not personal pages: their
+    # items must not be credited to whoever tracks them (issue #262).
+    # Shared pages stop being crawled. A page that never names its owner may
+    # still be theirs (Google Sites, Cyrillic profiles): it is extracted, the
+    # owner is not attached at position 0, and it is flagged for review.
+    owners = page_owners(url)
+    problem = page_ownership_problem(owners, text, raw_html, url, page_type) if owners else None
+    if problem == SHARED_PAGE:
+        deactivate_unowned_url(url, problem)
+        HTMLFetcher.mark_extracted(url_id, content_hash)
+        return ExtractionOutcome("empty")
+    try:
+        if owners:
+            flag_url_ownership(url, problem)
+    except Exception:
+        logger.warning("Could not record ownership flag for %s", url, exc_info=True)
     is_seed = payload['extracted_at'] is None
 
     ts = payload.get('timestamp')
