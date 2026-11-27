@@ -190,6 +190,11 @@ _enrichment_stop_event = threading.Event()
 
 EXTRACTION_WORKER_ENABLED = os.environ.get('EXTRACTION_WORKER_ENABLED', 'false').lower() == 'true'
 QUALITY_REVIEW_ENABLED = os.environ.get('QUALITY_REVIEW_ENABLED', 'false').lower() == 'true'
+JEL_CLASSIFICATION_ENABLED = os.environ.get('JEL_CLASSIFICATION_ENABLED', 'false').lower() == 'true'
+try:
+    _JEL_INTERVAL_MINUTES = max(5, int(os.environ.get('JEL_CLASSIFICATION_INTERVAL_MINUTES', '60')))
+except ValueError:
+    _JEL_INTERVAL_MINUTES = 60
 DIGEST_ENABLED = os.environ.get('RESEND_API_KEY', '') != ''
 _EXTRACTION_DELAY_SECONDS = float(os.environ.get('EXTRACTION_DELAY_SECONDS', '2'))
 _EXTRACTION_IDLE_SECONDS = 300       # queue empty → re-poll every 5 min
@@ -484,6 +489,16 @@ def run_site_mining_job() -> dict:
     """Cheap mining owns a separate DB lock and bounded, durable work queue."""
     from backend.discovery.mining import run_site_mining_batch
     return run_site_mining_batch(apply=True)
+
+
+def run_jel_classification_job() -> dict:
+    """Scheduled, budgeted JEL classification batch (see backend.enrichment.jel_job)."""
+    from backend.enrichment.jel_job import run_jel_classification_batch
+    try:
+        return run_jel_classification_batch()
+    except Exception as e:
+        logger.error("JEL classification job failed: %s: %s", type(e).__name__, e)
+        return {"stopped": "error"}
 
 
 def _start_lock_keepalive() -> None:
@@ -801,6 +816,18 @@ def start_scheduler() -> None:
         )
         logger.info("URL discovery job scheduled for daily at 05:00 UTC")
 
+    if JEL_CLASSIFICATION_ENABLED:
+        _scheduler.add_job(
+            run_jel_classification_job,
+            'interval',
+            minutes=_JEL_INTERVAL_MINUTES,
+            id='jel_classification',
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=600,
+        )
+        logger.info("JEL classification scheduled every %d minutes", _JEL_INTERVAL_MINUTES)
+
     if QUALITY_REVIEW_ENABLED:
         from backend.enrichment.review_batch import submit_review_batch, check_review_batches
         _scheduler.add_job(
@@ -827,6 +854,8 @@ def shutdown_scheduler() -> None:
     stop_enrichment_worker()
     stop_extraction_worker()
     if _scheduler is not None:
+        from backend.enrichment.jel_job import request_stop as _stop_jel
+        _stop_jel()
         _scheduler.shutdown(wait=True)
         _scheduler = None
         logger.info("Scheduler shut down")

@@ -5,7 +5,7 @@ import time
 
 import requests
 
-from backend.database import execute_query, fetch_all, get_unenriched_papers, update_openalex_data
+from backend.database import execute_query, fetch_all, get_unenriched_papers, save_paper_topics, update_openalex_data
 from backend.database.enrichment_budget import has_budget_remaining, reserve_request
 from backend.database.papers import has_title_identity, normalize_title
 from backend.database.researchers import matches_author_name
@@ -266,6 +266,13 @@ def enrich_publication(paper_id, title, author_name, existing_abstract=None, doi
         year=result.get("year"),
     )
 
+    # Topics come with the work at no extra cost; they feed JEL classification.
+    if result.get("topics"):
+        try:
+            save_paper_topics(paper_id, result["topics"])
+        except Exception:
+            logger.warning("Could not store OpenAlex topics for paper %s", paper_id, exc_info=True)
+
     # Backfill openalex_author_id on researchers from coauthor data
     _backfill_researcher_openalex_ids(paper_id, result["coauthors"])
 
@@ -386,4 +393,52 @@ def fetch_topics_batch(openalex_ids: list[str]) -> dict[str, list[dict]]:
         if i + 50 < len(openalex_ids):
             time.sleep(0.5)
 
+    return result
+
+
+def fetch_author_topics_batch(
+    author_ids: list[str], per_author: int = 10,
+) -> dict[str, list[dict]]:
+    """Fetch each OpenAlex author's most frequent research topics.
+
+    Returns ``{author_id: [{"topic_name", "score"}, ...]}`` where score is the
+    topic's share of the author's most frequent topic (1.0 for the top one).
+    One budgeted request per 50 authors; returns what it has when the daily
+    OpenAlex budget runs out or a request fails.
+    """
+    ids = [a for a in dict.fromkeys(author_ids) if a]
+    if not ids or not _check_budget():
+        return {}
+
+    session = _get_session()
+    result: dict[str, list[dict]] = {}
+    for i in range(0, len(ids), 50):
+        chunk = ids[i : i + 50]
+        params: dict[str, str | int] = {
+            "filter": "openalex:" + "|".join(f"{_OPENALEX_PREFIX}{a}" for a in chunk),
+            "per_page": 50,
+            "select": "id,topics",
+        }
+        if MAILTO:
+            params["mailto"] = MAILTO
+        try:
+            resp = _get_with_retry(session, f"{OPENALEX_BASE_URL}/authors", params)
+            resp.raise_for_status()
+            for author in resp.json().get("results", []):
+                author_id = _strip_prefix(author.get("id"), _OPENALEX_PREFIX)
+                topics = [t for t in author.get("topics") or [] if t.get("display_name")]
+                if not author_id or not topics:
+                    continue
+                top = max(float(t.get("count") or 0) for t in topics) or 1.0
+                result[author_id] = [
+                    {"topic_name": t["display_name"],
+                     "score": round(float(t.get("count") or 0) / top, 4)}
+                    for t in topics[:per_author]
+                ]
+        except _BudgetExhausted:
+            break
+        except (requests.RequestException, ValueError) as e:
+            logger.warning("Failed to fetch author topics for chunk starting at %d: %s", i, e)
+        if i + 50 < len(ids):
+            time.sleep(0.5)
     return result

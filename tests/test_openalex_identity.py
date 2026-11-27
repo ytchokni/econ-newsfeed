@@ -180,3 +180,26 @@ def test_free_doi_lookup_still_runs_after_search_budget_exhaustion():
         assert openalex.enrich_new_publications() == 1
     assert enrich.call_args.kwargs['paper_id'] == 2
     assert mark.call_args.args[1] == (2,)
+
+
+def test_matched_work_topics_are_stored_for_jel():
+    topics = [{"openalex_topic_id": "T1", "topic_name": "Labor markets", "score": 0.9}]
+    with (
+        patch.object(openalex, "lookup_by_doi", return_value={**work(), "topics": topics}),
+        patch.object(openalex, "update_openalex_data"),
+        patch.object(openalex, "_backfill_researcher_openalex_ids"),
+        patch.object(openalex, "save_paper_topics") as save_topics,
+    ):
+        assert openalex.enrich_publication(71119, TITLE, "Anja Rösner", doi=work()['doi'])
+    save_topics.assert_called_once_with(71119, topics)
+
+
+def test_topic_storage_failure_does_not_fail_enrichment():
+    topics = [{"openalex_topic_id": "T1", "topic_name": "Labor markets", "score": 0.9}]
+    with (
+        patch.object(openalex, "lookup_by_doi", return_value={**work(), "topics": topics}),
+        patch.object(openalex, "update_openalex_data"),
+        patch.object(openalex, "_backfill_researcher_openalex_ids"),
+        patch.object(openalex, "save_paper_topics", side_effect=RuntimeError("db")),
+    ):
+        assert openalex.enrich_publication(71119, TITLE, "Anja Rösner", doi=work()['doi'])

@@ -281,6 +281,22 @@ _TABLE_DEFINITIONS = {
             FOREIGN KEY (jel_code) REFERENCES jel_codes(code) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    # Incremental JEL classification state: one row per researcher the job
+    # has looked at. input_hash fingerprints the bio/papers/topics that were
+    # sent to the LLM, so unchanged researchers are never sent twice.
+    "researcher_jel_state": """
+        CREATE TABLE IF NOT EXISTS researcher_jel_state (
+            researcher_id INT NOT NULL PRIMARY KEY,
+            input_hash CHAR(64) DEFAULT NULL,
+            source VARCHAR(16) NOT NULL,
+            used_bio BOOLEAN NOT NULL DEFAULT FALSE,
+            model VARCHAR(100) DEFAULT NULL,
+            checked_at DATETIME NOT NULL,
+            attempts INT NOT NULL DEFAULT 0,
+            INDEX idx_checked_at (checked_at),
+            FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
     "paper_topics": """
         CREATE TABLE IF NOT EXISTS paper_topics (
             id INT AUTO_INCREMENT PRIMARY KEY,
