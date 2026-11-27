@@ -278,3 +278,15 @@ class TestTruncatedOutput:
         result = llm_client.extract_json("prompt", _ItemList)
 
         assert result.parsed is not None and result.truncated is False
+
+    @patch("backend.llm.client.get_client")
+    def test_request_timeout_counts_as_cut_off_output(self, mock_get_client):
+        import httpx
+        from openai import APITimeoutError
+        import backend.llm.client as llm_client
+        mock_get_client.return_value.chat.completions.create.side_effect = APITimeoutError(
+            request=httpx.Request("POST", "https://example.invalid"))
+
+        result = llm_client.extract_json("prompt", _ItemList)
+
+        assert result.parsed is None and result.truncated is True and result.retry_after is None

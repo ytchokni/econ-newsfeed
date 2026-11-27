@@ -15,7 +15,7 @@ import threading
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
-from openai import OpenAI, OpenAIError, RateLimitError
+from openai import APITimeoutError, OpenAI, OpenAIError, RateLimitError
 from pydantic import BaseModel, ValidationError
 
 _client: OpenAI | None = None
@@ -67,8 +67,9 @@ class StructuredResponse(Generic[T]):
     whole provider rather than this prompt: a rate-limit error (with its
     suggested wait) or an account error such as depleted billing.
     `truncated` is set when the output hit max_tokens (finish_reason
-    "length") and did not parse; repeating the same prompt would only be
-    cut off again, so the caller should send less input per call instead.
+    "length") and did not parse, or the request timed out while the model
+    was still writing; repeating the same prompt would only be cut off
+    again, so the caller should send less input per call instead.
     """
     parsed: T | None
     usage: object | None
@@ -194,6 +195,12 @@ def extract_json(
             retry_delay = _parse_retry_after(e)
             logging.warning("LLM rate limited, retry after %.0fs: %s", retry_delay, e)
             return StructuredResponse(parsed=None, usage=None, retry_after=retry_delay)
+        except APITimeoutError as e:
+            # At ~35 output tokens/s the 300s client timeout ends long answers
+            # before max_tokens does (a dense 20k-char list of ~130 papers):
+            # the same "too much output" failure as finish_reason "length".
+            logging.warning("LLM call timed out (output too long for the timeout?): %s", e)
+            return StructuredResponse(parsed=None, usage=None, truncated=True)
         except OpenAIError as e:
             if getattr(e, "status_code", None) in _ACCOUNT_ERROR_STATUS_CODES:
                 logging.error(
