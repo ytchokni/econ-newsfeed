@@ -45,6 +45,7 @@ REPORT_TITLE = "Daily data-quality report"
 REPORT_MARKER = "<!-- data-quality-report -->"
 STATE_RE = re.compile(r"<!-- dq-state: (.*?) -->", re.S)
 MAX_NEW_ISSUES = 3
+MAX_ISSUE_UPDATES = 5            # comments plus reopens on existing issues per run
 PASS_DAYS_TO_CLOSE = 2
 ALLOWED_LABELS = ("bug", "high-priority")
 MAX_BODY_CHARS = 20000
@@ -270,11 +271,9 @@ def short_id(node_id: str) -> str:
 
 
 def defuse_mentions(text: str) -> str:
-    """Wrap @names in backticks so nobody is notified; leave code and emails alone."""
-    parts = re.split(r"(```.*?```|`[^`\n]*`)", text or "", flags=re.S)
-    for i in range(0, len(parts), 2):
-        parts[i] = re.sub(r"(?<![\w`])@([A-Za-z0-9][\w-]*(?:/[\w.-]+)?)", r"`@\1`", parts[i])
-    return "".join(parts)
+    """Put a zero-width space after every @ that starts a name, so nobody is
+    notified however the text is quoted (code spans can be unbalanced)."""
+    return re.sub(r"@(?=[A-Za-z0-9])", "@\u200b", text or "")
 
 
 def clean_text(text: str, limit: int = MAX_BODY_CHARS) -> str:
@@ -343,6 +342,23 @@ class GitHub:
             return bool(out) and json.loads(out).get("state") == "MERGED"
         except (RuntimeError, ValueError):
             return False
+
+    def open_linked_prs(self, number: int) -> list[int]:
+        """Open pull requests linked to close this issue (`Fixes #N`)."""
+        try:
+            out = self.read("issue", "view", str(number), "--json", "closedByPullRequestsReferences")
+            refs = json.loads(out).get("closedByPullRequestsReferences", []) if out else []
+        except (RuntimeError, ValueError):
+            return []
+        open_prs = []
+        for ref in refs:
+            try:
+                state = json.loads(self.read("pr", "view", str(ref["number"]), "--json", "state") or "{}")
+            except (RuntimeError, ValueError, KeyError):
+                continue
+            if state.get("state") == "OPEN":
+                open_prs.append(int(ref["number"]))
+        return open_prs
 
     def issue(self, number: int) -> dict | None:
         if number not in self._issue_cache:
@@ -437,6 +453,8 @@ def apply_triage(triage: dict, fails: list[dict], state: dict, gh: GitHub,
     by_id = {f["id"]: f for f in fails}
     log: list[str] = []
     created = 0
+    updates = 0
+    state.setdefault("created_issues", [])
     run_link = f"\n\n[Data-quality run]({run_url})" if run_url else ""
     for group in triage.get("groups", []) if isinstance(triage.get("groups"), list) else []:
         if not isinstance(group, dict):
@@ -463,6 +481,7 @@ def apply_triage(triage: dict, fails: list[dict], state: dict, gh: GitHub,
                                *sum((["--label", lab] for lab in labels if lab in ALLOWED_LABELS), []))
                 created += 1
                 number = int(url.strip().rsplit("/", 1)[-1])
+                state["created_issues"].append(number)
                 log.append(f"filed #{number}: {title}")
             elif action == "cleanup_pending" and isinstance(number, int) and isinstance(fix_pr, int):
                 # Fix merged, existing rows not yet cleaned up: one line in the
@@ -487,12 +506,21 @@ def apply_triage(triage: dict, fails: list[dict], state: dict, gh: GitHub,
                     log.append(f"skipped: issue #{number} not found")
                     continue
                 if action == "comment":
-                    if issue.get("state") != "OPEN":
+                    reopen = issue.get("state") != "OPEN"
+                    if updates + 1 + reopen > MAX_ISSUE_UPDATES:
+                        log.append(f"not updated (limit of {MAX_ISSUE_UPDATES} issue updates per run): #{number}")
+                        continue
+                    if reopen:
                         if group.get("reopen") is not True:
                             log.append(f"skipped: #{number} is closed and reopening was not proposed")
                             continue
+                        if any(by_id[i].get("previous_issue") != number for i in ids):
+                            log.append(f"skipped: #{number} is not the issue these failures had before")
+                            continue
                         gh.write("issue", "reopen", str(number))
+                        updates += 1
                         log.append(f"reopened #{number}")
+                    updates += 1
                     gh.write("issue", "comment", str(number),
                              "--body", f"{text}{fix_line}\n\n{footer(ids, by_id, day)}{run_link}")
                     log.append(f"commented on #{number}")
@@ -546,6 +574,17 @@ def close_recovered(state: dict, gh: GitHub, run_url: str) -> list[str]:
         days = sorted({d for i in ids for d in state["pass_days"][i]})
         try:
             if issue and issue.get("state") == "OPEN":
+                if number not in state.get("created_issues", []):
+                    log.append(f"#{number} passes on {', '.join(days)}; not closed (not filed by this check)")
+                    for iid in ids:
+                        state["issue_map"].pop(iid, None)
+                        state["pass_days"].pop(iid, None)
+                        state["cleanup_pending"].pop(iid, None)
+                    continue
+                linked = gh.open_linked_prs(number)
+                if linked:
+                    log.append(f"#{number} passes but stays open while #{linked[0]} is open")
+                    continue
                 names = ", ".join(f"`{short_id(i)}`" for i in ids)
                 link = f" [Data-quality run]({run_url})" if run_url else ""
                 gh.write("issue", "comment", str(number), "--body",
@@ -634,8 +673,7 @@ def report(results_path: str, triage_path: str | None, gh: GitHub) -> int:
     if results.get("complete"):
         fails = failures(results)
         if triage:
-            untracked_ids = {f["id"] for f in untracked_failures(fails, state, gh)}
-            log += apply_triage(triage, [f for f in fails if f["id"] in untracked_ids],
+            log += apply_triage(triage, untracked_failures(fails, state, gh),
                                 state, gh, day, run_url)
         update_streaks(state, results, day)
         log += close_recovered(state, gh, run_url)

@@ -24,6 +24,7 @@ class FakeGitHub(dq.GitHub):
     def __init__(self, issues=None, report=None, merged=()):
         super().__init__()
         self.merged = set(merged)
+        self.linked = {}
         self.issues = {n: {"number": n, "state": s, "title": f"#{n}"} for n, s in (issues or {}).items()}
         self.report = report
         self.next_number = 500
@@ -33,6 +34,9 @@ class FakeGitHub(dq.GitHub):
 
     def issue(self, number):
         return self.issues.get(number)
+
+    def open_linked_prs(self, number):
+        return self.linked.get(number, [])
 
     def pr_merged(self, number):
         return number in self.merged
@@ -72,11 +76,10 @@ class TestParsing:
 
 class TestMentions:
     def test_mentions_are_wrapped_in_backticks(self):
-        assert dq.defuse_mentions("ask @ytchokni and @claude") == "ask `@ytchokni` and `@claude`"
+        assert dq.defuse_mentions("ask @ytchokni and @claude") == "ask @\u200bytchokni and @\u200bclaude"
 
-    def test_code_spans_blocks_and_emails_are_untouched(self):
-        text = "see `@claude` and ```\n@decorator\n``` mail a@b.org"
-        assert dq.defuse_mentions(text) == text
+    def test_stray_backtick_cannot_bypass(self):
+        assert "@ytchokni" not in dq.defuse_mentions("x ` @ytchokni `@org/team")
 
 
 class TestApplyTriage:
@@ -93,13 +96,13 @@ class TestApplyTriage:
         for args in created:
             assert "monitor-alert" not in args
             assert args.count("--label") == 2  # bug + high-priority only
-            assert "`@x`" in args[args.index("--body") + 1]
+            assert "@\u200bx" in args[args.index("--body") + 1]
         assert any("limit of 3" in line for line in log)
         assert set(state["issue_map"]) == {TITLE, YEAR, "a"}
         assert "b" not in state["issue_map"]  # retried tomorrow
 
     def test_comment_on_closed_issue_needs_explicit_reopen(self):
-        fails = dq.failures(results(failed=[TITLE, YEAR]))
+        fails = [{**f, "previous_issue": 261} for f in dq.failures(results(failed=[TITLE, YEAR]))]
         gh = FakeGitHub(issues={260: "CLOSED", 261: "CLOSED"})
         state = dq.read_state("")
         dq.apply_triage({"groups": [
@@ -160,7 +163,7 @@ class TestCleanupPending:
 
 class TestClosing:
     def test_closes_after_two_passing_days_not_two_runs(self):
-        state = {"issue_map": {TITLE: 260, YEAR: 260}, "pass_days": {}}
+        state = {"issue_map": {TITLE: 260, YEAR: 260}, "pass_days": {}, "created_issues": [260]}
         gh = FakeGitHub(issues={260: "OPEN"})
         dq.update_streaks(state, results("2026-11-27", passed=[TITLE, YEAR]), "2026-11-27")
         dq.update_streaks(state, results("2026-11-27", passed=[TITLE, YEAR]), "2026-11-27")
@@ -172,7 +175,7 @@ class TestClosing:
         assert state["issue_map"] == {}
 
     def test_one_failing_invariant_keeps_the_issue_open(self):
-        state = {"issue_map": {TITLE: 260, YEAR: 260}, "pass_days": {}}
+        state = {"issue_map": {TITLE: 260, YEAR: 260}, "pass_days": {}, "created_issues": [260]}
         gh = FakeGitHub(issues={260: "OPEN"})
         dq.update_streaks(state, results("2026-11-27", passed=[TITLE, YEAR]), "2026-11-27")
         dq.update_streaks(state, results("2026-11-28", passed=[TITLE], failed=[YEAR]), "2026-11-28")
@@ -186,12 +189,22 @@ class TestClosing:
         assert state["pass_days"][TITLE] == ["2026-11-27"]
 
     def test_signal_recovery_counts(self):
-        state = {"issue_map": {ZOMBIE: 262}, "pass_days": {}}
+        state = {"issue_map": {ZOMBIE: 262}, "pass_days": {}, "created_issues": [262]}
         gh = FakeGitHub(issues={262: "OPEN"})
         for day in ("2026-11-27", "2026-11-28"):
             sig = [{"id": ZOMBIE, "ok": True, "value": 0, "detail": "0"}]
             dq.update_streaks(state, results(day, signals=sig), day)
         assert dq.close_recovered(state, gh, "") == ["closed #262 (passed 2026-11-27, 2026-11-28)"]
+
+
+class TestClosingGuards:
+    def test_not_closed_when_not_filed_by_the_check_or_pr_open(self):
+        for created, linked, closed in (([], {}, False), ([260], {260: [290]}, False), ([260], {}, True)):
+            state = {"issue_map": {TITLE: 260}, "pass_days": {TITLE: ["d1", "d2"]}, "created_issues": created}
+            gh = FakeGitHub(issues={260: "OPEN"})
+            gh.linked = linked
+            dq.close_recovered(state, gh, "")
+            assert (["issue", "close", "260", "--reason", "completed"] in gh.writes) is closed
 
 
 class TestPlanAndReport:
