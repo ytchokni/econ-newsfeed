@@ -5,7 +5,6 @@ import json
 import logging
 
 from backend.database.connection import execute_query, fetch_all, fetch_one
-from backend.database.researchers import add_researcher_url
 from backend.database.top_presets import top5_publication_clause
 
 logger = logging.getLogger(__name__)
@@ -104,26 +103,15 @@ def get_pending_discoveries() -> list[dict]:
     return [_with_parsed_subpages(row) for row in rows]
 
 
-def approve_discovery(discovery_id: int) -> None:
-    """Approve a discovery: copy URL + subpages to researcher_urls."""
-    row = fetch_one(
-        "SELECT researcher_id, url, subpages FROM url_discoveries WHERE id = %s",
-        (discovery_id,),
-    )
-    if not row or not row["url"]:
-        return
+def approve_discovery(discovery_id: int) -> dict:
+    """Approve a discovery through the site miner's guarded, transactional path.
 
-    add_researcher_url(row["researcher_id"], "personal", row["url"])
-
-    subs = _parse_subpages(row["subpages"])
-    if subs:
-        for sp in subs:
-            add_researcher_url(row["researcher_id"], sp["page_type"], sp["url"])
-
-    execute_query(
-        "UPDATE url_discoveries SET status = 'approved', reviewed_at = NOW() WHERE id = %s",
-        (discovery_id,),
-    )
+    The old implementation called add_researcher_url statement by statement and
+    skipped identity holds, URL ownership, scope and prior-rejection checks.
+    Returns {"approved": bool, "reason": str | None}.
+    """
+    from backend.discovery.searlo_review import approve_one
+    return approve_one(discovery_id)
 
 
 def reject_discovery(discovery_id: int) -> None:
@@ -132,17 +120,6 @@ def reject_discovery(discovery_id: int) -> None:
         "UPDATE url_discoveries SET status = 'rejected', reviewed_at = NOW() WHERE id = %s",
         (discovery_id,),
     )
-
-
-def bulk_approve_discoveries(min_confidence: float = 0.8) -> int:
-    """Approve all pending discoveries above the confidence threshold. Returns count."""
-    rows = fetch_all(
-        "SELECT id FROM url_discoveries WHERE status = 'pending' AND confidence >= %s",
-        (min_confidence,),
-    )
-    for row in rows:
-        approve_discovery(row["id"])
-    return len(rows)
 
 
 def get_discovery_stats() -> dict:

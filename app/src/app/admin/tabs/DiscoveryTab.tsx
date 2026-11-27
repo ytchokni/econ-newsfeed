@@ -6,7 +6,6 @@ import {
   useDiscoveries,
   approveDiscovery,
   rejectDiscovery,
-  bulkApproveDiscoveries,
 } from "@/lib/api";
 
 interface Props {
@@ -28,14 +27,18 @@ function StatCard({ label, value }: { label: string; value: number }) {
 export default function DiscoveryTab({ data, onMutate }: Props) {
   const { data: discoveries, mutate } = useDiscoveries();
   const [acting, setActing] = useState<number | null>(null);
-  const [bulkActing, setBulkActing] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   async function handleApprove(id: number) {
     setActing(id);
+    setError(null);
     try {
       await approveDiscovery(id);
       mutate();
       onMutate();
+    } catch (e) {
+      // The miner's preflight refuses unsafe bundles; show why instead of failing silently.
+      setError(e instanceof Error ? e.message : "Approval was refused");
     } finally {
       setActing(null);
     }
@@ -52,23 +55,8 @@ export default function DiscoveryTab({ data, onMutate }: Props) {
     }
   }
 
-  async function handleBulkApprove() {
-    setBulkActing(true);
-    try {
-      await bulkApproveDiscoveries();
-      mutate();
-      onMutate();
-    } finally {
-      setBulkActing(false);
-    }
-  }
-
   const pending = discoveries?.pending || [];
   const recent = discoveries?.recent || [];
-  const highConfCount = pending.filter(
-    (d) => d.confidence !== null && d.confidence >= 0.8
-  ).length;
-
   return (
     <div className="space-y-6">
       {/* Stats */}
@@ -87,18 +75,11 @@ export default function DiscoveryTab({ data, onMutate }: Props) {
           <h2 className="text-sm font-medium text-zinc-400">
             Pending Review ({pending.length})
           </h2>
-          {highConfCount > 0 && (
-            <button
-              onClick={handleBulkApprove}
-              disabled={bulkActing}
-              className="px-3 py-1.5 text-xs font-medium rounded bg-emerald-900/50 text-emerald-400 border border-emerald-800 hover:bg-emerald-900/80 disabled:opacity-50"
-            >
-              {bulkActing
-                ? "Approving..."
-                : `Approve all high-confidence (${highConfCount})`}
-            </button>
-          )}
         </div>
+
+        {error && (
+          <p role="alert" className="mb-3 text-xs text-red-400">{error}</p>
+        )}
 
         {pending.length === 0 ? (
           <p className="text-sm text-zinc-500">No discoveries pending review.</p>

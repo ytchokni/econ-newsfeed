@@ -111,3 +111,38 @@ def test_load_decisions_validates(tmp_path):
         searlo_review.load_decisions(path)
     path.write_text(json.dumps([approve_decision()]))
     assert searlo_review.load_decisions(path)[0]["discovery_id"] == 11
+
+
+def _patch_fetch(monkeypatch, db):
+    from backend.database import connection
+
+    def fetch_one(sql, params=None):
+        d = next((x for x in db.discoveries if x["id"] == params[0]), None)
+        if d is None:
+            return None
+        return dict(d, subpages=json.dumps([{"page_type": "research", "url": "https://alice-economist.example/research"},
+                                            {"page_type": "cv", "url": "https://alice-economist.example/cv.pdf"}]),
+                    first_name="Alice", last_name="Economist")
+    monkeypatch.setattr(connection, "fetch_one", fetch_one)
+
+
+def test_admin_approve_one_uses_preflight_and_ignores_unknown_page_types(db, monkeypatch):
+    _patch_fetch(monkeypatch, db)
+    assert searlo_review.approve_one(11) == {"approved": True, "reason": None}
+    assert [u["page_type"] for u in db.urls] == ["HOME", "RESEARCH"]
+    assert db.discoveries[0]["status"] == "approved"
+
+
+def test_admin_approve_one_returns_hold_reason(db, monkeypatch):
+    _patch_fetch(monkeypatch, db)
+    db.urls.append(url_row("https://alice-economist.example/research", rid=8))
+    result = searlo_review.approve_one(11)
+    assert result["approved"] is False and result["reason"]
+    assert db.discoveries[0]["status"] == "pending" and len(db.urls) == 1
+
+
+def test_admin_approve_one_rejects_non_pending(db, monkeypatch):
+    _patch_fetch(monkeypatch, db)
+    db.discoveries[0]["status"] = "rejected"
+    assert searlo_review.approve_one(11)["approved"] is False
+    assert not db.urls

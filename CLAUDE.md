@@ -338,7 +338,12 @@ the miner's guards). `python -m backend.main apply-searlo-review --decisions F.j
 is a dry run; `--apply --manifest M.jsonl` runs one `approve_bundle` transaction per
 researcher (URL inserts + `url_discoveries.status` together; identity holds, URL
 ownership and prior rejections still hold a bundle back), and `--undo --manifest M.jsonl
-[--apply]` deletes the inserted URL rows and reopens the discoveries.
+[--apply]` deletes the inserted URL rows and reopens the discoveries (clean only until the
+next scrape/extraction picks the pages up: deleting a URL cascades to its stored HTML).
+A rejected discovery also blocks that URL for the miner (`MiningStore._rejected_urls`
+reads `url_discoveries.status='rejected'`), so reject wrong-person and not-a-homepage
+pages but leave dead pages pending. The admin approve button runs the same guarded
+path (a refused bundle answers 409 with the reason); bulk-approve answers 410.
 
 Alternatively, `SITE_MINING_ENABLED=true` schedules the same bounded job inside
 the API hourly and after a scrape. Use one scheduling mechanism at a time. The
