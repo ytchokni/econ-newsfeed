@@ -2,17 +2,24 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import PaperDetailContent from "./PaperDetailContent";
 import type { PublicationDetail } from "@/lib/types";
+import { BackendRateLimitedError, ssrApiHeaders } from "@/lib/ssr-api";
 
 const API_BASE = process.env.API_INTERNAL_URL || "http://localhost:8000";
 
 async function fetchPaper(id: number): Promise<PublicationDetail | null> {
+  const path = `/api/publications/${id}?include_history=true`;
+  // Outside the try: reading request headers must not be turned into a 404.
+  const headers = await ssrApiHeaders();
+  let res: Response;
   try {
-    const res = await fetch(
-      `${API_BASE}/api/publications/${id}?include_history=true`,
-      { next: { revalidate: 60 } }
-    );
-    if (!res.ok) return null;
-    return res.json();
+    res = await fetch(`${API_BASE}${path}`, { next: { revalidate: 60 }, headers });
+  } catch {
+    return null;
+  }
+  if (res.status === 429) throw new BackendRateLimitedError(path);
+  if (!res.ok) return null;
+  try {
+    return (await res.json()) as PublicationDetail;
   } catch {
     return null;
   }

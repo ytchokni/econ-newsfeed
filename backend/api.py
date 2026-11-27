@@ -21,7 +21,6 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
 from backend.database import (
     connection_scope,
@@ -65,6 +64,15 @@ from backend.database import (
     get_recent_discoveries as db_get_recent_discoveries,
 )
 from backend.auth import get_current_user, get_optional_user
+from backend import api_protection
+from backend.api_protection import (
+    cap_pages,
+    data_limit,
+    enforce_paging,
+    is_internal,
+    options_limit,
+    rate_limit_key,
+)
 from backend.database.snapshots import STATUS_ORDER
 from backend.database.researchers import search_researcher_options
 from backend.pipeline.publication import VALID_STATUSES
@@ -79,7 +87,9 @@ from backend.pipeline.scheduler import (
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
-limiter = Limiter(key_func=get_remote_address)
+# Keys on the resolved client (real visitor IP, signed-in user, or the
+# frontend itself); see backend/api_protection.py.
+limiter = Limiter(key_func=rate_limit_key)
 
 # ---------------------------------------------------------------------------
 # Server-side TTL cache for /api/filter-options
@@ -338,9 +348,20 @@ app.state.limiter = limiter
 
 
 async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    retry_after = api_protection.retry_after_seconds(request)
+    try:
+        info = api_protection.resolve_client(request)
+        tier, ip = info.tier, info.ip
+    except Exception:
+        tier, ip = "unknown", "unknown"
+    logging.getLogger("backend.api").warning(
+        "rate_limited ip=%s tier=%s path=%s limit=%s retry_after=%s",
+        ip, tier, request.url.path, exc.detail, retry_after,
+    )
     return JSONResponse(
         status_code=429,
         content={"error": {"code": "rate_limit_exceeded", "message": str(exc.detail)}},
+        headers={"Retry-After": str(retry_after)},
     )
 
 
@@ -353,6 +374,18 @@ app.add_middleware(
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type", "X-API-Key", "Authorization"],
 )
+
+
+# ---------------------------------------------------------------------------
+# Anti-scraping gate (User-Agent blocklist, direct-access policy)
+# ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def gate_data_endpoints(request: Request, call_next):
+    blocked = api_protection.gate_request(request)
+    if blocked is not None:
+        return blocked
+    return await call_next(request)
 
 
 # ---------------------------------------------------------------------------
@@ -512,6 +545,12 @@ def _format_feed_event(row: dict, authors: list[dict], coauthors: list[dict] | N
 def health_check():
     """Health check endpoint for load balancers and monitoring."""
     return {"status": "ok"}
+
+
+@app.get("/robots.txt", include_in_schema=False)
+def robots_txt():
+    """The API host is not for crawlers; the site itself has its own robots.txt."""
+    return Response("User-agent: *\nDisallow: /\n", media_type="text/plain")
 
 
 @app.get("/api/ready")
@@ -791,7 +830,7 @@ async def unsubscribe(token: str = Query(...)):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/publications", response_model=PaginatedPublications)
-@limiter.limit("60/minute")
+@limiter.shared_limit(data_limit, scope="data", exempt_when=is_internal)
 async def list_publications(
     request: Request,
     response: Response,
@@ -814,6 +853,8 @@ async def list_publications(
     non-published papers with known status generate events, so no
     include_seed parameter is needed.
     """
+    paging = enforce_paging(request, page, per_page)
+    per_page = paging.per_page
     researcher_ids = None
     if researcher_id:
         try:
@@ -840,7 +881,7 @@ async def list_publications(
         event_type=event_type, since=since, until=until,
     )
 
-    offset = (page - 1) * per_page
+    offset = paging.offset
     with connection_scope():
         rows, total, researcher_count = search_feed_events(
             year=year, researcher_ids=researcher_ids,
@@ -851,7 +892,7 @@ async def list_publications(
             jel_code=jel_code, offset=offset, limit=per_page,
             followed_ids=followed_ids,
         )
-        pages = math.ceil(total / per_page) if total else 0
+        pages = cap_pages(math.ceil(total / per_page) if total else 0, paging)
 
         pub_ids = [row['paper_id'] for row in rows]
         authors_by_pub = get_authors_for_papers(pub_ids)
@@ -871,6 +912,8 @@ async def list_publications(
     researcher_count = len(researcher_ids_set)
 
     response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=600"
+    # Signed-in callers are not capped, so shared caches must not mix them up.
+    response.headers["Vary"] = "Authorization"
     return {
         "items": items,
         "total": total,
@@ -940,7 +983,7 @@ def _build_publication_detail(publication_id: int, include_history: bool) -> dic
 
 
 @app.get("/api/publications/{publication_id}")
-@limiter.limit("60/minute")
+@limiter.shared_limit(data_limit, scope="data", exempt_when=is_internal)
 def get_publication(
     request: Request,
     publication_id: int,
@@ -1013,7 +1056,7 @@ def _build_atom_feed(items: list[dict], self_url: str) -> str:
 
 
 @app.get("/api/feed.xml")
-@limiter.limit("30/minute")
+@limiter.limit("30/minute;300/hour")
 def atom_feed(
     request: Request,
     response: Response,
@@ -1076,7 +1119,7 @@ def _get_website_url(urls: list[dict]) -> str | None:
 # ---------------------------------------------------------------------------
 
 @app.get("/api/fields")
-@limiter.limit("60/minute")
+@limiter.limit("60/minute", exempt_when=is_internal)
 def list_fields(request: Request, response: Response):
     def _fetch():
         rows = fetch_all("SELECT id, name, slug FROM research_fields ORDER BY name")
@@ -1087,7 +1130,7 @@ def list_fields(request: Request, response: Response):
 
 
 @app.get("/api/jel-codes")
-@limiter.limit("60/minute")
+@limiter.limit("60/minute", exempt_when=is_internal)
 def list_jel_codes(request: Request, response: Response):
     def _fetch():
         return {"items": get_all_jel_codes()}
@@ -1097,7 +1140,7 @@ def list_jel_codes(request: Request, response: Response):
 
 
 @app.get("/api/filter-options")
-@limiter.limit("30/minute")
+@limiter.limit("30/minute", exempt_when=is_internal)
 def get_filter_options(request: Request, response: Response):
     def _fetch():
         institutions = fetch_all(
@@ -1125,7 +1168,7 @@ def get_filter_options(request: Request, response: Response):
 
 
 @app.get("/api/researcher-options")
-@limiter.limit("60/minute")
+@limiter.limit(options_limit, exempt_when=is_internal)
 def get_researcher_options(
     request: Request,
     response: Response,
@@ -1152,7 +1195,7 @@ def get_researcher_options(
 
 
 @app.get("/api/researchers", response_model=PaginatedResearchers)
-@limiter.limit("60/minute")
+@limiter.shared_limit(data_limit, scope="data", exempt_when=is_internal)
 def list_researchers(
     request: Request,
     response: Response,
@@ -1168,14 +1211,16 @@ def list_researchers(
     if preset and preset not in valid_presets:
         raise HTTPException(status_code=400, detail=f"Invalid preset value. Must be one of: {', '.join(sorted(valid_presets))}")
 
-    offset = (page - 1) * per_page
+    paging = enforce_paging(request, page, per_page)
+    per_page = paging.per_page
+    offset = paging.offset
     with connection_scope():
         rows, total = search_researchers(
             search=search, institution=institution, field_slug=field,
             position=position, preset=preset,
             offset=offset, limit=per_page,
         )
-        pages = math.ceil(total / per_page) if total else 0
+        pages = cap_pages(math.ceil(total / per_page) if total else 0, paging)
 
         researcher_ids = [r['id'] for r in rows]
         urls_by_researcher = get_urls_for_researchers(researcher_ids)
@@ -1199,6 +1244,8 @@ def list_researchers(
         for r in rows
     ]
     response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=600"
+    # Signed-in callers are not capped, so shared caches must not mix them up.
+    response.headers["Vary"] = "Authorization"
     return {
         "items": items,
         "total": total,
@@ -1271,7 +1318,7 @@ def _build_researcher_detail(researcher_id: int, include_history: bool) -> dict 
 
 
 @app.get("/api/researchers/{researcher_id}")
-@limiter.limit("60/minute")
+@limiter.shared_limit(data_limit, scope="data", exempt_when=is_internal)
 def get_researcher(
     request: Request,
     researcher_id: int,
