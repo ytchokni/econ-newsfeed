@@ -13,6 +13,7 @@ import type {
   ResearcherFilters,
   UserFollowing,
 } from "./types";
+import { buildPublicationsUrl } from "./feed-params";
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -25,27 +26,6 @@ async function fetchJson<T>(url: string): Promise<T> {
   return res.json();
 }
 
-function buildPublicationsUrl(
-  page: number,
-  perPage: number,
-  filters?: FeedFilters
-): string {
-  const params = new URLSearchParams({
-    page: String(page),
-    per_page: String(perPage),
-  });
-  if (filters?.status) params.set("status", filters.status);
-  if (filters?.institution) params.set("institution", filters.institution);
-  if (filters?.preset) params.set("preset", filters.preset);
-  if (filters?.year) params.set("year", filters.year);
-  if (filters?.search) params.set("search", filters.search);
-  if (filters?.event_type) params.set("event_type", filters.event_type);
-  if (filters?.jel_code) params.set("jel_code", filters.jel_code);
-  if (filters?.since) params.set("since", filters.since);
-  if (filters?.until) params.set("until", filters.until);
-  if (filters?.researcher_id) params.set("researcher_id", filters.researcher_id);
-  return `/api/publications?${params.toString()}`;
-}
 
 export async function getPublications(
   page = 1,
@@ -116,7 +96,10 @@ export function useResearcherOptions(search = "", ids?: string) {
 }
 
 export function useCapabilities() {
-  return useSWR<{ weekly_digest_available: boolean }>("/api/capabilities", fetchJson);
+  return useSWR<{ weekly_digest_available: boolean; email_login_available?: boolean }>(
+    "/api/capabilities",
+    fetchJson,
+  );
 }
 
 export function useJelCodes() {
@@ -448,4 +431,47 @@ export async function updateNotificationPrefs(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(prefs),
   });
+}
+
+// --- Email-code login ---
+
+export class EmailLoginRequestError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public retryAfter: number | null,
+  ) {
+    super(message);
+  }
+}
+
+/** Ask the backend to email a one-time sign-in code to this address. */
+export async function requestEmailLoginCode(
+  email: string,
+): Promise<{ expires_in: number; resend_after: number }> {
+  let res: Response;
+  try {
+    res = await fetch("/api/email-login/request-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+  } catch {
+    throw new EmailLoginRequestError("Couldn't reach the server. Check your connection.", "network", null);
+  }
+  if (res.ok) return res.json();
+  let code = "request_failed";
+  let message = "Something went wrong. Try again in a moment.";
+  try {
+    const body = await res.json();
+    if (typeof body?.error?.code === "string") code = body.error.code;
+    if (typeof body?.error?.message === "string" && code !== "rate_limit_exceeded") {
+      message = body.error.message;
+    }
+  } catch {
+    // Non-JSON error body: keep the generic message.
+  }
+  if (code === "rate_limit_exceeded") message = "Too many requests. Wait a minute and try again.";
+  const retryAfter = Number(res.headers.get("Retry-After")) || null;
+  throw new EmailLoginRequestError(message, code, retryAfter);
 }

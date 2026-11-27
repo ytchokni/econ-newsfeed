@@ -471,7 +471,7 @@ _TABLE_DEFINITIONS = {
     "users": """
         CREATE TABLE IF NOT EXISTS users (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            google_id VARCHAR(255) NOT NULL,
+            google_id VARCHAR(255) NULL,
             email VARCHAR(255) NOT NULL,
             name VARCHAR(255),
             picture_url TEXT,
@@ -507,6 +507,19 @@ _TABLE_DEFINITIONS = {
             PRIMARY KEY (user_id, event_id),
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (event_id) REFERENCES feed_events(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "email_login_codes": """
+        CREATE TABLE IF NOT EXISTS email_login_codes (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            email VARCHAR(255) NOT NULL,
+            code_hash CHAR(64) NOT NULL,
+            created_at DATETIME(6) NOT NULL,
+            expires_at DATETIME(6) NOT NULL,
+            attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+            consumed_at DATETIME(6) NULL DEFAULT NULL,
+            INDEX idx_email_created (email, created_at),
+            INDEX idx_created (created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     "enrichment_daily_budget": """
@@ -620,6 +633,21 @@ def create_tables() -> None:
                         except Exception as e:
                             if getattr(e, 'errno', None) != 1060:
                                 logging.warning("Migration warning for %s.%s: %s", table, col, e)
+
+                    # Email-code accounts have no Google identity. A UNIQUE index
+                    # admits any number of NULLs, so Google users keep their key.
+                    try:
+                        cursor.execute(
+                            "SELECT IS_NULLABLE FROM information_schema.COLUMNS "
+                            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' "
+                            "AND COLUMN_NAME = 'google_id'"
+                        )
+                        row = cursor.fetchone()
+                        if row is not None and row[0] != 'YES':
+                            cursor.execute("ALTER TABLE users MODIFY COLUMN google_id VARCHAR(255) NULL")
+                            conn.commit()
+                    except Exception as e:
+                        logging.warning("Migration: users.google_id nullable: %s", e)
 
                     # Historical rows have no known ingestion time. Preserve NULL,
                     # while future inserts record ingestion independently of source date.

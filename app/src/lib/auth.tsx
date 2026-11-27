@@ -3,6 +3,7 @@
 import { createContext, useCallback, useContext, useState } from "react";
 import { SessionProvider, useSession, signIn } from "next-auth/react";
 import { useCapabilities } from "@/lib/api";
+import { EmailCodeLogin } from "@/components/EmailCodeLogin";
 import type { ReactNode } from "react";
 
 const LoginModalContext = createContext<{
@@ -76,6 +77,16 @@ function LoginModal({ onClose }: { onClose: () => void }) {
           </svg>
           Continue with Google
         </button>
+        {capabilities?.email_login_available && (
+          <>
+            <div className="my-5 flex items-center gap-3 text-xs uppercase tracking-wide text-[var(--text-muted)]">
+              <span className="h-px flex-1 bg-[var(--border)]" />
+              or
+              <span className="h-px flex-1 bg-[var(--border)]" />
+            </div>
+            <EmailCodeLogin onSignedIn={onClose} />
+          </>
+        )}
       </div>
     </div>
   );
