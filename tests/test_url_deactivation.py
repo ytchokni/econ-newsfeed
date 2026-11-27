@@ -72,10 +72,62 @@ class TestRecordUrlFetchSuccess:
         """Should reset consecutive_failures to 0."""
         record_url_fetch_success(42)
 
-        mock_exec.assert_called_once_with(
-            "UPDATE researcher_urls SET consecutive_failures = 0 WHERE id = %s AND consecutive_failures > 0",
-            (42,),
-        )
+        mock_exec.assert_called_once()
+        sql, params = mock_exec.call_args[0]
+        assert "consecutive_failures = 0" in sql
+        assert "consecutive_failures > 0" in sql
+        assert params == (42,)
+
+    @patch(f"{_MOD}.execute_query")
+    def test_reactivates_only_too_large_urls(self, mock_exec):
+        """A size-deactivated URL that fetched fine again is reactivated and its
+        deactivation fields cleared; other deactivation reasons are untouched."""
+        record_url_fetch_success(5)
+
+        sql = " ".join(mock_exec.call_args[0][0].split())
+        assert "is_active = FALSE AND deactivation_reason = 'response_too_large'" in sql
+        assert "deactivated_at = IF(is_active, deactivated_at, NULL)" in sql
+        assert "deactivation_reason = IF(is_active, deactivation_reason, NULL)" in sql
+        assert "is_active = TRUE" in sql
+
+    @patch(f"{_MOD}.execute_query")
+    def test_is_active_assigned_after_conditional_fields(self, mock_exec):
+        """MySQL evaluates SET left to right: is_active must be assigned after
+        the IF(is_active, ...) clauses or they would see the new TRUE value and
+        keep the stale deactivation fields."""
+        record_url_fetch_success(5)
+
+        sql = mock_exec.call_args[0][0]
+        set_clause = sql[sql.index("SET"):sql.index("WHERE")]
+        assert set_clause.index("is_active = TRUE") > set_clause.index("deactivated_at = IF")
+        assert set_clause.index("is_active = TRUE") > set_clause.index("deactivation_reason = IF")
+
+
+class TestScrapeUrlSelection:
+    """Researcher.get_all_researcher_urls rechecks URLs deactivated as too large."""
+
+    @patch("backend.researcher.fetch_all", return_value=[])
+    def test_includes_too_large_urls_after_recheck_period(self, mock_fetch_all):
+        from backend.database.researchers import TOO_LARGE_RECHECK_DAYS
+        from backend.researcher import Researcher
+
+        Researcher.get_all_researcher_urls()
+
+        sql, params = mock_fetch_all.call_args[0]
+        sql = " ".join(sql.split())
+        assert "is_active = TRUE" in sql
+        assert "deactivation_reason = 'response_too_large'" in sql
+        assert "deactivated_at < NOW() - INTERVAL %s DAY" in sql
+        assert params == (TOO_LARGE_RECHECK_DAYS,)
+
+    @patch("backend.researcher.fetch_all", return_value=[])
+    def test_does_not_recheck_consecutive_failure_urls(self, mock_fetch_all):
+        from backend.researcher import Researcher
+
+        Researcher.get_all_researcher_urls()
+
+        sql = mock_fetch_all.call_args[0][0]
+        assert "consecutive_failures" not in sql
 
 
 class TestGetDeactivatedUrls:

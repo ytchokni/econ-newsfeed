@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+import unicodedata
 
 def escape_like(value: str) -> str:
     """Escape LIKE-special characters so user input is matched literally."""
@@ -16,6 +17,66 @@ _FT_BOOLEAN_OPERATORS = str.maketrans("", "", '+-~<>()@*"')
 def escape_fulltext(value: str) -> str:
     """Strip BOOLEAN MODE operators so user input is matched literally."""
     return value.translate(_FT_BOOLEAN_OPERATORS)
+
+
+def name_search_words(search: str | None) -> list[str]:
+    """Split a person-name query into words ("Rieger, Thomas" -> Rieger, Thomas)."""
+    normalized = unicodedata.normalize("NFC", search or "").replace(",", " ")
+    return normalized.split()
+
+
+def name_words_clause(name_expr: str, words: list[str]) -> tuple[str, list[str]]:
+    """Require every query word somewhere in ``name_expr``, in any order.
+
+    ``name_expr`` is an internal SQL expression, never a request parameter.
+    """
+    clause = " AND ".join([f"{name_expr} LIKE %s ESCAPE '\\\\'"] * len(words))
+    return f"({clause})", [f"%{escape_like(w)}%" for w in words]
+
+
+def name_relevance_sql(
+    first_col: str,
+    last_col: str,
+    search: str | None,
+    *,
+    include_substring: bool = True,
+) -> tuple[str, list[str]]:
+    """Score how well a person's name matches a query (higher is better).
+
+    4: the whole name, in either order ("Thomas Rieger", "rieger thomas")
+    3: every query word is a whole word of the name ("Rieger")
+    2: every query word starts a word of the name ("Thom Rie")
+    1: every query word occurs inside the name ("rieger" in "Krieger");
+       0 instead when ``include_substring`` is false
+    0: otherwise
+
+    LIKE follows the column collation (utf8mb4_unicode_ci), so matching is
+    case- and accent-insensitive. Column names are internal identifiers.
+    Returns an empty fragment when the query has no words.
+    """
+    words = name_search_words(search)
+    if not words:
+        return "", []
+    full = f"CONCAT_WS(' ', {first_col}, {last_col})"
+    reverse = f"CONCAT_WS(' ', {last_col}, {first_col})"
+    esc = " ESCAPE '\\\\'"
+    phrase = escape_like(" ".join(words))
+    whole = " AND ".join([f"CONCAT(' ', {full}, ' ') LIKE %s{esc}"] * len(words))
+    prefix = " AND ".join([f"CONCAT(' ', {full}) LIKE %s{esc}"] * len(words))
+    sql = (
+        f"(CASE WHEN {full} LIKE %s{esc} OR {reverse} LIKE %s{esc} THEN 4"
+        f" WHEN {whole} THEN 3"
+        f" WHEN {prefix} THEN 2"
+    )
+    params = [phrase, phrase]
+    params.extend(f"% {escape_like(w)} %" for w in words)
+    params.extend(f"% {escape_like(w)}%" for w in words)
+    if include_substring:
+        substring = " AND ".join([f"{full} LIKE %s{esc}"] * len(words))
+        sql += f" WHEN {substring} THEN 1"
+        params.extend(f"%{escape_like(w)}%" for w in words)
+    sql += " ELSE 0 END)"
+    return sql, params
 
 
 TOP20_DEPT_KEYWORDS = [
