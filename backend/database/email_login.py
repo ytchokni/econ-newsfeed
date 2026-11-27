@@ -43,6 +43,25 @@ def count_codes_since(since: datetime) -> int:
     return int(row["n"]) if row else 0
 
 
+def failed_attempts_for_email_since(email: str, since: datetime) -> int:
+    """Wrong guesses against this address's codes issued since ``since``."""
+    row = fetch_one(
+        "SELECT COALESCE(SUM(attempts), 0) AS n FROM email_login_codes "
+        "WHERE email = %s AND created_at >= %s",
+        (email, since),
+    )
+    return int(row["n"]) if row else 0
+
+
+def failed_attempts_since(since: datetime) -> int:
+    """Wrong guesses against anyone's codes issued since ``since`` (circuit breaker)."""
+    row = fetch_one(
+        "SELECT COALESCE(SUM(attempts), 0) AS n FROM email_login_codes WHERE created_at >= %s",
+        (since,),
+    )
+    return int(row["n"]) if row else 0
+
+
 def store_code(email: str, code_hash: str, now: datetime, expires_at: datetime) -> int:
     """Invalidate earlier codes for this email and store a new one. Returns its id."""
     with get_connection() as conn:
@@ -65,6 +84,27 @@ def store_code(email: str, code_hash: str, now: datetime, expires_at: datetime) 
                 )
             conn.commit()
             return code_id
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def purge_old_codes(now: datetime) -> int:
+    """Delete codes issued more than CODE_RETENTION ago. Returns rows deleted.
+
+    Runs hourly from the scheduler, so a code row is gone at most
+    CODE_RETENTION + 1 hour after it was issued, even with no new requests.
+    """
+    with get_connection() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM email_login_codes WHERE created_at < %s",
+                    (now - CODE_RETENTION,),
+                )
+                deleted = cursor.rowcount
+            conn.commit()
+            return deleted
         except Exception:
             conn.rollback()
             raise
