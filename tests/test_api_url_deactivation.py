@@ -76,17 +76,3 @@ async def test_ownership_review_urls(api_key_header):
             unauth = await client.get("/api/admin/ownership-review-urls")
     assert resp.status_code == 200 and resp.json()[0]["ownership_flag"] == "owner_not_named"
     assert unauth.status_code == 401
-
-
-
-@pytest.mark.anyio
-async def test_confirm_url_owner(api_key_header):
-    with patch("backend.database.researchers.confirm_url_owner",
-               side_effect=[{"url": "https://u", "papers_credited": 3}, None]):
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
-            ok = await client.post("/api/admin/confirm-url-owner/8", headers=api_key_header)
-            missing = await client.post("/api/admin/confirm-url-owner/9", headers=api_key_header)
-            unauth = await client.post("/api/admin/confirm-url-owner/8")
-    assert ok.status_code == 200 and ok.json()["papers_credited"] == 3
-    assert missing.status_code == 404
-    assert unauth.status_code == 401

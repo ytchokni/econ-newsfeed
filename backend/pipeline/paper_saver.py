@@ -18,7 +18,7 @@ from backend.database.researchers import (
     prefetch_disambiguation, refresh_has_top5_for,
 )
 from backend.database.identity import (
-    OWNER_CONFIRMED, SHARED_PAGE, match_score, on_merge, page_ownership_problem, same_person, strip_repeated_surname,
+    SHARED_PAGE, match_score, on_merge, page_ownership_problem, same_person, strip_repeated_surname,
 )
 from backend.database.snapshots import _STATUS_RANK
 from backend.database.papers import title_hash_candidates
@@ -259,7 +259,7 @@ def _page_owners(cursor, url: str) -> tuple[list[dict], str | None]:
     if not owners:
         return [], None
     cursor.execute(
-        """SELECT hc.content, hc.raw_html, ru.page_type, ru.ownership_flag FROM html_content hc
+        """SELECT hc.content, hc.raw_html, ru.page_type FROM html_content hc
            JOIN researcher_urls ru ON ru.id = hc.url_id
            WHERE ru.url = %s AND (hc.content IS NOT NULL OR hc.raw_html IS NOT NULL)
            ORDER BY hc.timestamp DESC LIMIT 1""",
@@ -268,8 +268,7 @@ def _page_owners(cursor, url: str) -> tuple[list[dict], str | None]:
     page = cursor.fetchall() or []
     text, raw = (page[0][0], page[0][1]) if page else (None, None)
     page_type = page[0][2] if page and len(page[0]) > 2 else None
-    confirmed = bool(page and len(page[0]) > 3 and page[0][3] == OWNER_CONFIRMED)
-    return owners, page_ownership_problem(owners, text, raw, url, page_type, confirmed)
+    return owners, page_ownership_problem(owners, text, raw, url, page_type)
 
 
 def _owner_byline_index(owners: list[dict], authors: list[tuple[str, str]]) -> dict[int, int]:

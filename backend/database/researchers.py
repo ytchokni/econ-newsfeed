@@ -641,61 +641,18 @@ def flag_url_ownership(url: str, flag: str | None) -> None:
     Flagged pages stay active; their owner is not credited by position-0
     attachment, and they are listed for review in the admin Health tab.
     """
-    # An admin confirmation (owner_confirmed) is never overwritten or cleared here.
     if flag:
         execute_query(
             """UPDATE researcher_urls SET ownership_flag = %s, ownership_flagged_at = NOW()
-               WHERE url = %s AND (ownership_flag IS NULL
-                                   OR ownership_flag NOT IN (%s, 'owner_confirmed'))""",
+               WHERE url = %s AND (ownership_flag IS NULL OR ownership_flag != %s)""",
             (flag, url, flag),
         )
     else:
         execute_query(
             "UPDATE researcher_urls SET ownership_flag = NULL, ownership_flagged_at = NULL "
-            "WHERE url = %s AND ownership_flag IS NOT NULL AND ownership_flag != 'owner_confirmed'",
+            "WHERE url = %s AND ownership_flag IS NOT NULL",
             (url,),
         )
-
-
-def url_owner_confirmed(url: str) -> bool:
-    """True if an admin confirmed this page belongs to its owner."""
-    return bool(fetch_one(
-        "SELECT 1 AS ok FROM researcher_urls WHERE url = %s AND ownership_flag = 'owner_confirmed' LIMIT 1",
-        (url,),
-    ))
-
-
-def confirm_url_owner(url_id: int) -> dict | None:
-    """Admin: the page behind url_id is its owner's even though it never prints
-    their name. Stops flagging it, and credits the owner with the items from
-    it that have no author at all (attachments withheld while it was flagged).
-    Returns {"url", "papers_credited"} or None if the URL row does not exist."""
-    row = fetch_one("SELECT url, researcher_id FROM researcher_urls WHERE id = %s", (url_id,))
-    if not row:
-        return None
-    execute_query(
-        "UPDATE researcher_urls SET ownership_flag = 'owner_confirmed', ownership_flagged_at = NOW() "
-        "WHERE url = %s",
-        (row["url"],),
-    )
-    owners = [r["researcher_id"] for r in fetch_all(
-        "SELECT DISTINCT researcher_id FROM researcher_urls WHERE url = %s ORDER BY researcher_id",
-        (row["url"],))]
-    orphans = [r["paper_id"] for r in fetch_all(
-        """SELECT pu.paper_id FROM paper_urls pu
-           WHERE pu.url = %s
-             AND NOT EXISTS (SELECT 1 FROM authorship a WHERE a.publication_id = pu.paper_id)""",
-        (row["url"],))]
-    for pid in orphans:
-        for rid in owners:
-            execute_query(
-                "INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order) VALUES (%s, %s, 0)",
-                (rid, pid),
-            )
-    if orphans:
-        refresh_has_top5_for(owners)
-    logging.info("Confirmed owner page %s (url_id=%s); credited %d papers", row["url"], url_id, len(orphans))
-    return {"url": row["url"], "papers_credited": len(orphans)}
 
 
 def get_ownership_review_urls() -> list[dict]:
@@ -706,7 +663,7 @@ def get_ownership_review_urls() -> list[dict]:
                   r.id AS researcher_id
            FROM researcher_urls ru
            JOIN researchers r ON r.id = ru.researcher_id
-           WHERE ru.is_active = TRUE AND ru.ownership_flag = 'owner_not_named'
+           WHERE ru.is_active = TRUE AND ru.ownership_flag IS NOT NULL
            ORDER BY ru.ownership_flagged_at DESC
            LIMIT 500"""
     )
