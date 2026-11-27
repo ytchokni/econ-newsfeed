@@ -104,7 +104,8 @@ describe("site footer", () => {
   it("links the legal pages and the removal request", () => {
     process.env.CONTACT_EMAIL = "owner@example.test";
     render(<SiteFooter />);
-    const nav = screen.getByRole("navigation", { name: "Legal" });
+    const nav = screen.getByRole("navigation", { name: "Footer" });
+    expect(within(nav).getByRole("link", { name: "About" })).toHaveAttribute("href", "/about");
     expect(within(nav).getByRole("link", { name: /Contact & Impressum/ })).toHaveAttribute("href", "/contact");
     expect(within(nav).getByRole("link", { name: "Privacy" })).toHaveAttribute("href", "/privacy");
     expect(within(nav).getByRole("link", { name: /request removal/ }).getAttribute("href")).toMatch(/^mailto:/);
