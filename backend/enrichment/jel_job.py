@@ -11,9 +11,15 @@ codes from their bio, paper titles/abstracts and OpenAlex topics. Each run:
    - at most ``JEL_CLASSIFICATION_DAILY_LIMIT`` calls per UTC day (counted in
      ``llm_usage``, so CLI runs and scheduled runs share it),
    - ``JEL_CLASSIFICATION_DELAY_SECONDS`` between calls (one call in flight);
-4. stops the whole run on the first quota/account refusal, so the extraction
-   worker (same free-tier key) keeps priority: it gets the quota back at once,
-   and JEL waits for its next scheduled run.
+4. yields to extraction, which shares the LLM key and has priority:
+   - a run is skipped, and a running batch stops before its next call, when
+     extraction was refused by the provider (429 or account error) in the
+     last ``JEL_YIELD_AFTER_QUOTA_MINUTES``. Extraction records refusals in
+     ``llm_quota_signals``, so this also works across processes (the
+     ``classify-jel`` CLI runs in its own ``docker compose exec`` process);
+   - a run is skipped while the extraction backlog is above
+     ``JEL_MAX_EXTRACTION_BACKLOG`` pages;
+   - a run stops on its own first quota/account refusal.
 
 When the LLM finds nothing (or fails), codes derived from OpenAlex topics are
 used as a fallback. A MySQL advisory lock keeps CLI and scheduled runs apart.
@@ -24,11 +30,12 @@ import logging
 import os
 import threading
 from dataclasses import asdict, dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import mysql.connector
 
 from backend.config import db_config
+from backend.database.llm import count_extraction_backlog, get_last_llm_quota_limit
 from backend.database.jel import (
     count_jel_llm_calls_since,
     get_jel_classification_candidates,
@@ -69,6 +76,12 @@ BATCH_CALLS = _env_int("JEL_CLASSIFICATION_BATCH_CALLS", 40)
 DAILY_LIMIT = _env_int("JEL_CLASSIFICATION_DAILY_LIMIT", 600)
 DELAY_SECONDS = _env_float("JEL_CLASSIFICATION_DELAY_SECONDS", 20.0)
 RECLASSIFY_AFTER_DAYS = _env_int("JEL_RECLASSIFY_AFTER_DAYS", 30)
+# Yield to extraction: minutes after an extraction quota refusal, and the
+# backlog (pages) above which JEL does not run. 1,000 pages is ~7-10 hours of
+# extraction at 2,500-3,400 pages/day, and the monitor's "stalled" level.
+# 0 disables either check.
+YIELD_AFTER_QUOTA_MINUTES = _env_int("JEL_YIELD_AFTER_QUOTA_MINUTES", 15)
+MAX_EXTRACTION_BACKLOG = _env_int("JEL_MAX_EXTRACTION_BACKLOG", 1000)
 CANDIDATE_LIMIT = 500  # researchers examined per run (most need no LLM call)
 _MAX_CONSECUTIVE_FAILURES = 5
 
@@ -90,6 +103,7 @@ class JelRunStats:
     no_evidence: int = 0
     failed: int = 0
     calls_today_before: int = 0
+    extraction_backlog: int = -1
     stopped: str = "done"
 
 
@@ -127,6 +141,14 @@ def _release_lock(conn) -> None:
             pass
 
 
+def _extraction_refused_recently() -> bool:
+    """True when extraction hit a provider refusal within the yield window."""
+    if YIELD_AFTER_QUOTA_MINUTES <= 0:
+        return False
+    last = get_last_llm_quota_limit("extraction")
+    return last is not None and last > _utcnow() - timedelta(minutes=YIELD_AFTER_QUOTA_MINUTES)
+
+
 def _fetch_author_topics(author_ids: list[str]) -> dict[str, list[dict]]:
     if not author_ids:
         return {}
@@ -148,6 +170,7 @@ def run_jel_classification_batch(
     researcher_ids: list[int] | None = None,
     force: bool = False,
     use_lock: bool = True,
+    yield_to_extraction: bool = True,
 ) -> dict:
     """Run one bounded classification batch. Returns run statistics."""
     max_calls = BATCH_CALLS if max_calls is None else max_calls
@@ -167,7 +190,7 @@ def run_jel_classification_batch(
     _stop_event.clear()
     try:
         _run(stats, max_calls, daily_limit, delay_seconds, candidate_limit,
-             reclassify_after_days, researcher_ids, force)
+             reclassify_after_days, researcher_ids, force, yield_to_extraction)
     finally:
         if lock_conn is not None:
             _release_lock(lock_conn)
@@ -176,7 +199,16 @@ def run_jel_classification_batch(
 
 
 def _run(stats, max_calls, daily_limit, delay_seconds, candidate_limit,
-         reclassify_after_days, researcher_ids, force) -> None:
+         reclassify_after_days, researcher_ids, force, yield_to_extraction) -> None:
+    if yield_to_extraction:
+        if _extraction_refused_recently():
+            stats.stopped = "extraction_quota"
+            return
+        if MAX_EXTRACTION_BACKLOG > 0:
+            stats.extraction_backlog = count_extraction_backlog()
+            if stats.extraction_backlog > MAX_EXTRACTION_BACKLOG:
+                stats.stopped = "extraction_backlog"
+                return
     now = _utcnow()
     day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
     stats.calls_today_before = count_jel_llm_calls_since(day_start)
@@ -237,6 +269,11 @@ def _run(stats, max_calls, daily_limit, delay_seconds, candidate_limit,
     for idx, (row, profile, digest, topic_rows) in enumerate(queue):
         if _stop_event.is_set():
             stats.stopped = "stop_requested"
+            break
+        if yield_to_extraction and _extraction_refused_recently():
+            stats.stopped = "extraction_quota"
+            logger.info("JEL classification: extraction was refused by the provider "
+                        "recently; stopping this run")
             break
         rid = row["id"]
         extra = author_topics.get(row.get("openalex_author_id") or "", [])

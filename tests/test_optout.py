@@ -300,6 +300,17 @@ def test_user_agent_names_bot_and_links_contact_page():
     assert with_bot_token(SCRAPER_USER_AGENT) == SCRAPER_USER_AGENT
 
 
+def test_curl_fallback_sends_the_same_user_agent():
+    from unittest.mock import MagicMock
+    from backend.pipeline.html_fetcher import HTMLFetcher, SCRAPER_USER_AGENT
+    with patch("subprocess.run") as run:
+        run.return_value = MagicMock(returncode=0, stdout=b"<html></html>", stderr=b"")
+        HTMLFetcher._fetch_with_curl("https://example.com/page")
+    cmd = run.call_args[0][0]
+    assert cmd[cmd.index("--user-agent") + 1] == SCRAPER_USER_AGENT
+    assert cmd.index("--user-agent") < cmd.index("--")
+
+
 def test_contact_url_uses_public_frontend(monkeypatch):
     from backend.crawler_identity import contact_url
     monkeypatch.setenv("FRONTEND_URL", "https://www.econnewsfeed.org/")

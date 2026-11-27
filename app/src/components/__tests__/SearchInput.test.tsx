@@ -112,4 +112,31 @@ describe("SearchInput", () => {
 
     expect(onChange).not.toHaveBeenCalled();
   });
+
+  it("searches immediately on Enter", async () => {
+    const onChange = jest.fn();
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+    render(<SearchInput value="" onChange={onChange} placeholder="Search..." />);
+
+    await user.type(screen.getByRole("textbox"), "rieger{Enter}");
+
+    expect(onChange).toHaveBeenCalledTimes(1);
+    expect(onChange).toHaveBeenCalledWith("rieger");
+    act(() => { jest.advanceTimersByTime(300); });
+    expect(onChange).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps focus in the field after clearing", async () => {
+    const user = userEvent.setup({ advanceTimers: jest.advanceTimersByTime });
+    render(<SearchInput value="test" onChange={jest.fn()} placeholder="Search..." />);
+
+    await user.click(screen.getByRole("button", { name: /clear/i }));
+
+    expect(screen.getByRole("textbox")).toHaveFocus();
+  });
+
+  it("is labelled for screen readers", () => {
+    render(<SearchInput value="" onChange={jest.fn()} placeholder="Search by name or institution..." />);
+    expect(screen.getByRole("textbox", { name: "Search by name or institution" })).toBeInTheDocument();
+  });
 });

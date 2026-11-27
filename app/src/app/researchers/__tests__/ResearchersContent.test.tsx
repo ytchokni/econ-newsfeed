@@ -189,4 +189,58 @@ describe("ResearchersContent", () => {
     expect(new URL(filteredUrl!, "http://localhost").searchParams.get("page")).toBe("1");
     expect(new URL(filteredUrl!, "http://localhost").searchParams.get("search")).toBe("Jane");
   });
+
+  it("offers a 'Did you mean' link when only similar names matched", async () => {
+    window.history.pushState({}, "", "/researchers?search=Reiger");
+    const rieger = { ...researchers[0], id: 3, first_name: "Thomas", last_name: "Rieger", match: "similar" as const };
+    (global.fetch as jest.Mock).mockImplementation(async (url: string) => {
+      if (url.includes("/api/filter-options")) return { ok: true, json: async () => emptyFilterOptions };
+      const search = new URL(url, "http://localhost").searchParams.get("search");
+      return { ok: true, json: async () => search === "Reiger"
+        ? { items: [rieger], total: 1, page: 1, per_page: 100, pages: 1, suggestion: "Rieger" }
+        : { items: [{ ...rieger, match: "name" }], total: 1, page: 1, per_page: 100, pages: 1, suggestion: null } };
+    });
+
+    renderWithSWR(<ResearchersContent />);
+
+    const status = await screen.findByRole("status");
+    expect(status).toHaveTextContent("No exact matches for “Reiger”. Did you mean Rieger?");
+    fireEvent.click(screen.getByRole("button", { name: "Rieger" }));
+
+    await waitFor(() => expect(screen.queryByRole("status")).not.toBeInTheDocument());
+    expect(screen.getByDisplayValue("Rieger")).toBeInTheDocument();
+    const urls = (global.fetch as jest.Mock).mock.calls.map(([url]) => String(url));
+    expect(urls.some((url) => new URL(url, "http://localhost").searchParams.get("search") === "Rieger")).toBe(true);
+  });
+
+  it("explains how to widen a search that found nobody", async () => {
+    window.history.pushState({}, "", "/researchers?search=zzzz");
+    mockFetchResponses({ items: [], total: 0, pages: 0 });
+
+    renderWithSWR(<ResearchersContent />);
+
+    expect(await screen.findByText("No researchers match “zzzz”.")).toBeInTheDocument();
+    expect(screen.getByText(/search an institution/i)).toBeInTheDocument();
+    // Only the search is active, so there are no other filters to clear here.
+    expect(screen.queryByRole("button", { name: "Clear filters" })).not.toBeInTheDocument();
+  });
+
+  it("keeps the previous results on screen while the next search loads", async () => {
+    window.history.pushState({}, "", "/researchers?search=Max");
+    (global.fetch as jest.Mock).mockImplementation(async (url: string) => {
+      if (url.includes("/api/filter-options")) return { ok: true, json: async () => emptyFilterOptions };
+      if (url.includes("preset=top20")) return new Promise(() => {});
+      return { ok: true, json: async () => ({ items: researchers, total: 2, page: 1, per_page: 100, pages: 1 }) };
+    });
+
+    renderWithSWR(<ResearchersContent />);
+    expect(await screen.findByText("Steinhardt, Max Friedrich")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Top-20 Depts" }));
+
+    expect(await screen.findByText("Searching…")).toBeInTheDocument();
+    expect(screen.getByText("Steinhardt, Max Friedrich")).toBeInTheDocument();
+    expect(document.querySelector("[aria-busy='true']")).not.toBeNull();
+    expect(document.querySelectorAll(".animate-pulse")).toHaveLength(0);
+  });
 });

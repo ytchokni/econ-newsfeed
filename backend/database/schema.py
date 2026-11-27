@@ -71,7 +71,9 @@ REQUIRED_SCHEMA_QUERY = """SELECT (
     AND (SELECT COUNT(*) FROM information_schema.COLUMNS
          WHERE TABLE_SCHEMA = DATABASE() AND
            ((TABLE_NAME = 'feed_events' AND COLUMN_NAME = 'recorded_at') OR
-            (TABLE_NAME = 'html_content' AND COLUMN_NAME = 'has_stored_content'))) = 2
+            (TABLE_NAME = 'html_content' AND COLUMN_NAME = 'has_stored_content') OR
+            (TABLE_NAME = 'html_content' AND COLUMN_NAME = 'extraction_retry_at') OR
+            (TABLE_NAME = 'html_content' AND COLUMN_NAME = 'extracted_untruncated'))) = 4
     AND (SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS
          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'html_content'
            AND INDEX_NAME IN ('idx_extraction_state', 'idx_extracted_at')) = 2
@@ -140,6 +142,9 @@ def _ensure_content_metadata(cursor) -> None:
     for name, columns in (
         ('idx_extraction_state', 'has_stored_content, url_id, content_hash, extracted_hash'),
         ('idx_extracted_at', 'extracted_at'),
+        # Covers the cooled-down-page lookup in get_urls_needing_extraction,
+        # which must not read MEDIUMTEXT rows.
+        ('idx_extraction_retry', 'extraction_retry_at, url_id, extraction_failed_hash, content_hash'),
     ):
         cursor.execute(
             "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() "
@@ -214,6 +219,10 @@ _TABLE_DEFINITIONS = {
             researcher_id INT,
             extracted_at DATETIME,
             extracted_hash VARCHAR(64),
+            extraction_failures INT NOT NULL DEFAULT 0,
+            extraction_failed_hash VARCHAR(64) DEFAULT NULL,
+            extraction_retry_at DATETIME DEFAULT NULL,
+            extracted_untruncated BOOLEAN NOT NULL DEFAULT FALSE,
             UNIQUE KEY uq_url_id (url_id),
             INDEX idx_url_id_ts (url_id, timestamp),
             FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
@@ -295,6 +304,15 @@ _TABLE_DEFINITIONS = {
             attempts INT NOT NULL DEFAULT 0,
             INDEX idx_checked_at (checked_at),
             FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    # Latest provider quota/account refusal per caller (e.g. 'extraction'),
+    # so lower-priority LLM jobs (JEL classification) can yield to extraction.
+    "llm_quota_signals": """
+        CREATE TABLE IF NOT EXISTS llm_quota_signals (
+            source VARCHAR(32) NOT NULL PRIMARY KEY,
+            limited_at DATETIME NOT NULL,
+            retry_after_seconds INT DEFAULT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     "paper_topics": """
@@ -453,7 +471,7 @@ _TABLE_DEFINITIONS = {
     "users": """
         CREATE TABLE IF NOT EXISTS users (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            google_id VARCHAR(255) NOT NULL,
+            google_id VARCHAR(255) NULL,
             email VARCHAR(255) NOT NULL,
             name VARCHAR(255),
             picture_url TEXT,
@@ -489,6 +507,19 @@ _TABLE_DEFINITIONS = {
             PRIMARY KEY (user_id, event_id),
             FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
             FOREIGN KEY (event_id) REFERENCES feed_events(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "email_login_codes": """
+        CREATE TABLE IF NOT EXISTS email_login_codes (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            email VARCHAR(255) NOT NULL,
+            code_hash CHAR(64) NOT NULL,
+            created_at DATETIME(6) NOT NULL,
+            expires_at DATETIME(6) NOT NULL,
+            attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+            consumed_at DATETIME(6) NULL DEFAULT NULL,
+            INDEX idx_email_created (email, created_at),
+            INDEX idx_created (created_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     "enrichment_daily_budget": """
@@ -617,6 +648,13 @@ def create_tables() -> None:
                         ("feed_events", "event_source_url", "VARCHAR(2048) DEFAULT NULL"),
                         ("feed_events", "event_metadata_captured", "BOOLEAN NOT NULL DEFAULT FALSE"),
                         ("feed_events", "recorded_at", "DATETIME(6) NULL DEFAULT NULL"),
+                        # Extraction poison-pill state; survives worker restarts.
+                        ("html_content", "extraction_failures", "INT NOT NULL DEFAULT 0"),
+                        ("html_content", "extraction_failed_hash", "VARCHAR(64) DEFAULT NULL"),
+                        ("html_content", "extraction_retry_at", "DATETIME DEFAULT NULL"),
+                        # FALSE for extractions made before chunking (first
+                        # CONTENT_MAX_CHARS only); see extract_one_url.
+                        ("html_content", "extracted_untruncated", "BOOLEAN NOT NULL DEFAULT FALSE"),
                     ]
                     for table, col, definition in _migrations:
                         try:
@@ -625,6 +663,21 @@ def create_tables() -> None:
                         except Exception as e:
                             if getattr(e, 'errno', None) != 1060:
                                 logging.warning("Migration warning for %s.%s: %s", table, col, e)
+
+                    # Email-code accounts have no Google identity. A UNIQUE index
+                    # admits any number of NULLs, so Google users keep their key.
+                    try:
+                        cursor.execute(
+                            "SELECT IS_NULLABLE FROM information_schema.COLUMNS "
+                            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' "
+                            "AND COLUMN_NAME = 'google_id'"
+                        )
+                        row = cursor.fetchone()
+                        if row is not None and row[0] != 'YES':
+                            cursor.execute("ALTER TABLE users MODIFY COLUMN google_id VARCHAR(255) NULL")
+                            conn.commit()
+                    except Exception as e:
+                        logging.warning("Migration: users.google_id nullable: %s", e)
 
                     # Historical rows have no known ingestion time. Preserve NULL,
                     # while future inserts record ingestion independently of source date.
@@ -1021,8 +1074,8 @@ def create_tables() -> None:
 
                     # Backfill has_top5_pub from existing data
                     try:
-                        from backend.database.search_helpers import top5_venue_clause
-                        venue_clause, params = top5_venue_clause("p.venue")
+                        from backend.database.top_presets import top5_publication_clause
+                        venue_clause, params = top5_publication_clause("p.venue", "p.status")
                         cursor.execute(
                             f"""UPDATE researchers r
                                 JOIN (

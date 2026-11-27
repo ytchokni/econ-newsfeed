@@ -19,7 +19,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 
@@ -65,6 +65,7 @@ from backend.database import (
     get_recent_discoveries as db_get_recent_discoveries,
 )
 from backend.auth import get_current_user, get_optional_user
+import backend.email_login as email_login
 from backend import api_protection
 from backend.api_protection import (
     cap_pages,
@@ -75,7 +76,11 @@ from backend.api_protection import (
     rate_limit_key,
 )
 from backend.database.snapshots import STATUS_ORDER
-from backend.database.researchers import search_researcher_options
+from backend.database.researchers import (
+    researcher_search_suggestion,
+    search_researcher_options,
+    warm_researcher_index,
+)
 from backend.database.users import set_digest_enabled_by_token
 from backend.database.sitemap import (
     count_sitemap_papers,
@@ -254,6 +259,8 @@ class ResearcherResponse(BaseModel):
     publication_count: int
     fields: list[ResearchFieldResponse]
     jel_codes: list[JelCodeResponse]
+    # Set when searching: "name", "affiliation", or "similar" (spelling fallback).
+    match: str | None = None
 
 class PaginatedResearchers(BaseModel):
     items: list[ResearcherResponse]
@@ -261,6 +268,8 @@ class PaginatedResearchers(BaseModel):
     page: int
     per_page: int
     pages: int
+    # "Did you mean ...?" query when the search matched only by similar spelling.
+    suggestion: str | None = None
 
 class HealthResponse(BaseModel):
     status: str
@@ -338,6 +347,7 @@ async def lifespan(app: FastAPI):
             )
             await asyncio.sleep(wait)
     start_scheduler()
+    warm_researcher_index()
     yield
     shutdown_scheduler()
 
@@ -585,7 +595,10 @@ def readiness_check():
 def capabilities(response: Response):
     """Only advertise delivery features that this deployment can run."""
     response.headers["Cache-Control"] = "public, max-age=60"
-    return {"weekly_digest_available": scheduler.DIGEST_ENABLED}
+    return {
+        "weekly_digest_available": scheduler.DIGEST_ENABLED,
+        "email_login_available": email_login.is_available(),
+    }
 
 
 @app.get("/api/metrics")
@@ -887,6 +900,82 @@ async def resubscribe(request: Request, token: str = Query(..., max_length=200))
 
 
 # ---------------------------------------------------------------------------
+# Email-code login (NextAuth's credentials provider calls verify-code)
+# ---------------------------------------------------------------------------
+
+class EmailCodeRequestBody(BaseModel):
+    email: str = Field(max_length=320)
+
+
+class EmailCodeVerifyBody(BaseModel):
+    email: str = Field(max_length=320)
+    code: str = Field(max_length=32)
+
+
+def _email_login_error(exc: "email_login.EmailLoginError") -> JSONResponse:
+    headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+    return JSONResponse(
+        status_code=exc.status,
+        content={"error": {"code": exc.code, "message": exc.message}},
+        headers=headers,
+    )
+
+
+# Both limits use the limiter's resolved client (api_protection.py): the visitor
+# IP the frontend vouches for with INTERNAL_API_KEY, else the edge IP Caddy saw.
+# Forwarding headers a caller sets itself are ignored. Keyless requests in the
+# fail-open tier share a few Vercel egress IPs, so strict per-IP limits there
+# would throttle sign-in site-wide; they get coarse limits instead, and the
+# per-address and global caps in the database stay the binding controls.
+_SHARED_IP_TIERS = (api_protection.LEGACY, api_protection.INTERNAL)
+
+
+def _shared_ip(key: str) -> bool:
+    return key.split(":", 1)[0] in _SHARED_IP_TIERS
+
+
+def email_code_request_limit(key: str) -> str:
+    return "60/minute" if _shared_ip(key) else "5/minute;30/hour"
+
+
+def email_code_verify_limit(key: str) -> str:
+    return "240/minute" if _shared_ip(key) else "20/minute"
+
+
+@app.post("/api/email-login/request-code", status_code=202)
+@limiter.limit(email_code_request_limit)
+def request_email_login_code(request: Request, body: EmailCodeRequestBody):
+    """Email a one-time sign-in code. Same response whether or not an account exists."""
+    try:
+        with connection_scope():
+            result = email_login.request_code(body.email)
+    except email_login.EmailLoginError as exc:
+        return _email_login_error(exc)
+    return {
+        "message": "If that address can receive email, a sign-in code is on its way.",
+        "expires_in": result.expires_in,
+        "resend_after": result.resend_after,
+    }
+
+
+@app.post("/api/email-login/verify-code")
+@limiter.limit(email_code_verify_limit)
+def verify_email_login_code(request: Request, body: EmailCodeVerifyBody):
+    """Check a code; on success return the account it signs into."""
+    try:
+        with connection_scope():
+            user = email_login.verify_code(body.email, body.code)
+    except email_login.EmailLoginError as exc:
+        return _email_login_error(exc)
+    return {
+        "id": user["id"],
+        "email": user["email"],
+        "name": user.get("name"),
+        "picture_url": user.get("picture_url"),
+    }
+
+
+# ---------------------------------------------------------------------------
 # Publication endpoints
 # ---------------------------------------------------------------------------
 
@@ -944,7 +1033,7 @@ async def list_publications(
 
     offset = paging.offset
     with connection_scope():
-        rows, total, researcher_count = search_feed_events(
+        rows, total = search_feed_events(
             year=year, researcher_ids=researcher_ids,
             status_list=status_list or None,
             since=since_dt, until=until_dt,
@@ -1138,7 +1227,7 @@ def atom_feed(
     )
 
     with connection_scope():
-        rows, _, _ = search_feed_events(
+        rows, _ = search_feed_events(
             year=year, status_list=status_list or None,
             since=since_dt, until=until_dt,
             institution_list=institution_list or None,
@@ -1288,6 +1377,12 @@ def list_researchers(
         pub_counts = get_pub_counts_for_researchers(researcher_ids)
         fields_by_researcher = get_fields_for_researchers(researcher_ids)
         jel_map = get_jel_codes_for_researchers(researcher_ids)
+        # Similar-spelling matches rank after every strict one, so they reach
+        # the first page whenever they matter.
+        suggestion = (
+            researcher_search_suggestion(search)
+            if search and any(r.get('match') == "similar" for r in rows) else None
+        )
     items = [
         {
             "id": r['id'],
@@ -1301,6 +1396,7 @@ def list_researchers(
             "publication_count": pub_counts.get(r['id'], 0),
             "fields": fields_by_researcher.get(r['id'], []),
             "jel_codes": jel_map.get(r['id'], []),
+            "match": r.get('match'),
         }
         for r in rows
     ]
@@ -1313,6 +1409,7 @@ def list_researchers(
         "page": page,
         "per_page": per_page,
         "pages": pages,
+        "suggestion": suggestion,
     }
 
 
@@ -1464,6 +1561,11 @@ def sitemap_page(request: Request, response: Response, kind: str, page: int = Qu
     """One chunk of ids with last-modified times, ordered by id."""
     if kind not in _SITEMAP_KINDS:
         raise HTTPException(status_code=404, detail="Unknown sitemap")
+    # Pages past the end 404 from the (cached) counts without running the
+    # chunk query, so arbitrary page numbers can't be used to load the DB.
+    index = _sitemap_cache.get_or_set("index", _build_sitemap_index)
+    if page >= index[kind]["pages"]:
+        raise HTTPException(status_code=404, detail="Sitemap page out of range")
     result = _sitemap_cache.get_or_set(f"{kind}:{page}", lambda: _build_sitemap_page(kind, page))
     response.headers["Cache-Control"] = "public, max-age=3600"
     return result

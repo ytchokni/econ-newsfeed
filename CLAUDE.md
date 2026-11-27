@@ -28,7 +28,7 @@ poetry run python -m backend.main extract --limit 5  # Extract a limited batch
 # Enrichment & classification
 poetry run python -m backend.main enrich            # Enrich papers via OpenAlex
 poetry run python -m backend.main classify-jel      # One budgeted JEL batch (bio + papers + OpenAlex topics)
-poetry run python -m backend.main classify-jel --until-done  # Repeat batches until nothing is due or the daily limit is hit
+poetry run python -m backend.main classify-jel --until-done  # Repeat batches until nothing is due, a limit is hit, or extraction needs the key
 poetry run python -m backend.main discover-domains  # Scan HTML for untrusted domains with paper-like links
 
 # Researcher removal requests (GDPR objection)
@@ -51,8 +51,10 @@ cd app && npx jest --testPathPattern=ComponentName  # Single frontend test
 # One-time scripts
 poetry run python scripts/backfill_paper_links.py   # Populate paper_links from stored HTML + enrich
 poetry run python scripts/cleanup_data_quality.py   # Fix rows flagged by data-quality checks (dry-run; add --apply to write)
+poetry run python scripts/recompute_has_top5.py     # Recompute researchers.has_top5_pub (dry-run; add --apply to write)
 poetry run python scripts/reverify_openalex_ids.py --max-requests 300 --apply  # #266: re-check pre-15-Oct OpenAlex IDs (~900 budgeted requests: pause ENRICHMENT_WORKER_ENABLED or raise OPENALEX_DAILY_BUDGET for ~3 days; DB-cached, resumable; --status, --undo, --purge-cache)
 poetry run python scripts/merge_renamed_papers.py   # #265: merge renames sharing an SSRN/NBER/arXiv/DOI link (dry-run; --apply)
+poetry run python scripts/cleanup_spurious_feed_events.py  # Delete stale new_paper / bogus "published" events (dry-run; --apply backs up first; --undo RUN)
 
 # Docker
 docker compose up         # Full stack (db + api + frontend)
@@ -70,9 +72,11 @@ docker compose up         # Full stack (db + api + frontend)
 
 Extraction is owned by the extraction worker (below) — the scrape job only refreshes stored HTML and the `content_hash ≠ extracted_hash` queue.
 
+**Large pages:** downloads are streamed and capped at `FETCH_MAX_BYTES` (10 MB). Pages over 1 MB are compacted (`compact_html`: inline CSS, SVG, comments, data: URIs and >1 KB attributes, then scripts) and stored if they fit 1 MB; smaller pages are stored byte-for-byte. Only pages still too large are deactivated as `response_too_large`. The full page text is stored and hashed. Extraction splits text over `CONTENT_MAX_CHARS` into chunks between HTML blocks (`backend/pipeline/chunking.py`), carries the publication-section heading into each chunk's prompt, and merges results by title hash; the diff path sends only changed hunks. An unchanged long page re-queued by a hash change is extracted as seed (`_backfill_long_page`), so tails cut off by the old 20k truncation are saved without feed events.
+
 **Enrichment worker:** When `ENRICHMENT_WORKER_ENABLED=true`, a background thread in the API process continuously enriches unenriched papers via OpenAlex. Polls every 5 minutes, processes batches of 50, respects the daily budget. Backs off to 10-minute sleep after 5 consecutive failures. In local dev (worker disabled), run `python -m backend.main enrich` manually after scraping.
 
-**Extraction worker:** When `EXTRACTION_WORKER_ENABLED=true`, a background thread in the API process continuously extracts publications from changed pages (`content_hash ≠ extracted_hash`) using synchronous free-tier Gemma calls. Calls are latency-bound (45–190s each, ~35 output tokens/s); `EXTRACTION_DELAY_SECONDS` (default 2) paces the fast tail under the 30 RPM free-tier cap. Polls every 5 minutes when idle, backs off 10 minutes after 10 consecutive failures (quota exhaustion), and skips a URL for the process lifetime after 3 failed attempts (poison-pill guard). Account errors from the provider (HTTP 401/402/403, e.g. depleted AI Studio billing) pause the whole worker for 10 minutes per attempt instead of counting against individual pages. In local dev (worker disabled), run `python -m backend.main extract` manually after fetching.
+**Extraction worker:** When `EXTRACTION_WORKER_ENABLED=true`, a background thread in the API process continuously extracts publications from changed pages (`content_hash ≠ extracted_hash`) using synchronous free-tier Gemma calls. Calls are latency-bound (45–190s each, ~35 output tokens/s); `EXTRACTION_DELAY_SECONDS` (default 2) paces the fast tail under the 30 RPM free-tier cap. Polls every 5 minutes when idle, backs off 10 minutes after 10 consecutive failures (quota exhaustion), and after 3 failed attempts on the same page version skips it for an hour, doubling per further failure up to a week (poison-pill guard; the count, hash and retry time live in `html_content.extraction_*`, so restarts do not reset it). An LLM answer cut off at `max_tokens` (32000 for full and diff calls) is not retried as is: the text is split in two (twice at most), and a cut-off diff falls back to chunked full extraction. Account errors from the provider (HTTP 401/402/403, e.g. depleted AI Studio billing) pause the whole worker for 10 minutes per attempt instead of counting against individual pages. In local dev (worker disabled), run `python -m backend.main extract` manually after fetching.
 
 **Extraction circuit breaker (CLI):** The `extract` CLI stops after 10 consecutive failed extractions (e.g. LLM quota exhausted). Fetched HTML is preserved — extraction resumes on the next run for URLs where `content_hash ≠ extracted_hash`. The continuous worker uses backoff + per-URL retry limits instead of stopping.
 
@@ -86,15 +90,23 @@ due retry are sent to the LLM; others are skipped without a call. It has its own
 budget so extraction keeps priority on the shared free-tier key:
 `JEL_CLASSIFICATION_BATCH_CALLS` (40) per run, `JEL_CLASSIFICATION_DAILY_LIMIT`
 (600) per UTC day counted from `llm_usage`, `JEL_CLASSIFICATION_DELAY_SECONDS`
-(20) between calls, and a run stops at the first quota refusal. When the LLM
-finds nothing, codes mapped from OpenAlex topics are used. The `classify-jel`
-CLI runs the same batches under the same advisory lock and daily budget.
+(20) between calls, and a run stops at the first quota refusal. It also yields
+to extraction: extraction records every provider refusal in `llm_quota_signals`,
+and JEL skips a run (or stops before its next call) within
+`JEL_YIELD_AFTER_QUOTA_MINUTES` (15) of one. It also skips runs while more than
+`JEL_MAX_EXTRACTION_BACKLOG` (1000) pages wait for extraction. The DB signal
+works across processes, so the CLI yields too. When the LLM finds nothing, codes
+mapped from OpenAlex topics are used. The `classify-jel` CLI runs the same
+batches under the same advisory lock, daily budget and yield checks
+(`--no-yield` skips the checks). Catch-up after a large backlog, run overnight
+once the extraction backlog has cleared:
+`nohup docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T api python -m backend.main classify-jel --until-done --daily-limit 2000 --delay 30 > /root/jel-backfill.log 2>&1 &`
 
 **Paper merge:** `merge_duplicate_papers()` dedupes papers post-run.
 
 **Zombie scrape_log cleanup:** On scheduler start and hourly thereafter, `scrape_log` entries stuck in `'running'` are marked `'failed'` based on the scrape advisory lock: if no connection holds the lock, all running rows older than 5 minutes are zombies; if the lock is held, all but the newest running row are. Deploys that restart the container mid-scrape are swept on the next boot.
 
-Feed event integrity is protected by `_title_in_previous_snapshot()` and the `_url_has_baseline()` check in `backend.pipeline.extraction.extract_one_url()`.
+Feed event integrity is protected by `_title_in_previous_snapshot()` and the `_url_has_baseline()` check in `backend.pipeline.extraction.extract_one_url()`. The plausibility rules in `backend/publication_rules.py` also apply: `new_paper` only for papers new to the database (not seeds, not known for over a week, not dated more than 2 years before the event), and `accepted`/`published` only with a journal venue (a `published` item at most a year old). `scripts/cleanup_spurious_feed_events.py` applies the same rules to stored events.
 
 Deployment waits for `/api/ready`, which checks the database, versioned snapshot
 guard, and required schema. `/api/health` is process liveness only. Losing the
@@ -120,6 +132,13 @@ alerts the owner straight away. Every other call uses the workflow token so the
 owner mention comes from a bot (a self-mention sends no email). The script is standard
 library only because it runs on the server's system Python. Run it by hand with
 `python3 scripts/monitor.py --external`, or `--host` on the server.
+
+"Has Top-5" means a published or accepted paper in exactly AER, Econometrica,
+JPE, QJE or REStud (sister journals, look-alikes and R&Rs do not count); the
+"Top-20" preset matches department names as whole words. Both are regexes in
+`backend/database/top_presets.py` that MySQL and Python apply identically.
+Both feed and directory presets read `researchers.has_top5_pub`, refreshed for a
+page's authors on save and in full after each scrape job's paper merge.
 
 `.github/workflows/data-quality.yml` runs at 07:47 UTC: `tests_data_quality`
 plus a few pipeline signals (`scripts/data_quality_check.py`) against prod
@@ -148,7 +167,14 @@ retry. The sitemap fetches send `INTERNAL_API_KEY` without a visitor, so they
 are exempt from rate limits and paging caps (see API scrape protection below).
 
 Researcher filter choices are fetched on demand from `/api/researcher-options`
-(at most 50 results), rather than included in `/api/filter-options`. Weekly
+(at most 50 results), rather than included in `/api/filter-options`. Both that
+chooser and the researchers-tab search (`/api/researchers?search=`) rank names
+with the in-process index in `backend/database/researcher_index.py`: it ignores
+case, accents and punctuation, puts surnames before first names, matches
+affiliation words (plus `INSTITUTION_ALIASES` such as DIW), and falls back to
+similar spellings with a `suggestion`. It is rebuilt in the background every 10
+minutes, so new researchers appear in search within that time. The feed's free-text
+search still uses the SQL helpers in `search_helpers.py`. Weekly
 digest controls follow `/api/capabilities`; an unavailable delivery provider
 cannot be enabled through settings. Digest events use ingestion timestamps and
 a per-user delivery ledger so delayed extraction is not skipped.
@@ -216,10 +242,11 @@ Researcher URLs (DB) → HTMLFetcher (fetch + hash-based change detection)
 | File | Role |
 |------|------|
 | `backend/api.py` | FastAPI REST API — 20+ endpoints, CORS, rate limiting (`slowapi`), standardized error envelope |
-| `backend/database/` | Package with facade class (`Database`) — submodules: `connection.py` (pool), `schema.py` (DDL/migrations), `researchers.py`, `papers.py`, `snapshots.py`, `llm.py`, `admin.py` |
+| `backend/database/` | Package with facade class (`Database`) — submodules: `connection.py` (pool), `schema.py` (DDL/migrations), `researchers.py`, `researcher_index.py` (in-memory name search index), `papers.py`, `snapshots.py`, `llm.py`, `admin.py` |
 | `backend/main.py` | CLI entry points for scraping pipeline stages |
 | `backend/pipeline/html_fetcher.py` | Web scraper — per-domain rate limiting, robots.txt compliance, content hashing for change detection |
 | `backend/pipeline/publication.py` | LLM extraction (Google AI Studio/Gemini) — Pydantic structured outputs, title dedup via SHA-256 hash |
+| `backend/pipeline/chunking.py` | Splits long page text into extraction chunks between HTML blocks, with section-heading context |
 | `backend/pipeline/extraction.py` | Per-URL extraction logic shared by worker and CLI — reads stored HTML, runs LLM, persists papers/links/snapshots, marks extracted |
 | `backend/pipeline/paper_saver.py` | Persists extracted papers and authorship links to the database |
 | `backend/pipeline/feed_events.py` | Emits feed events (new_paper, status_change, etc.) after extraction |
@@ -333,13 +360,31 @@ Required env vars: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `GOOGLE_API_K
 
 `ADMIN_PASSWORD` enables the `/admin` dashboard (must also be set in `app/.env.local` for local dev and as a Vercel env var for production). Auth uses HMAC-signed cookies with 7-day expiry.
 
+**User login** has two NextAuth providers: Google, and passwordless email codes
+(`backend/email_login.py`, `/api/email-login/request-code` and `verify-code`;
+not under `/api/auth/`, which NextAuth owns). Codes are 6 digits, HMAC-hashed in
+`email_login_codes`, valid 10 minutes, single use, 5 wrong tries, 60 s resend
+cooldown, 5 per address per hour plus a deployment-wide hourly cap
+(`EMAIL_LOGIN_HOURLY_LIMIT`). Per-IP limits use `api_protection`'s client key (strict per
+visitor; coarse in the keyless fail-open tier, where visitors share Vercel IPs);
+the credentials provider forwards the visitor with `internalApiHeaders`. Email
+login is offered only with a Resend key and an explicit `LOGIN_FROM_EMAIL` or
+`DIGEST_FROM_EMAIL` (the compose placeholder sender does not count). Email sessions carry `sub = "user:<id>"`; Google
+sessions keep the Google subject. Both reach the same `users` row for the same
+address (a first Google login adopts an email account only when Google reports
+`email_verified`). Codes go out through the digest's Resend sender
+(`LOGIN_FROM_EMAIL`, default `DIGEST_FROM_EMAIL`); `/api/capabilities` reports
+`email_login_available` and the modal hides the option without a provider. For
+local dev without Resend, `EMAIL_LOGIN_DEV_LOG_CODES=true` logs codes to the API
+console (ignored unless `FRONTEND_URL` is localhost).
+
 `backend/config.py` validates required vars at import time — tests set defaults in `tests/conftest.py` (must be set before any app imports).
 
 ## Testing Patterns
 
 - Python tests use `httpx.AsyncClient` with FastAPI's `TestClient` — no real database needed for API contract tests
 - `conftest.py` sets env vars *before* importing app modules to avoid `backend/config.py`'s `sys.exit()`
-- Frontend tests mock `next/font/google` via `__mocks__/next-font-google.ts`
+- Fonts are self-hosted with `next/font/local` (`app/src/app/fonts.ts`, woff2 files in `app/src/app/fonts/`), so builds never fetch Google Fonts; tests mock it via `__mocks__/next-font-local.ts`
 
 ## Gotchas
 

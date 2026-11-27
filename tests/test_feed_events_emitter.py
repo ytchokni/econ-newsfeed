@@ -44,9 +44,10 @@ class TestEmitNewPaperEvents:
         )
         assert result == 0
 
+    @patch("backend.pipeline.feed_events._load_paper_facts", return_value={"is_seed": False, "discovered_at": None, "year": None, "already_announced": False})
     @patch("backend.pipeline.feed_events._get_previous_snapshot_html", return_value=None)
     @patch("backend.pipeline.feed_events.get_connection")
-    def test_creates_event_for_new_working_paper_with_baseline(self, mock_get_conn, _):
+    def test_creates_event_for_new_working_paper_with_baseline(self, mock_get_conn, _, __):
         from backend.pipeline.feed_events import FeedEventEmitter
         mock_conn = MagicMock()
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
@@ -100,16 +101,20 @@ class TestEmitNewPaperEvents:
         )
         assert result == 0
 
+    @patch("backend.pipeline.feed_events._load_paper_facts")
     @patch("backend.pipeline.feed_events._get_previous_snapshot_html", return_value=None)
     @patch("backend.pipeline.feed_events.get_connection")
-    def test_duplicate_paper_new_to_url_no_prior_event(self, mock_get_conn, _):
-        """Duplicate paper appearing on a new URL for the first time gets an event if no prior event exists."""
+    def test_duplicate_paper_new_to_url_no_prior_event(self, mock_get_conn, _, mock_facts):
+        """A paper discovered days ago (not a seed) appearing on another URL gets an event if none exists."""
+        from datetime import datetime, timedelta
+        mock_facts.return_value = {"is_seed": False, "discovered_at": datetime.now() - timedelta(days=2),
+                                   "year": None, "already_announced": False}
         from backend.pipeline.feed_events import FeedEventEmitter
         mock_conn = MagicMock()
         mock_conn.__enter__ = MagicMock(return_value=mock_conn)
         mock_conn.__exit__ = MagicMock(return_value=False)
         cursor = MagicMock()
-        cursor.fetchone.side_effect = [(3,), (0,)]
+        cursor.fetchone.return_value = (3,)
         mock_conn.cursor.return_value = cursor
         mock_get_conn.return_value = mock_conn
 

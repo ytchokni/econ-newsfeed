@@ -281,7 +281,7 @@ export default function FilterDrawer({
             className="text-sm font-semibold text-white bg-[var(--accent)] px-5 py-2 rounded-sm cursor-pointer border-none hover:brightness-110 transition-all"
           >
             {totalResults !== null
-              ? `Show ${totalResults.toLocaleString()} result${totalResults === 1 ? "" : "s"}`
+              ? `Show ${totalResults.toLocaleString("en-US")} result${totalResults === 1 ? "" : "s"}`
               : "Show results"}
           </button>
         </div>

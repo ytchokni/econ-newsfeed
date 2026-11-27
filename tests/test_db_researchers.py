@@ -12,7 +12,7 @@ os.environ.setdefault("DB_NAME", "test_econ_newsfeed")
 os.environ.setdefault("GOOGLE_API_KEY", "test-google-key")
 os.environ.setdefault("SCRAPE_API_KEY", "test-key")
 
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 import pytest
 
 
@@ -299,12 +299,11 @@ class TestSearchResearchers:
         sql, _ = mock_fetch.call_args[0]
         assert "authorship" in sql
 
-    def test_base_condition_char_length_always_present(self):
+    def test_base_condition_initials_guard_always_present(self):
         (_, _), mock_fetch = self._call()
         sql, _ = mock_fetch.call_args[0]
-        assert "CHAR_LENGTH" in sql
-        assert "first_name" in sql
-        assert "last_name" in sql
+        assert "REGEXP_LIKE(TRIM(r.first_name)" in sql
+        assert "REGEXP_LIKE(TRIM(r.last_name)" in sql
 
     def test_base_condition_regexp_filter_always_present(self):
         (_, _), mock_fetch = self._call()
@@ -326,9 +325,11 @@ class TestSearchResearchers:
     def test_preset_top20_adds_dept_keywords(self):
         (_, _), mock_fetch = self._call(preset="top20")
         sql, params = mock_fetch.call_args[0]
-        # All keywords are in affiliation LIKE conditions
-        assert "r.affiliation LIKE %s" in sql
-        assert any("MIT" in str(p) for p in params)
+        # Whole-word department matching, not substring LIKEs
+        assert "r.affiliation LIKE %s" not in sql
+        assert "REGEXP_LIKE" in sql
+        from backend.database.top_presets import TOP20_DEPARTMENT_PATTERN
+        assert TOP20_DEPARTMENT_PATTERN in params and "(mit|" in TOP20_DEPARTMENT_PATTERN
 
     def test_field_slug_single_uses_equals(self):
         (_, _), mock_fetch = self._call(field_slug="labor")
@@ -350,29 +351,72 @@ class TestSearchResearchers:
         assert "researcher_fields" in sql
         assert "research_fields" in sql
 
-    def test_search_requires_every_word_and_ranks_by_name(self):
-        """Fulltext BOOLEAN MODE matched ANY word ("Thomas" alone), so every
-        Thomas was listed alphabetically ahead of Thomas Rieger."""
-        (_, _), mock_fetch = self._call(search="Thomas Rieger")
+    def _call_search(self, matches, page_rows, **kwargs):
+        """search_researchers with a stubbed name index and mocked SQL."""
+        from backend.database.researcher_index import SearchResult
+        index = MagicMock()
+        index.search.return_value = SearchResult(tuple(matches))
+        with patch("backend.database.researchers._name_index", return_value=index), \
+             patch("backend.database.researchers.fetch_one") as mock_count, \
+             patch("backend.database.researchers.fetch_all", side_effect=page_rows) as mock_fetch:
+            from backend.database.researchers import search_researchers
+            result = search_researchers(**kwargs)
+        mock_count.assert_not_called()  # the index supplies the total
+        return result, mock_fetch, index
+
+    def test_search_pages_index_ranking_and_keeps_guards(self):
+        """The index orders the ids; SQL only loads the requested page."""
+        from backend.database.researcher_index import Match
+        matches = [Match(3, 100), Match(9, 75), Match(4, 30), Match(5, 20, similar=True)]
+        db_rows = [{"id": i, "first_name": "F", "last_name": f"L{i}", "position": None,
+                    "affiliation": None, "description": None} for i in (4, 9)]
+        (rows, total), mock_fetch, index = self._call_search(
+            matches, [db_rows], search="Thomas Rieger", offset=1, limit=2,
+        )
+        index.search.assert_called_once_with("Thomas Rieger", listed_only=True)
+        assert total == 4
+        assert [(r["id"], r["match"]) for r in rows] == [(9, "name"), (4, "affiliation")]
         sql, params = mock_fetch.call_args[0]
-        assert "MATCH" not in sql
-        assert "%Thomas%" in params and "%Rieger%" in params
-        assert "THEN 4" in sql
-        assert sql.index("THEN 4") > sql.index("ORDER BY")
+        assert "EXISTS (SELECT 1 FROM authorship" in sql
+        assert "LIMIT" not in sql and " LIKE " not in sql  # no name LIKE scan
+        assert list(params[-2:]) == [9, 4]
         assert sql.count("%s") == len(params)
 
-    def test_search_like_for_short_terms(self):
-        (_, _), mock_fetch = self._call(search="ab")  # 2 chars < default FT_MIN_TOKEN_SIZE=3
-        sql, params = mock_fetch.call_args[0]
-        assert "LIKE" in sql
-        assert "MATCH" not in sql
+    def test_search_skips_rows_that_no_longer_pass_the_guards(self):
+        from backend.database.researcher_index import Match
+        (rows, total), _, _ = self._call_search(
+            [Match(1, 95), Match(2, 95)],
+            [[{"id": 2, "first_name": "A", "last_name": "B", "position": None,
+               "affiliation": None, "description": None}]],
+            search="B",
+        )
+        assert [r["id"] for r in rows] == [2]
+        assert total == 2
 
-    def test_search_fulltext_also_adds_concat_like(self):
-        """FULLTEXT search should also add a CONCAT LIKE for full-name matching."""
-        (_, _), mock_fetch = self._call(search="John Smith")
-        sql, params = mock_fetch.call_args[0]
-        assert "CONCAT" in sql
-        assert "LIKE" in sql
+    def test_search_with_filters_checks_ranked_ids_in_sql(self):
+        """Institution etc. are applied by SQL to the index's candidates, in order."""
+        from backend.database.researcher_index import Match
+        matches = [Match(i, 95) for i in (5, 6, 7)]
+        page = [{"id": i, "first_name": "F", "last_name": "L", "position": None,
+                 "affiliation": "MIT", "description": None} for i in (5, 7)]
+        (rows, total), mock_fetch, _ = self._call_search(
+            matches, [[{"id": 7}, {"id": 5}], page], search="L", institution="MIT",
+        )
+        assert total == 2
+        assert [r["id"] for r in rows] == [5, 7]
+        filter_sql, filter_params = mock_fetch.call_args_list[0][0]
+        assert "r.affiliation LIKE %s" in filter_sql
+        assert list(filter_params[-3:]) == [5, 6, 7]
+
+    def test_search_without_matches_runs_no_sql(self):
+        (rows, total), mock_fetch, _ = self._call_search([], [], search="zzzz")
+        assert rows == [] and total == 0
+        mock_fetch.assert_not_called()
+
+    def test_punctuation_only_search_lists_alphabetically(self):
+        (rows, total), mock_fetch = self._call(search=" %_ ")
+        sql, _ = mock_fetch.call_args[0]
+        assert "ORDER BY r.last_name, r.first_name" in sql
 
     def test_pagination_params_are_last_in_tuple(self):
         """LIMIT and OFFSET must be the final params."""
@@ -427,7 +471,8 @@ class TestGetUrlsNeedingExtraction:
     def test_queries_active_urls_with_hash_mismatch(self):
         from backend.database.researchers import get_urls_needing_extraction
         rows = [{"id": 1, "researcher_id": 10, "url": "https://a.com", "page_type": "PUBLICATIONS"}]
-        with patch("backend.database.researchers.fetch_all", return_value=rows) as mock_fetch:
+        # First call: cooled-down pages (none); second: the queue itself.
+        with patch("backend.database.researchers.fetch_all", side_effect=[[], rows]) as mock_fetch:
             result = get_urls_needing_extraction()
         assert result == rows
         query = mock_fetch.call_args[0][0]

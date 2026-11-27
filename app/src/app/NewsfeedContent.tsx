@@ -1,11 +1,19 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { useSearchParams, useRouter, usePathname } from "next/navigation";
 import { usePublications, useJelCodes, useFilterOptions, useResearcherOptions } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { formatDate } from "@/lib/publication-utils";
+import { formatDate, formatDayUTC } from "@/lib/publication-utils";
 import type { FeedFilters, Publication } from "@/lib/types";
+import {
+  FEED_PAGE_SIZE,
+  FILTER_PARAM_KEYS,
+  filtersFromParams,
+  mergeTabFilters,
+  parseTab,
+  type TabValue,
+} from "@/lib/feed-params";
 import PublicationCard from "@/components/PublicationCard";
 import PublicationCardSkeleton from "@/components/PublicationCardSkeleton";
 import ErrorMessage from "@/components/ErrorMessage";
@@ -17,11 +25,22 @@ import type { FilterChip } from "@/components/ActiveFilterChips";
 
 /* ---------- helpers ---------- */
 
-function groupByDate(publications: Publication[]) {
+const noopSubscribe = () => () => {};
+
+/**
+ * False while hydrating server HTML, true afterwards. Date headings depend on
+ * the visitor's clock and time zone, so the server and the first client
+ * render use fixed UTC labels; relative local labels follow right after.
+ */
+function useHydrated(): boolean {
+  return useSyncExternalStore(noopSubscribe, () => true, () => false);
+}
+
+function groupByDate(publications: Publication[], localLabels: boolean) {
   const groups: Map<string, Publication[]> = new Map();
   for (const pub of publications) {
     const dateStr = pub.event_date ?? pub.discovered_at;
-    const key = formatDate(dateStr);
+    const key = localLabels ? formatDate(dateStr) : formatDayUTC(dateStr);
     const group = groups.get(key);
     if (group) {
       group.push(pub);
@@ -32,20 +51,7 @@ function groupByDate(publications: Publication[]) {
   return groups;
 }
 
-const FILTER_PARAM_KEYS = ["institution", "preset", "search", "jel_code", "since", "until", "researcher_id"] as const satisfies readonly (keyof Omit<FeedFilters, "event_type" | "status" | "year">)[];
 
-function filtersFromParams(params: URLSearchParams): FeedFilters {
-  const filters: FeedFilters = {};
-  for (const key of FILTER_PARAM_KEYS) {
-    const val = params.get(key);
-    if (val) (filters as Record<string, string>)[key] = val;
-  }
-  // Explicit tabs or filters describe a shared view, including cleared filters.
-  if (!params.has("tab") && Object.keys(filters).length === 0) {
-    filters.preset = "top5_and_field";
-  }
-  return filters;
-}
 
 function filtersToParams(
   filters: FeedFilters,
@@ -81,12 +87,6 @@ function formatChipDate(iso: string): string {
 
 const MIN_DATE = "2026-06-15";
 
-const TAB_FILTERS: Record<TabValue, { event_type?: string; status?: string }> = {
-  all: {},
-  working_papers: { event_type: "new_paper", status: "working_paper" },
-  publications: { event_type: "status_change", status: "revise_and_resubmit,accepted,published" },
-  work_in_progress: { event_type: "new_paper", status: "work_in_progress" },
-};
 
 const PRESET_LABELS: Record<string, string> = {
   top20: "Top-20 Departments",
@@ -122,9 +122,7 @@ function datePresetToSince(key: DatePresetKey): string {
 
 /* ---------- types ---------- */
 
-type TabValue = "all" | "working_papers" | "publications" | "work_in_progress";
 
-const VALID_TABS: TabValue[] = ["all", "working_papers", "publications", "work_in_progress"];
 
 const TAB_DEFS: { key: TabValue; label: string }[] = [
   { key: "work_in_progress", label: "Work in Progress" },
@@ -133,10 +131,6 @@ const TAB_DEFS: { key: TabValue; label: string }[] = [
   { key: "all", label: "All" },
 ];
 
-function parseTab(value: string | null): TabValue {
-  if (value && VALID_TABS.includes(value as TabValue)) return value as TabValue;
-  return "publications";
-}
 
 /* ---------- drawer presets per tab ---------- */
 
@@ -187,18 +181,15 @@ export default function NewsfeedContent() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters, activeTab, page, pathname]);
 
-  const mergedFilters = useMemo<FeedFilters>(() => {
-    const tabF = TAB_FILTERS[activeTab];
-    return {
-      ...filters,
-      ...(tabF.event_type ? { event_type: tabF.event_type as FeedFilters["event_type"] } : {}),
-      ...(tabF.status ? { status: tabF.status } : {}),
-    };
-  }, [filters, activeTab]);
+  const hydrated = useHydrated();
+  const mergedFilters = useMemo<FeedFilters>(
+    () => mergeTabFilters(filters, activeTab),
+    [filters, activeTab],
+  );
 
   const { data, error, isLoading, isValidating } = usePublications(
     page,
-    20,
+    FEED_PAGE_SIZE,
     mergedFilters,
     accessToken,
   );
@@ -507,7 +498,7 @@ export default function NewsfeedContent() {
           <p className="m-0 text-[13px] text-[var(--muted)]">
             {data.total === 0
               ? "No updates"
-              : `Showing ${data.items.length.toLocaleString()} of ${data.total.toLocaleString()} updates`}
+              : `Showing ${data.items.length.toLocaleString("en-US")} of ${data.total.toLocaleString("en-US")} updates`}
           </p>
         )}
       </div>
@@ -537,7 +528,7 @@ export default function NewsfeedContent() {
 
         {data && data.items.length > 0 && (
           <div className={isValidating && !isLoading ? "opacity-60 transition-opacity duration-200" : "transition-opacity duration-200"}>
-            {Array.from(groupByDate(data.items).entries()).map(([date, pubs]) => (
+            {Array.from(groupByDate(data.items, hydrated).entries()).map(([date, pubs]) => (
               <section key={date} className="mt-[34px]">
                 <div className="flex items-center gap-[14px] mb-1.5">
                   {date === "Today" && (

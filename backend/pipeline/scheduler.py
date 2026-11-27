@@ -17,6 +17,7 @@ from backend.database import (
     update_draft_url_status,
 )
 from backend.config import db_config
+from backend.database.researchers import record_extraction_failure
 from backend.researcher import Researcher
 from backend.pipeline.html_fetcher import HTMLFetcher
 logger = logging.getLogger(__name__)
@@ -471,6 +472,15 @@ def run_scrape_job() -> None:
         logger.error("Paper merge failed: %s: %s", type(e).__name__, e)
     merge_s = time.time() - t0
     logger.info(f"Paper merge: {merge_s:.1f}s")
+    try:
+        # Merges, venue/status repairs and coauthor links all move the flag
+        # behind the "Has Top-5" presets; a full recompute takes well under 1 s.
+        from backend.database.researchers import refresh_all_has_top5
+        changed = refresh_all_has_top5()
+        if changed:
+            logger.info("has_top5_pub refreshed for %d researchers", changed)
+    except Exception as e:
+        logger.error("has_top5_pub refresh failed: %s: %s", type(e).__name__, e)
     if os.environ.get("SITE_MINING_ENABLED", "false").lower() == "true" and _scheduler:
         _scheduler.add_job(run_site_mining_job, 'date', id='site_mining_after_scrape',
                            replace_existing=True, max_instances=1)
@@ -580,6 +590,22 @@ def stop_enrichment_worker() -> None:
     logger.info("Enrichment worker thread stopped")
 
 
+def _persist_extraction_failure(row: dict) -> None:
+    """Record a page failure in the database so the poison-pill guard
+    survives restarts (deploys restart the worker often). The in-memory
+    counters in _extraction_worker_loop still pace retries within a process."""
+    try:
+        state = record_extraction_failure(row['id'], row.get('content_hash'))
+    except Exception as e:
+        logger.error("Could not persist extraction failure for url_id=%s: %s: %s",
+                     row['id'], type(e).__name__, e)
+        return
+    if state and state.get('extraction_retry_at'):
+        logger.warning("Extraction worker: url_id=%s (%s) failed %d times on this version; "
+                       "skipped until %s", row['id'], row.get('url'),
+                       state['extraction_failures'], state['extraction_retry_at'])
+
+
 def _extraction_worker_loop() -> None:
     """Continuously extract publications from changed pages until stopped.
 
@@ -666,6 +692,12 @@ def _extraction_worker_loop() -> None:
                 continue
             else:
                 rate_limit_streak = 0
+                # Only failures caused by the page persist across restarts:
+                # an outage (5xx/connection) or an unexpected error (outcome
+                # None, e.g. a database blip) must not park every page it
+                # touches for hours. They still count in memory below.
+                if outcome is not None and not outcome.provider_error:
+                    _persist_extraction_failure(row)
                 url_failures[url_id] = url_failures.get(url_id, 0) + 1
                 if url_failures[url_id] >= _EXTRACTION_MAX_URL_FAILURES:
                     retry_at[url_id] = time.monotonic() + _EXTRACTION_URL_COOLDOWN_SECONDS
