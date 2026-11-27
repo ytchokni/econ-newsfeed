@@ -57,7 +57,7 @@ from backend.database.identity import (  # noqa: E402
     match_score, matches_display_name, merge_researcher_into, page_ownership_problem,
     same_person, split_name,
 )
-from backend.database.researchers import refresh_has_top5  # noqa: E402
+from backend.database.researchers import refresh_has_top5_for  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
 log = logging.getLogger("repair_identity")
@@ -633,7 +633,7 @@ def route_page_papers_to_owner() -> dict:
                 merge_researcher_into(cur, owner_id, sid)
         if APPLY and _write(f"route to owner {owner_id}", writes):
             applied += 1
-            refresh_has_top5(owner_id)
+            refresh_has_top5_for([owner_id])
     twins_applied = _apply_merges("route_page_papers_to_owner_twins", twin_plan)
     twins_applied = twins_applied if APPLY else 0
     return {"pairs_checked": len(pairs), "authorships_moved": n_moves, "owners": len(moves),
@@ -773,7 +773,7 @@ def deactivate_unowned_pages() -> dict:
                 cur.execute(f"DELETE FROM papers WHERE id IN ({','.join(['%s'] * len(ids))})", tuple(ids))
             _write("delete unowned items", writes)
         for rid in {rid for rid, _ in detached}:
-            refresh_has_top5(rid)
+            refresh_has_top5_for([rid])
     return {"urls_flagged": len(urls), "shared_page": reasons[SHARED_PAGE],
             "owner_not_named": reasons[OWNER_NOT_NAMED],
             "owner_attachments_removed": len(detached),

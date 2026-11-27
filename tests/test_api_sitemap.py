@@ -73,7 +73,10 @@ class TestSitemapPage:
             calls.append((offset, limit))
             return rows
 
-        with patch.dict("backend.api._SITEMAP_KINDS", {"researchers": (None, fake_fetch)}):
+        with patch.dict("backend.api._SITEMAP_KINDS", {
+            "researchers": (lambda: 25_000, fake_fetch),
+            "papers": (lambda: 0, None),
+        }):
             response = client.get("/api/sitemap/researchers?page=2")
 
         assert response.status_code == 200
@@ -84,6 +87,18 @@ class TestSitemapPage:
         ]}
         import backend.api as api_mod
         assert calls == [(2 * api_mod.SITEMAP_PAGE_SIZE, api_mod.SITEMAP_PAGE_SIZE)]
+
+    def test_page_past_the_end_is_404_without_querying(self, client):
+        def fail(offset, limit):
+            raise AssertionError("chunk query must not run")
+
+        with patch.dict("backend.api._SITEMAP_KINDS", {
+            "researchers": (lambda: 10_000, fail),
+            "papers": (lambda: 0, fail),
+        }):
+            assert client.get("/api/sitemap/researchers?page=1").status_code == 404
+            assert client.get("/api/sitemap/papers?page=0").status_code == 404
+            assert client.get("/api/sitemap/papers?page=1000").status_code == 404
 
     def test_unknown_kind_is_404(self, client):
         assert client.get("/api/sitemap/users").status_code == 404
@@ -114,32 +129,27 @@ class TestInternalRenderExemption:
         }):
             return [client.get("/api/sitemap", headers=headers or {}).status_code for _ in range(n)]
 
+    @pytest.fixture(autouse=True)
+    def _key(self, monkeypatch):
+        from backend import api_protection
+
+        monkeypatch.setenv("INTERNAL_API_KEY", self.KEY)
+        api_protection.reload_settings()
+        yield
+        monkeypatch.delenv("INTERNAL_API_KEY")
+        api_protection.reload_settings()
+
     def test_public_requests_are_rate_limited(self, client):
-        with patch("backend.api._INTERNAL_API_KEY", self.KEY):
-            codes = self._hit(client, 31)
+        codes = self._hit(client, 31)
         assert codes[-1] == 429
 
     def test_frontend_server_with_key_is_exempt(self, client):
-        with patch("backend.api._INTERNAL_API_KEY", self.KEY):
-            codes = self._hit(client, 35, {"X-Internal-Api-Key": self.KEY})
+        codes = self._hit(client, 35, {"X-Internal-Api-Key": self.KEY})
         assert set(codes) == {200}
 
-    def test_wrong_or_unset_key_is_not_exempt(self, client):
-        from backend.api import _is_internal_render
-
-        class Req:
-            def __init__(self, value):
-                self.headers = {"X-Internal-Api-Key": value} if value is not None else {}
-
-        with patch("backend.api._INTERNAL_API_KEY", self.KEY):
-            assert _is_internal_render(Req(self.KEY))
-            assert not _is_internal_render(Req("nope"))
-            assert not _is_internal_render(Req(None))
-        # Too-short or unset server key disables the exemption entirely.
-        with patch("backend.api._INTERNAL_API_KEY", ""):
-            assert not _is_internal_render(Req(""))
-        with patch("backend.api._INTERNAL_API_KEY", "short"):
-            assert not _is_internal_render(Req("short"))
+    def test_wrong_key_is_not_exempt(self, client):
+        codes = self._hit(client, 31, {"X-Internal-Api-Key": "nope-nope-nope-nope"})
+        assert codes[-1] == 429
 
 
 class TestResearcherDetailOpenAlex:

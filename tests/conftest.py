@@ -52,6 +52,8 @@ def _clear_api_caches():
     backend.api._jel_codes_cache.clear()
     backend.api._researcher_detail_cache.clear()
     backend.api._publication_detail_cache.clear()
+    # Rate-limit counters are per process; tests must not inherit each other's hits.
+    backend.api.limiter.reset()
     yield
     backend.api._filter_options_cache.clear()
     backend.api._fields_cache.clear()

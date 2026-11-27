@@ -8,8 +8,11 @@
 !scripts/audit_zero_pub_researchers.py
 !scripts/backfill_page_owner_authorship.py
 !scripts/cleanup_data_quality.py
+!scripts/recompute_has_top5.py
 !scripts/repair_researcher_identity.py
 !scripts/merge_fuzzy_duplicates.py
+!scripts/merge_renamed_papers.py
+!scripts/reverify_openalex_ids.py
 !scripts/fix_researcher_names.py
 !pyproject.toml
 !poetry.lock

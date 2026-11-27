@@ -16,7 +16,7 @@ from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
-from backend.database import execute_query, fetch_all, fetch_one, log_llm_usage
+from backend.database import execute_query, fetch_all, fetch_one
 from backend.database.researchers import record_url_fetch_failure, record_url_fetch_success
 from bs4 import BeautifulSoup
 import urllib3.util.connection as _urllib3_cn
@@ -650,43 +650,16 @@ class HTMLFetcher:
 
     @staticmethod
     def extract_description(text_content: str, url: str, scrape_log_id=None) -> str | None:
-        """Extract a researcher description (up to 200 words) from plain text.
+        """Extract a clean researcher bio (up to 200 words) from page text.
 
-        Single LLM call on text content, output capped with max_tokens and
-        truncated to 200 words application-side. Returns the description
-        string, or None if nothing could be extracted.
+        Returns None when nothing usable came back; see
+        `backend.pipeline.description` for the validation (issue #258).
         """
-        from backend.llm.client import get_client, get_model
+        from backend.pipeline.description import extract_description
 
-        model = get_model()
-        prompt = (
-            f"From the following text from a researcher's homepage at {url}, "
-            "extract a professional description (up to 200 words) describing who this person is, "
-            "their research interests, and their current position/affiliation. "
-            "Return only the description text, nothing else. "
-            "If no clear description can be extracted, reply with exactly: null\n\n"
-            f"Content:\n{text_content[:CONTENT_MAX_CHARS]}"
+        return extract_description(
+            text_content[:CONTENT_MAX_CHARS], url, scrape_log_id=scrape_log_id,
         )
-        try:
-            response = get_client().chat.completions.create(
-                messages=[{"role": "user", "content": prompt}],
-                model=model,
-                max_tokens=1024,
-            )
-            log_llm_usage(
-                "description_extraction", model, response.usage,
-                context_url=url, scrape_log_id=scrape_log_id,
-            )
-            desc = (response.choices[0].message.content or "").strip()
-            if desc.lower() in ("null", "none", ""):
-                return None
-            words = desc.split()
-            if len(words) > 200:
-                desc = ' '.join(words[:200])
-            return desc
-        except Exception as e:
-            logging.error(f"Error extracting description from {url}: {e}")
-            return None
 
     @staticmethod
     def validate_draft_url(url: str, max_redirects: int = 5) -> str:

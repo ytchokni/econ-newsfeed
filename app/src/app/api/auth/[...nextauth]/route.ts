@@ -1,3 +1,5 @@
+import CredentialsProvider from "next-auth/providers/credentials";
+import { authorizeEmailCode, EMAIL_CODE_PROVIDER_ID } from "@/lib/email-code-auth";
 import NextAuth from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import { encodeBackendJwt } from "@/lib/backend-jwt";
@@ -16,6 +18,16 @@ const handler = NextAuth({
       clientId: process.env.GOOGLE_CLIENT_ID || "",
       clientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
     }),
+    // Passwordless login: the backend emails a one-time code and checks it.
+    CredentialsProvider({
+      id: EMAIL_CODE_PROVIDER_ID,
+      name: "Email code",
+      credentials: {
+        email: { label: "Email", type: "email" },
+        code: { label: "Code", type: "text" },
+      },
+      authorize: (credentials, req) => authorizeEmailCode(credentials, req?.headers),
+    }),
   ],
   session: {
     strategy: "jwt",
@@ -28,6 +40,11 @@ const handler = NextAuth({
         token.email = profile.email;
         token.name = profile.name;
         token.picture = (profile as { picture?: string }).picture;
+      }
+      if (account?.provider === "google" && profile) {
+        // Lets the backend attach an existing email-code account to this login.
+        token.email_verified =
+          (profile as { email_verified?: boolean }).email_verified === true;
       }
       return token;
     },

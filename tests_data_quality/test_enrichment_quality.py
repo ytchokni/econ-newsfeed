@@ -126,3 +126,80 @@ class TestCoauthorQuality:
                 LIMIT 50"""
         )
         assert not rows, "mojibake coauthor names:\n" + fmt_violations(rows)
+
+
+class TestIdentifierReverification:
+    """#266: enrichment before #244 (15 Oct 2026) accepted a page's DOI without
+    a title check, so some papers carry a neighbouring entry's DOI/OpenAlex ID.
+    scripts/reverify_openalex_ids.py re-checks them and records each decision in
+    openalex_identifier_checks."""
+
+    def test_pre_title_check_identifiers_reverified(self, db):
+        from backend.enrichment.identifier_verification import count_papers_to_verify
+
+        remaining = count_papers_to_verify()
+        assert remaining == 0, (
+            f"{remaining} OpenAlex identifiers set before the #244 title check are not re-verified; "
+            "run scripts/reverify_openalex_ids.py --apply"
+        )
+
+    def test_cleared_identifier_not_reattached(self, db):
+        """A cleared work must not come back on the same paper (enrichment now title-checks)."""
+        rows = db.fetch_all(
+            """SELECT c.paper_id, c.openalex_id, c.reason FROM openalex_identifier_checks c
+               JOIN papers p ON p.id = c.paper_id AND p.openalex_id = c.openalex_id
+               WHERE c.verdict = 'cleared' LIMIT 50"""
+        )
+        assert not rows, "papers carrying an identifier re-verification cleared:\n" + fmt_violations(rows)
+
+    def test_cleared_doi_not_left_on_links(self, db):
+        rows = db.fetch_all(
+            """SELECT c.paper_id, c.doi, pl.id AS link_id FROM openalex_identifier_checks c
+               JOIN paper_links pl ON pl.paper_id = c.paper_id AND LOWER(pl.doi) = LOWER(c.doi)
+               WHERE c.verdict = 'cleared' LIMIT 50"""
+        )
+        assert not rows, "paper_links still carrying a cleared DOI:\n" + fmt_violations(rows)
+
+    def test_shared_identifier_with_different_titles_is_reviewed(self, db):
+        """No DOI/OpenAlex ID is shared by papers with different titles unless the
+        pair is a known rename (sharing a link: merge_renamed_papers.py) or is on
+        the re-verification review list."""
+        from backend.enrichment.paper_merge import find_duplicate_groups, same_paper_title
+
+        groups = find_duplicate_groups()
+        ids = sorted({pid for g in groups for pid in g})
+        if not ids:
+            return
+        placeholders = ",".join(["%s"] * len(ids))
+        titles = {r["id"]: r["title"] for r in db.fetch_all(
+            f"SELECT id, title FROM papers WHERE id IN ({placeholders})", tuple(ids))}
+        reviewed = {r["paper_id"] for r in db.fetch_all(
+            f"""SELECT paper_id FROM openalex_identifier_checks
+                WHERE verdict = 'review' AND paper_id IN ({placeholders})""", tuple(ids))}
+        from backend.enrichment.rename_merge import load_rename_candidates
+
+        renames = {frozenset((a, b)) for a, b, _ in load_rename_candidates()[0]}
+        rows = []
+        for group in groups:
+            for i, a in enumerate(group):
+                for b in group[i + 1:]:
+                    if same_paper_title(titles.get(a), titles.get(b)):
+                        continue
+                    if a in reviewed or b in reviewed or frozenset((a, b)) in renames:
+                        continue
+                    rows.append({"paper_ids": f"{a},{b}", "a": titles.get(a), "b": titles.get(b)})
+        assert not rows, (
+            "identifier shared by differently titled papers (neither reviewed nor a link-sharing rename):\n"
+            + fmt_violations(rows[:50], total=len(rows))
+        )
+
+
+class TestRenameMergeDebt:
+    def test_no_unmerged_renames(self, db):
+        """#265: renamed papers sharing an SSRN/NBER/arXiv/DOI link must be merged
+        (scripts/merge_renamed_papers.py --apply)."""
+        from backend.enrichment.rename_merge import find_rename_groups
+
+        groups, _ = find_rename_groups()
+        rows = [{"paper_ids": ",".join(map(str, g))} for g in groups[:50]]
+        assert not groups, f"unmerged renames ({len(groups)} groups):\n" + fmt_violations(rows, total=len(groups))
