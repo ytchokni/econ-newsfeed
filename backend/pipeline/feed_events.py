@@ -5,6 +5,7 @@ Consolidates event logic previously scattered across publication.py
 """
 from backend.database import get_connection
 from backend.database.papers import normalize_title, has_title_identity
+from backend.publication_rules import new_paper_suppression_reason
 from datetime import datetime, timezone
 import html as html_module
 import logging
@@ -93,6 +94,23 @@ def _title_in_previous_snapshot(title: str, prev_html_normalized: str | None) ->
     return _normalize_for_matching(title) in prev_html_normalized
 
 
+def _load_paper_facts(cursor, paper_id: int) -> dict | None:
+    """Facts that decide whether a saved paper is genuinely new (issue #261)."""
+    cursor.execute(
+        """SELECT p.is_seed, p.discovered_at, p.year,
+                  EXISTS(SELECT 1 FROM feed_events fe
+                         WHERE fe.paper_id = p.id AND fe.event_type = 'new_paper')
+           FROM papers p WHERE p.id = %s""",
+        (paper_id,),
+    )
+    row = cursor.fetchone()
+    if not row:
+        return None
+    is_seed, discovered_at, year, announced = row
+    return {"is_seed": bool(is_seed), "discovered_at": discovered_at, "year": year,
+            "already_announced": bool(announced)}
+
+
 class FeedEventEmitter:
     @staticmethod
     def emit_new_paper_events(results, url: str, is_seed: bool = False, event_date: datetime | None = None) -> int:
@@ -118,32 +136,31 @@ class FeedEventEmitter:
                     logging.info("Suppressed new_paper event for '%s': title found in previous HTML snapshot", r.title)
                     continue
 
+                if not (r.is_new or r.new_to_this_url):
+                    continue
+
                 cursor = conn.cursor(buffered=True)
-                if r.is_new:
-                    cursor.execute(
-                        """INSERT INTO feed_events
-                           (paper_id, event_type, new_status, created_at,
-                            event_venue, event_source_url, event_metadata_captured)
-                           VALUES (%s, 'new_paper', %s, %s,
-                                   (SELECT venue FROM papers WHERE id = %s), %s, TRUE)""",
-                        (r.paper_id, r.status, created_at, r.paper_id, url),
-                    )
-                    events_created += 1
-                elif r.new_to_this_url:
-                    cursor.execute(
-                        "SELECT COUNT(*) FROM feed_events WHERE paper_id = %s AND event_type = 'new_paper'",
-                        (r.paper_id,),
-                    )
-                    if cursor.fetchone()[0] == 0:
-                        cursor.execute(
-                            """INSERT INTO feed_events
-                               (paper_id, event_type, new_status, created_at,
-                                event_venue, event_source_url, event_metadata_captured)
-                               VALUES (%s, 'new_paper', %s, %s,
-                                       (SELECT venue FROM papers WHERE id = %s), %s, TRUE)""",
-                            (r.paper_id, r.status, created_at, r.paper_id, url),
-                        )
-                        events_created += 1
+                facts = _load_paper_facts(cursor, r.paper_id)
+                if facts is None:
+                    cursor.close()
+                    continue
+                reason = new_paper_suppression_reason(
+                    is_new=r.is_new, event_at=created_at, **facts,
+                )
+                if reason:
+                    logging.info("Suppressed new_paper event for '%s': %s", r.title, reason)
+                    cursor.close()
+                    continue
+
+                cursor.execute(
+                    """INSERT INTO feed_events
+                       (paper_id, event_type, new_status, created_at,
+                        event_venue, event_source_url, event_metadata_captured)
+                       VALUES (%s, 'new_paper', %s, %s,
+                               (SELECT venue FROM papers WHERE id = %s), %s, TRUE)""",
+                    (r.paper_id, r.status, created_at, r.paper_id, url),
+                )
+                events_created += 1
                 cursor.close()
 
             conn.commit()

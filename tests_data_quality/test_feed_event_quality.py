@@ -6,7 +6,13 @@ the baseline guard; PR #153 found regression status_change events.
 """
 import zlib
 
+import os
+
 from conftest import STATUS_ORDER, PROJECT_EPOCH, fmt_violations
+
+# Events recorded from this date on must pass the #261/#264 rules; older rows
+# are handled by scripts/cleanup_spurious_feed_events.py (run after deploy).
+FEED_EVENT_RULES_SINCE = os.environ.get("FEED_EVENT_RULES_SINCE", "2026-11-28")
 
 
 class TestNewPaperBaselineGuard:
@@ -251,3 +257,63 @@ class TestStatusChainCoherence:
         assert not bad, (
             "papers outranked by their own latest status_change event:\n" + fmt_violations(bad)
         )
+
+
+class TestNewPaperEventsAreGenuinelyNew:
+    """new_paper events only for papers new to the database (issue #261).
+
+    Seed papers, papers known for more than a week before the event, and
+    papers dated years before it were posted as new when a second URL (often
+    a mined site) first listed them. scripts/cleanup_spurious_feed_events.py
+    removes existing violations.
+    """
+
+    def test_new_paper_events_pass_the_emitter_rules(self, db):
+        from backend.publication_rules import new_paper_suppression_reason
+
+        rows = db.fetch_all(
+            """SELECT fe.id, fe.paper_id, fe.created_at, p.is_seed, p.discovered_at, p.year,
+                      LEFT(p.title, 80) AS title
+               FROM feed_events fe JOIN papers p ON p.id = fe.paper_id
+               WHERE fe.event_type = 'new_paper' AND fe.recorded_at >= %s""",
+            (FEED_EVENT_RULES_SINCE,),
+        )
+        bad = []
+        for r in rows:
+            reason = new_paper_suppression_reason(
+                is_new=False, is_seed=bool(r["is_seed"]), discovered_at=r["discovered_at"],
+                year=r["year"], already_announced=False, event_at=r["created_at"],
+            )
+            if reason:
+                bad.append({"id": r["id"], "created_at": r["created_at"], "year": r["year"],
+                            "reason": reason, "title": r["title"]})
+        assert not bad, "new_paper events for papers that were not new:\n" + fmt_violations(bad)
+
+
+class TestJournalStatusEventsArePlausible:
+    """accepted/published events need a journal venue and a recent year (issue #264).
+
+    Blog posts, policy briefs and working-paper series were shown as "now
+    published", as were articles published years earlier.
+    """
+
+    def test_status_change_events_pass_the_emitter_rules(self, db):
+        from backend.publication_rules import status_change_suppression_reason
+
+        rows = db.fetch_all(
+            """SELECT fe.id, fe.created_at, fe.old_status, fe.new_status, p.year,
+                      CASE WHEN fe.event_metadata_captured THEN fe.event_venue ELSE p.venue END AS venue,
+                      LEFT(p.title, 80) AS title
+               FROM feed_events fe JOIN papers p ON p.id = fe.paper_id
+               WHERE fe.event_type = 'status_change' AND fe.recorded_at >= %s""",
+            (FEED_EVENT_RULES_SINCE,),
+        )
+        bad = []
+        for r in rows:
+            reason = status_change_suppression_reason(
+                r["new_status"], r["venue"], r["year"], r["created_at"].year,
+            )
+            if reason:
+                bad.append({"id": r["id"], "new_status": r["new_status"], "venue": r["venue"],
+                            "year": r["year"], "reason": reason, "title": r["title"]})
+        assert not bad, "implausible status_change events:\n" + fmt_violations(bad)

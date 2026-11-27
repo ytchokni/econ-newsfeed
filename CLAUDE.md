@@ -29,6 +29,7 @@ poetry run python -m backend.main extract --limit 5  # Extract a limited batch
 poetry run python -m backend.main enrich            # Enrich papers via OpenAlex
 poetry run python -m backend.main classify-jel      # One budgeted JEL batch (bio + papers + OpenAlex topics)
 poetry run python -m backend.main classify-jel --until-done  # Repeat batches until nothing is due, a limit is hit, or extraction needs the key
+poetry run python -m backend.main backfill-bios     # Regenerate missing bios from stored HOME pages (paced, budgeted)
 poetry run python -m backend.main discover-domains  # Scan HTML for untrusted domains with paper-like links
 
 # Testing & validation
@@ -50,6 +51,7 @@ poetry run python scripts/recompute_has_top5.py     # Recompute researchers.has_
 poetry run python scripts/reverify_openalex_ids.py --max-requests 300 --apply  # #266: re-check pre-15-Oct OpenAlex IDs (~900 budgeted requests: pause ENRICHMENT_WORKER_ENABLED or raise OPENALEX_DAILY_BUDGET for ~3 days; DB-cached, resumable; --status, --undo, --purge-cache)
 poetry run python scripts/merge_renamed_papers.py   # #265: merge renames sharing an SSRN/NBER/arXiv/DOI link (dry-run; --apply)
 poetry run python scripts/repair_researcher_identity.py  # Merge split researchers, route page papers to owners, deactivate unowned pages (dry-run; --apply)
+poetry run python scripts/cleanup_spurious_feed_events.py  # Delete stale new_paper / bogus "published" events (dry-run; --apply backs up first; --undo RUN)
 
 # Docker
 docker compose up         # Full stack (db + api + frontend)
@@ -67,9 +69,13 @@ docker compose up         # Full stack (db + api + frontend)
 
 Extraction is owned by the extraction worker (below) — the scrape job only refreshes stored HTML and the `content_hash ≠ extracted_hash` queue.
 
+**Large pages:** downloads are streamed and capped at `FETCH_MAX_BYTES` (10 MB). Pages over 1 MB are compacted (`compact_html`: inline CSS, SVG, comments, data: URIs and >1 KB attributes, then scripts) and stored if they fit 1 MB; smaller pages are stored byte-for-byte. Only pages still too large are deactivated as `response_too_large`. The full page text is stored and hashed. Extraction splits text over `CONTENT_MAX_CHARS` into chunks between HTML blocks (`backend/pipeline/chunking.py`), carries the publication-section heading into each chunk's prompt, and merges results by title hash; the diff path sends only changed hunks. An unchanged long page re-queued by a hash change is extracted as seed (`_backfill_long_page`), so tails cut off by the old 20k truncation are saved without feed events.
+
 **Enrichment worker:** When `ENRICHMENT_WORKER_ENABLED=true`, a background thread in the API process continuously enriches unenriched papers via OpenAlex. Polls every 5 minutes, processes batches of 50, respects the daily budget. Backs off to 10-minute sleep after 5 consecutive failures. In local dev (worker disabled), run `python -m backend.main enrich` manually after scraping.
 
-**Extraction worker:** When `EXTRACTION_WORKER_ENABLED=true`, a background thread in the API process continuously extracts publications from changed pages (`content_hash ≠ extracted_hash`) using synchronous free-tier Gemma calls. Calls are latency-bound (45–190s each, ~35 output tokens/s); `EXTRACTION_DELAY_SECONDS` (default 2) paces the fast tail under the 30 RPM free-tier cap. Polls every 5 minutes when idle, backs off 10 minutes after 10 consecutive failures (quota exhaustion), and skips a URL for the process lifetime after 3 failed attempts (poison-pill guard). Account errors from the provider (HTTP 401/402/403, e.g. depleted AI Studio billing) pause the whole worker for 10 minutes per attempt instead of counting against individual pages. In local dev (worker disabled), run `python -m backend.main extract` manually after fetching.
+**Extraction worker:** When `EXTRACTION_WORKER_ENABLED=true`, a background thread in the API process continuously extracts publications from changed pages (`content_hash ≠ extracted_hash`) using synchronous free-tier Gemma calls. Calls are latency-bound (45–190s each, ~35 output tokens/s); `EXTRACTION_DELAY_SECONDS` (default 2) paces the fast tail under the 30 RPM free-tier cap. Polls every 5 minutes when idle, backs off 10 minutes after 10 consecutive failures (quota exhaustion), and after 3 failed attempts on the same page version skips it for an hour, doubling per further failure up to a week (poison-pill guard; the count, hash and retry time live in `html_content.extraction_*`, so restarts do not reset it). An LLM answer cut off at `max_tokens` (32000 for full and diff calls) is not retried as is: the text is split in two (twice at most), and a cut-off diff falls back to chunked full extraction. Account errors from the provider (HTTP 401/402/403, e.g. depleted AI Studio billing) pause the whole worker for 10 minutes per attempt instead of counting against individual pages. In local dev (worker disabled), run `python -m backend.main extract` manually after fetching.
+
+**Bio backfill:** `BIO_BACKFILL_ENABLED=true` (off by default) schedules an hourly job that regenerates missing researcher bios (`description IS NULL`) from stored HOME page text, e.g. after the #258 cleanup NULLed ~3,500 bios. It shares the free-tier key with extraction, so it is small and yields: `BIO_BACKFILL_BATCH_CALLS` (10) calls per run, `BIO_BACKFILL_DAILY_LIMIT` (150) per UTC day, `BIO_BACKFILL_DELAY_SECONDS` (30) between calls, a run stops at the first quota refusal, and, like the JEL job, it yields to extraction: no run within `BIO_BACKFILL_YIELD_AFTER_QUOTA_MINUTES` (15) of an extraction quota refusal (`llm_quota_signals`) and none while more than `BIO_BACKFILL_MAX_BACKLOG` (50) pages wait for extraction. `researcher_bio_backfill` records the page hash per attempt, so a page with no bio is not retried until it changes. Run by hand with `python -m backend.main backfill-bios [--max-calls N]`. Bio answers are structured JSON and must pass `backend.pipeline.description.clean_description()`; a rejected answer never replaces a stored bio.
 
 **Extraction circuit breaker (CLI):** The `extract` CLI stops after 10 consecutive failed extractions (e.g. LLM quota exhausted). Fetched HTML is preserved — extraction resumes on the next run for URLs where `content_hash ≠ extracted_hash`. The continuous worker uses backoff + per-URL retry limits instead of stopping.
 
@@ -101,7 +107,7 @@ once the extraction backlog has cleared:
 
 **Researcher identity:** `backend/database/identity.py` decides when two names are one person (`same_person`: initials, nicknames, accents, hyphen/space; `strong=True` adds typos and compound surnames and is only used with a shared OpenAlex ID or page ownership). An OpenAlex author ID stays on one record: `assign_openalex_author_id` merges a compatible holder or refuses. `merge_researcher_into` moves authorship, URLs, follows, JEL codes and the rest; feed events belong to papers and are never touched. When papers are saved from a page, a byline name that matches the page owner resolves to the owner. The owner is attached (author_order 0) only when the page names them and no unrelated researcher tracks it; otherwise extraction deactivates the URL with reason `shared_page` or `owner_not_named` (pages under 1000 characters and profile registries such as ORCID are not judged). Reactivating such a URL re-runs the check on the next content change.
 
-Feed event integrity is protected by `_title_in_previous_snapshot()` and the `_url_has_baseline()` check in `backend.pipeline.extraction.extract_one_url()`.
+Feed event integrity is protected by `_title_in_previous_snapshot()` and the `_url_has_baseline()` check in `backend.pipeline.extraction.extract_one_url()`. The plausibility rules in `backend/publication_rules.py` also apply: `new_paper` only for papers new to the database (not seeds, not known for over a week, not dated more than 2 years before the event), and `accepted`/`published` only with a journal venue (a `published` item at most a year old). `scripts/cleanup_spurious_feed_events.py` applies the same rules to stored events.
 
 Deployment waits for `/api/ready`, which checks the database, versioned snapshot
 guard, and required schema. `/api/health` is process liveness only. Losing the
@@ -162,7 +168,14 @@ retry. The sitemap fetches send `INTERNAL_API_KEY` without a visitor, so they
 are exempt from rate limits and paging caps (see API scrape protection below).
 
 Researcher filter choices are fetched on demand from `/api/researcher-options`
-(at most 50 results), rather than included in `/api/filter-options`. Weekly
+(at most 50 results), rather than included in `/api/filter-options`. Both that
+chooser and the researchers-tab search (`/api/researchers?search=`) rank names
+with the in-process index in `backend/database/researcher_index.py`: it ignores
+case, accents and punctuation, puts surnames before first names, matches
+affiliation words (plus `INSTITUTION_ALIASES` such as DIW), and falls back to
+similar spellings with a `suggestion`. It is rebuilt in the background every 10
+minutes, so new researchers appear in search within that time. The feed's free-text
+search still uses the SQL helpers in `search_helpers.py`. Weekly
 digest controls follow `/api/capabilities`; an unavailable delivery provider
 cannot be enabled through settings. Digest events use ingestion timestamps and
 a per-user delivery ledger so delayed extraction is not skipped.
@@ -209,10 +222,11 @@ Researcher URLs (DB) → HTMLFetcher (fetch + hash-based change detection)
 | File | Role |
 |------|------|
 | `backend/api.py` | FastAPI REST API — 20+ endpoints, CORS, rate limiting (`slowapi`), standardized error envelope |
-| `backend/database/` | Package with facade class (`Database`) — submodules: `connection.py` (pool), `schema.py` (DDL/migrations), `researchers.py`, `papers.py`, `snapshots.py`, `llm.py`, `admin.py` |
+| `backend/database/` | Package with facade class (`Database`) — submodules: `connection.py` (pool), `schema.py` (DDL/migrations), `researchers.py`, `researcher_index.py` (in-memory name search index), `papers.py`, `snapshots.py`, `llm.py`, `admin.py` |
 | `backend/main.py` | CLI entry points for scraping pipeline stages |
 | `backend/pipeline/html_fetcher.py` | Web scraper — per-domain rate limiting, robots.txt compliance, content hashing for change detection |
 | `backend/pipeline/publication.py` | LLM extraction (Google AI Studio/Gemini) — Pydantic structured outputs, title dedup via SHA-256 hash |
+| `backend/pipeline/chunking.py` | Splits long page text into extraction chunks between HTML blocks, with section-heading context |
 | `backend/pipeline/extraction.py` | Per-URL extraction logic shared by worker and CLI — reads stored HTML, runs LLM, persists papers/links/snapshots, marks extracted |
 | `backend/pipeline/paper_saver.py` | Persists extracted papers and authorship links to the database |
 | `backend/pipeline/feed_events.py` | Emits feed events (new_paper, status_change, etc.) after extraction |
@@ -331,7 +345,12 @@ Required env vars: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `GOOGLE_API_K
 not under `/api/auth/`, which NextAuth owns). Codes are 6 digits, HMAC-hashed in
 `email_login_codes`, valid 10 minutes, single use, 5 wrong tries, 60 s resend
 cooldown, 5 per address per hour plus a deployment-wide hourly cap
-(`EMAIL_LOGIN_HOURLY_LIMIT`). Per-IP limits use `api_protection`'s client key (strict per
+(`EMAIL_LOGIN_HOURLY_LIMIT`). After 15 wrong codes in a day an address is
+"guarded" (not locked out): 2 codes an hour, one try each. 100 wrong codes in an
+hour across all addresses (`EMAIL_LOGIN_MAX_FAILURES_PER_HOUR`) pause email
+sign-in until they age out of that rolling hour (up to an hour) and log `email_login_circuit_open`, which the daily monitor's
+`api_traffic` check reports. An hourly scheduler job deletes code rows older
+than a day. Per-IP limits use `api_protection`'s client key (strict per
 visitor; coarse in the keyless fail-open tier, where visitors share Vercel IPs);
 the credentials provider forwards the visitor with `internalApiHeaders`. Email
 login is offered only with a Resend key and an explicit `LOGIN_FROM_EMAIL` or
@@ -350,7 +369,7 @@ console (ignored unless `FRONTEND_URL` is localhost).
 
 - Python tests use `httpx.AsyncClient` with FastAPI's `TestClient` — no real database needed for API contract tests
 - `conftest.py` sets env vars *before* importing app modules to avoid `backend/config.py`'s `sys.exit()`
-- Frontend tests mock `next/font/google` via `__mocks__/next-font-google.ts`
+- Fonts are self-hosted with `next/font/local` (`app/src/app/fonts.ts`, woff2 files in `app/src/app/fonts/`), so builds never fetch Google Fonts; tests mock it via `__mocks__/next-font-local.ts`
 
 ## Gotchas
 

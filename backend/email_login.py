@@ -13,6 +13,8 @@ import logging
 import os
 import re
 import secrets
+import threading
+import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from html import escape
@@ -28,6 +30,17 @@ MAX_ATTEMPTS = 5
 RESEND_COOLDOWN = timedelta(seconds=60)
 PER_EMAIL_WINDOW = timedelta(hours=1)
 MAX_CODES_PER_EMAIL = 5
+# Wrong guesses allowed per address per rolling day (5 per code x 5 codes an
+# hour would otherwise allow ~600 a day). Counted from email_login_codes,
+# whose rows are kept for exactly that day.
+MAX_FAILED_PER_EMAIL_PER_DAY = 15
+FAILED_PER_EMAIL_WINDOW = timedelta(days=1)
+# Once an address is guarded (see _check_guess_limits): codes per hour, tries per code.
+MAX_CODES_PER_EMAIL_GUARDED = 2
+MAX_ATTEMPTS_GUARDED = 1
+CIRCUIT_WINDOW = timedelta(hours=1)
+# Seconds between repeated circuit-open log lines (the monitor counts them).
+_CIRCUIT_LOG_EVERY = 300.0
 
 _EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _LOCAL_HOSTS = ("http://localhost", "http://127.0.0.1")
@@ -91,6 +104,55 @@ def _hourly_limit() -> int:
         return max(1, int(os.environ.get("EMAIL_LOGIN_HOURLY_LIMIT", "200")))
     except ValueError:
         return 200
+
+
+def _max_failures_per_hour() -> int:
+    try:
+        return max(1, int(os.environ.get("EMAIL_LOGIN_MAX_FAILURES_PER_HOUR", "100")))
+    except ValueError:
+        return 100
+
+
+_circuit_logged_at = -_CIRCUIT_LOG_EVERY
+_circuit_log_lock = threading.Lock()
+
+
+def _log_circuit_open(failures: int, limit: int) -> None:
+    """ERROR line scripts/monitor.py looks for; at most one per process per 5 min."""
+    global _circuit_logged_at
+    now = time.monotonic()
+    with _circuit_log_lock:
+        if now - _circuit_logged_at < _CIRCUIT_LOG_EVERY:
+            return
+        _circuit_logged_at = now
+    logger.error(
+        "email_login_circuit_open failures=%d limit=%d window=1h: "
+        "email sign-in paused (possible code guessing)", failures, limit,
+    )
+
+
+def _check_guess_limits(email: str, now: datetime) -> bool:
+    """Pause on a global guessing spike; report whether this address is guarded.
+
+    An address with MAX_FAILED_PER_EMAIL_PER_DAY wrong codes in the last day is
+    "guarded": it is not locked out (a stranger could otherwise lock anyone out
+    of email login for a day), but each new code allows a single try and only
+    MAX_CODES_PER_EMAIL_GUARDED codes an hour may be issued. That leaves the
+    owner, who receives the codes, able to sign in, and caps further guessing
+    at about 48 a day.
+    """
+    limit = _max_failures_per_hour()
+    failures = store.failed_attempts_since(now - CIRCUIT_WINDOW)
+    if failures >= limit:
+        _log_circuit_open(failures, limit)
+        raise EmailLoginError(
+            "email_login_paused",
+            # Failures age out of a rolling hour, so the pause can last up to that long.
+            "Email sign-in is paused for up to an hour. Try again later or continue with Google.",
+            503, int(CIRCUIT_WINDOW.total_seconds()),
+        )
+    failed_today = store.failed_attempts_for_email_since(email, now - FAILED_PER_EMAIL_WINDOW)
+    return failed_today >= MAX_FAILED_PER_EMAIL_PER_DAY
 
 
 def dev_log_mode() -> bool:
@@ -182,6 +244,7 @@ def request_code(raw_email: str, now: datetime | None = None) -> CodeRequest:
         )
     email = _require_email(raw_email)
     now = now or _utcnow()
+    guarded = _check_guess_limits(email, now)
 
     latest = store.latest_code_created_at(email)
     if latest is not None and now - latest < RESEND_COOLDOWN:
@@ -191,7 +254,8 @@ def request_code(raw_email: str, now: datetime | None = None) -> CodeRequest:
         raise EmailLoginError(
             "resend_too_soon", f"Wait {wait} seconds before requesting another code.", 429, wait,
         )
-    if store.count_codes_for_email_since(email, now - PER_EMAIL_WINDOW) >= MAX_CODES_PER_EMAIL:
+    max_codes = MAX_CODES_PER_EMAIL_GUARDED if guarded else MAX_CODES_PER_EMAIL
+    if store.count_codes_for_email_since(email, now - PER_EMAIL_WINDOW) >= max_codes:
         raise EmailLoginError(
             "too_many_codes", "Too many codes requested for this address. Try again in an hour.",
             429, int(PER_EMAIL_WINDOW.total_seconds()),
@@ -237,8 +301,10 @@ def verify_code(raw_email: str, raw_code: str, now: datetime | None = None) -> d
     if not re.fullmatch(rf"\d{{{CODE_LENGTH}}}", code):
         raise EmailLoginError("invalid_code", f"Enter the {CODE_LENGTH}-digit code from the email.", 400)
     now = now or _utcnow()
+    guarded = _check_guess_limits(email, now)
 
-    result = store.consume_code(email, hash_code(email, code), now, MAX_ATTEMPTS)
+    max_attempts = MAX_ATTEMPTS_GUARDED if guarded else MAX_ATTEMPTS
+    result = store.consume_code(email, hash_code(email, code), now, max_attempts)
     if result == "expired":
         raise EmailLoginError("code_expired", "This code has expired. Request a new one.", 400)
     if result == "locked":

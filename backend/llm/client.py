@@ -15,7 +15,7 @@ import threading
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
-from openai import OpenAI, OpenAIError, RateLimitError
+from openai import APIConnectionError, APITimeoutError, OpenAI, OpenAIError, RateLimitError
 from pydantic import BaseModel, ValidationError
 
 _client: OpenAI | None = None
@@ -70,10 +70,18 @@ class StructuredResponse(Generic[T]):
     call itself raised). `retry_after` is set when the failure affects the
     whole provider rather than this prompt: a rate-limit error (with its
     suggested wait) or an account error such as depleted billing.
+    `truncated` is set when the output hit max_tokens (finish_reason
+    "length") and did not parse, or the request timed out while the model
+    was still writing; repeating the same prompt would only be cut off
+    again, so the caller should send less input per call instead.
     """
     parsed: T | None
     usage: object | None
     retry_after: float | None = None
+    truncated: bool = False
+    # A server-side (5xx) or connection failure: not this prompt's fault, so
+    # it must not count toward the persisted per-page backoff.
+    provider_error: bool = False
 
 
 _SCHEMA_METADATA_KEYS = {"$defs", "title", "description", "default"}
@@ -194,6 +202,12 @@ def extract_json(
             retry_delay = _parse_retry_after(e)
             logging.warning("LLM rate limited, retry after %.0fs: %s", retry_delay, e)
             return StructuredResponse(parsed=None, usage=None, retry_after=retry_delay)
+        except APITimeoutError as e:
+            # At ~35 output tokens/s the 300s client timeout ends long answers
+            # before max_tokens does (a dense 20k-char list of ~130 papers):
+            # the same "too much output" failure as finish_reason "length".
+            logging.warning("LLM call timed out (output too long for the timeout?): %s", e)
+            return StructuredResponse(parsed=None, usage=None, truncated=True)
         except OpenAIError as e:
             if getattr(e, "status_code", None) in _ACCOUNT_ERROR_STATUS_CODES:
                 logging.error(
@@ -204,15 +218,23 @@ def extract_json(
                     parsed=None, usage=None, retry_after=ACCOUNT_ERROR_RETRY_SECONDS,
                 )
             logging.error("LLM API call failed: %s: %s", type(e).__name__, e)
-            return StructuredResponse(parsed=None, usage=None)
+            status = getattr(e, "status_code", None)
+            provider_error = isinstance(e, APIConnectionError) or (
+                isinstance(status, int) and status >= 500)
+            return StructuredResponse(parsed=None, usage=None, provider_error=provider_error)
 
         last_usage = completion.usage
-        content = completion.choices[0].message.content or ""
+        choice = completion.choices[0]
+        content = choice.message.content or ""
 
         try:
             parsed = _validate_content(model_class, content)
             return StructuredResponse(parsed=parsed, usage=last_usage)
         except (ValidationError, json.JSONDecodeError) as e:
+            if getattr(choice, "finish_reason", None) == "length":
+                logging.warning("LLM output cut off at max_tokens=%d; not retrying the same prompt",
+                                max_tokens)
+                return StructuredResponse(parsed=None, usage=last_usage, truncated=True)
             logging.warning(
                 "LLM JSON validation failed (attempt %d/%d): %s",
                 attempt + 1, attempts, e,

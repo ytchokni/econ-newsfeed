@@ -210,6 +210,11 @@ def main() -> None:
     jel_parser.add_argument('--force', action='store_true', help='Ignore the due checks: reclassify every selected researcher')
     jel_parser.add_argument('--no-yield', action='store_true', help='Run even if extraction was quota-limited recently or its backlog is large')
     jel_parser.add_argument('--until-done', action='store_true', help='Repeat batches until nothing is due or the daily limit is reached')
+    bio_parser = subparsers.add_parser('backfill-bios', help='Regenerate missing researcher bios from stored HOME pages (paced)')
+    bio_parser.add_argument('--max-calls', type=int, default=None, help='Max LLM calls (default: BIO_BACKFILL_BATCH_CALLS)')
+    bio_parser.add_argument('--daily-limit', type=int, default=None, help='Max backfill calls per UTC day (default: BIO_BACKFILL_DAILY_LIMIT)')
+    bio_parser.add_argument('--delay', type=float, default=None, help='Seconds between LLM calls (default: BIO_BACKFILL_DELAY_SECONDS)')
+    bio_parser.add_argument('--max-backlog', type=int, default=None, help='Skip while more pages wait for extraction (default: BIO_BACKFILL_MAX_BACKLOG; -1 disables)')
     subparsers.add_parser('enrich', help='Enrich publications with OpenAlex metadata')
     subparsers.add_parser('enrich-jel', help='Enrich researcher JEL codes from paper topics via OpenAlex')
     subparsers.add_parser('discover-domains', help='Scan stored HTML for untrusted domains with paper-title links')
@@ -244,6 +249,11 @@ def main() -> None:
                      delay=args.delay, researcher_ids=args.researcher_id,
                      force=args.force, until_done=args.until_done,
                      yield_to_extraction=not args.no_yield)
+    elif args.command == 'backfill-bios':
+        create_tables()
+        from backend.pipeline.bio_backfill import run_bio_backfill_batch
+        print(run_bio_backfill_batch(max_calls=args.max_calls, daily_limit=args.daily_limit,
+                                     delay_seconds=args.delay, max_backlog=args.max_backlog))
     elif args.command == 'enrich':
         create_tables()
         from backend.enrichment.openalex import enrich_new_publications
