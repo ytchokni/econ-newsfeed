@@ -12,12 +12,13 @@ import time
 from collections import OrderedDict
 import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
+from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
@@ -67,6 +68,7 @@ from backend.database import (
 from backend.auth import get_current_user, get_optional_user
 from backend.database.snapshots import STATUS_ORDER
 from backend.database.researchers import search_researcher_options
+from backend.database.users import set_digest_enabled_by_token
 from backend.pipeline.publication import VALID_STATUSES
 
 FILTER_VALID_STATUSES = frozenset(STATUS_ORDER)
@@ -774,16 +776,65 @@ async def update_notifications(
     return {"digest_enabled": body.digest_enabled}
 
 
-@app.get("/api/users/unsubscribe")
-async def unsubscribe(token: str = Query(...)):
-    """One-click email unsubscribe via HMAC-signed token."""
-    secret = os.environ.get("NEXTAUTH_SECRET", "")
-    user_id = Database.verify_unsubscribe_token(token, secret)
+def _digest_token_user(token: str) -> int:
+    """Resolve an unsubscribe token to its user, or raise 400.
+
+    The token authorizes only the weekly-digest setting of that one user.
+    """
+    user_id = Database.verify_unsubscribe_token(token, os.environ.get("NEXTAUTH_SECRET", ""))
     if user_id is None:
-        raise HTTPException(status_code=400, detail="Invalid or expired unsubscribe link")
+        raise HTTPException(status_code=400, detail="This unsubscribe link is invalid.")
+    return user_id
+
+
+def _set_digest_by_token(user_id: int, enabled: bool) -> None:
     with connection_scope():
-        Database.update_notification_prefs(user_id, digest_enabled=False)
-    return {"message": "You have been unsubscribed from the weekly digest."}
+        set_digest_enabled_by_token(user_id, enabled)
+
+
+@app.get("/api/users/unsubscribe")
+async def unsubscribe_landing(token: str = Query("", max_length=200)):
+    """Email-link landing: redirect to the confirmation page without changing anything.
+
+    Link scanners and prefetchers issue GET requests, so GET must never
+    unsubscribe. Old digests link here too, so they keep working.
+    """
+    return RedirectResponse(
+        f"{FRONTEND_URL}/unsubscribe?{urlencode({'token': token})}",
+        status_code=303,
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
+
+
+@app.post("/api/users/unsubscribe")
+@limiter.limit("30/minute")
+async def unsubscribe(request: Request, token: str = Query(..., max_length=200)):
+    """RFC 8058 one-click unsubscribe; also used by the confirmation page.
+
+    Mail clients POST ``List-Unsubscribe=One-Click`` as a form body to the
+    List-Unsubscribe URL; the body carries nothing we need, so it is ignored.
+    No login is required: the signed token is the authorization.
+    """
+    user_id = _digest_token_user(token)
+    _set_digest_by_token(user_id, False)
+    return JSONResponse(
+        {"digest_enabled": False, "message": "You have been unsubscribed from the weekly digest."},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/users/resubscribe")
+@limiter.limit("30/minute")
+async def resubscribe(request: Request, token: str = Query(..., max_length=200)):
+    """Undo an unsubscribe from the confirmation page, using the same token."""
+    user_id = _digest_token_user(token)
+    if not scheduler.DIGEST_ENABLED:
+        raise HTTPException(status_code=503, detail="Weekly email delivery is temporarily unavailable")
+    _set_digest_by_token(user_id, True)
+    return JSONResponse(
+        {"digest_enabled": True, "message": "You are subscribed to the weekly digest again."},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # ---------------------------------------------------------------------------

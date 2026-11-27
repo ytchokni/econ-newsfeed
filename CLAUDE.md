@@ -102,6 +102,11 @@ Researcher filter choices are fetched on demand from `/api/researcher-options`
 digest controls follow `/api/capabilities`; an unavailable delivery provider
 cannot be enabled through settings. Digest events use ingestion timestamps and
 a per-user delivery ledger so delayed extraction is not skipped.
+Each digest carries `List-Unsubscribe` + `List-Unsubscribe-Post` (RFC 8058)
+headers and a footer button. `GET /api/users/unsubscribe` only redirects to the
+`/unsubscribe` confirmation page (link scanners prefetch GETs); `POST` unsubscribes
+with no login. Tokens are HMAC-signed with `NEXTAUTH_SECRET`, never expire, and
+only toggle that user's digest, so rotating the secret breaks old links.
 
 ## Architecture
 
