@@ -529,6 +529,9 @@ def add_researcher_url(researcher_id: int, page_type: str, url: str) -> None:
 
 
 _URL_DEACTIVATION_THRESHOLD = 3
+# A URL deactivated as response_too_large is fetched again after this many
+# days (see Researcher.get_all_researcher_urls); sites get rebuilt or moved.
+TOO_LARGE_RECHECK_DAYS = 30
 
 
 def record_url_fetch_failure(url_id: int, error_type: str) -> None:
@@ -562,9 +565,24 @@ def record_url_fetch_failure(url_id: int, error_type: str) -> None:
 
 
 def record_url_fetch_success(url_id: int) -> None:
-    """Reset the failure counter on a successful fetch (no-op if already zero)."""
+    """Reset failure tracking on a successful fetch (no-op if nothing to reset).
+
+    A URL deactivated as ``response_too_large`` that now fetches within the
+    size limit (see TOO_LARGE_RECHECK_DAYS) is reactivated. URLs deactivated
+    for other reasons are not fetched, so they are never reactivated here.
+
+    MySQL applies single-table SET assignments left to right, so is_active is
+    assigned last: the IF()s must see its value before the update.
+    """
     execute_query(
-        "UPDATE researcher_urls SET consecutive_failures = 0 WHERE id = %s AND consecutive_failures > 0",
+        """UPDATE researcher_urls
+           SET consecutive_failures = 0,
+               deactivated_at = IF(is_active, deactivated_at, NULL),
+               deactivation_reason = IF(is_active, deactivation_reason, NULL),
+               is_active = TRUE
+           WHERE id = %s
+             AND (consecutive_failures > 0
+                  OR (is_active = FALSE AND deactivation_reason = 'response_too_large'))""",
         (url_id,),
     )
 

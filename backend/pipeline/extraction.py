@@ -48,6 +48,16 @@ class ExtractionOutcome:
         return self.status in ("extracted", "empty")
 
 
+# researcher_urls.page_type has mixed case in production: older imports wrote
+# 'home', the site miner writes 'HOME'. MySQL compares them equal, Python does not.
+_HOME_PAGE_TYPES = frozenset({"HOME", "HOMEPAGE"})
+
+
+def is_home_page(page_type: str | None) -> bool:
+    """True for a researcher's home page, whatever the stored case."""
+    return (page_type or "").strip().upper() in _HOME_PAGE_TYPES
+
+
 def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> ExtractionOutcome:
     """Extract publications for one researcher URL from stored HTML.
 
@@ -106,7 +116,7 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
         outcome = _extract_full(url_id, url, text, is_seed, content_hash,
                                 scrape_log_id, fetch_date)
 
-    if outcome.ok and page_type == "HOME":
+    if outcome.ok and is_home_page(page_type):
         _update_home_description(researcher_id, text, url, scrape_log_id)
 
     return outcome
