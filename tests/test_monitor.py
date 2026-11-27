@@ -132,6 +132,19 @@ class TestApiTraffic:
         assert not result["ok"]
         assert "email sign-in paused 1x" in result["detail"]
 
+    def test_pool_exhaustion_is_counted_and_a_flood_fails(self):
+        lines = [
+            "2026-11-27 10:06:00 backend.email_login WARNING Email login: database connection pool exhausted",
+            "mysql.connector.errors.PoolError: Failed getting connection; pool exhausted",
+        ]
+        stats = monitor.summarize_api_traffic(self.LINES + lines)
+        assert stats["pool_exhausted"] == 2
+        result = monitor.evaluate_api_traffic(stats)
+        assert result["ok"]  # an occasional burst is tolerated
+        assert "2 requests found the DB connection pool exhausted" in result["detail"]
+        flood = lines * monitor.API_POOL_EXHAUSTED_PER_DAY
+        assert not monitor.evaluate_api_traffic(monitor.summarize_api_traffic(flood))["ok"]
+
     def test_wrong_frontend_key_fails(self):
         lines = ["internal_key_invalid ip=76.76.21.21"] * monitor.API_INVALID_KEY_WARNINGS
         assert not monitor.evaluate_api_traffic(monitor.summarize_api_traffic(lines))["ok"]
