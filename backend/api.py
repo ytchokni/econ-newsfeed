@@ -18,7 +18,7 @@ from fastapi import FastAPI, HTTPException, Query, Request, Response, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
@@ -65,6 +65,7 @@ from backend.database import (
     get_recent_discoveries as db_get_recent_discoveries,
 )
 from backend.auth import get_current_user, get_optional_user
+import backend.email_login as email_login
 from backend.database.snapshots import STATUS_ORDER
 from backend.database.researchers import search_researcher_options
 from backend.pipeline.publication import VALID_STATUSES
@@ -534,7 +535,10 @@ def readiness_check():
 def capabilities(response: Response):
     """Only advertise delivery features that this deployment can run."""
     response.headers["Cache-Control"] = "public, max-age=60"
-    return {"weekly_digest_available": scheduler.DIGEST_ENABLED}
+    return {
+        "weekly_digest_available": scheduler.DIGEST_ENABLED,
+        "email_login_available": email_login.is_available(),
+    }
 
 
 @app.get("/api/metrics")
@@ -784,6 +788,76 @@ async def unsubscribe(token: str = Query(...)):
     with connection_scope():
         Database.update_notification_prefs(user_id, digest_enabled=False)
     return {"message": "You have been unsubscribed from the weekly digest."}
+
+
+# ---------------------------------------------------------------------------
+# Email-code login (NextAuth's credentials provider calls verify-code)
+# ---------------------------------------------------------------------------
+
+class EmailCodeRequestBody(BaseModel):
+    email: str = Field(max_length=320)
+
+
+class EmailCodeVerifyBody(BaseModel):
+    email: str = Field(max_length=320)
+    code: str = Field(max_length=32)
+
+
+def _client_ip(request: Request) -> str:
+    """Best-effort visitor address for rate limits.
+
+    Requests arrive through Vercel and Caddy, so the socket address is the
+    proxy's. Vercel sets x-real-ip / x-vercel-forwarded-for, which Caddy passes
+    through. Direct callers can forge them, so the per-email limits stored in
+    the database remain the binding control.
+    """
+    for header in ("x-vercel-forwarded-for", "x-real-ip", "x-forwarded-for"):
+        value = request.headers.get(header)
+        if value:
+            return value.split(",")[0].strip()
+    return get_remote_address(request)
+
+
+def _email_login_error(exc: "email_login.EmailLoginError") -> JSONResponse:
+    headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
+    return JSONResponse(
+        status_code=exc.status,
+        content={"error": {"code": exc.code, "message": exc.message}},
+        headers=headers,
+    )
+
+
+@app.post("/api/email-login/request-code", status_code=202)
+@limiter.limit("5/minute;30/hour", key_func=_client_ip)
+def request_email_login_code(request: Request, body: EmailCodeRequestBody):
+    """Email a one-time sign-in code. Same response whether or not an account exists."""
+    try:
+        with connection_scope():
+            result = email_login.request_code(body.email)
+    except email_login.EmailLoginError as exc:
+        return _email_login_error(exc)
+    return {
+        "message": "If that address can receive email, a sign-in code is on its way.",
+        "expires_in": result.expires_in,
+        "resend_after": result.resend_after,
+    }
+
+
+@app.post("/api/email-login/verify-code")
+@limiter.limit("20/minute", key_func=_client_ip)
+def verify_email_login_code(request: Request, body: EmailCodeVerifyBody):
+    """Check a code; on success return the account it signs into."""
+    try:
+        with connection_scope():
+            user = email_login.verify_code(body.email, body.code)
+    except email_login.EmailLoginError as exc:
+        return _email_login_error(exc)
+    return {
+        "id": user["id"],
+        "email": user["email"],
+        "name": user.get("name"),
+        "picture_url": user.get("picture_url"),
+    }
 
 
 # ---------------------------------------------------------------------------

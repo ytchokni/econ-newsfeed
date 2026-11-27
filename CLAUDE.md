@@ -236,6 +236,20 @@ Required env vars: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `GOOGLE_API_K
 
 `ADMIN_PASSWORD` enables the `/admin` dashboard (must also be set in `app/.env.local` for local dev and as a Vercel env var for production). Auth uses HMAC-signed cookies with 7-day expiry.
 
+**User login** has two NextAuth providers: Google, and passwordless email codes
+(`backend/email_login.py`, `/api/email-login/request-code` and `verify-code`;
+not under `/api/auth/`, which NextAuth owns). Codes are 6 digits, HMAC-hashed in
+`email_login_codes`, valid 10 minutes, single use, 5 wrong tries, 60 s resend
+cooldown, 5 per address per hour plus a deployment-wide hourly cap
+(`EMAIL_LOGIN_HOURLY_LIMIT`). Email sessions carry `sub = "user:<id>"`; Google
+sessions keep the Google subject. Both reach the same `users` row for the same
+address (a first Google login adopts an email account only when Google reports
+`email_verified`). Codes go out through the digest's Resend sender
+(`LOGIN_FROM_EMAIL`, default `DIGEST_FROM_EMAIL`); `/api/capabilities` reports
+`email_login_available` and the modal hides the option without a provider. For
+local dev without Resend, `EMAIL_LOGIN_DEV_LOG_CODES=true` logs codes to the API
+console (ignored unless `FRONTEND_URL` is localhost).
+
 `backend/config.py` validates required vars at import time — tests set defaults in `tests/conftest.py` (must be set before any app imports).
 
 ## Testing Patterns
