@@ -354,9 +354,16 @@ def _apply_title_change(change: dict, source_url: str, event_date) -> None:
         return
 
     paper_id = row['id']
-    PaperSaver.apply_title_rename(paper_id, old_title, new_title, change, source_url)
-    FeedEventEmitter.emit_title_change(paper_id, old_title, new_title,
-                                      event_date=event_date, source_url=source_url)
+    try:
+        outcome = PaperSaver.apply_title_rename(paper_id, old_title, new_title, change, source_url)
+    except Exception:
+        # The LLM answer is already paid for: keep the page's other changes
+        # and mark it extracted rather than retrying it into the same error.
+        logger.exception("Title change for paper %d on %s not applied", paper_id, source_url)
+        return
+    if outcome == PaperSaver.RENAMED:
+        FeedEventEmitter.emit_title_change(paper_id, old_title, new_title,
+                                          event_date=event_date, source_url=source_url)
 
 
 def _update_home_description(researcher_id: int, text: str, url: str,

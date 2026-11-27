@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 from backend.llm.client import StructuredResponse
+from backend.pipeline.paper_saver import PaperSaver
 from backend.pipeline.publication import (
     ExtractionLLMResult, Publication, PublicationChange,
     PublicationChangeList, validate_publication,
@@ -400,7 +401,8 @@ class TestExtractOneUrlDiffPath:
         """Title change from diff path calls apply_title_rename and emits event."""
         from backend.pipeline.extraction import extract_one_url
         patches = self._base_patches()
-        patches["apply_rename"] = patch("backend.pipeline.paper_saver.PaperSaver.apply_title_rename")
+        patches["apply_rename"] = patch("backend.pipeline.paper_saver.PaperSaver.apply_title_rename",
+                                        return_value=PaperSaver.RENAMED)
         mocks = {k: p.start() for k, p in patches.items()}
 
         tc = _title_change()
@@ -424,6 +426,30 @@ class TestExtractOneUrlDiffPath:
         assert emit_args[0] == 99
         assert emit_args[1] == "Old Title for My Paper"
         assert emit_args[2] == "Improved Title for My Paper"
+
+    @pytest.mark.parametrize("rename", [PaperSaver.MERGED, PaperSaver.SKIPPED, RuntimeError("db blip")])
+    def test_title_change_onto_existing_title_completes_page_without_event(self, rename):
+        """A merged, skipped or failed rename must not fail the page or emit title_change."""
+        from backend.pipeline.extraction import extract_one_url
+        patches = self._base_patches()
+        kwargs = {"side_effect": rename} if isinstance(rename, Exception) else {"return_value": rename}
+        patches["apply_rename"] = patch("backend.pipeline.paper_saver.PaperSaver.apply_title_rename", **kwargs)
+        mocks = {k: p.start() for k, p in patches.items()}
+        mocks["try_changes"].return_value = ExtractionLLMResult(pubs=[_title_change(), _status_change()])
+        mocks["fetch_one"].return_value = {"Old Title for My Paper": {"id": 99}}
+
+        try:
+            with patch("backend.pipeline.feed_events.FeedEventEmitter.emit_title_change") as mock_emit:
+                outcome = extract_one_url(_row())
+        finally:
+            for p in patches.values():
+                p.stop()
+
+        assert outcome.status == "extracted" and outcome.pubs_count == 2
+        mocks["apply_rename"].assert_called_once()
+        mock_emit.assert_not_called()
+        mocks["snapshots"].assert_called_once()  # the page's other change is still saved
+        mocks["mark"].assert_called_once_with(1, "h1")
 
     def test_home_page_description_still_works_on_diff_path(self):
         """HOME page description update runs after diff extraction."""

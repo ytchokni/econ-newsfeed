@@ -188,6 +188,11 @@ def _split_author(author) -> tuple[str, str]:
 
 
 class PaperSaver:
+    # apply_title_rename outcomes
+    RENAMED = 'renamed'
+    MERGED = 'merged'      # the new title belonged to the same work: rows merged
+    SKIPPED = 'skipped'    # the new title belongs to a different work: both kept
+
     @staticmethod
     def save_publications(
         url: str,
@@ -423,19 +428,25 @@ class PaperSaver:
 
     @staticmethod
     def apply_title_rename(paper_id: int, old_title: str, new_title: str,
-                           metadata: dict, source_url: str) -> None:
-        """Apply a known title rename; refuse collisions with another identity.
+                           metadata: dict, source_url: str) -> str:
+        """Apply a known title rename. Returns RENAMED, MERGED or SKIPPED.
+
+        A paper may already carry the new title (often from another
+        researcher's page). That is not an error: see _resolve_rename_collision.
+        Only RENAMED changes this paper's title and warrants a title_change event.
 
         metadata should contain status, venue, abstract, draft_url, year.
         """
         new_hash = compute_title_hash(new_title)
+        collision_id = None
 
         with get_connection() as conn:
             cursor = conn.cursor(buffered=True)
             try:
                 # A paper with the target title may already exist (typically
-                # saved as "new" earlier in the same run). Abstain rather than
-                # deleting that record without validated title/author evidence.
+                # saved from a coauthor's page). Never overwrite or delete it
+                # here: _resolve_rename_collision decides after this
+                # connection is back in the pool.
                 hashes = title_hash_candidates(new_title)
                 cursor.execute(
                     f"SELECT id FROM papers WHERE title_hash IN ({','.join(['%s'] * len(hashes))}) AND id != %s FOR UPDATE",
@@ -443,18 +454,20 @@ class PaperSaver:
                 )
                 dup = cursor.fetchone()
                 if dup:
-                    raise ValueError('Title rename collides with another paper; require a validated merge')
-                cursor.execute(
-                    "UPDATE papers SET title = %s, title_hash = %s WHERE id = %s",
-                    (new_title, new_hash, paper_id),
-                )
-                append_paper_snapshot(
-                    paper_id=paper_id, status=metadata.get('status'),
-                    venue=metadata.get('venue'), abstract=metadata.get('abstract'),
-                    draft_url=metadata.get('draft_url'), year=metadata.get('year'),
-                    source_url=source_url, title=old_title, conn=conn,
-                )
-                conn.commit()
+                    collision_id = dup[0]
+                    conn.rollback()
+                else:
+                    cursor.execute(
+                        "UPDATE papers SET title = %s, title_hash = %s WHERE id = %s",
+                        (new_title, new_hash, paper_id),
+                    )
+                    append_paper_snapshot(
+                        paper_id=paper_id, status=metadata.get('status'),
+                        venue=metadata.get('venue'), abstract=metadata.get('abstract'),
+                        draft_url=metadata.get('draft_url'), year=metadata.get('year'),
+                        source_url=source_url, title=old_title, conn=conn,
+                    )
+                    conn.commit()
             except Exception as e:
                 conn.rollback()
                 logging.error("Error applying title rename %s → %s: %s",
@@ -462,6 +475,42 @@ class PaperSaver:
                 raise
             finally:
                 cursor.close()
+
+        if collision_id is not None:
+            return PaperSaver._resolve_rename_collision(
+                paper_id, collision_id, old_title, new_title, source_url,
+            )
+        return PaperSaver.RENAMED
+
+    @staticmethod
+    def _resolve_rename_collision(paper_id: int, other_id: int, old_title: str,
+                                  new_title: str, source_url: str) -> str:
+        """The new title already belongs to another paper: merge or keep both.
+
+        The page renaming this paper to the other paper's title is the title
+        evidence; merge_paper_group(as_title=...) still requires the same
+        authors (or a shared identifier) before treating them as one work, and
+        creates no feed events. Anything else keeps both papers unchanged.
+        Never raises, so the page's other results are still saved.
+        """
+        from backend.enrichment.paper_merge import merge_paper_group
+        try:
+            merged = merge_paper_group([paper_id, other_id], as_title=new_title)
+        except Exception:
+            logging.exception("Title rename merge of papers %d and %d failed", paper_id, other_id)
+            merged = False
+        if merged:
+            logging.info(
+                "Title rename '%s' → '%s' on %s matched paper %d; merged with paper %d",
+                old_title[:50], new_title[:50], source_url, other_id, paper_id,
+            )
+            return PaperSaver.MERGED
+        logging.warning(
+            "Skipped title rename of paper %d to the title of paper %d (not verified as "
+            "the same work) on %s: '%s' → '%s'",
+            paper_id, other_id, source_url, old_title[:80], new_title[:80],
+        )
+        return PaperSaver.SKIPPED
 
     @staticmethod
     def reconcile_title_renames(source_url: str, extracted_pubs: list[dict]) -> list[TitleRename]:
@@ -531,10 +580,12 @@ class PaperSaver:
             new_title = new_pub['title'].strip()
 
             try:
-                PaperSaver.apply_title_rename(
+                outcome = PaperSaver.apply_title_rename(
                     old_id, old_title, new_title, new_pub, source_url,
                 )
             except Exception:
+                continue
+            if outcome != PaperSaver.RENAMED:
                 continue
 
             renames.append(TitleRename(

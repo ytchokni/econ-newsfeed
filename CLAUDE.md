@@ -102,7 +102,7 @@ batches under the same advisory lock, daily budget and yield checks
 once the extraction backlog has cleared:
 `nohup docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T api python -m backend.main classify-jel --until-done --daily-limit 2000 --delay 30 > /root/jel-backfill.log 2>&1 &`
 
-**Paper merge:** `merge_duplicate_papers()` dedupes papers post-run.
+**Paper merge:** `merge_duplicate_papers()` dedupes papers post-run. A page renaming a paper to a title another paper already has (`PaperSaver.apply_title_rename`) merges the two via `merge_paper_group(as_title=...)` when their authors match (or they share an identifier), otherwise keeps both and logs `Skipped title rename` at WARNING; neither emits a feed event, and the page is still marked extracted.
 
 **Zombie scrape_log cleanup:** On scheduler start and hourly thereafter, `scrape_log` entries stuck in `'running'` are marked `'failed'` based on the scrape advisory lock: if no connection holds the lock, all running rows older than 5 minutes are zombies; if the lock is held, all but the newest running row are. Deploys that restart the container mid-scrape are swept on the next boot.
 
