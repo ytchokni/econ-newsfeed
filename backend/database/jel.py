@@ -137,8 +137,7 @@ def save_researcher_jel_codes(researcher_id: int, jel_codes: list[str]) -> None:
 
 def _get_all_jel_codes_for_researcher(researcher_id: int) -> list[str]:
     """Return all JEL code strings currently assigned to a researcher."""
-    from database.connection import fetch_all as _fetch_all
-    rows = _fetch_all(
+    rows = fetch_all(
         "SELECT jel_code FROM researcher_jel_codes WHERE researcher_id = %s",
         (researcher_id,),
     )
@@ -262,3 +261,188 @@ def add_researcher_jel_codes(researcher_id: int, jel_codes: list[str]) -> None:
     # Sync fields from the full set, not just the newly added codes
     all_codes = _get_all_jel_codes_for_researcher(researcher_id)
     sync_researcher_fields_from_jel(researcher_id, all_codes)
+
+
+# ---------------------------------------------------------------------------
+# Incremental classification (researcher_jel_state)
+# ---------------------------------------------------------------------------
+
+_ACTIVE_RESEARCHER_SQL = (
+    "EXISTS (SELECT 1 FROM researcher_urls u "
+    "WHERE u.researcher_id = r.id AND u.is_active = 1)"
+)
+
+
+def get_jel_classification_candidates(
+    limit: int,
+    now: datetime,
+    reclassify_after_days: int = 30,
+    researcher_ids: list[int] | None = None,
+    force: bool = False,
+) -> list[dict]:
+    """Return tracked researchers whose JEL codes should be (re)computed.
+
+    A researcher is due when:
+    - the job has never looked at them (no state row), or a merge reset it;
+    - the state is provisional (``input_hash`` NULL);
+    - the last LLM call failed: retried after ``attempts`` days (max 30);
+    - their bio or papers changed since ``checked_at`` and either nothing was
+      classifiable before, a new bio arrived that was not used, or the last
+      check is older than ``reclassify_after_days``.
+
+    ``force`` skips these checks (every tracked researcher is a candidate).
+    Researchers without codes and with recent papers come first, so the feed
+    filter gains coverage fastest. Rows are only candidates: the caller
+    compares input hashes before spending an LLM call.
+    """
+    where = [_ACTIVE_RESEARCHER_SQL]
+    params: list = []
+    if researcher_ids:
+        where.append(f"r.id IN ({','.join(['%s'] * len(researcher_ids))})")
+        params.extend(researcher_ids)
+    if not force:
+        where.append(
+            """(
+                s.researcher_id IS NULL
+                OR s.input_hash IS NULL
+                OR (s.attempts > 0
+                    AND s.checked_at < %s - INTERVAL LEAST(s.attempts, 30) DAY)
+                OR (s.attempts = 0
+                    AND (r.description_updated_at > s.checked_at
+                         OR EXISTS (SELECT 1 FROM authorship a
+                                    JOIN papers p ON p.id = a.publication_id
+                                    WHERE a.researcher_id = r.id
+                                      AND p.discovered_at > s.checked_at))
+                    AND (s.source = 'none'
+                         OR (s.used_bio = 0 AND r.description IS NOT NULL
+                             AND r.description_updated_at > s.checked_at)
+                         OR s.checked_at < %s - INTERVAL %s DAY))
+            )"""
+        )
+        params.extend([now, now, reclassify_after_days])
+    params.append(limit)
+    return fetch_all(
+        f"""SELECT r.id, r.first_name, r.last_name, r.description,
+                   r.openalex_author_id, s.input_hash,
+                   COALESCE(s.attempts, 0) AS attempts,
+                   EXISTS (SELECT 1 FROM researcher_jel_codes rjc
+                           WHERE rjc.researcher_id = r.id) AS has_codes
+            FROM researchers r
+            LEFT JOIN researcher_jel_state s ON s.researcher_id = r.id
+            WHERE {" AND ".join(where)}
+            ORDER BY (s.researcher_id IS NULL) DESC,
+                     has_codes ASC,
+                     (SELECT MAX(a2.publication_id) FROM authorship a2
+                      WHERE a2.researcher_id = r.id) DESC,
+                     r.id DESC
+            LIMIT %s""",
+        tuple(params),
+    )
+
+
+def get_jel_inputs_for_researchers(
+    researcher_ids: list[int], max_papers: int = 20,
+) -> dict[int, dict]:
+    """Batch-load the paper evidence used to classify researchers.
+
+    Returns ``{researcher_id: {"papers": [...], "topics": [...]}}``. Papers
+    are newest first (by year, then id) and capped at ``max_papers``; topics
+    are the stored OpenAlex topics of those papers.
+    """
+    result: dict[int, dict] = {rid: {"papers": [], "topics": []} for rid in researcher_ids}
+    if not researcher_ids:
+        return result
+    placeholders = ",".join(["%s"] * len(researcher_ids))
+    rows = fetch_all(
+        f"""SELECT a.researcher_id, p.id, p.title, p.abstract, p.year
+            FROM authorship a
+            JOIN papers p ON p.id = a.publication_id
+            WHERE a.researcher_id IN ({placeholders})
+              AND p.title IS NOT NULL AND p.title != ''
+            ORDER BY a.researcher_id, p.year DESC, p.id DESC""",
+        tuple(researcher_ids),
+    )
+    paper_owner: dict[int, list[int]] = {}
+    for row in rows:
+        papers = result[row["researcher_id"]]["papers"]
+        if len(papers) >= max_papers:
+            continue
+        papers.append({"id": row["id"], "title": row["title"],
+                       "abstract": row.get("abstract"), "year": row.get("year")})
+        paper_owner.setdefault(row["id"], []).append(row["researcher_id"])
+    if not paper_owner:
+        return result
+    paper_ids = list(paper_owner)
+    topic_rows = fetch_all(
+        f"""SELECT paper_id, topic_name, score FROM paper_topics
+            WHERE paper_id IN ({",".join(["%s"] * len(paper_ids))})
+            ORDER BY paper_id, score DESC""",
+        tuple(paper_ids),
+    )
+    for row in topic_rows:
+        for rid in paper_owner.get(row["paper_id"], []):
+            result[rid]["topics"].append(
+                {"topic_name": row["topic_name"], "score": row["score"]}
+            )
+    return result
+
+
+def save_jel_state(
+    researcher_id: int,
+    *,
+    input_hash: str | None,
+    source: str,
+    used_bio: bool,
+    model: str | None,
+    attempts: int,
+    checked_at: datetime,
+) -> None:
+    """Upsert the classification state for one researcher."""
+    execute_query(
+        """INSERT INTO researcher_jel_state
+               (researcher_id, input_hash, source, used_bio, model, checked_at, attempts)
+           VALUES (%s, %s, %s, %s, %s, %s, %s)
+           ON DUPLICATE KEY UPDATE
+               input_hash = VALUES(input_hash), source = VALUES(source),
+               used_bio = VALUES(used_bio), model = VALUES(model),
+               checked_at = VALUES(checked_at), attempts = VALUES(attempts)""",
+        (researcher_id, input_hash, source, bool(used_bio), model, checked_at, attempts),
+    )
+
+
+def touch_jel_state(researcher_id: int, checked_at: datetime) -> None:
+    """Mark a researcher as checked without changing its classification."""
+    execute_query(
+        "UPDATE researcher_jel_state SET checked_at = %s WHERE researcher_id = %s",
+        (checked_at, researcher_id),
+    )
+
+
+def count_jel_llm_calls_since(since: datetime) -> int:
+    """Count JEL classification LLM calls logged since ``since`` (UTC)."""
+    rows = fetch_all(
+        "SELECT COUNT(*) AS n FROM llm_usage "
+        "WHERE call_type = 'jel_classification' AND called_at >= %s",
+        (since,),
+    )
+    return int(rows[0]["n"]) if rows else 0
+
+
+def get_jel_coverage_stats() -> dict:
+    """Coverage of the JEL filter: tracked researchers and visible feed events."""
+    rows = fetch_all(
+        f"""SELECT
+              (SELECT COUNT(*) FROM researchers r WHERE {_ACTIVE_RESEARCHER_SQL}) AS tracked,
+              (SELECT COUNT(*) FROM researchers r
+               WHERE {_ACTIVE_RESEARCHER_SQL}
+                 AND EXISTS (SELECT 1 FROM researcher_jel_codes rjc
+                             WHERE rjc.researcher_id = r.id)) AS tracked_with_codes,
+              (SELECT COUNT(*) FROM researcher_jel_state) AS checked,
+              (SELECT COUNT(*) FROM feed_events) AS events,
+              (SELECT COUNT(*) FROM feed_events fe
+               WHERE EXISTS (SELECT 1 FROM authorship a
+                             JOIN researcher_jel_codes rjc
+                               ON rjc.researcher_id = a.researcher_id
+                             WHERE a.publication_id = fe.paper_id)) AS events_with_codes"""
+    )
+    return dict(rows[0]) if rows else {}

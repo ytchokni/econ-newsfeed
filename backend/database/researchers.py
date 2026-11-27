@@ -8,6 +8,8 @@ import os
 import re
 import unicodedata
 
+import mysql.connector
+
 from backend.database.connection import execute_query, fetch_one, fetch_all
 from backend.database.llm import log_llm_usage
 from backend.config import fix_encoding
@@ -472,6 +474,15 @@ def merge_researchers(canonical_id: int, duplicate_id: int, conn) -> None:
         "UPDATE IGNORE researcher_jel_codes SET researcher_id = %s WHERE researcher_id = %s",
         (canonical_id, duplicate_id),
     )
+    # The merged researcher has more papers: let the JEL job classify it again.
+    try:
+        c.execute(
+            "DELETE FROM researcher_jel_state WHERE researcher_id = %s",
+            (canonical_id,),
+        )
+    except mysql.connector.Error as e:
+        if getattr(e, "errno", None) != 1146:  # table not created yet
+            raise
 
     # 3. Transfer user follows (IGNORE skips duplicates; CASCADE cleans up leftovers)
     c.execute(
