@@ -1,4 +1,6 @@
 """Re-verification of pre-#244 OpenAlex identifiers (issue #266)."""
+import json
+from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -179,7 +181,11 @@ class TestApplyVerdict:
     def test_clear_removes_identifier_coauthors_topics_and_link_doi(self, cursor):
         conn, cur = cursor
         cur.fetchone.return_value = {"openalex_id": "W3025280704", "doi": "10.1257/pandp.20201078", "abstract": None}
-        cur.fetchall.return_value = [{"id": 7, "doi": "10.1257/PANDP.20201078"}, {"id": 8, "doi": "10.1093/other"}]
+        coauthors = [{"display_name": "Abel Brodeur", "openalex_author_id": "A1"}]
+        topics = [{"openalex_topic_id": "T1", "topic_name": "p-hacking", "subfield_name": None,
+                   "field_name": None, "domain_name": None, "score": Decimal("0.9")}]
+        links = [{"id": 7, "doi": "10.1257/PANDP.20201078"}, {"id": 8, "doi": "10.1093/other"}]
+        cur.fetchall.side_effect = [coauthors, topics, links]
         assert iv.apply_verdict(self.PAPER, PHACK_WORK, Verdict("cleared", "belongs_to_other_paper", 56036))
         sql = [c.args[0] for c in cur.execute.call_args_list]
         update = next(c for c in cur.execute.call_args_list if c.args[0].lstrip().startswith("UPDATE papers"))
@@ -191,6 +197,10 @@ class TestApplyVerdict:
         assert link_updates == [(7,)]
         insert = next(c for c in cur.execute.call_args_list if "INSERT INTO openalex_identifier_checks" in c.args[0])
         assert insert.args[1][:5] == (56037, "W3025280704", "10.1257/pandp.20201078", "cleared", "belongs_to_other_paper")
+        backup = json.loads(insert.args[1][-1])
+        assert backup["doi"] == "10.1257/pandp.20201078" and backup["doi_cleared"] is True
+        assert backup["coauthors"] == coauthors and backup["topics"][0]["score"] == "0.9"
+        assert backup["links"] == [{"id": 7, "doi": "10.1257/PANDP.20201078"}]
         conn.commit.assert_called_once()
 
     def test_verified_only_records(self, cursor):
@@ -204,7 +214,7 @@ class TestApplyVerdict:
     def test_keeps_doi_that_is_not_the_works(self, cursor):
         _, cur = cursor
         cur.fetchone.return_value = {"openalex_id": "W3025280704", "doi": "10.9999/merged", "abstract": None}
-        cur.fetchall.return_value = [{"id": 5, "doi": "10.9999/merged"}]
+        cur.fetchall.side_effect = [[], [], [{"id": 5, "doi": "10.9999/merged"}]]
         paper = {**self.PAPER, "doi": "10.9999/merged"}
         iv.apply_verdict(paper, PHACK_WORK, Verdict("cleared", "no_author_overlap"))
         update = next(c for c in cur.execute.call_args_list if c.args[0].lstrip().startswith("UPDATE papers"))
@@ -229,3 +239,71 @@ def test_plan_batch_uses_title_owner_lookup():
                       return_value={"Altruism in Networks": {"id": 406249, "title": "Altruism in Networks"}}):
         plan = iv.plan_batch(papers, {"W1547689330": ALTRUISM_WORK})
     assert [(p["id"], v.reason) for p, _, v in plan] == [(135479, "belongs_to_other_paper")]
+
+
+class TestUndo:
+    @pytest.fixture
+    def cursor(self):
+        with patch.object(iv, "get_connection") as get_conn:
+            conn = MagicMock()
+            conn.__enter__.return_value = conn
+            get_conn.return_value = conn
+            yield conn, conn.cursor.return_value
+
+    BACKUP = json.dumps({
+        "doi": "10.1007/978-3-319-13746-9", "abstract": "Old abstract", "enrichment_attempted_at": "2026-10-13 10:00:43",
+        "coauthors": [{"display_name": "Andre Dorsman", "openalex_author_id": "A9"}],
+        "topics": [{"openalex_topic_id": "T2", "topic_name": "Energy", "subfield_name": None, "field_name": None,
+                    "domain_name": None, "score": "0.5"}],
+        "links": [{"id": 70, "doi": "10.1007/978-3-319-13746-9"}],
+    })
+
+    def test_restores_87182_and_marks_check_undone(self, cursor):
+        conn, cur = cursor
+        cur.fetchone.side_effect = [{"backup": self.BACKUP}, {"openalex_id": None}]
+        assert iv.undo_clear(87182, "W2153688434") == "restored"
+        calls = cur.execute.call_args_list
+        update = next(c for c in calls if c.args[0].lstrip().startswith("UPDATE papers"))
+        assert update.args[1] == ("W2153688434", "10.1007/978-3-319-13746-9", "Old abstract",
+                                  "2026-10-13 10:00:43", 87182)
+        assert next(c for c in calls if c.args[0].startswith("UPDATE paper_links")).args[1] == \
+            ("10.1007/978-3-319-13746-9", 70, 87182)
+        assert any("reason = 'undone'" in c.args[0] for c in calls)
+        assert cur.executemany.call_count == 2
+        conn.commit.assert_called_once()
+
+    def test_skips_re_enriched_paper(self, cursor):
+        conn, cur = cursor
+        cur.fetchone.side_effect = [{"backup": self.BACKUP}, {"openalex_id": "W_new"}]
+        assert iv.undo_clear(87182, "W2153688434") == "re_enriched"
+        conn.rollback.assert_called_once()
+        conn.commit.assert_not_called()
+
+
+class TestWorkCache:
+    def test_compact_work_keeps_only_comparison_fields(self):
+        w = iv.compact_work(work("W7", "Unrelated Title", ["Wei Zhang"], doi="10.1/x", type_="Book",
+                                 abstract="We study networks"))
+        assert w == {"id": "W7", "doi": "10.1/x", "title": "Unrelated Title", "type": "book",
+                     "author_names": ["Wei Zhang"], "abstract_hash": iv.abstract_hash("we  study NETWORKS")}
+        assert iv.compact_work(w) is w
+
+    def test_persisted_works_are_reused(self):
+        cached = {"W1": iv.compact_work(ALTRUISM_WORK), "W2": None}
+        with patch.object(iv, "load_cached_works", return_value=cached) as load, \
+             patch.object(iv.openalex, "_get_with_retry") as get:
+            works = iv.fetch_works(["W1", "W2"], {}, persist=True)
+        get.assert_not_called()
+        load.assert_called_once()
+        assert works == cached
+
+    def test_fetched_chunk_is_stored_immediately(self):
+        resp = MagicMock(status_code=200)
+        resp.json.return_value = {"results": [work("W1", "T1", ["A B"])]}
+        with patch.object(iv, "load_cached_works", return_value={}), \
+             patch.object(iv, "store_cached_works") as store, \
+             patch.object(iv.openalex, "_get_session"), \
+             patch.object(iv.openalex, "_get_with_retry", return_value=resp), \
+             patch.object(iv.time, "sleep"):
+            iv.fetch_works(["W1"], {}, persist=True)
+        assert store.call_args.args[0]["W1"]["title"] == "T1"
