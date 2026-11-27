@@ -587,13 +587,23 @@ class TestPersistedExtractionFailures:
         assert params == ("hash1", "hash1", r.EXTRACTION_MAX_FAILURES, r.EXTRACTION_COOLDOWN_SECONDS,
                           r.EXTRACTION_MAX_FAILURES, r.EXTRACTION_MAX_COOLDOWN_SECONDS, 7)
 
-    def test_queue_skips_cooled_down_version_only(self):
+    def test_queue_skips_cooled_down_version_by_id(self):
+        """The cooldown lookup is a separate indexed query; the main queue query
+        keeps only idx_extraction_state columns so it never reads MEDIUMTEXT rows."""
         from backend.database import researchers as r
-        with patch.object(r, "fetch_all", return_value=[]) as fa:
-            r.get_urls_needing_extraction()
-        flat = " ".join(fa.call_args.args[0].split())
-        assert ("(hc.extraction_retry_at IS NULL OR hc.extraction_retry_at <= NOW() "
-                "OR NOT (hc.extraction_failed_hash <=> hc.content_hash))") in flat
+        with patch.object(r, "fetch_all", side_effect=[[{"url_id": 7}, {"url_id": 9}], []]) as fa:
+            r.get_urls_needing_extraction(exclude_url_ids=(3, 7))
+        cooling_sql, (main_sql, params) = fa.call_args_list[0].args[0], fa.call_args_list[1].args
+        assert "extraction_retry_at > NOW() AND extraction_failed_hash <=> content_hash" in cooling_sql
+        assert "extraction_" not in main_sql.split("NOT IN")[0]
+        assert "ru.id NOT IN (%s,%s,%s)" in main_sql
+        assert params == (3, 7, 9)
+
+    def test_retry_lookup_has_covering_index(self):
+        import inspect
+        from backend.database import schema
+        src = inspect.getsource(schema._ensure_content_metadata)
+        assert "'extraction_retry_at, url_id, extraction_failed_hash, content_hash'" in src
 
     @pytest.mark.parametrize("extracted_hash", [None, "h1"])
     def test_successful_extraction_clears_failure_state(self, extracted_hash):

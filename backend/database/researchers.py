@@ -651,9 +651,17 @@ def get_urls_needing_extraction(exclude_url_ids: tuple[int, ...] = ()) -> list[d
           AND hc.content_hash IS NOT NULL
           AND hc.has_stored_content = TRUE
           AND (hc.extracted_hash IS NULL OR hc.extracted_hash != hc.content_hash)
-          AND (hc.extraction_retry_at IS NULL OR hc.extraction_retry_at <= NOW()
-               OR NOT (hc.extraction_failed_hash <=> hc.content_hash))
     """
+    # Pages cooling down after repeated failures (record_extraction_failure)
+    # are found separately and excluded by id: any other html_content column
+    # in the query above takes it off idx_extraction_state and makes MySQL
+    # read every MEDIUMTEXT row (~60 s on prod instead of 0.09 s).
+    cooling = fetch_all(
+        "SELECT url_id FROM html_content"
+        " WHERE extraction_retry_at > NOW() AND extraction_failed_hash <=> content_hash"
+    ) or []
+    exclude_url_ids = tuple(dict.fromkeys(
+        tuple(exclude_url_ids) + tuple(row['url_id'] for row in cooling)))
     if exclude_url_ids:
         query += " AND ru.id NOT IN (" + ",".join(["%s"] * len(exclude_url_ids)) + ")"
     query += " ORDER BY ru.id LIMIT 200"

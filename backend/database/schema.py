@@ -141,6 +141,9 @@ def _ensure_content_metadata(cursor) -> None:
     for name, columns in (
         ('idx_extraction_state', 'has_stored_content, url_id, content_hash, extracted_hash'),
         ('idx_extracted_at', 'extracted_at'),
+        # Covers the cooled-down-page lookup in get_urls_needing_extraction,
+        # which must not read MEDIUMTEXT rows.
+        ('idx_extraction_retry', 'extraction_retry_at, url_id, extraction_failed_hash, content_hash'),
     ):
         cursor.execute(
             "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() "

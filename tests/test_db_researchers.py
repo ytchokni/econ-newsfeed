@@ -427,7 +427,8 @@ class TestGetUrlsNeedingExtraction:
     def test_queries_active_urls_with_hash_mismatch(self):
         from backend.database.researchers import get_urls_needing_extraction
         rows = [{"id": 1, "researcher_id": 10, "url": "https://a.com", "page_type": "PUBLICATIONS"}]
-        with patch("backend.database.researchers.fetch_all", return_value=rows) as mock_fetch:
+        # First call: cooled-down pages (none); second: the queue itself.
+        with patch("backend.database.researchers.fetch_all", side_effect=[[], rows]) as mock_fetch:
             result = get_urls_needing_extraction()
         assert result == rows
         query = mock_fetch.call_args[0][0]
