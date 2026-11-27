@@ -291,8 +291,11 @@ Required env vars: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `GOOGLE_API_K
 not under `/api/auth/`, which NextAuth owns). Codes are 6 digits, HMAC-hashed in
 `email_login_codes`, valid 10 minutes, single use, 5 wrong tries, 60 s resend
 cooldown, 5 per address per hour plus a deployment-wide hourly cap
-(`EMAIL_LOGIN_HOURLY_LIMIT`). Per-IP limits use `api_protection`'s client key; the
-credentials provider forwards the visitor with `internalApiHeaders`. Email sessions carry `sub = "user:<id>"`; Google
+(`EMAIL_LOGIN_HOURLY_LIMIT`). Per-IP limits use `api_protection`'s client key (strict per
+visitor; coarse in the keyless fail-open tier, where visitors share Vercel IPs);
+the credentials provider forwards the visitor with `internalApiHeaders`. Email
+login is offered only with a Resend key and an explicit `LOGIN_FROM_EMAIL` or
+`DIGEST_FROM_EMAIL` (the compose placeholder sender does not count). Email sessions carry `sub = "user:<id>"`; Google
 sessions keep the Google subject. Both reach the same `users` row for the same
 address (a first Google login adopts an email account only when Google reports
 `email_verified`). Codes go out through the digest's Resend sender

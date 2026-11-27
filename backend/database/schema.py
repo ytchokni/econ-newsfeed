@@ -579,8 +579,15 @@ def create_tables() -> None:
                     # Email-code accounts have no Google identity. A UNIQUE index
                     # admits any number of NULLs, so Google users keep their key.
                     try:
-                        cursor.execute("ALTER TABLE users MODIFY COLUMN google_id VARCHAR(255) NULL")
-                        conn.commit()
+                        cursor.execute(
+                            "SELECT IS_NULLABLE FROM information_schema.COLUMNS "
+                            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' "
+                            "AND COLUMN_NAME = 'google_id'"
+                        )
+                        row = cursor.fetchone()
+                        if row is not None and row[0] != 'YES':
+                            cursor.execute("ALTER TABLE users MODIFY COLUMN google_id VARCHAR(255) NULL")
+                            conn.commit()
                     except Exception as e:
                         logging.warning("Migration: users.google_id nullable: %s", e)
 

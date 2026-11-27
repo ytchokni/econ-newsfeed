@@ -430,9 +430,24 @@ def internal_key(monkeypatch):
     """Configure INTERNAL_API_KEY as in production; restore settings afterwards."""
     from backend import api_protection
     monkeypatch.setenv("INTERNAL_API_KEY", INTERNAL_KEY)
+    # Target config once the key is live on both sides: keyless callers are
+    # "direct" and keyed by their own edge IP.
+    monkeypatch.setenv("API_DIRECT_ACCESS", "limited")
     api_protection.reload_settings()
     yield INTERNAL_KEY
     monkeypatch.delenv("INTERNAL_API_KEY")
+    monkeypatch.delenv("API_DIRECT_ACCESS")
+    api_protection.reload_settings()
+
+
+@pytest.fixture
+def no_internal_key(monkeypatch):
+    """Production today: no INTERNAL_API_KEY, so everything is the fail-open tier."""
+    from backend import api_protection
+    monkeypatch.delenv("INTERNAL_API_KEY", raising=False)
+    monkeypatch.delenv("API_DIRECT_ACCESS", raising=False)
+    api_protection.reload_settings()
+    yield
     api_protection.reload_settings()
 
 
@@ -472,6 +487,28 @@ def test_spoofed_forwarding_headers_do_not_change_rate_limit_key(client, outbox,
 
     statuses = _request_statuses(client, spoofed, 6)
     assert statuses == [202] * 5 + [429]
+
+
+def test_without_internal_key_shared_vercel_ip_is_not_throttled_like_one_visitor(client, outbox, no_internal_key):
+    """All site traffic arrives from a few Vercel IPs: per-IP limits stay coarse."""
+    vercel = {"X-Forwarded-For": "76.76.21.21"}
+    statuses = _request_statuses(client, lambda i: vercel, 12)
+    assert statuses == [202] * 12
+    verify = [
+        client.post("/api/email-login/verify-code", json={"email": f"v{i}@example.com", "code": "123456"},
+                    headers=vercel).status_code
+        for i in range(25)
+    ]
+    assert verify == [400] * 25
+
+
+def test_email_limits_by_tier():
+    from backend.api import email_code_request_limit, email_code_verify_limit
+    assert email_code_request_limit("visitor:203.0.113.9") == "5/minute;30/hour"
+    assert email_code_request_limit("direct:203.0.113.9") == "5/minute;30/hour"
+    assert email_code_request_limit("legacy:76.76.21.21") == "60/minute"
+    assert email_code_verify_limit("visitor:203.0.113.9") == "20/minute"
+    assert email_code_verify_limit("legacy:76.76.21.21") == "240/minute"
 
 
 def test_rate_limit_key_ignores_spoofed_headers(internal_key):

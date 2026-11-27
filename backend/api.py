@@ -863,9 +863,27 @@ def _email_login_error(exc: "email_login.EmailLoginError") -> JSONResponse:
 
 # Both limits use the limiter's resolved client (api_protection.py): the visitor
 # IP the frontend vouches for with INTERNAL_API_KEY, else the edge IP Caddy saw.
-# Forwarding headers a caller sets itself are ignored.
+# Forwarding headers a caller sets itself are ignored. Keyless requests in the
+# fail-open tier share a few Vercel egress IPs, so strict per-IP limits there
+# would throttle sign-in site-wide; they get coarse limits instead, and the
+# per-address and global caps in the database stay the binding controls.
+_SHARED_IP_TIERS = (api_protection.LEGACY, api_protection.INTERNAL)
+
+
+def _shared_ip(key: str) -> bool:
+    return key.split(":", 1)[0] in _SHARED_IP_TIERS
+
+
+def email_code_request_limit(key: str) -> str:
+    return "60/minute" if _shared_ip(key) else "5/minute;30/hour"
+
+
+def email_code_verify_limit(key: str) -> str:
+    return "240/minute" if _shared_ip(key) else "20/minute"
+
+
 @app.post("/api/email-login/request-code", status_code=202)
-@limiter.limit("5/minute;30/hour")
+@limiter.limit(email_code_request_limit)
 def request_email_login_code(request: Request, body: EmailCodeRequestBody):
     """Email a one-time sign-in code. Same response whether or not an account exists."""
     try:
@@ -881,7 +899,7 @@ def request_email_login_code(request: Request, body: EmailCodeRequestBody):
 
 
 @app.post("/api/email-login/verify-code")
-@limiter.limit("20/minute")
+@limiter.limit(email_code_verify_limit)
 def verify_email_login_code(request: Request, body: EmailCodeVerifyBody):
     """Check a code; on success return the account it signs into."""
     try:
