@@ -39,7 +39,8 @@ def _no_page_owner_lookup(request):
     if request.node.get_closest_marker("real_page_owners"):
         yield
         return
-    with patch("backend.pipeline.extraction.page_owners", return_value=[]):
+    with patch("backend.pipeline.extraction.page_owners", return_value=[]), \
+         patch("backend.pipeline.extraction.flag_url_ownership"):
         yield
 
 

@@ -293,3 +293,68 @@ def test_owner_named_in(first, last, text, url):
 
 def test_short_surname_needs_a_whole_word():
     assert not owner_named_in("Wei", "Li", "Lisbon policy limits", None)
+
+
+# ------------------------------------------- review fixes (PR #288 review)
+
+@pytest.mark.parametrize("first,last,expected", [
+    ("Peter Hull", "Hull", "Peter"),
+    ("Ana Pérez", "Perez", "Ana"),
+    ("Ann Marie Smith-Jones", "Smith-Jones", "Ann Marie"),
+    ("Hull", "Hull", "Hull"),
+    ("Hull Peter", "Hull", "Hull Peter"),
+    ("Peter Hullman", "Hull", "Peter Hullman"),
+])
+def test_strip_repeated_surname(first, last, expected):
+    assert identity.strip_repeated_surname(first, last) == expected
+
+
+def _renames(canonical, duplicate):
+    cursor = _merge_cursor(canonical, duplicate)
+    merge_researcher_into(cursor, 1, 2)
+    return [c.args[1] for c in cursor.execute.call_args_list if "SET first_name" in c.args[0]]
+
+
+def test_merge_never_adopts_repeated_surname_spelling():
+    assert _renames(_row("Peter", "Hull"), _row("Peter Hull", "Hull")) == []
+    assert _renames(_row("Paola", "Conconi"), _row("Paola Conconi", "Conconi")) == []
+    assert _renames(_row("Ricardo Duque", "Gabriel"), _row("Ricardo Duque Gabriel", "Gabriel")) == []
+    assert _renames(_row("Ricardo", "Duque Gabriel"), _row("Ricardo Duque Gabriel", "Gabriel")) == []
+
+
+def test_merge_repairs_survivor_stored_with_repeated_surname():
+    assert _renames(_row("Peter Hull", "Hull"), _row("P.", "Hull")) == [("Peter", 1)]
+
+
+@pytest.mark.parametrize("a,b", [
+    (("Wei", "Zhang"), ("Wei", "Zheng")),
+    (("Thomas", "Meyer"), ("Thomas", "Mayer")),
+    (("Anna", "Bauer"), ("Anna", "Baier")),
+    (("Li", "Wang"), ("Wang", "Li")),
+])
+def test_runtime_strength_keeps_lookalike_surnames_apart(a, b):
+    assert not same_person(*a, *b)
+
+
+def test_assign_does_not_merge_lookalike_surname_holder():
+    conn, cursor = _assign_conn(
+        {"id": 2, "first_name": "Wei", "last_name": "Zheng", "openalex_author_id": None},
+        [{"id": 1, "first_name": "Wei", "last_name": "Zhang"}])
+    with patch.object(identity, "merge_researcher_into") as merge:
+        assert assign_openalex_author_id(conn, 2, "A1") is None
+    merge.assert_not_called()
+
+
+@pytest.mark.parametrize("owner,url,page_type,text", [
+    (("Christopher A.", "Hartwell"), "https://sites.google.com/view/institutionaleconomist/research", "research", LONG),
+    (("Hao", "Dong"), "https://sites.google.com/view/haod/research", "research", LONG),
+    (("Immanuel", "Lampe"), "https://soegampars.github.io/", "research", LONG),
+    (("Karol J.", "Borowiecki"), "https://example.org/~kjb/research", "research", LONG),
+    (("Antonis", "Ragkousis"), "https://www.kcl.ac.uk/people/antonis-ragkousis", "research", LONG),
+    (("Javier", "Valbuena"), "https://example.org/research", "home", LONG),
+    (("Olga", "Makeeva"), "https://www.hse.ru/org/hse/123", "research", LONG + " Ольга Макеева"),
+    (("Immanuel", "Satya"), "https://example.org/research", "research", LONG + " Immanuel"),
+])
+def test_personal_pages_are_not_flagged(owner, url, page_type, text):
+    owners = _owners(owner)
+    assert page_ownership_problem(owners, text, None, url, page_type) is None

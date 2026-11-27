@@ -179,3 +179,44 @@ def test_undo_pairs_removes_only_rows_moved_onto_survivor():
     repair._undo_op(cur, ["pairs", "user_follows", "user_id", [9583, 42608], rows])
     deletes = [c.args[1] for c in cur.execute.call_args_list if c.args[0].startswith("DELETE")]
     assert deletes == [(9583, 1)]
+
+
+def test_undo_set_keeps_values_changed_after_the_repair():
+    from unittest.mock import MagicMock
+    cur = MagicMock()
+    cur.fetchone.side_effect = [{"v": None}, {"v": "A9"}]
+    repair._undo_op(cur, ["set", "researchers", "openalex_author_id", [[1, "A6", None], [2, "A6", None]]])
+    updates = [c.args[1] for c in cur.execute.call_args_list if c.args[0].startswith("UPDATE")]
+    assert updates == [("A6", 1)]  # researcher 2 got a new ID since: kept
+
+
+def test_undo_skips_units_that_recreate_opted_out_researchers(tmp_path, monkeypatch):
+    import types
+    fake = types.ModuleType("backend.database.optouts")
+    fake.is_name_opted_out = lambda first, last: last == "Garin"
+    fake.is_url_opted_out = lambda url: False
+    monkeypatch.setitem(sys.modules, "backend.database.optouts", fake)
+    path = tmp_path / "b.jsonl"
+    bk = repair.Backup(str(path))
+    unit = bk.record("merge_openalex_twins", "a", [[["rows", "researchers", ["id"],
+                                                    [{"id": 42608, "first_name": "Andy", "last_name": "Garin"}]]]])
+    bk.committed(unit)
+    monkeypatch.setattr(repair, "APPLY", True)
+    monkeypatch.setattr(repair, "_write", lambda *a, **k: pytest.fail("must not restore"))
+    counts = repair.undo(str(path))
+    assert counts["skipped_opted_out"] == 1 and counts["units"] == 0
+
+
+def test_undo_filters_by_step_and_unit(tmp_path, monkeypatch):
+    path = tmp_path / "b.jsonl"
+    bk = repair.Backup(str(path))
+    for step in ("merge_openalex_twins", "clear_conflicting_openalex_ids", "merge_openalex_twins"):
+        bk.committed(bk.record(step, step, []))
+    monkeypatch.setattr(repair, "APPLY", True)
+    seen = []
+    monkeypatch.setattr(repair, "_write", lambda label, fn, record=True: seen.append(label) or True)
+    repair.undo(str(path), steps={"merge_openalex_twins"})
+    assert seen == ["undo 3 merge_openalex_twins", "undo 1 merge_openalex_twins"]
+    seen.clear()
+    repair.undo(str(path), unit_ids=repair._parse_units("2-3"))
+    assert seen == ["undo 3 merge_openalex_twins", "undo 2 clear_conflicting_openalex_ids"]

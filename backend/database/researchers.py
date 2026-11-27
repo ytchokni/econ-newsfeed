@@ -9,7 +9,7 @@ import re
 import unicodedata
 
 from backend.database.connection import execute_query, fetch_one, fetch_all, get_connection
-from backend.database.identity import merge_researcher_into, same_person
+from backend.database.identity import merge_researcher_into, same_person, strip_repeated_surname
 from backend.database.llm import log_llm_usage
 from backend.config import fix_encoding
 
@@ -374,6 +374,7 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
     # Normalize capitalization (fixes ALL CAPS / all lowercase from LLM / HTML)
     first_name = normalize_name_case(first_name)
     last_name = normalize_name_case(last_name)
+    first_name = strip_repeated_surname(first_name.strip(), last_name.strip())
 
     def _fetch_one(query, params):
         if conn is not None:
@@ -418,7 +419,7 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
             (openalex_author_id,),
         )
         compatible = [c for c in id_candidates if same_person(
-            first_name, last_name, c['first_name'], c['last_name'], strong=True)]
+            first_name, last_name, c['first_name'], c['last_name'])]
         if len(compatible) == 1:
             logging.info(
                 "OpenAlex ID and name matched '%s %s' to researcher id=%s",
@@ -446,8 +447,9 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
         ]
         if len(initial_matches) == 1:
             match = initial_matches[0]
-            longer_name = _longer_first_name(first_name, match['first_name'])
-            if longer_name != match['first_name'] and is_compatible_name(first_name, match['first_name']):
+            stored = strip_repeated_surname(match['first_name'], last_name)
+            longer_name = _longer_first_name(first_name, stored)
+            if longer_name != match['first_name'] and is_compatible_name(first_name, stored):
                 _execute(
                     "UPDATE researchers SET first_name = %s WHERE id = %s",
                     (longer_name, match['id']),
@@ -558,6 +560,40 @@ def deactivate_unowned_url(url: str, reason: str) -> None:
         (reason, url),
     )
     logging.warning("Deactivated %s: %s", url, reason)
+
+
+def flag_url_ownership(url: str, flag: str | None) -> None:
+    """Mark (or, with None, clear) a page whose owner it never names.
+
+    Flagged pages stay active; their owner is not credited by position-0
+    attachment, and they are listed for review in the admin Health tab.
+    """
+    if flag:
+        execute_query(
+            """UPDATE researcher_urls SET ownership_flag = %s, ownership_flagged_at = NOW()
+               WHERE url = %s AND (ownership_flag IS NULL OR ownership_flag != %s)""",
+            (flag, url, flag),
+        )
+    else:
+        execute_query(
+            "UPDATE researcher_urls SET ownership_flag = NULL, ownership_flagged_at = NULL "
+            "WHERE url = %s AND ownership_flag IS NOT NULL",
+            (url,),
+        )
+
+
+def get_ownership_review_urls() -> list[dict]:
+    """Active URLs flagged because the page never names its owner."""
+    return fetch_all(
+        """SELECT ru.id, ru.url, ru.page_type, ru.ownership_flag, ru.ownership_flagged_at,
+                  CONCAT(r.first_name, ' ', r.last_name) AS researcher_name,
+                  r.id AS researcher_id
+           FROM researcher_urls ru
+           JOIN researchers r ON r.id = ru.researcher_id
+           WHERE ru.is_active = TRUE AND ru.ownership_flag IS NOT NULL
+           ORDER BY ru.ownership_flagged_at DESC
+           LIMIT 500"""
+    )
 
 
 _URL_DEACTIVATION_THRESHOLD = 3

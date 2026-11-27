@@ -162,10 +162,10 @@ class TestGetResearcherIdRoutesVariants:
     @patch("backend.database.researchers._disambiguate_researcher")
     @patch("backend.database.researchers.fetch_all")
     @patch("backend.database.researchers.fetch_one", return_value=None)
-    def test_openalex_id_with_typo_surname_matches_holder(self, one, fetch_all, llm):
+    def test_openalex_id_holder_with_variant_name_matches(self, one, fetch_all, llm):
         from backend.database.researchers import get_researcher_id
         fetch_all.return_value = [{"id": 5, "first_name": "Alexander", "last_name": "Torgovitsky"}]
-        assert get_researcher_id("Alexander", "Torgovistky", openalex_author_id="A9") == 5
+        assert get_researcher_id("A.", "Torgovitsky", openalex_author_id="A9") == 5
         llm.assert_not_called()
 
 
@@ -210,3 +210,47 @@ def test_extraction_deactivates_unowned_page_without_llm_call():
     deactivate.assert_called_once_with("http://www.stanford.edu/research", "shared_page")
     mark.assert_called_once_with(1, "h1")
     full.assert_not_called()
+
+
+@pytest.mark.real_page_owners
+def test_extraction_flags_page_that_never_names_owner_and_keeps_extracting():
+    from backend.pipeline import extraction
+    payload = {"content": "Management School news. " * 200, "raw_html": None, "content_hash": "h1",
+               "timestamp": None, "extracted_at": None}
+    with patch.object(extraction.HTMLFetcher, "get_extraction_payload", return_value=payload), \
+         patch.object(extraction.HTMLFetcher, "mark_extracted"), \
+         patch.object(extraction, "page_owners",
+                      return_value=[{"id": 1, "first_name": "Costas", "last_name": "Milas"}]), \
+         patch.object(extraction, "deactivate_unowned_url") as deactivate, \
+         patch.object(extraction, "flag_url_ownership") as flag, \
+         patch.object(extraction, "_extract_full", return_value=extraction.ExtractionOutcome("empty")) as full:
+        extraction.extract_one_url({"id": 1, "url": "http://www.liv.ac.uk/management/",
+                                    "researcher_id": 1, "page_type": "research"})
+    deactivate.assert_not_called()
+    flag.assert_called_once_with("http://www.liv.ac.uk/management/", "owner_not_named")
+    full.assert_called_once()
+
+
+def test_byline_repeated_surname_is_stripped_before_lookup():
+    conn, cursor = _conn([])
+    rid = _save(conn, [["Peter Hull", "Hull"]], url="https://other.example")
+    rid.assert_called_once_with("Peter", "Hull", conn=conn)
+
+
+def test_owner_not_named_page_still_routes_byline_to_owner_but_never_attaches():
+    page = ("Management School news " * 100, None, "research")
+    conn, cursor = _conn([(13000, "Costas", "Milas")], page)
+    _save(conn, [["Costas", "Milas"], ["Jane", "Doe"]], url="http://www.liv.ac.uk/management/")
+    assert _authorships(cursor) == [(13000, 1, 1), (500, 1, 2)]
+    conn2, cursor2 = _conn([(13000, "Costas", "Milas")], page)
+    _save(conn2, [["Jane", "Doe"]], url="http://www.liv.ac.uk/management/")
+    assert _authorships(cursor2) == [(500, 1, 1)]
+
+
+@patch("backend.database.researchers._disambiguate_researcher")
+@patch("backend.database.researchers.fetch_all", return_value=[])
+@patch("backend.database.researchers.fetch_one", return_value={"id": 6330})
+def test_get_researcher_id_strips_repeated_surname(one, fetch_all, llm):
+    from backend.database.researchers import get_researcher_id
+    assert get_researcher_id("Peter Hull", "Hull") == 6330
+    assert one.call_args_list[0].args[1] == ("Peter", "Hull")

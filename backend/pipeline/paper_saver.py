@@ -17,7 +17,7 @@ from backend.database.researchers import (
     is_abbreviation_of, is_compatible_name, merge_researchers, refresh_has_top5_for,
 )
 from backend.database.identity import (
-    match_score, on_merge, page_ownership_problem, same_person,
+    SHARED_PAGE, match_score, on_merge, page_ownership_problem, same_person, strip_repeated_surname,
 )
 from backend.database.snapshots import _STATUS_RANK
 from backend.database.papers import title_hash_candidates
@@ -220,7 +220,8 @@ def _merge_openalex_twins(authors: list[dict]) -> bool:
         if len(group) != 2:
             continue
         a, b = group
-        if not same_person(a['first_name'], a['last_name'], b['first_name'], b['last_name'], strong=True):
+        # Default strength: OpenAlex itself conflates Zhang/Zheng, Meyer/Mayer.
+        if not same_person(a['first_name'], a['last_name'], b['first_name'], b['last_name']):
             continue
         from backend.database.identity import canonical_order, merge_researcher_into, researcher_weights
         try:
@@ -257,7 +258,7 @@ def _page_owners(cursor, url: str) -> tuple[list[dict], str | None]:
     if not owners:
         return [], None
     cursor.execute(
-        """SELECT hc.content, hc.raw_html FROM html_content hc
+        """SELECT hc.content, hc.raw_html, ru.page_type FROM html_content hc
            JOIN researcher_urls ru ON ru.id = hc.url_id
            WHERE ru.url = %s AND (hc.content IS NOT NULL OR hc.raw_html IS NOT NULL)
            ORDER BY hc.timestamp DESC LIMIT 1""",
@@ -265,7 +266,8 @@ def _page_owners(cursor, url: str) -> tuple[list[dict], str | None]:
     )
     page = cursor.fetchall() or []
     text, raw = (page[0][0], page[0][1]) if page else (None, None)
-    return owners, page_ownership_problem(owners, text, raw, url)
+    page_type = page[0][2] if page and len(page[0]) > 2 else None
+    return owners, page_ownership_problem(owners, text, raw, url, page_type)
 
 
 def _owner_byline_index(owners: list[dict], authors: list[tuple[str, str]]) -> dict[int, int]:
@@ -415,10 +417,12 @@ class PaperSaver:
                             byline.append((author[0], author[1]))
                         else:
                             byline.append((" ".join(author[:-1]), author[-1]))
+                    # ["Peter Hull", "Hull"] -> "Peter" / "Hull"
+                    byline = [(strip_repeated_surname(b[0], b[1]), b[1]) if b else None for b in byline]
                     # A byline name that is the page owner's resolves to the
                     # owner, never to a same-name stub record.
                     owner_at = _owner_byline_index(
-                        owners, [b if b else ("", "") for b in byline]) if not ownership_problem else {}
+                        owners, [b if b else ("", "") for b in byline]) if ownership_problem != SHARED_PAGE else {}
 
                     for author_order, name in enumerate(byline, start=1):
                         if not name:

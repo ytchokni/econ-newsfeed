@@ -12,10 +12,13 @@ Name matching has two strengths:
 * default: equal names after normalization, initials, middle names, nickname
   table (Andy/Andrew, Alex/Alexandre), accent and hyphen/space variants.
 * ``strong=True`` adds one-letter typos (Torgovitsky/Torgovistky,
-  Cristopher/Christopher, mojibake "J?rgen"/Jürgen) and compound surnames
-  (Johansson Capusan / Capusan). Use it only with independent evidence that the two records are
-  one person: a shared OpenAlex author ID, or the owner of the page the name
-  was extracted from.
+  Cristopher/Christopher, mojibake "J?rgen"/Jürgen), compound surnames
+  (Johansson Capusan / Capusan) and reversed order (Fu Chao / Chao Fu). It
+  also equates some different common surnames (Zhang/Zheng, Meyer/Mayer), so
+  it is used only where a person reviews the result or the page owner is the
+  evidence: the backed-up repair script, byline routing to a page's owner,
+  and the shared-page check. Merges made while the pipeline runs (OpenAlex
+  backfill, Layer 2) use the default strength.
 """
 from __future__ import annotations
 
@@ -35,6 +38,13 @@ _TRANSLIT = str.maketrans({
     'ł': 'l', 'Ł': 'l', 'đ': 'd', 'Đ': 'd', 'ð': 'd', 'þ': 'th', 'ı': 'i',
     '�': '?',  # mojibake replacement char: matches one letter (see _dl1)
 })
+# Cyrillic profile pages (HSE: "Макеева") name owners stored in Latin script.
+_CYRILLIC = dict(zip(
+    "абвгдеёжзийклмнопрстуфхцчшщъыьэюя",
+    ["a", "b", "v", "g", "d", "e", "e", "zh", "z", "i", "y", "k", "l", "m", "n", "o", "p", "r",
+     "s", "t", "u", "f", "kh", "ts", "ch", "sh", "shch", "", "y", "", "e", "yu", "ya"]))
+_TRANSLIT.update({ord(k): v for k, v in _CYRILLIC.items()})
+_TRANSLIT.update({ord(k.upper()): v for k, v in _CYRILLIC.items()})
 
 _PARTICLES = frozenset({
     "de", "del", "della", "der", "di", "du", "da", "das", "dos", "do", "den",
@@ -58,6 +68,29 @@ def _tokens(text: str) -> list[str]:
 def _undigraph(token: str) -> str:
     """German transliteration: Groeger -> Groger matches Gröger -> Groger."""
     return token.replace('ae', 'a').replace('oe', 'o').replace('ue', 'u')
+
+
+def strip_repeated_surname(first_name: str, last_name: str) -> str:
+    """Drop a copy of the surname that the LLM appended to the given names.
+
+    Extraction sometimes returns ["Peter Hull", "Hull"]; stored as-is the
+    researcher displays as "Peter Hull Hull", and prefix matching would let
+    that variant overwrite a correct "Peter". Only a trailing copy is removed,
+    and only when given names remain. (Same rule as PR #249.)
+    """
+    if not first_name or not last_name:
+        return first_name
+
+    def norm(text: str) -> str:
+        text = ''.join(c for c in unicodedata.normalize('NFKD', text) if not unicodedata.combining(c))
+        return ' '.join(text.replace('-', ' ').casefold().split())
+
+    surname = norm(last_name)
+    tokens = first_name.split()
+    for k in range(1, len(tokens)):
+        if norm(' '.join(tokens[-k:])) == surname:
+            return ' '.join(tokens[:-k])
+    return first_name
 
 
 def split_name(first_name: str, last_name: str) -> tuple[list[str], list[str]]:
@@ -264,6 +297,10 @@ def owner_named_in(first_name: str, last_name: str, text: str, url: str | None =
             return True
         if len(tok) >= 5 and tok in hay_joined:
             return True
+    # The owner's own given name on the page ("Nikhil", "Immanuel").
+    given_words = [t for t in _tokens(first_name) if len(t) >= 4 and '?' not in t]
+    if any(f' {t} ' in hay for t in given_words):
+        return True
     if url:
         url_words = _norm_text(url).split()
         if any(tok in url_words for tok in surname):  # ".../Professoren/Wey"
@@ -416,13 +453,21 @@ def merge_researcher_into(cursor, canonical_id: int, duplicate_id: int) -> bool:
         if getattr(exc, 'errno', None) != 1146:
             raise
 
-    new_first = canonical['first_name']
-    cg, cs = split_name(canonical['first_name'], canonical['last_name'])
-    dg, ds = split_name(duplicate['first_name'], duplicate['last_name'])
+    # Keep the survivor's name unless the duplicate spells the same name out
+    # in full ("J." -> "Jane Q."). Both are compared and stored without a
+    # repeated surname: "Peter" + "Peter Hull Hull" stays "Peter", and a
+    # survivor stored as "Peter Hull" + "Hull" is repaired to "Peter".
+    cur_first = strip_repeated_surname(canonical['first_name'], canonical['last_name'])
+    dup_first = strip_repeated_surname(
+        strip_repeated_surname(duplicate['first_name'], duplicate['last_name']), canonical['last_name'])
+    new_first = cur_first
+    cg, cs = split_name(cur_first, canonical['last_name'])
+    dg, ds = split_name(dup_first, duplicate['last_name'])
     if (cs == ds and len(dg) >= len(cg) and _given_match(cg, dg, strong=False)
             and all(len(c) == 1 or c == d for c, d in zip(cg, dg))
-            and len(duplicate['first_name'].rstrip('.')) > len(canonical['first_name'].rstrip('.'))):
-        new_first = duplicate['first_name']  # "J." -> "Jane Q." (same surname, longer spelling)
+            and len(dup_first.rstrip('.')) > len(cur_first.rstrip('.'))
+            and strip_repeated_surname(dup_first, canonical['last_name']) == dup_first):
+        new_first = dup_first
 
     present = [k for k in _RESEARCHER_COLUMNS if k in canonical or k in duplicate]
     canonical = {k: canonical.get(k) for k in _RESEARCHER_COLUMNS}
@@ -507,7 +552,7 @@ def assign_openalex_author_id(conn, researcher_id: int, openalex_author_id: str)
             conn.commit()
             return researcher_id
         same = [h for h in holders if same_person(me['first_name'], me['last_name'],
-                                                   h['first_name'], h['last_name'], strong=True)]
+                                                   h['first_name'], h['last_name'])]
         if len(same) != len(holders) or len(same) != 1:
             logger.info("Not assigning OpenAlex ID %s to researcher %s (%s %s): held by %s",
                         openalex_author_id, researcher_id, me['first_name'], me['last_name'],
@@ -550,17 +595,34 @@ def _is_profile_registry(url: str | None) -> bool:
     return bool(url and _PROFILE_REGISTRIES.match(url.strip()))
 
 
+# Personal-site hosts and per-person paths: a page there that does not print
+# its owner's name (a Google Sites research tab) is still theirs.
+_PERSONAL_PAGES = re.compile(
+    r'^https?://([^/]*\.)?(sites\.google\.com|github\.io|weebly\.com|wordpress\.com|wixsite\.com)'
+    r'|/~|/people/|/persons?/|/profiles?[/.?]|/staff/[^/?#]+', re.IGNORECASE)
+_PERSONAL_PAGE_TYPES = frozenset({"home", "homepage", "personal"})
+
+
+def _is_personal_page(url: str | None, page_type: str | None) -> bool:
+    if page_type and page_type.strip().lower() in _PERSONAL_PAGE_TYPES:
+        return True
+    return bool(url and _PERSONAL_PAGES.search(url.strip()))
+
+
 def page_ownership_problem(owners: list[dict], text: str | None, raw_html: str | None = None,
-                           url: str | None = None) -> str | None:
+                           url: str | None = None, page_type: str | None = None) -> str | None:
     """Why a tracked page should not be treated as its owners' personal page.
 
     owners: every researcher tracking the URL (dicts with first_name, last_name).
     - SHARED_PAGE: tracked for people with unrelated names (department, news
-      or institute pages such as stanford.edu/research).
+      or institute pages such as stanford.edu/research). Extraction stops.
     - OWNER_NOT_NAMED: neither the page text, its HTML nor the URL names any
-      owner (see owner_named_in).
-    Returns None when the page looks like the owner's own, or when there is
-    no stored page to judge.
+      owner (see owner_named_in). The page is kept but flagged for review,
+      and its owner is not attached to items without a byline.
+    Returns None when the page looks like the owner's own, when there is no
+    stored page to judge, for pages under MIN_JUDGED_TEXT characters, profile
+    registries (ORCID…), personal-site hosts (Google Sites, github.io…),
+    per-person paths (/~x, /people/x, /profile) and home/personal page types.
     """
     if len(owners) > 1:
         for i, a in enumerate(owners):
@@ -568,15 +630,20 @@ def page_ownership_problem(owners: list[dict], text: str | None, raw_html: str |
                 if not same_person(a['first_name'], a['last_name'], b['first_name'], b['last_name'],
                                    strong=True):
                     return SHARED_PAGE
-    hay = ' '.join(t for t in (text, raw_html) if isinstance(t, str) and t)
-    if not owners or not hay.strip() or _is_profile_registry(url):
+    text = text if isinstance(text, str) else None
+    raw_html = raw_html if isinstance(raw_html, str) else None
+    if not owners or not ((text or '').strip() or (raw_html or '').strip()):
+        return None
+    if _is_profile_registry(url) or _is_personal_page(url, page_type):
         return None
     # Error, login and bot-check pages are short; judge only real content.
-    if len(_norm_text(text if isinstance(text, str) and text else hay)) < MIN_JUDGED_TEXT:
+    if len(_norm_text(text or raw_html)) < MIN_JUDGED_TEXT:
         return None
-    if not any(owner_named_in(o['first_name'], o['last_name'], hay, url) for o in owners):
-        return OWNER_NOT_NAMED
-    return None
+    # Text first; the (possibly multi-megabyte) HTML only when the text fails.
+    for hay in (text, raw_html):
+        if hay and any(owner_named_in(o['first_name'], o['last_name'], hay, url) for o in owners):
+            return None
+    return OWNER_NOT_NAMED
 
 
 def matches_display_name(first_name: str, last_name: str, display_name: str, *, strong: bool = True) -> bool:

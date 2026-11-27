@@ -11,25 +11,36 @@ Pass --apply to write. Steps run in this order (later steps see earlier merges):
                                   agree (Gordon B. Dahl 24 / 17140) become one
   route_page_papers_to_owner      #260 byline authors on a page that name its owner
                                   move to the owner ("Dora Costa" stub -> Dora L. Costa)
-  deactivate_unowned_pages        #262 pages tracked for unrelated people, or that
-                                  never name their owner, stop being crawled; owner
+  deactivate_shared_pages         #262 pages tracked for unrelated people (Bundesbank,
+                                  ESRI, stanford.edu/research) stop being crawled; owner
                                   attachments that came only from them are removed
+  flag_unowned_pages              #262 review list of pages that never name their owner;
+                                  deletes nothing, sets researcher_urls.ownership_flag
 
-    poetry run python scripts/repair_researcher_identity.py                  # dry run
-    poetry run python scripts/repair_researcher_identity.py --apply --backup /backups/identity.jsonl
-    poetry run python scripts/repair_researcher_identity.py --steps merge_openalex_twins --apply --backup b.jsonl
-    poetry run python scripts/repair_researcher_identity.py --undo /backups/identity.jsonl          # dry run
-    poetry run python scripts/repair_researcher_identity.py --undo /backups/identity.jsonl --apply
+Run one step at a time, each with its own backup file. In production the api
+container has no volume, so mount /backups into a one-off container:
+
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm -v /backups:/backups \
+      api python scripts/repair_researcher_identity.py --steps merge_openalex_twins \
+      --apply --backup /backups/identity-merge_openalex_twins.jsonl
+
+    poetry run python scripts/repair_researcher_identity.py                  # dry run, all steps
     poetry run python scripts/repair_researcher_identity.py --report plan.json   # every action
+    poetry run python scripts/repair_researcher_identity.py --steps X --apply --backup X.jsonl
+    poetry run python scripts/repair_researcher_identity.py --undo X.jsonl              # dry run
+    poetry run python scripts/repair_researcher_identity.py --undo X.jsonl --units 3-9 --apply
 
 Each merge or move is its own short transaction, so the script can run while
 the API and workers are up. Researcher merges never touch feed_events: events
-belong to papers. Only deactivate_unowned_pages deletes papers (and with them
-their events): items with no remaining author that came only from unowned pages.
+belong to papers. Only deactivate_shared_pages deletes papers (and with them
+their events): items with no remaining author that came only from shared pages.
 Safe to re-run: every step selects the current violations. --apply requires
 --backup: before each transaction commits, the rows it replaces or deletes
 (including cascaded children of deleted papers and URLs) are appended to that
-file; --undo restores them, newest change first.
+file; --undo restores them, newest change first (--steps / --units narrow it).
+Undo restores a value only while it still holds what the repair wrote, so
+later edits win, and it skips units that would re-create an opted-out (#256)
+researcher or URL.
 """
 from __future__ import annotations
 
@@ -162,11 +173,20 @@ def _group() -> list:
     return _GROUPS[-1]
 
 
-def _capture_merge(cur, canonical_id: int, duplicate_id: int) -> None:
-    """Everything merge_researcher_into changes or deletes for this pair."""
+def _merge_with_backup(cur, canonical_id: int, duplicate_id: int) -> None:
+    """merge_researcher_into, recording what it changes and how it left the survivor."""
+    researchers_op = _capture_merge(cur, canonical_id, duplicate_id)
+    merge_researcher_into(cur, canonical_id, duplicate_id)
+    researchers_op.append({str(r["id"]): r for r in _select(cur, "researchers", "id", [canonical_id])})
+
+
+def _capture_merge(cur, canonical_id: int, duplicate_id: int) -> list:
+    """Everything merge_researcher_into changes or deletes for this pair.
+    Returns the researchers op, so the caller can attach the post-merge row."""
     ops = _group()
     ids = (canonical_id, duplicate_id)
-    ops.append(["rows", "researchers", ["id"], _select(cur, "researchers", "id", ids)])
+    researchers_op = ["rows", "researchers", ["id"], _select(cur, "researchers", "id", ids)]
+    ops.append(researchers_op)
     urls = _select(cur, "researcher_urls", "researcher_id", ids)
     ops.append(["rows", "researcher_urls", ["id"], urls])
     canonical_urls = {u["url"][:500] for u in urls if u["researcher_id"] == canonical_id}
@@ -175,10 +195,13 @@ def _capture_merge(cur, canonical_id: int, duplicate_id: int) -> None:
               if u["researcher_id"] == duplicate_id and u["url"][:500] in canonical_urls]
     ops.append(["rows", "html_content", ["id"], _select(cur, "html_content", "url_id", doomed)])
     ops.append(["rows", "html_snapshots", ["id"], _select(cur, "html_snapshots", "url_id", doomed)])
-    refs = _select(cur, "html_content", "researcher_id", ids, "id, researcher_id")
-    refs += [r for r in _select(cur, "html_content", "url_id", dup_url_ids, "id, researcher_id")
+    refs = _select(cur, "html_content", "researcher_id", ids, "id, url_id, researcher_id")
+    refs += [r for r in _select(cur, "html_content", "url_id", dup_url_ids, "id, url_id, researcher_id")
              if r not in refs]
-    ops.append(["set", "html_content", "researcher_id", [[r["id"], r["researcher_id"]] for r in refs]])
+    # Rows of doomed URL rows are deleted and restored whole (above).
+    ops.append(["set", "html_content", "researcher_id",
+                [[r["id"], r["researcher_id"], canonical_id] for r in refs
+                 if r["researcher_id"] != canonical_id and r["url_id"] not in doomed]])
     for table in ("authorship", "researcher_snapshots", "url_discoveries"):
         ops.append(["rows", table, ["id"], _select(cur, table, "researcher_id", ids)])
     for table, key in (("user_follows", "user_id"), ("researcher_jel_codes", "jel_code"),
@@ -186,8 +209,10 @@ def _capture_merge(cur, canonical_id: int, duplicate_id: int) -> None:
         ops.append(["pairs", table, key, list(ids), _select(cur, table, "researcher_id", ids)])
     ops.append(["rows", "researcher_jel_state", ["researcher_id"],
                 _select(cur, "researcher_jel_state", "researcher_id", ids)])
-    mining = _select(cur, "site_mining_candidates", "researcher_id", ids, "id, researcher_id")
-    ops.append(["set", "site_mining_candidates", "researcher_id", [[r["id"], r["researcher_id"]] for r in mining]])
+    mining = _select(cur, "site_mining_candidates", "researcher_id", [duplicate_id], "id, researcher_id")
+    ops.append(["set", "site_mining_candidates", "researcher_id",
+                [[r["id"], r["researcher_id"], canonical_id] for r in mining]])
+    return researchers_op
 
 
 _FK_CHILDREN: dict[str, list[tuple[str, str, str]]] = {}
@@ -235,14 +260,27 @@ def _insert(cur, table: str, row: dict, ignore: bool = False) -> None:
                 f"VALUES ({', '.join(['%s'] * len(cols))})", [row[c] for c in cols])
 
 
-def _restore_rows(cur, table: str, pk: list[str], rows: list[dict]) -> None:
+_UNDO_STATS: collections.Counter = collections.Counter()
+
+
+def _restore_rows(cur, table: str, pk: list[str], rows: list[dict], after: dict | None = None) -> None:
+    """Put rows back by primary key. With `after` ({id: row as the repair
+    left it}), a column is restored only if it still holds that value."""
     for row in rows:
         row = _writable(cur, table, row)
         where = " AND ".join(f"`{c}` = %s" for c in pk)
         key = [row[c] for c in pk]
-        cur.execute(f"SELECT 1 FROM `{table}` WHERE {where}", key)
-        if cur.fetchone():
+        cur.execute(f"SELECT * FROM `{table}` WHERE {where}", key)
+        current = cur.fetchone()
+        if current:
             cols = [c for c in row if c not in pk]
+            left = (after or {}).get(str(key[0])) if len(pk) == 1 else None
+            if left is not None:
+                kept = [c for c in cols if c in left and current.get(c) != left[c]]
+                _UNDO_STATS["kept_later_values"] += len(kept)
+                if kept:
+                    log.warning("  %s %s changed since the repair; keeping current %s", table, key, kept)
+                cols = [c for c in cols if c not in kept]
             if cols:
                 cur.execute(f"UPDATE `{table}` SET {', '.join(f'`{c}` = %s' for c in cols)} WHERE {where}",
                             [row[c] for c in cols] + key)
@@ -253,12 +291,24 @@ def _restore_rows(cur, table: str, pk: list[str], rows: list[dict]) -> None:
 def _undo_op(cur, op: list) -> None:
     kind = op[0]
     if kind == "rows":
-        _, table, pk, rows = op
-        _restore_rows(cur, table, pk, rows)
+        _restore_rows(cur, op[1], op[2], op[3], op[4] if len(op) > 4 else None)
     elif kind == "set":
         _, table, col, pairs = op
-        for row_id, value in pairs:
-            cur.execute(f"UPDATE `{table}` SET `{col}` = %s WHERE id = %s", (value, row_id))
+        for pair in pairs:
+            if len(pair) == 3:  # [id, old, value the repair wrote]: restore only if unchanged since
+                row_id, value, written = pair
+                cur.execute(f"SELECT `{col}` AS v FROM `{table}` WHERE id = %s", (row_id,))
+                current = cur.fetchone()
+                if current is None:
+                    continue
+                if current["v"] != written:
+                    _UNDO_STATS["kept_later_values"] += 1
+                    log.warning("  %s %s.%s changed since the repair; keeping current value", table, row_id, col)
+                    continue
+                cur.execute(f"UPDATE `{table}` SET `{col}` = %s WHERE id = %s", (value, row_id))
+            else:
+                row_id, value = pair
+                cur.execute(f"UPDATE `{table}` SET `{col}` = %s WHERE id = %s", (value, row_id))
     elif kind == "pairs":
         # (researcher_id, key) tables: drop what the merge moved onto the
         # surviving record, then put the original rows back.
@@ -285,8 +335,41 @@ def _undo_op(cur, op: list) -> None:
         raise ValueError(f"unknown backup operation {kind}")
 
 
-def undo(path: str) -> dict:
-    """Restore every committed unit of a backup file, newest first."""
+def _parse_units(spec: str | None) -> set[int] | None:
+    if not spec:
+        return None
+    out: set[int] = set()
+    for part in spec.split(","):
+        part = part.strip()
+        if "-" in part:
+            lo, hi = part.split("-", 1)
+            out.update(range(int(lo), int(hi) + 1))
+        elif part:
+            out.add(int(part))
+    return out
+
+
+def _opted_out(unit: dict) -> list[str]:
+    """Researchers or URLs this unit would re-create that have opted out (#256)."""
+    try:
+        from backend.database.optouts import is_name_opted_out, is_url_opted_out
+    except ImportError:  # opt-out tombstones not deployed: nothing to protect
+        return []
+    hits = []
+    for group in unit["groups"]:
+        for op in group:
+            rows = op[3] if op[0] == "rows" else op[2] if op[0] == "insert" else []
+            table = op[1]
+            for r in rows if isinstance(rows, list) else []:
+                if table == "researchers" and is_name_opted_out(r.get("first_name", ""), r.get("last_name", "")):
+                    hits.append(f"researcher {r.get('id')}")
+                elif table == "researcher_urls" and is_url_opted_out(r.get("url", "")):
+                    hits.append(f"url {r.get('id')}")
+    return hits
+
+
+def undo(path: str, steps: set[str] | None = None, unit_ids: set[int] | None = None) -> dict:
+    """Restore committed units of a backup file, newest first."""
     units, committed = {}, set()
     for line in Path(path).read_text().splitlines():
         rec = json.loads(line)
@@ -294,7 +377,16 @@ def undo(path: str) -> dict:
             units[rec["unit"]] = _decode(rec)
         elif "commit" in rec:
             committed.add(rec["commit"])
-    todo = [units[u] for u in sorted(committed, reverse=True) if u in units]
+    todo = [units[u] for u in sorted(committed, reverse=True) if u in units
+            and (steps is None or units[u]["step"] in steps)
+            and (unit_ids is None or u in unit_ids)]
+    skipped_optout = 0
+    for unit in list(todo):
+        hits = _opted_out(unit)
+        if hits:
+            log.warning("  skip unit %s (%s): would re-create opted-out %s", unit["unit"], unit["label"], hits[:3])
+            todo.remove(unit)
+            skipped_optout += 1
     by_step = collections.Counter(u["step"] for u in todo)
     log.info("  %d committed units to undo (%d recorded): %s", len(todo), len(units), dict(by_step))
     restored = 0
@@ -307,7 +399,8 @@ def undo(path: str) -> dict:
             restored += _write(f"undo {unit['unit']} {unit['label']}", writes, record=False)
     if APPLY and restored < len(todo):
         log.error("  %d units could not be restored (see FAILED above)", len(todo) - restored)
-    return {"units": len(todo), "restored": restored, **{f"units_{k}": v for k, v in by_step.items()}}
+    return {"units": len(todo), "restored": restored, "skipped_opted_out": skipped_optout,
+            "kept_later_values": _UNDO_STATS["kept_later_values"], **{f"units_{k}": v for k, v in by_step.items()}}
 
 
 def _write(label: str, fn, record: bool = True) -> bool:
@@ -367,8 +460,7 @@ def _apply_merges(step: str, plan: list[tuple[dict, list[dict]]]) -> int:
 
         def writes(cur, canonical=canonical, dups=dups):
             for d in dups:
-                _capture_merge(cur, canonical["id"], d["id"])
-                merge_researcher_into(cur, canonical["id"], d["id"])
+                _merge_with_backup(cur, canonical["id"], d["id"])
         if _write(f"{step} {canonical['id']}", writes):
             done += 1
     return done
@@ -470,7 +562,7 @@ def clear_conflicting_openalex_ids() -> dict:
         ids = [r["id"] for r in losers]
 
         def writes(cur, oa=oa, ids=ids):
-            _group().append(["set", "researchers", "openalex_author_id", [[i, oa] for i in ids]])
+            _group().append(["set", "researchers", "openalex_author_id", [[i, oa, None] for i in ids]])
             cur.execute(f"UPDATE researchers SET openalex_author_id = NULL "
                         f"WHERE openalex_author_id = %s AND id IN ({','.join(['%s'] * len(ids))})",
                         (oa, *ids))
@@ -629,8 +721,7 @@ def route_page_papers_to_owner() -> dict:
                 cur.execute("DELETE FROM authorship WHERE researcher_id = %s AND publication_id = %s",
                             (a["researcher_id"], pid))
             for sid in {a["researcher_id"] for _, a, _ in ms} & emptied:
-                _capture_merge(cur, owner_id, sid)
-                merge_researcher_into(cur, owner_id, sid)
+                _merge_with_backup(cur, owner_id, sid)
         if APPLY and _write(f"route to owner {owner_id}", writes):
             applied += 1
             refresh_has_top5_for([owner_id])
@@ -645,9 +736,8 @@ def route_page_papers_to_owner() -> dict:
 
 # ---------------------------------------------------------------- #262
 
-def deactivate_unowned_pages() -> dict:
-    flagged: dict[str, str] = {}
-
+def _shared_pages() -> dict[str, str]:
+    """Active URLs tracked for researchers with unrelated names."""
     shared = fetch_all(
         """SELECT DISTINCT ru.url, r.id, r.first_name, r.last_name
            FROM researcher_urls ru JOIN researchers r ON r.id = ru.researcher_id
@@ -656,15 +746,17 @@ def deactivate_unowned_pages() -> dict:
     by_url: dict[str, list[dict]] = collections.defaultdict(list)
     for r in shared:
         by_url[r["url"]].append(r)
-    for url, owners in by_url.items():
-        if any(not same_person(a["first_name"], a["last_name"], b["first_name"], b["last_name"], strong=True)
-               for i, a in enumerate(owners) for b in owners[i + 1:]):
-            flagged[url] = SHARED_PAGE
+    return {url: SHARED_PAGE for url, owners in by_url.items()
+            if page_ownership_problem(owners, None) == SHARED_PAGE}
 
+
+def _unnamed_pages(exclude: set[str]) -> dict[str, dict]:
+    """Active pages that never name their owner: {url: {owner, page_type}}."""
+    flagged: dict[str, dict] = {}
     # SQL prefilter (accent/case-insensitive collation): pages whose text and
     # HTML never contain the stored surname; the Python check then decides.
     candidates = fetch_all(
-        """SELECT ru.id AS url_id, ru.url, r.first_name, r.last_name
+        """SELECT ru.id AS url_id, ru.url, ru.page_type, r.id AS researcher_id, r.first_name, r.last_name
            FROM researcher_urls ru
            JOIN researchers r ON r.id = ru.researcher_id
            JOIN html_content hc ON hc.url_id = ru.id
@@ -680,10 +772,46 @@ def deactivate_unowned_pages() -> dict:
         for c in chunk:
             page = pages.get(c["url_id"]) or {}
             owner = [{"first_name": c["first_name"], "last_name": c["last_name"]}]
-            if c["url"] not in flagged and page_ownership_problem(
-                    owner, page.get("content"), page.get("raw_html"), c["url"]) == OWNER_NOT_NAMED:
-                flagged[c["url"]] = OWNER_NOT_NAMED
+            if c["url"] not in exclude and page_ownership_problem(
+                    owner, page.get("content"), page.get("raw_html"), c["url"], c["page_type"]) == OWNER_NOT_NAMED:
+                flagged[c["url"]] = {"researcher_id": c["researcher_id"], "name": _name(c),
+                                     "page_type": c["page_type"]}
+    return flagged
 
+
+def flag_unowned_pages() -> dict:
+    """#262 review list: pages that never name their owner. Nothing is deleted
+    or deactivated; --apply sets researcher_urls.ownership_flag, which lists
+    them in the admin Health tab and stops position-0 owner credit from them."""
+    pages = _unnamed_pages(set(_shared_pages()))
+    for url, info in list(pages.items())[:SAMPLES]:
+        log.info("  review: %s (%s, %s)", url, info["name"], info["page_type"])
+    REPORT["flag_unowned_pages"] = [{"url": u, **info} for u, info in sorted(pages.items())]
+    applied = 0
+    if APPLY:
+        for chunk in _chunks(sorted(pages), 200):
+            def writes(cur, chunk=chunk):
+                now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0, tzinfo=None)
+                rows = _select(cur, "researcher_urls", "url", chunk, "id, ownership_flag, ownership_flagged_at")
+                todo = [r for r in rows if r["ownership_flag"] != OWNER_NOT_NAMED]
+                _group().append(["set", "researcher_urls", "ownership_flag",
+                                 [[r["id"], r["ownership_flag"], OWNER_NOT_NAMED] for r in todo]])
+                _group().append(["set", "researcher_urls", "ownership_flagged_at",
+                                 [[r["id"], r["ownership_flagged_at"], now] for r in todo]])
+                for r in todo:
+                    cur.execute("UPDATE researcher_urls SET ownership_flag = %s, ownership_flagged_at = %s "
+                                "WHERE id = %s", (OWNER_NOT_NAMED, now, r["id"]))
+            applied += _write("flag unowned pages", writes)
+    return {"urls_flagged_for_review": len(pages), "applied_chunks": applied}
+
+
+def deactivate_shared_pages() -> dict:
+    """#262: pages tracked for unrelated people stop being crawled; owner
+    attachments (position 0) that came only from them are removed, and items
+    left with no author that came only from them are deleted. Those items are
+    other people's papers or news scraped from institutional list pages; no
+    tracked author remains on them."""
+    flagged = _shared_pages()
     urls = sorted(flagged)
     detached: list[tuple[int, int]] = []   # (researcher, paper) owner attachments to remove
     doomed: set[int] = set()
@@ -735,20 +863,26 @@ def deactivate_unowned_pages() -> dict:
             events += fetch_all(f"SELECT COUNT(*) AS n FROM feed_events WHERE paper_id IN ({ph})",
                                 tuple(chunk))[0]["n"]
 
-    reasons = collections.Counter(flagged.values())
     for url in urls[:SAMPLES]:
         log.info("  %s: %s", flagged[url], url)
-    REPORT["deactivate_unowned_pages"] = [{"url": u, "reason": flagged[u]} for u in urls]
-    REPORT["deactivate_unowned_pages_papers_deleted"] = sorted(doomed)
+    REPORT["deactivate_shared_pages"] = [{"url": u, "reason": flagged[u]} for u in urls]
+    REPORT["deactivate_shared_pages_papers_deleted"] = sorted(doomed)
 
     applied = 0
     if APPLY:
         for url in urls:
             def writes(cur, url=url):
-                _group().append(["rows", "researcher_urls", ["id"], _select(cur, "researcher_urls", "url", [url])])
-                cur.execute("""UPDATE researcher_urls SET is_active = FALSE, deactivated_at = NOW(),
+                now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0, tzinfo=None)
+                before = _select(cur, "researcher_urls", "url", [url])
+                _group().append(["set", "researcher_urls", "is_active",
+                                 [[r["id"], r["is_active"], 0] for r in before if r["is_active"]]])
+                _group().append(["set", "researcher_urls", "deactivation_reason",
+                                 [[r["id"], r["deactivation_reason"], flagged[url]] for r in before if r["is_active"]]])
+                _group().append(["set", "researcher_urls", "deactivated_at",
+                                 [[r["id"], r["deactivated_at"], now] for r in before if r["is_active"]]])
+                cur.execute("""UPDATE researcher_urls SET is_active = FALSE, deactivated_at = %s,
                                  deactivation_reason = %s WHERE url = %s AND is_active = TRUE""",
-                            (flagged[url], url))
+                            (now, flagged[url], url))
             applied += _write(f"deactivate {url}", writes)
         for chunk in _chunks(detached, 500):
             def writes(cur, chunk=chunk):
@@ -774,8 +908,7 @@ def deactivate_unowned_pages() -> dict:
             _write("delete unowned items", writes)
         for rid in {rid for rid, _ in detached}:
             refresh_has_top5_for([rid])
-    return {"urls_flagged": len(urls), "shared_page": reasons[SHARED_PAGE],
-            "owner_not_named": reasons[OWNER_NOT_NAMED],
+    return {"urls_deactivated": len(urls),
             "owner_attachments_removed": len(detached),
             "papers_deleted": len(doomed), "feed_events_deleted": events, "applied_urls": applied}
 
@@ -785,7 +918,8 @@ STEP_ORDER = [
     clear_conflicting_openalex_ids,
     merge_shared_url_twins,
     route_page_papers_to_owner,
-    deactivate_unowned_pages,
+    deactivate_shared_pages,
+    flag_unowned_pages,
 ]
 STEPS = {fn.__name__: fn for fn in STEP_ORDER}
 
@@ -799,13 +933,15 @@ def main(argv=None) -> dict:
     parser.add_argument("--backup", help="with --apply: append the rows each change replaces to this "
                                          "JSON-lines file (required)")
     parser.add_argument("--undo", metavar="BACKUP", help="restore a --backup file, newest change first "
-                                                         "(dry run unless --apply)")
+                                                         "(dry run unless --apply; narrow with --steps/--units)")
+    parser.add_argument("--units", help="with --undo: unit numbers to restore, e.g. 3,5-9")
     args = parser.parse_args(argv)
     APPLY = args.apply
     global BACKUP, CURRENT_STEP
     if args.undo:
         log.info("=== repair_researcher_identity --undo %s (%s) ===", args.undo, "APPLY" if APPLY else "DRY RUN")
-        counts = undo(args.undo)
+        steps = {x.strip() for x in args.steps.split(",") if x.strip()} if args.steps else None
+        counts = undo(args.undo, steps, _parse_units(args.units))
         log.info("  %s", counts)
         return {"undo": counts}
     if APPLY and not args.backup:

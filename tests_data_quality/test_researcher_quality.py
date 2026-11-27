@@ -439,20 +439,19 @@ class TestResearcherIdentity:
 
     def test_no_owner_credit_from_unowned_pages(self, db):
         """Issue #262: owner attachments (author_order 0) whose only source is a
-        page deactivated as not the owner's ("Rubin Observatory..." for Abramitzky)."""
+        page deactivated as shared ("Rubin Observatory..." for Abramitzky)."""
         rows = db.fetch_all(
             """SELECT a.researcher_id, a.publication_id
                FROM authorship a
                JOIN paper_urls pu ON pu.paper_id = a.publication_id
                JOIN researcher_urls ru ON ru.url = pu.url AND ru.researcher_id = a.researcher_id
                WHERE COALESCE(a.author_order, 0) = 0
-                 AND ru.deactivation_reason IN ('owner_not_named', 'shared_page')
+                 AND ru.deactivation_reason = 'shared_page'
                  AND NOT EXISTS (
                      SELECT 1 FROM paper_urls pu2
                      JOIN researcher_urls ru2 ON ru2.url = pu2.url
                      WHERE pu2.paper_id = a.publication_id AND ru2.researcher_id = a.researcher_id
-                       AND (ru2.deactivation_reason IS NULL
-                            OR ru2.deactivation_reason NOT IN ('owner_not_named', 'shared_page')))
+                       AND (ru2.deactivation_reason IS NULL OR ru2.deactivation_reason != 'shared_page'))
                LIMIT 50"""
         )
         assert not rows, "owners credited with items from pages that are not theirs:\n" + fmt_violations(rows)
