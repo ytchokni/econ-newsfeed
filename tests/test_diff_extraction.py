@@ -419,7 +419,7 @@ class TestExtractOneUrlDiffPath:
         assert outcome.status == "extracted"
         mocks["apply_rename"].assert_called_once_with(
             99, "Old Title for My Paper", "Improved Title for My Paper", tc,
-            "https://example.com/pubs",
+            "https://example.com/pubs", allow_merge=True,  # neither title wrongly on the page
         )
         mock_emit.assert_called_once()
         emit_args = mock_emit.call_args[0]
@@ -527,3 +527,15 @@ class TestGetPreviousText:
             from backend.pipeline.html_fetcher import HTMLFetcher
             result = HTMLFetcher.get_previous_text(1)
         assert result is None
+
+
+@pytest.mark.parametrize("old_text, new_text, expected", [
+    ("Papers: Old Title for My Paper (2023)", "Papers: Improved Title for My Paper (2024)", True),
+    ("Papers: Old Title for My Paper; Improved Title for My Paper", "Papers: Improved Title for My Paper", False),
+    ("Papers: Old Title for My Paper", "Papers: OLD TITLE, for my paper! Improved Title for My Paper", False),
+    (None, "Improved Title for My Paper", False),
+])
+def test_rename_page_evidence(old_text, new_text, expected):
+    from backend.pipeline.extraction import _rename_has_page_evidence
+    assert _rename_has_page_evidence(
+        "Old Title for My Paper", "Improved Title for My Paper", old_text, new_text) is expected

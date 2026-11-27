@@ -428,11 +428,13 @@ class PaperSaver:
 
     @staticmethod
     def apply_title_rename(paper_id: int, old_title: str, new_title: str,
-                           metadata: dict, source_url: str) -> str:
+                           metadata: dict, source_url: str, *, allow_merge: bool = False) -> str:
         """Apply a known title rename. Returns RENAMED, MERGED or SKIPPED.
 
         A paper may already carry the new title (often from another
         researcher's page). That is not an error: see _resolve_rename_collision.
+        allow_merge: the page text shows the old title replaced by the new one
+        (extraction._rename_has_page_evidence); without it a collision is skipped.
         Only RENAMED changes this paper's title and warrants a title_change event.
 
         metadata should contain status, venue, abstract, draft_url, year.
@@ -478,27 +480,29 @@ class PaperSaver:
 
         if collision_id is not None:
             return PaperSaver._resolve_rename_collision(
-                paper_id, collision_id, old_title, new_title, source_url,
+                paper_id, collision_id, old_title, new_title, source_url, allow_merge,
             )
         return PaperSaver.RENAMED
 
     @staticmethod
     def _resolve_rename_collision(paper_id: int, other_id: int, old_title: str,
-                                  new_title: str, source_url: str) -> str:
+                                  new_title: str, source_url: str, allow_merge: bool) -> str:
         """The new title already belongs to another paper: merge or keep both.
 
-        The page renaming this paper to the other paper's title is the title
-        evidence; merge_paper_group(as_title=...) still requires the same
-        authors (or a shared identifier) before treating them as one work, and
-        creates no feed events. Anything else keeps both papers unchanged.
-        Never raises, so the page's other results are still saved.
+        The page replacing this paper's title with the other paper's title
+        (allow_merge) is the title evidence; merge_paper_group(as_title=...)
+        still requires the same authors (or a shared identifier) before
+        treating them as one work, and creates no feed events. Anything else
+        keeps both papers unchanged. Never raises, so the page's other results
+        are still saved.
         """
-        from backend.enrichment.paper_merge import merge_paper_group
-        try:
-            merged = merge_paper_group([paper_id, other_id], as_title=new_title)
-        except Exception:
-            logging.exception("Title rename merge of papers %d and %d failed", paper_id, other_id)
-            merged = False
+        merged = False
+        if allow_merge:
+            from backend.enrichment.paper_merge import merge_paper_group
+            try:
+                merged = merge_paper_group([paper_id, other_id], as_title=new_title)
+            except Exception:
+                logging.exception("Title rename merge of papers %d and %d failed", paper_id, other_id)
         if merged:
             logging.info(
                 "Title rename '%s' → '%s' on %s matched paper %d; merged with paper %d",

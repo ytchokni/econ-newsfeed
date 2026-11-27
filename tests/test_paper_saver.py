@@ -258,7 +258,7 @@ class TestAuthorLookupCache:
 class TestApplyTitleRenameCollision:
     """A rename onto another paper's title merges one work or keeps both; never raises."""
 
-    def _run(self, dup_id=None, merge=False):
+    def _run(self, dup_id=None, merge=False, allow_merge=True):
         """Run apply_title_rename with a mocked connection; return (outcome, SQL list, conn, merge mock)."""
         cursor = MagicMock()
         cursor.fetchone.return_value = (dup_id,) if dup_id else None
@@ -275,7 +275,7 @@ class TestApplyTitleRenameCollision:
         ):
             outcome = PaperSaver.apply_title_rename(
                 1, "Old Title", "New Title",
-                {"status": "working_paper"}, "http://example.com",
+                {"status": "working_paper"}, "http://example.com", allow_merge=allow_merge,
             )
         return outcome, [str(c[0][0]) for c in cursor.execute.call_args_list], conn, merge_mock
 
@@ -293,6 +293,11 @@ class TestApplyTitleRenameCollision:
         assert not any("UPDATE papers" in s or "DELETE" in s for s in sqls)
         warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
         assert len(warnings) == 1 and "paper 1" in warnings[0] and "paper 77" in warnings[0]
+
+    def test_collision_without_page_evidence_never_merges(self):
+        outcome, _, _, merge = self._run(dup_id=77, merge=True, allow_merge=False)
+        assert outcome == PaperSaver.SKIPPED
+        merge.assert_not_called()
 
     def test_failed_merge_is_a_skip_not_an_error(self):
         outcome, _, _, _ = self._run(dup_id=77, merge=RuntimeError("deadlock"))

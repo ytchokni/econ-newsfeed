@@ -143,11 +143,15 @@ def _title_change(old_title, new_title):
     }
 
 
-def _run_diff(url_id, changes):
+def _run_diff(url_id, changes, old_text, new_text):
     from backend.pipeline.extraction import _extract_via_diff
     with patch("backend.pipeline.extraction.Publication.try_extract_changes",
                return_value=ExtractionLLMResult(pubs=changes)):
-        return _extract_via_diff(url_id, PAGE, "new text", "old text", "new", None)
+        return _extract_via_diff(url_id, PAGE, new_text, old_text, "new", None)
+
+
+def _page_text(*titles):
+    return "Research\n" + "\n".join(f"{t}. With coauthors. Working paper." for t in titles)
 
 
 def _events():
@@ -169,7 +173,8 @@ def test_same_work_collision_merges_without_events(db):
     url_id = _page(orkin)
     events_before = _events()
 
-    outcome = _run_diff(url_id, [_title_change(old_title, new_title)])
+    outcome = _run_diff(url_id, [_title_change(old_title, new_title)],
+                        _page_text(old_title), _page_text(new_title))
 
     assert outcome.ok
     assert _extracted_hash(url_id) == "new"
@@ -194,14 +199,16 @@ def test_different_work_collision_keeps_both_and_page_completes(db, caplog):
     renamed = _paper("Monetary Policy Communication and Household Expectations", PAGE, [handlan])
     url_id = _page(handlan)
 
+    matters_title = "FedSpeak Matters: Statement Similarity and Monetary Policy Expectations"
     with caplog.at_level("WARNING"):
         outcome = _run_diff(url_id, [
-            _title_change("FedSpeak Matters: Statement Similarity and Monetary Policy Expectations",
-                          "FedSpeak Indicators"),
+            _title_change(matters_title, "FedSpeak Indicators"),
             # A clean rename on the same page is still applied.
             _title_change("Monetary Policy Communication and Household Expectations",
                           "Central Bank Communication and Household Inflation Expectations"),
-        ])
+        ], _page_text(matters_title, "Monetary Policy Communication and Household Expectations"),
+           _page_text("FedSpeak Indicators",
+                      "Central Bank Communication and Household Inflation Expectations"))
 
     assert outcome.ok and outcome.pubs_count == 2
     assert _extracted_hash(url_id) == "new"
@@ -227,12 +234,37 @@ def test_subset_authors_without_shared_identifier_keep_both(db):
                       "https://samueldodini.com", [dodini, smith, xu])
     url_id = _page(smith)
 
-    outcome = _run_diff(url_id, [_title_change(
-        "Degrees for GPTs: The Effects of Generative AI on Skills and Schooling",
-        "Degrees for GPTs: The Effects of Generative AI on Skill Demand and Supply",
-    )])
+    old_t = "Degrees for GPTs: The Effects of Generative AI on Skills and Schooling"
+    new_t = "Degrees for GPTs: The Effects of Generative AI on Skill Demand and Supply"
+    outcome = _run_diff(url_id, [_title_change(old_t, new_t)], _page_text(old_t), _page_text(new_t))
 
     assert outcome.ok
     assert _extracted_hash(url_id) == "new"
     assert {r["id"] for r in _q("SELECT id FROM papers")} == {old_id, other_id}
+    assert [e["event_type"] for e in _events()] == ["new_paper", "new_paper"]
+
+
+@pytest.mark.parametrize("old_page, new_page", [
+    (["Trade Shocks and Local Labor Markets", "Minimum Wages and Firm Entry"],
+     ["Trade Shocks and Local Labor Markets", "Minimum Wages and Firm Entry"]),  # both listed throughout
+    (["Trade Shocks and Local Labor Markets"],
+     ["Trade Shocks and Local Labor Markets", "Minimum Wages and Firm Entry"]),  # old title still there
+    (["Trade Shocks and Local Labor Markets", "Minimum Wages and Firm Entry"],
+     ["Minimum Wages and Firm Entry"]),  # new title was already there
+], ids=["both-listed", "old-still-listed", "new-already-listed"])
+def test_same_team_different_papers_not_fused_without_page_evidence(db, old_page, new_page):
+    """Same 2-author team, LLM wrongly reports A -> B: the author set alone must not merge them."""
+    a, b = _researcher("Ann", "Autor"), _researcher("Ben", "Borjas")
+    trade = _paper("Trade Shocks and Local Labor Markets", PAGE, [a, b])
+    wages = _paper("Minimum Wages and Firm Entry", "https://example.edu/borjas", [a, b])
+    url_id = _page(a)
+
+    outcome = _run_diff(url_id, [_title_change("Trade Shocks and Local Labor Markets",
+                                               "Minimum Wages and Firm Entry")],
+                        _page_text(*old_page), _page_text(*new_page))
+
+    assert outcome.ok
+    assert _extracted_hash(url_id) == "new"
+    titles = {r["id"]: r["title"] for r in _q("SELECT id, title FROM papers")}
+    assert titles == {trade: "Trade Shocks and Local Labor Markets", wages: "Minimum Wages and Firm Entry"}
     assert [e["event_type"] for e in _events()] == ["new_paper", "new_paper"]
