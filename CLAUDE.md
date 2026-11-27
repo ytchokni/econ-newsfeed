@@ -331,7 +331,7 @@ cooldown, 5 per address per hour plus a deployment-wide hourly cap
 (`EMAIL_LOGIN_HOURLY_LIMIT`). After 15 wrong codes in a day an address is
 "guarded" (not locked out): 2 codes an hour, one try each. 100 wrong codes in an
 hour across all addresses (`EMAIL_LOGIN_MAX_FAILURES_PER_HOUR`) pause email
-sign-in and log `email_login_circuit_open`, which the daily monitor's
+sign-in until they age out of that rolling hour (up to an hour) and log `email_login_circuit_open`, which the daily monitor's
 `api_traffic` check reports. An hourly scheduler job deletes code rows older
 than a day. Per-IP limits use `api_protection`'s client key (strict per
 visitor; coarse in the keyless fail-open tier, where visitors share Vercel IPs);

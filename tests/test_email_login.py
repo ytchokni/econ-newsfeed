@@ -552,7 +552,7 @@ def test_paused_response_over_http(client, store, monkeypatch):
         resp = client.post(f"/api/email-login/{path}", json=body)
         assert resp.status_code == 503
         assert resp.json()["error"]["code"] == "email_login_paused"
-        assert resp.headers["Retry-After"] == "600"
+        assert resp.headers["Retry-After"] == "3600"  # failures age out of a rolling hour
 
 
 def test_request_code_unavailable_returns_503(client, monkeypatch):

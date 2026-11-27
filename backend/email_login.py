@@ -147,8 +147,9 @@ def _check_guess_limits(email: str, now: datetime) -> bool:
         _log_circuit_open(failures, limit)
         raise EmailLoginError(
             "email_login_paused",
-            "Email sign-in is paused for a while. Try again later or continue with Google.",
-            503, 600,
+            # Failures age out of a rolling hour, so the pause can last up to that long.
+            "Email sign-in is paused for up to an hour. Try again later or continue with Google.",
+            503, int(CIRCUIT_WINDOW.total_seconds()),
         )
     failed_today = store.failed_attempts_for_email_since(email, now - FAILED_PER_EMAIL_WINDOW)
     return failed_today >= MAX_FAILED_PER_EMAIL_PER_DAY
