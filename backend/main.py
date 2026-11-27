@@ -233,6 +233,12 @@ def main() -> None:
     mining_parser.add_argument('--max-seconds', type=int, default=None)
     mining_parser.add_argument('--status', action='store_true', help='Read recent runs, queue counts and held candidates; no network requests')
 
+    searlo_parser = subparsers.add_parser('apply-searlo-review', help='Apply reviewed paid-search (Searlo) discoveries through the miner store; dry run unless --apply')
+    searlo_parser.add_argument('--decisions', help='JSON file of reviewed decisions (approve/reject/unsure per discovery)')
+    searlo_parser.add_argument('--apply', action='store_true', help='Write: insert URLs / reject discoveries (requires --manifest)')
+    searlo_parser.add_argument('--manifest', help='JSONL file recording every applied change; required with --apply, used by --undo')
+    searlo_parser.add_argument('--undo', action='store_true', help='Reverse the changes recorded in --manifest (dry run unless --apply)')
+
     review_parser = subparsers.add_parser('review', help='LLM quality review of feed events (GPT 5.4 Mini)')
     review_parser.add_argument('--limit', type=int, default=None, help='Max events to review')
     review_parser.add_argument('--batch-size', type=int, default=100, help='Batch size (default: 100)')
@@ -284,6 +290,20 @@ def main() -> None:
             result = run_site_mining_batch(apply=args.apply, mode=args.mode,
                 source_limit=args.source_limit, candidate_limit=args.limit,
                 max_requests=args.max_requests, max_seconds=args.max_seconds)
+        print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
+    elif args.command == 'apply-searlo-review':
+        from backend.discovery import searlo_review
+        if args.undo:
+            if not args.manifest:
+                parser.error('--undo requires --manifest')
+            result = searlo_review.undo(args.manifest, apply=args.apply)
+        else:
+            if not args.decisions:
+                parser.error('--decisions is required')
+            if args.apply and not args.manifest:
+                parser.error('--apply requires --manifest')
+            result = searlo_review.apply_decisions(
+                searlo_review.load_decisions(args.decisions), apply=args.apply, manifest_path=args.manifest)
         print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
     elif args.command == 'review':
         create_tables()

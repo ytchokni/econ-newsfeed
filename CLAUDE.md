@@ -332,6 +332,14 @@ unchanged pages and detect href-only changes. The `econ_site_mining` MySQL lock
 also protects simultaneous CLI runs. Each URL bundle and its approval commit
 together; existing URLs are never reassigned or reactivated.
 
+Reviewed paid-search (Searlo) discoveries are applied through the same store, never
+through the legacy admin approve/bulk-approve (which write `researcher_urls` without
+the miner's guards). `python -m backend.main apply-searlo-review --decisions F.json`
+is a dry run; `--apply --manifest M.jsonl` runs one `approve_bundle` transaction per
+researcher (URL inserts + `url_discoveries.status` together; identity holds, URL
+ownership and prior rejections still hold a bundle back), and `--undo --manifest M.jsonl
+[--apply]` deletes the inserted URL rows and reopens the discoveries.
+
 Alternatively, `SITE_MINING_ENABLED=true` schedules the same bounded job inside
 the API hourly and after a scrape. Use one scheduling mechanism at a time. The
 paid Searlo discovery job remains separate and its configuration is unchanged.
