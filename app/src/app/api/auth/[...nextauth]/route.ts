@@ -1,8 +1,8 @@
+import CredentialsProvider from "next-auth/providers/credentials";
+import { authorizeEmailCode, EMAIL_CODE_PROVIDER_ID } from "@/lib/email-code-auth";
 import NextAuth from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
-import CredentialsProvider from "next-auth/providers/credentials";
 import { encodeBackendJwt } from "@/lib/backend-jwt";
-import { authorizeEmailCode, EMAIL_CODE_PROVIDER_ID } from "@/lib/email-code-auth";
 
 const NEXTAUTH_SECRET = process.env.NEXTAUTH_SECRET || "";
 
