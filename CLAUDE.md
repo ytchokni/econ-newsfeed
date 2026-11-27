@@ -43,6 +43,7 @@ cd app && npx jest --testPathPattern=ComponentName  # Single frontend test
 # One-time scripts
 poetry run python scripts/backfill_paper_links.py   # Populate paper_links from stored HTML + enrich
 poetry run python scripts/cleanup_data_quality.py   # Fix rows flagged by data-quality checks (dry-run; add --apply to write)
+poetry run python scripts/recompute_has_top5.py     # Recompute researchers.has_top5_pub (dry-run; add --apply to write)
 
 # Docker
 docker compose up         # Full stack (db + api + frontend)
@@ -96,6 +97,13 @@ alerts the owner straight away. Every other call uses the workflow token so the
 owner mention comes from a bot (a self-mention sends no email). The script is standard
 library only because it runs on the server's system Python. Run it by hand with
 `python3 scripts/monitor.py --external`, or `--host` on the server.
+
+"Has Top-5" means a published or accepted paper in exactly AER, Econometrica,
+JPE, QJE or REStud (sister journals, look-alikes and R&Rs do not count); the
+"Top-20" preset matches department names as whole words. Both are regexes in
+`backend/database/top_presets.py` that MySQL and Python apply identically.
+Both feed and directory presets read `researchers.has_top5_pub`, refreshed for a
+page's authors on save and in full after each scrape job's paper merge.
 
 Researcher filter choices are fetched on demand from `/api/researcher-options`
 (at most 50 results), rather than included in `/api/filter-options`. Weekly

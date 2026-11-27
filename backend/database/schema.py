@@ -942,8 +942,8 @@ def create_tables() -> None:
 
                     # Backfill has_top5_pub from existing data
                     try:
-                        from backend.database.search_helpers import top5_venue_clause
-                        venue_clause, params = top5_venue_clause("p.venue")
+                        from backend.database.top_presets import top5_publication_clause
+                        venue_clause, params = top5_publication_clause("p.venue", "p.status")
                         cursor.execute(
                             f"""UPDATE researchers r
                                 JOIN (

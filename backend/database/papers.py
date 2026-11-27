@@ -165,14 +165,15 @@ def get_unenriched_papers(limit=50):
 from backend.database.search_helpers import (
     escape_like as _escape_like,
     escape_fulltext as _escape_fulltext,
-    TOP20_DEPT_KEYWORDS as _TOP20_DEPT_KEYWORDS,
-    TOP5_JOURNAL_KEYWORDS as _TOP5_JOURNAL_KEYWORDS,
     TOP100_REPEC_KEYWORDS as _TOP100_REPEC_KEYWORDS,
-    top5_venue_clause as _top5_venue_clause,
     top5_and_field_venue_clause as _top5_and_field_venue_clause,
     name_relevance_sql as _name_relevance_sql,
     name_search_words as _name_search_words,
     name_words_clause as _name_words_clause,
+)
+from backend.database.top_presets import (
+    top5_venue_clause as _top5_venue_clause,
+    top20_affiliation_clause as _top20_affiliation_clause,
 )
 
 _FEED_VISIBLE_EVENT_TYPES = ("new_paper", "status_change")
@@ -314,7 +315,7 @@ def search_feed_events(
 ) -> tuple[list[dict], int]:
     """Search feed_events with dynamic filters.
 
-    Returns (rows, total_count, researcher_count). All filter params are optional.
+    Returns (rows, total_count). All filter params are optional.
 
     Filters:
     - year: match p.year
@@ -388,13 +389,13 @@ def search_feed_events(
             params.extend(f"%{_escape_like(i)}%" for i in institution_list)
 
     if preset == "top20":
-        dept_likes = " OR ".join(["r.affiliation LIKE %s"] * len(_TOP20_DEPT_KEYWORDS))
+        dept_clause, dept_params = _top20_affiliation_clause("r.affiliation")
         conditions.append(
             f"EXISTS (SELECT 1 FROM authorship a "
             f"JOIN researchers r ON r.id = a.researcher_id "
-            f"WHERE a.publication_id = p.id AND ({dept_likes}))"
+            f"WHERE a.publication_id = p.id AND {dept_clause})"
         )
-        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP20_DEPT_KEYWORDS)
+        params.extend(dept_params)
 
     if preset == "top5_rr_accepted":
         conditions.append("p.status IN ('accepted', 'revise_and_resubmit')")
@@ -403,14 +404,13 @@ def search_feed_events(
         params.extend(venue_params)
 
     if preset == "has_top5":
-        venue_clause, venue_params = _top5_venue_clause("p2.venue")
+        # The directory's flag, kept current by refresh_has_top5*: an author
+        # has a published or accepted paper in one of the five journals.
         conditions.append(
-            f"EXISTS (SELECT 1 FROM authorship a2 "
-            f"JOIN authorship a3 ON a3.researcher_id = a2.researcher_id "
-            f"JOIN papers p2 ON p2.id = a3.publication_id "
-            f"WHERE a2.publication_id = p.id AND {venue_clause})"
+            "EXISTS (SELECT 1 FROM authorship a2 "
+            "JOIN researchers r2 ON r2.id = a2.researcher_id "
+            "WHERE a2.publication_id = p.id AND r2.has_top5_pub = TRUE)"
         )
-        params.extend(venue_params)
 
     if preset == "top5_journals":
         venue_clause, venue_params = _top5_venue_clause("p.venue")
@@ -501,18 +501,6 @@ def search_feed_events(
     )
     total = count_row['cnt'] if count_row else 0
 
-    researcher_count_row = fetch_one(
-        f"""
-        SELECT COUNT(DISTINCT a.researcher_id) AS cnt
-        FROM feed_events fe
-        JOIN papers p ON p.id = fe.paper_id
-        JOIN authorship a ON a.publication_id = p.id
-        {where}
-        """,
-        tuple(params),
-    )
-    researcher_count = researcher_count_row['cnt'] if researcher_count_row else 0
-
     rows = fetch_all(
         f"""
         SELECT fe.id AS event_id, fe.event_type, fe.old_status, fe.new_status,
@@ -529,4 +517,4 @@ def search_feed_events(
         """,
         (*params, *order_params, limit, offset),
     )
-    return rows, total, researcher_count
+    return rows, total
