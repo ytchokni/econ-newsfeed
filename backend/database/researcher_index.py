@@ -151,8 +151,9 @@ def _affiliation_search_text(normalized: str) -> str:
 # authorship but hidden from the directory. Short real names (Li, Wu, Bo) are
 # not stubs. The directory's SQL guard uses the same patterns (case-sensitive
 # REGEXP_LIKE), so both must stay in step.
-_LETTER = "A-Za-zÀ-ÖØ-öø-ÿ"
-INITIALS_ONLY = rf"^[{_LETTER}]([ .-]+[{_LETTER}])*[ .]*$"
+# Any Unicode letter ("Ş.", "Ł.", "Č." too); MySQL's ICU regex reads the class alike.
+_LETTER = r"[^\W\d_]"
+INITIALS_ONLY = rf"^{_LETTER}([ .-]+{_LETTER})*[ .]*$"
 CAPITAL_INITIALS = r"^[A-Z]{2,3}$"   # first name "HTT" / "ET" ...
 HAS_LOWERCASE = r"[a-z]"             # ... unless the surname is in capitals too ("HAN QIU")
 _INITIALS_ONLY = re.compile(INITIALS_ONLY)
