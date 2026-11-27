@@ -1,4 +1,5 @@
 """Shared publication rules, independent of extraction and database clients."""
+import os
 import re
 from datetime import datetime, timedelta, timezone
 
@@ -37,8 +38,9 @@ NEW_PAPER_MAX_AGE_YEARS = 2
 NEW_PAPER_MAX_DISCOVERY_LAG_DAYS = 7
 
 # A "now published" event is suppressed when the publication year is more
-# than this many years before the event (issue #264).
-PUBLISHED_MAX_AGE_YEARS = 1
+# than this many years before the event (issue #264). Override with the
+# FEED_PUBLISHED_MAX_AGE_YEARS env var (e.g. 2 for a gentler window).
+PUBLISHED_MAX_AGE_YEARS = int(os.environ.get("FEED_PUBLISHED_MAX_AGE_YEARS", "1"))
 
 # Other forward transitions (R&R, accepted) carry the working-paper year,
 # which can legitimately be several years old.
@@ -111,11 +113,15 @@ def is_journal_venue(venue: str | None) -> bool:
 
 
 def status_change_suppression_reason(new_status: str | None, venue: str | None,
-                                     year, reference_year: int) -> str | None:
+                                     year, reference_year: int,
+                                     published_max_age_years: int | None = None) -> str | None:
     """Why a forward status_change event would be spurious, or None if plausible."""
     if new_status in JOURNAL_STATUSES and not is_journal_venue(venue):
         return "no journal venue"
-    max_age = PUBLISHED_MAX_AGE_YEARS if new_status == "published" else STATUS_CHANGE_MAX_AGE_YEARS
+    if new_status == "published":
+        max_age = PUBLISHED_MAX_AGE_YEARS if published_max_age_years is None else published_max_age_years
+    else:
+        max_age = STATUS_CHANGE_MAX_AGE_YEARS
     if is_stale_year(year, reference_year, max_age):
         return f"year {parse_year(year)} older than {max_age}y"
     return None

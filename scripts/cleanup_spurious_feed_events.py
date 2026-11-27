@@ -5,8 +5,8 @@
   years before the event (#261).
 - status_change events to accepted/published without a journal venue (blog
   posts, policy briefs, working-paper series), "published" events for items
-  dated more than a year before the event, and other forward transitions for
-  items more than five years old (#264).
+  dated more than FEED_PUBLISHED_MAX_AGE_YEARS (default 1) before the event,
+  and other forward transitions for items more than ten years old (#264).
 
 The rules are the ones the pipeline applies when emitting events
 (backend.publication_rules), so a re-run after --apply finds nothing.
@@ -16,6 +16,7 @@ digest_deliveries and feed_event_reviews.
 
     poetry run python scripts/cleanup_spurious_feed_events.py
     poetry run python scripts/cleanup_spurious_feed_events.py --apply
+    poetry run python scripts/cleanup_spurious_feed_events.py --before 2026-11-28 --published-max-age 2
 """
 import argparse
 import sys
@@ -55,7 +56,7 @@ STATUS_CHANGE_SQL = """
 BATCH = 500
 
 
-def spurious_reason(row: dict) -> str | None:
+def spurious_reason(row: dict, published_max_age_years: int | None = None) -> str | None:
     """Why an existing event would not be emitted today, or None to keep it."""
     if row["event_type"] == "new_paper":
         # The emitter skips seeds before this check; the stored is_seed flag
@@ -73,14 +74,15 @@ def spurious_reason(row: dict) -> str | None:
     if row["event_type"] == "status_change":
         return status_change_suppression_reason(
             row["new_status"], row["venue"], row["year"], row["created_at"].year,
+            published_max_age_years,
         )
     return None
 
 
-def find_spurious(rows: list[dict]) -> list[tuple[dict, str]]:
+def find_spurious(rows: list[dict], published_max_age_years: int | None = None) -> list[tuple[dict, str]]:
     found = []
     for row in rows:
-        reason = spurious_reason(row)
+        reason = spurious_reason(row, published_max_age_years)
         if reason:
             found.append((row, reason))
     return found
@@ -99,12 +101,19 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--apply", action="store_true", help="delete the events (default: dry run)")
     parser.add_argument("--samples", type=int, default=10, help="example rows to print per reason")
+    parser.add_argument("--before", help="only events recorded before this date (YYYY-MM-DD); default: all")
+    parser.add_argument("--published-max-age", type=int, default=None,
+                        help="years a 'published' item may predate its event (default: FEED_PUBLISHED_MAX_AGE_YEARS or 1)")
     args = parser.parse_args(argv)
 
     from backend.database import fetch_all, get_connection
 
-    rows = fetch_all(NEW_PAPER_SQL) + fetch_all(STATUS_CHANGE_SQL)
-    spurious = find_spurious(rows)
+    # recorded_at is the insert time; older rows only have created_at.
+    cutoff_sql, params = "", ()
+    if args.before:
+        cutoff_sql, params = " AND COALESCE(fe.recorded_at, fe.created_at) < %s", (args.before,)
+    rows = fetch_all(NEW_PAPER_SQL + cutoff_sql, params) + fetch_all(STATUS_CHANGE_SQL + cutoff_sql, params)
+    spurious = find_spurious(rows, args.published_max_age)
 
     by_reason: dict[str, list[dict]] = {}
     for row, reason in spurious:

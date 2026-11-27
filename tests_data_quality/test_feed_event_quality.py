@@ -6,7 +6,13 @@ the baseline guard; PR #153 found regression status_change events.
 """
 import zlib
 
+import os
+
 from conftest import STATUS_ORDER, PROJECT_EPOCH, fmt_violations
+
+# Events recorded from this date on must pass the #261/#264 rules; older rows
+# are handled by scripts/cleanup_spurious_feed_events.py (run after deploy).
+FEED_EVENT_RULES_SINCE = os.environ.get("FEED_EVENT_RULES_SINCE", "2026-11-28")
 
 
 class TestNewPaperBaselineGuard:
@@ -269,7 +275,8 @@ class TestNewPaperEventsAreGenuinelyNew:
             """SELECT fe.id, fe.paper_id, fe.created_at, p.is_seed, p.discovered_at, p.year,
                       LEFT(p.title, 80) AS title
                FROM feed_events fe JOIN papers p ON p.id = fe.paper_id
-               WHERE fe.event_type = 'new_paper'"""
+               WHERE fe.event_type = 'new_paper' AND fe.recorded_at >= %s""",
+            (FEED_EVENT_RULES_SINCE,),
         )
         bad = []
         for r in rows:
@@ -298,7 +305,8 @@ class TestJournalStatusEventsArePlausible:
                       CASE WHEN fe.event_metadata_captured THEN fe.event_venue ELSE p.venue END AS venue,
                       LEFT(p.title, 80) AS title
                FROM feed_events fe JOIN papers p ON p.id = fe.paper_id
-               WHERE fe.event_type = 'status_change'"""
+               WHERE fe.event_type = 'status_change' AND fe.recorded_at >= %s""",
+            (FEED_EVENT_RULES_SINCE,),
         )
         bad = []
         for r in rows:
