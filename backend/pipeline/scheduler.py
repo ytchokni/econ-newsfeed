@@ -251,6 +251,21 @@ def update_scrape_log(log_id: int, status: str, urls_checked: int = 0, urls_chan
     ))
 
 
+def _purge_email_login_codes() -> None:
+    """Hourly: delete one-time login code rows older than a day.
+
+    Requests also purge, but only while people sign in; this bounds how long
+    a code (stored as a hash) and its address stay in the database.
+    """
+    from backend.database.email_login import purge_old_codes
+    try:
+        deleted = purge_old_codes(datetime.now(timezone.utc).replace(tzinfo=None))
+        if deleted:
+            logger.info("Purged %d email login code rows older than a day", deleted)
+    except Exception as e:
+        logger.warning("Email login code purge failed: %s", e)
+
+
 def _cleanup_stale_scrape_logs() -> None:
     """Mark zombie 'running' scrape_log entries as 'failed'.
 
@@ -771,6 +786,14 @@ def start_scheduler() -> None:
         'interval',
         hours=1,
         id='stale_scrape_cleanup',
+    )
+    _scheduler.add_job(
+        _purge_email_login_codes,
+        'interval',
+        hours=1,
+        id='email_login_code_purge',
+        max_instances=1,
+        coalesce=True,
     )
     _scheduler.start()
     logger.info(f"Scheduler started: scraping every {SCRAPE_INTERVAL_HOURS} hours")

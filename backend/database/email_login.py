@@ -89,6 +89,27 @@ def store_code(email: str, code_hash: str, now: datetime, expires_at: datetime) 
             raise
 
 
+def purge_old_codes(now: datetime) -> int:
+    """Delete codes issued more than CODE_RETENTION ago. Returns rows deleted.
+
+    Runs hourly from the scheduler, so a code row is gone at most
+    CODE_RETENTION + 1 hour after it was issued, even with no new requests.
+    """
+    with get_connection() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute(
+                    "DELETE FROM email_login_codes WHERE created_at < %s",
+                    (now - CODE_RETENTION,),
+                )
+                deleted = cursor.rowcount
+            conn.commit()
+            return deleted
+        except Exception:
+            conn.rollback()
+            raise
+
+
 def discard_code(code_id: int, now: datetime) -> None:
     """Retire a code whose email could not be sent."""
     execute_query(

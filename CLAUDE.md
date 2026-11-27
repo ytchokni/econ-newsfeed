@@ -328,10 +328,12 @@ Required env vars: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `GOOGLE_API_K
 not under `/api/auth/`, which NextAuth owns). Codes are 6 digits, HMAC-hashed in
 `email_login_codes`, valid 10 minutes, single use, 5 wrong tries, 60 s resend
 cooldown, 5 per address per hour plus a deployment-wide hourly cap
-(`EMAIL_LOGIN_HOURLY_LIMIT`). At most 15 wrong codes per address per day; 100 wrong
-codes in an hour across all addresses (`EMAIL_LOGIN_MAX_FAILURES_PER_HOUR`) pause
-email sign-in and log `email_login_circuit_open`, which the daily monitor's
-`api_traffic` check reports. Per-IP limits use `api_protection`'s client key (strict per
+(`EMAIL_LOGIN_HOURLY_LIMIT`). After 15 wrong codes in a day an address is
+"guarded" (not locked out): 2 codes an hour, one try each. 100 wrong codes in an
+hour across all addresses (`EMAIL_LOGIN_MAX_FAILURES_PER_HOUR`) pause email
+sign-in and log `email_login_circuit_open`, which the daily monitor's
+`api_traffic` check reports. An hourly scheduler job deletes code rows older
+than a day. Per-IP limits use `api_protection`'s client key (strict per
 visitor; coarse in the keyless fail-open tier, where visitors share Vercel IPs);
 the credentials provider forwards the visitor with `internalApiHeaders`. Email
 login is offered only with a Resend key and an explicit `LOGIN_FROM_EMAIL` or
