@@ -755,12 +755,12 @@ def get_fields_for_researchers(researcher_ids: list[int]) -> dict[int, list[dict
 def get_researcher_detail(researcher_id: int) -> dict | None:
     """Fetch a single researcher by ID.
 
-    Returns dict with columns: id, first_name, last_name, position, affiliation, description.
-    Returns None if not found.
+    Returns dict with columns: id, first_name, last_name, position, affiliation,
+    description, openalex_author_id. Returns None if not found.
     """
     return fetch_one(
-        "SELECT id, first_name, last_name, position, affiliation, description "
-        "FROM researchers WHERE id = %s",
+        "SELECT id, first_name, last_name, position, affiliation, description, "
+        "openalex_author_id FROM researchers WHERE id = %s",
         (researcher_id,),
     )
 
