@@ -610,15 +610,33 @@ def record_url_fetch_failure(url_id: int, error_type: str) -> None:
         logging.warning("Deactivated URL %d: %s", url_id, error_type)
         return
 
-    # Atomic increment + conditional deactivation (no TOCTOU race)
+    # Atomic increment + conditional deactivation (no TOCTOU race).
+    #
+    # A URL inactive as response_too_large is only fetched as a recheck
+    # (TOO_LARGE_RECHECK_DAYS). Any other failure there restarts its recheck
+    # clock and keeps the reason; counting it as an ordinary failure would
+    # relabel it consecutive_failures (never rechecked again) and, until
+    # then, leave deactivated_at old so every scrape fetched it again.
+    #
+    # MySQL applies SET assignments left to right, each seeing the values
+    # already assigned. So consecutive_failures is incremented last (the
+    # threshold tests see the old count: deactivation on the
+    # _URL_DEACTIVATION_THRESHOLD-th failure, not one earlier), and the
+    # recheck test stays true or false throughout because the clauses
+    # before it change is_active/deactivation_reason only when it is false.
+    recheck = "(is_active = FALSE AND deactivation_reason <=> 'response_too_large')"
+    reached = "consecutive_failures + 1 >= %s"
     execute_query(
-        """UPDATE researcher_urls
-           SET consecutive_failures = consecutive_failures + 1,
-               is_active = IF(consecutive_failures + 1 >= %s, FALSE, is_active),
-               deactivated_at = IF(consecutive_failures + 1 >= %s AND is_active = TRUE, NOW(), deactivated_at),
-               deactivation_reason = IF(consecutive_failures + 1 >= %s, %s, deactivation_reason)
+        f"""UPDATE researcher_urls
+           SET deactivated_at = IF({recheck}, NOW(),
+                   IF({reached} AND is_active = TRUE, NOW(), deactivated_at)),
+               deactivation_reason = IF({recheck}, deactivation_reason,
+                   IF({reached}, %s, deactivation_reason)),
+               is_active = IF({recheck}, is_active, IF({reached}, FALSE, is_active)),
+               consecutive_failures = IF({recheck}, consecutive_failures, consecutive_failures + 1)
            WHERE id = %s""",
-        (_URL_DEACTIVATION_THRESHOLD, _URL_DEACTIVATION_THRESHOLD, _URL_DEACTIVATION_THRESHOLD, "consecutive_failures", url_id),
+        (_URL_DEACTIVATION_THRESHOLD, _URL_DEACTIVATION_THRESHOLD, "consecutive_failures",
+         _URL_DEACTIVATION_THRESHOLD, url_id),
     )
     row = fetch_one(
         "SELECT consecutive_failures FROM researcher_urls WHERE id = %s", (url_id,),
@@ -696,10 +714,55 @@ def get_urls_needing_extraction(exclude_url_ids: tuple[int, ...] = ()) -> list[d
           AND hc.has_stored_content = TRUE
           AND (hc.extracted_hash IS NULL OR hc.extracted_hash != hc.content_hash)
     """
+    # Pages cooling down after repeated failures (record_extraction_failure)
+    # are found separately and excluded by id: any other html_content column
+    # in the query above takes it off idx_extraction_state and makes MySQL
+    # read every MEDIUMTEXT row (~60 s on prod instead of 0.09 s).
+    cooling = fetch_all(
+        "SELECT url_id FROM html_content"
+        " WHERE extraction_retry_at > NOW() AND extraction_failed_hash <=> content_hash"
+    ) or []
+    exclude_url_ids = tuple(dict.fromkeys(
+        tuple(exclude_url_ids) + tuple(row['url_id'] for row in cooling)))
     if exclude_url_ids:
         query += " AND ru.id NOT IN (" + ",".join(["%s"] * len(exclude_url_ids)) + ")"
     query += " ORDER BY ru.id LIMIT 200"
     return fetch_all(query, exclude_url_ids) if exclude_url_ids else fetch_all(query)
+
+
+EXTRACTION_MAX_FAILURES = 3
+EXTRACTION_COOLDOWN_SECONDS = 3600
+EXTRACTION_MAX_COOLDOWN_SECONDS = 7 * 24 * 3600
+
+
+def record_extraction_failure(url_id: int, content_hash: str | None) -> dict | None:
+    """Count a failed extraction of one page version, persisted across restarts.
+
+    The count is per content hash: a new page version starts again at one.
+    From EXTRACTION_MAX_FAILURES failures on, the page is left out of
+    get_urls_needing_extraction until extraction_retry_at, with the cooldown
+    doubling per further failure up to EXTRACTION_MAX_COOLDOWN_SECONDS, so a
+    page that always fails costs a few calls a week instead of one per poll.
+    mark_extracted clears the state.
+
+    MySQL applies SET clauses left to right: the count is updated first, and
+    extraction_retry_at deliberately reads the new count.
+    """
+    execute_query(
+        """UPDATE html_content
+           SET extraction_failures = IF(extraction_failed_hash <=> %s, extraction_failures + 1, 1),
+               extraction_failed_hash = %s,
+               extraction_retry_at = IF(extraction_failures >= %s,
+                   NOW() + INTERVAL LEAST(%s * POW(2, extraction_failures - %s), %s) SECOND,
+                   NULL)
+           WHERE url_id = %s""",
+        (content_hash, content_hash, EXTRACTION_MAX_FAILURES, EXTRACTION_COOLDOWN_SECONDS,
+         EXTRACTION_MAX_FAILURES, EXTRACTION_MAX_COOLDOWN_SECONDS, url_id),
+    )
+    return fetch_one(
+        "SELECT extraction_failures, extraction_retry_at FROM html_content WHERE url_id = %s",
+        (url_id,),
+    )
 
 
 def reactivate_url(url_id: int) -> None:

@@ -27,9 +27,36 @@ class TestRecordUrlFetchFailure:
         record_url_fetch_failure(42, "http_error")
 
         assert mock_exec.call_count == 1
-        sql = mock_exec.call_args[0][0]
-        assert "consecutive_failures = consecutive_failures + 1" in sql
+        sql = " ".join(mock_exec.call_args[0][0].split())
+        assert "consecutive_failures + 1)" in sql
         assert "is_active = IF" in sql
+
+    @patch(f"{_MOD}.fetch_one", return_value={"consecutive_failures": 0})
+    @patch(f"{_MOD}.execute_query")
+    def test_failed_too_large_recheck_keeps_reason_and_restarts_clock(self, mock_exec, _):
+        """A too-large URL failing its recheck with another error stays in the
+        30-day recheck cycle: reason kept, deactivated_at reset, no increment."""
+        record_url_fetch_failure(5, "fetch_failed")
+
+        sql = " ".join(mock_exec.call_args[0][0].split())
+        recheck = "(is_active = FALSE AND deactivation_reason <=> 'response_too_large')"
+        assert f"deactivated_at = IF({recheck}, NOW()," in sql
+        assert f"deactivation_reason = IF({recheck}, deactivation_reason," in sql
+        assert f"is_active = IF({recheck}, is_active," in sql
+        assert f"consecutive_failures = IF({recheck}, consecutive_failures," in sql
+
+    @patch(f"{_MOD}.fetch_one", return_value={"consecutive_failures": 0})
+    @patch(f"{_MOD}.execute_query")
+    def test_failure_count_incremented_after_threshold_checks(self, mock_exec, _):
+        """MySQL evaluates SET left to right; incrementing first would make the
+        threshold tests see the new count and deactivate one failure early."""
+        record_url_fetch_failure(5, "fetch_failed")
+
+        sql = mock_exec.call_args[0][0]
+        set_clause = sql[sql.index("SET"):sql.index("WHERE")]
+        increment = set_clause.index("consecutive_failures = IF")
+        for clause in ("deactivated_at = IF", "deactivation_reason = IF", "is_active = IF"):
+            assert set_clause.index(clause) < increment
 
     @patch(f"{_MOD}.fetch_one")
     @patch(f"{_MOD}.execute_query")

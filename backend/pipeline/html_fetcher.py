@@ -25,7 +25,8 @@ _DNS_RESOLVE_TIMEOUT = 10  # seconds; socket.getaddrinfo has no built-in timeout
 
 
 class ResponseTooLarge(Exception):
-    """Raised when a response exceeds CONTENT_MAX_BYTES."""
+    """Raised when a response exceeds FETCH_MAX_BYTES, or is still larger than
+    CONTENT_MAX_BYTES after heavy non-content markup has been stripped."""
     pass
 
 
@@ -77,7 +78,16 @@ def _pin_dns(hostname: str, resolved_ip: str):
 RATE_LIMIT_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_SECONDS', '2'))
 RATE_LIMIT_FAST_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_FAST_SECONDS', '0.5'))
 CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS'))
-CONTENT_MAX_BYTES = 1_000_000  # 1 MB response size limit
+# Stored-HTML limit. Pages above it are compacted (compact_html) before the
+# check; only pages that are still larger are rejected as response_too_large.
+CONTENT_MAX_BYTES = 1_000_000
+# Download limit. Bodies are streamed and abandoned once they pass this, so a
+# page never costs more than this much memory before compaction. Site builders
+# (Squarespace, Wix, Google Sites, Webflow) inflate pages with inline CSS, SVG
+# path data and JSON attributes; 1-2 MB raw pages compact to well under 1 MB.
+FETCH_MAX_BYTES = int(os.environ.get('FETCH_MAX_BYTES', '10000000'))
+_STREAM_CHUNK_BYTES = 64 * 1024
+_CURL_FILESIZE_EXCEEDED = 63  # curl exit code for --max-filesize
 SCRAPER_USER_AGENT = os.environ.get(
     'SCRAPER_USER_AGENT',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
@@ -104,6 +114,105 @@ def _is_fast_domain(hostname: str) -> bool:
         if hostname == domain or hostname.endswith('.' + domain):
             return True
     return False
+
+
+# Heavy markup that carries no page text for extract_text_content(), removed
+# only from pages over CONTENT_MAX_BYTES (see compact_html). Blocks are cut
+# with a linear find() scan, not lazy regexes: an unterminated <!-- or <style
+# made each regex attempt rescan to the end of the page (32k of them in a
+# 1 MB page took 96 s). Like browsers, an unterminated block runs to the end
+# of the page, and <script>/<style> end at their first closing tag.
+_STYLE_BLOCKS = (('<style', '</style'), ('<svg', '</svg'))
+_COMMENT_BLOCK = ('<!--', '-->')
+# Scripts are dropped only if the steps above are not enough: new Google Sites
+# embed page content as JSON in scripts, which the feed-event guard
+# (_title_in_previous_snapshot) can match against archived snapshots.
+_SCRIPT_BLOCKS = (('<script', '</script'), ('<noscript', '</noscript'))
+_RE_DATA_URI = re.compile(r'data:[\w.+-]+/[\w.+-]+(?:;[\w=.+-]+)*;base64,[A-Za-z0-9+/=]+', re.I)
+# Attribute values stop at a quote or a tag bracket, so a stray unterminated
+# quote costs a scan to the next tag, not to the end of the page.
+_RE_STYLE_ATTR = re.compile(r'\sstyle\s*=\s*(?:"[^"<>]*"|\'[^\'<>]*\')', re.I)
+# Attribute values over 1 KB are builder state (Squarespace data-current-styles
+# was 85% of one 1 MB page), not text. href is kept for link extraction.
+_RE_HUGE_ATTR = re.compile(r'\s(?!href\b)[\w:.-]+\s*=\s*(?:"[^"<>]{1000,}"|\'[^\'<>]{1000,}\')', re.I)
+_TAG_NAME_END = frozenset(' \t\r\n\f/>')
+
+
+def _strip_blocks(html: str, blocks: tuple[tuple[str, str], ...]) -> str:
+    """Remove <tag ...>...</tag> blocks (case-insensitive) in one linear pass.
+
+    An opener counts only when followed by whitespace, '/' or '>' (so <svg
+    does not match <svgfoo); '<!--' needs no such check. A block without a
+    closer is cut to the end of the page.
+    """
+    lower = html.lower()
+    out: list[str] = []
+    pos = 0
+    # Next opener position per block type, recomputed only once passed, so
+    # the whole scan stays linear however the openers interleave.
+    upcoming: dict[str, int] = {}
+
+    def next_opener(opener: str) -> int:
+        start = upcoming.get(opener, pos)
+        if start != -1 and start < pos:
+            start = pos
+        if start == -1:
+            return -1
+        start = lower.find(opener, start)
+        while start != -1 and opener[1] != '!' and (
+                start + len(opener) < len(lower)
+                and lower[start + len(opener)] not in _TAG_NAME_END):
+            start = lower.find(opener, start + 1)
+        upcoming[opener] = start
+        return start
+
+    while True:
+        best = None  # (start, opener, closer)
+        for opener, closer in blocks:
+            cached = upcoming.get(opener)
+            start = cached if cached is not None and (cached == -1 or cached >= pos) else next_opener(opener)
+            if start != -1 and (best is None or start < best[0]):
+                best = (start, opener, closer)
+        if best is None:
+            out.append(html[pos:])
+            break
+        start, opener, closer = best
+        out.append(html[pos:start])
+        close = lower.find(closer, start + len(opener))
+        if close == -1:
+            break
+        end = close + len(closer)
+        if closer.startswith('</'):
+            gt = lower.find('>', end)
+            end = len(lower) if gt == -1 else gt + 1
+        pos = end
+    return ''.join(out)
+
+
+def _utf8_len(text: str) -> int:
+    return len(text.encode('utf-8', errors='replace'))
+
+
+def compact_html(html: str, max_bytes: int | None = None) -> str:
+    """Strip heavy non-text markup from a page larger than max_bytes.
+
+    Pages within the limit are returned unchanged, so stored HTML, hashes and
+    snapshots of ordinary pages are byte-for-byte what they were. Larger pages
+    lose, in order and only until they fit: inline CSS, SVG, comments, data:
+    URIs and >1 KB attribute values (none of which reach extracted text, except
+    SVG labels such as icon titles); then <script> and <noscript>.
+    The result may still exceed max_bytes; callers decide what to do then.
+    """
+    limit = CONTENT_MAX_BYTES if max_bytes is None else max_bytes
+    if _utf8_len(html) <= limit:
+        return html
+    html = _strip_blocks(html, _STYLE_BLOCKS + (_COMMENT_BLOCK,))
+    html = _RE_DATA_URI.sub('data:,', html)
+    html = _RE_STYLE_ATTR.sub('', html)
+    html = _RE_HUGE_ATTR.sub('', html)
+    if _utf8_len(html) <= limit:
+        return html
+    return _strip_blocks(html, _SCRIPT_BLOCKS)
 
 
 # Boilerplate substrings to strip before hashing (case-insensitive).
@@ -309,48 +418,55 @@ class HTMLFetcher:
                 HTMLFetcher._rate_limit(current_url)
                 for attempt in range(max_retries):
                     try:
-                        response = session.get(current_url, timeout=timeout, allow_redirects=False)
-                        if response.status_code >= 500:
-                            backoff = 2 ** attempt
-                            logging.warning(f"Server error {response.status_code} for {current_url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
-                            time.sleep(backoff)
-                            continue
-                        if response.status_code == 403:
-                            logging.info("403 from requests for %s, falling back to curl", current_url)
-                            # Re-validate to get a fresh resolved IP for curl
-                            safe, curl_ip = HTMLFetcher.validate_url_with_pin(current_url)
-                            if not safe:
-                                logging.warning("curl fallback blocked: URL failed SSRF check: %s", current_url)
-                                return None
-                            return HTMLFetcher._fetch_with_curl(current_url, timeout, resolved_ip=curl_ip)
-                        if response.status_code in (301, 302, 303, 307, 308):
-                            if redirects_remaining <= 0:
-                                logging.warning(f"Redirect limit exceeded for {current_url}")
-                                return None
-                            location = response.headers.get('Location')
-                            if not location:
-                                logging.warning("Redirect with no Location header from %s", current_url)
-                                return None
-                            redirect_url = urljoin(current_url, location)
-                            safe, redirect_ip = HTMLFetcher.validate_url_with_pin(redirect_url)
-                            if not safe:
-                                logging.warning(f"Blocked redirect to unsafe URL from {current_url}: {redirect_url}")
-                                return None
-                            # Pin DNS for the redirect target hostname too
-                            if redirect_ip:
-                                redir_ctx = _pin_dns(urlparse(redirect_url).hostname, redirect_ip)
-                                redir_ctx.__enter__()
-                                redirect_pin_ctxs.append(redir_ctx)
-                            redirects_remaining -= 1
-                            current_url = redirect_url
-                            break
-                        response.raise_for_status()
-                        if len(response.content) > CONTENT_MAX_BYTES:
-                            logging.warning(f"Response too large ({len(response.content)} bytes) for {current_url}, rejecting")
-                            raise ResponseTooLarge(f"{len(response.content)} bytes")
-                        logging.info(f"Successfully fetched HTML content from {current_url}")
-                        response.encoding = response.apparent_encoding
-                        return response.text
+                        response = session.get(current_url, timeout=timeout, allow_redirects=False, stream=True)
+                        # stream=True: the body is read (and size-capped) only on
+                        # success; closing releases the connection on every path.
+                        try:
+                            if response.status_code >= 500:
+                                backoff = 2 ** attempt
+                                logging.warning(f"Server error {response.status_code} for {current_url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
+                                time.sleep(backoff)
+                                continue
+                            if response.status_code == 403:
+                                logging.info("403 from requests for %s, falling back to curl", current_url)
+                                # Re-validate to get a fresh resolved IP for curl
+                                safe, curl_ip = HTMLFetcher.validate_url_with_pin(current_url)
+                                if not safe:
+                                    logging.warning("curl fallback blocked: URL failed SSRF check: %s", current_url)
+                                    return None
+                                return HTMLFetcher._fetch_with_curl(current_url, timeout, resolved_ip=curl_ip)
+                            if response.status_code in (301, 302, 303, 307, 308):
+                                if redirects_remaining <= 0:
+                                    logging.warning(f"Redirect limit exceeded for {current_url}")
+                                    return None
+                                location = response.headers.get('Location')
+                                if not location:
+                                    logging.warning("Redirect with no Location header from %s", current_url)
+                                    return None
+                                redirect_url = urljoin(current_url, location)
+                                safe, redirect_ip = HTMLFetcher.validate_url_with_pin(redirect_url)
+                                if not safe:
+                                    logging.warning(f"Blocked redirect to unsafe URL from {current_url}: {redirect_url}")
+                                    return None
+                                # Pin DNS for the redirect target hostname too
+                                if redirect_ip:
+                                    redir_ctx = _pin_dns(urlparse(redirect_url).hostname, redirect_ip)
+                                    redir_ctx.__enter__()
+                                    redirect_pin_ctxs.append(redir_ctx)
+                                redirects_remaining -= 1
+                                current_url = redirect_url
+                                break
+                            response.raise_for_status()
+                            body = HTMLFetcher._read_body(response, current_url)
+                            # Hand the capped body back to requests so .text keeps
+                            # its usual charset detection and decoding.
+                            response._content = body
+                            response.encoding = response.apparent_encoding
+                            html = HTMLFetcher._fit_html(response.text, current_url)
+                            logging.info(f"Successfully fetched HTML content from {current_url}")
+                            return html
+                        finally:
+                            response.close()
                     except requests.exceptions.Timeout:
                         backoff = 2 ** attempt
                         logging.warning(f"Timeout for {current_url}. Retrying in {backoff}s (attempt {attempt + 1}/{max_retries})")
@@ -367,6 +483,38 @@ class HTMLFetcher:
                 ctx.__exit__(None, None, None)
 
     @staticmethod
+    def _read_body(response, url: str) -> bytes:
+        """Read a streamed response body, raising ResponseTooLarge past FETCH_MAX_BYTES."""
+        try:
+            declared = int(response.headers.get('Content-Length') or 0)
+        except (TypeError, ValueError):
+            declared = 0
+        if declared > FETCH_MAX_BYTES:
+            logging.warning("Response too large (declared %d bytes) for %s, rejecting", declared, url)
+            raise ResponseTooLarge(f"{declared} bytes declared")
+        body = bytearray()
+        for chunk in response.iter_content(_STREAM_CHUNK_BYTES):
+            body += chunk
+            if len(body) > FETCH_MAX_BYTES:
+                logging.warning("Response too large (> %d bytes) for %s, rejecting", FETCH_MAX_BYTES, url)
+                raise ResponseTooLarge(f"> {FETCH_MAX_BYTES} bytes")
+        return bytes(body)
+
+    @staticmethod
+    def _fit_html(html: str, url: str) -> str:
+        """Compact an oversized page; raise ResponseTooLarge if it still does not fit."""
+        original = _utf8_len(html)
+        if original <= CONTENT_MAX_BYTES:
+            return html
+        compacted = compact_html(html)
+        size = _utf8_len(compacted)
+        logging.info("Compacted %s from %d to %d bytes", url, original, size)
+        if size > CONTENT_MAX_BYTES:
+            logging.warning("Response too large after compaction (%d bytes) for %s, rejecting", size, url)
+            raise ResponseTooLarge(f"{size} bytes after compaction")
+        return compacted
+
+    @staticmethod
     def _fetch_with_curl(url: str, timeout: int = 10, resolved_ip: str | None = None) -> str | None:
         """Fallback fetcher using curl subprocess to bypass TLS fingerprint blocking."""
         if not url.startswith(("http://", "https://")):
@@ -374,7 +522,7 @@ class HTMLFetcher:
             return None
         try:
             cmd = ["curl", "-sS", "--max-time", str(timeout),
-                   "--max-filesize", str(CONTENT_MAX_BYTES)]
+                   "--max-filesize", str(FETCH_MAX_BYTES)]
             # Pin DNS in curl to prevent rebinding between validation and fetch
             if resolved_ip:
                 parsed = urlparse(url)
@@ -389,12 +537,15 @@ class HTMLFetcher:
                 cmd,
                 capture_output=True, timeout=timeout + 5,
             )
+            if result.returncode == _CURL_FILESIZE_EXCEEDED:
+                logging.warning("Response too large (> %d bytes) for %s via curl, rejecting", FETCH_MAX_BYTES, url)
+                raise ResponseTooLarge(f"> {FETCH_MAX_BYTES} bytes")
             if result.returncode != 0:
                 stderr = result.stderr.decode("utf-8", errors="replace").strip()
                 logging.error("curl failed for %s (exit %d): %s", url, result.returncode, stderr)
                 return None
             logging.info("Successfully fetched %s via curl fallback", url)
-            return HTMLFetcher._decode_bytes(result.stdout)
+            return HTMLFetcher._fit_html(HTMLFetcher._decode_bytes(result.stdout), url)
         except (subprocess.TimeoutExpired, OSError) as e:
             logging.error("curl fallback error for %s: %s", url, e)
             return None
@@ -414,6 +565,16 @@ class HTMLFetcher:
     @staticmethod
     def extract_text_content(html_content: str, *, include_links: bool = False) -> str:
         """Extract page content without site-wide navigation and recommendations."""
+        soup = HTMLFetcher.content_soup(html_content, include_links=include_links)
+        return soup.get_text(separator='\n', strip=True)
+
+    @staticmethod
+    def content_soup(html_content: str, *, include_links: bool = False) -> BeautifulSoup:
+        """Parse a page and drop site chrome (scripts, nav, header, footer, cookie banners).
+
+        Shared by extract_text_content and the extraction chunker, so chunks
+        contain exactly the text a single extraction call would see.
+        """
         soup = BeautifulSoup(html_content, 'html.parser')
         for element in soup.select(
             'script, style, noscript, nav, header, footer, aside, '
@@ -430,7 +591,7 @@ class HTMLFetcher:
                 if href.startswith(('http://', 'https://')):
                     label = anchor.get_text(' ', strip=True)
                     anchor.replace_with(f"{label} ({href})" if label else href)
-        return soup.get_text(separator='\n', strip=True)
+        return soup
 
     @staticmethod
     def hash_text_content(text_content: str) -> str:
@@ -612,12 +773,10 @@ class HTMLFetcher:
         record_url_fetch_success(url_id)
 
         # Parse HTML once, reuse for both comparison and storage
-        text_content = HTMLFetcher.extract_text_content(raw_html)
-        if len(text_content) > CONTENT_MAX_CHARS:
-            dropped = len(text_content) - CONTENT_MAX_CHARS
-            logging.info(f"Truncating content for URL ID {url_id}: {len(text_content)} -> {CONTENT_MAX_CHARS} chars ({dropped} dropped)")
-            text_content = text_content[:CONTENT_MAX_CHARS]
-        text_content = HTMLFetcher.normalize_text(text_content)
+        # The full text is stored and hashed: a change after the first
+        # CONTENT_MAX_CHARS characters must still queue the page; extraction splits
+        # long pages into chunks rather than truncating them.
+        text_content = HTMLFetcher.normalize_text(HTMLFetcher.extract_text_content(raw_html))
         text_hash = HTMLFetcher.hash_text_content(text_content)
 
         if HTMLFetcher.has_text_changed(url_id, text_hash):
@@ -723,10 +882,7 @@ class HTMLFetcher:
         try:
             raw_bytes = zlib.decompress(row["raw_html_compressed"])
             raw_html = raw_bytes.decode("utf-8", errors="replace")
-            text = HTMLFetcher.extract_text_content(raw_html)
-            if len(text) > CONTENT_MAX_CHARS:
-                text = text[:CONTENT_MAX_CHARS]
-            return HTMLFetcher.normalize_text(text)
+            return HTMLFetcher.normalize_text(HTMLFetcher.extract_text_content(raw_html))
         except Exception as e:
             logging.warning("Failed to reconstruct previous text for url_id %s: %s", url_id, e)
             return None
@@ -754,7 +910,7 @@ class HTMLFetcher:
     def get_extraction_payload(url_id: int) -> dict | None:
         """Read raw HTML and its queue hash atomically, including legacy text."""
         return fetch_one(
-            "SELECT content, raw_html, content_hash, timestamp, extracted_at"
+            "SELECT content, raw_html, content_hash, timestamp, extracted_at, extracted_untruncated"
             " FROM html_content WHERE url_id = %s",
             (url_id,),
         )
@@ -799,13 +955,19 @@ class HTMLFetcher:
         fetch and extraction cannot overlap).
         """
         now = datetime.now(timezone.utc)
+        # A successful extraction also clears the persisted failure state
+        # (record_extraction_failure).
+        # extracted_untruncated: this extraction saw the whole page (chunked),
+        # unlike those before chunking, which saw CONTENT_MAX_CHARS at most.
+        reset = ("extraction_failures = 0, extraction_failed_hash = NULL, "
+                 "extraction_retry_at = NULL, extracted_untruncated = TRUE")
         if extracted_hash is None:
             execute_query(
-                "UPDATE html_content SET extracted_at = %s, extracted_hash = content_hash WHERE url_id = %s",
+                f"UPDATE html_content SET extracted_at = %s, extracted_hash = content_hash, {reset} WHERE url_id = %s",
                 (now, url_id),
             )
         else:
             execute_query(
-                "UPDATE html_content SET extracted_at = %s, extracted_hash = %s WHERE url_id = %s",
+                f"UPDATE html_content SET extracted_at = %s, extracted_hash = %s, {reset} WHERE url_id = %s",
                 (now, extracted_hash, url_id),
             )
