@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Daily data-quality check against the production database.
+r"""Daily data-quality check against the production database.
 
 Runs the `tests_data_quality` invariants and a few cheap pipeline signals,
 writes a JSON summary, and keeps GitHub issues in step with what fails.
@@ -26,6 +26,38 @@ whose fix is merged but whose one-off cleanup has not run yet is recorded as
 "cleanup pending" (after checking the pull request is merged): one line with
 the cleanup step in the daily report, no new issue and no reopening, and no
 further triage until the invariant passes.
+
+Nothing changes on GitHub unless the workflow is told to file: scheduled runs
+need the repository variable DQ_FILE_ISSUES=true, manual runs an unticked
+dry_run input. Otherwise `report --dry-run` lists the changes it would make.
+
+One-time setup on the server (as root) and in the repository:
+
+  1. A user that may only forward to MySQL. Generate the key on your machine:
+       ssh-keygen -t ed25519 -N '' -C dq-tunnel -f dq_tunnel_key
+       gh secret set DQ_TUNNEL_SSH_KEY < dq_tunnel_key
+     then on the server:
+       useradd --system --create-home --shell /usr/sbin/nologin dqtunnel
+       install -d -m 700 -o dqtunnel -g dqtunnel /home/dqtunnel/.ssh
+       echo 'restrict,port-forwarding,permitopen="127.0.0.1:3306" <contents of dq_tunnel_key.pub>' \
+         > /home/dqtunnel/.ssh/authorized_keys
+       chown dqtunnel:dqtunnel /home/dqtunnel/.ssh/authorized_keys
+       chmod 600 /home/dqtunnel/.ssh/authorized_keys
+     `sshd -T | grep -Ei 'allowtcpforwarding|allowusers'` must not forbid it.
+  2. A SELECT-only MySQL user. Tunnelled connections reach the container from
+     the Docker network gateway, so look it up first:
+       docker network inspect econ-newsfeed_default \
+         --format '{{range .IPAM.Config}}{{.Gateway}}{{end}}'
+     and create the user for that address (for example 172.18.0.1):
+       docker exec -i econ-newsfeed-db-1 sh -c 'mysql -uroot -p"$MYSQL_ROOT_PASSWORD"' <<'SQL'
+       CREATE USER 'dq_readonly'@'<gateway>' IDENTIFIED BY '<long random password>'
+         WITH MAX_USER_CONNECTIONS 4;
+       GRANT SELECT ON econ_newsfeed.* TO 'dq_readonly'@'<gateway>';
+       SQL
+       gh secret set DQ_DB_PASSWORD
+     If the first run reports "Access denied for user 'dq_readonly'@'<address>'",
+     that address is the one to use.
+  3. After a dry run looks right: gh variable set DQ_FILE_ISSUES --body true
 """
 from __future__ import annotations
 
@@ -662,6 +694,38 @@ def report_body(state: dict) -> str:
     ])
 
 
+def describe_write(args: list[str]) -> str:
+    """One readable line for a planned `gh` call (dry-run summary)."""
+    action = " ".join(args[:2])
+    target = args[2] if len(args) > 2 and not args[2].startswith("--") else ""
+    title = args[args.index("--title") + 1] if "--title" in args else ""
+    labels = [args[i + 1] for i, a in enumerate(args) if a == "--label"]
+    parts = [f"`gh {action}{' ' + target if target else ''}`"]
+    if title:
+        parts.append(f"“{title}”")
+    if labels:
+        parts.append("labels " + ", ".join(labels))
+    return " ".join(parts)
+
+
+def write_step_summary(comment: str, gh: GitHub) -> None:
+    """Show the report in the Actions run summary; in a dry run, also every
+    change that was not made."""
+    path = os.environ.get("GITHUB_STEP_SUMMARY")
+    if not path:
+        return
+    lines = []
+    if gh.dry_run:
+        lines += ["## Dry run: nothing was changed on GitHub", "",
+                  "Set the `DQ_FILE_ISSUES` repository variable to `true` (scheduled runs) or "
+                  "start the workflow with `dry_run` unticked to apply these changes:", ""]
+        lines += [f"- {describe_write(w)}" for w in gh.writes] or ["- none"]
+        lines += ["", "### Report comment that would be posted", ""]
+    lines += [comment, ""]
+    with open(path, "a") as fh:
+        fh.write("\n".join(lines))
+
+
 def report(results_path: str, triage_path: str | None, gh: GitHub) -> int:
     results = load_results(results_path)
     triage = load_triage(triage_path)
@@ -687,6 +751,7 @@ def report(results_path: str, triage_path: str | None, gh: GitHub) -> int:
         url = gh.write("issue", "create", "--title", REPORT_TITLE, "--body", body)
         number = url.strip().rsplit("/", 1)[-1]
     gh.write("issue", "comment", str(number), "--body", comment)
+    write_step_summary(comment, gh)
     if not results.get("complete"):
         print(f"::error::data-quality check could not run: {results.get('error')}")
         return 1

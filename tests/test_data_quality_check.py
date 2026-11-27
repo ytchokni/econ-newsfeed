@@ -247,3 +247,22 @@ class TestPlanAndReport:
         create = gh.created()[0]
         assert create[create.index("--title") + 1] == dq.REPORT_TITLE
         assert "Every invariant passes." in gh.writes[-1][-1]
+
+
+class TestDryRunSummary:
+    def test_dry_run_lists_planned_changes_in_the_run_summary(self, tmp_path, monkeypatch):
+        summary = tmp_path / "summary.md"
+        monkeypatch.setenv("GITHUB_STEP_SUMMARY", str(summary))
+        path = tmp_path / "results.json"
+        path.write_text(json.dumps(results(failed=[TITLE])))
+        gh = dq.GitHub(dry_run=True)
+        gh.report_issue = lambda: None
+        gh.issue = lambda number: None
+        triage = tmp_path / "triage.json"
+        triage.write_text(json.dumps({"groups": [{"invariants": [TITLE], "action": "create",
+                                                   "title": "Lowercase titles", "body": "b"}]}))
+        assert dq.report(str(path), str(triage), gh) == 0
+        text = summary.read_text()
+        assert "Dry run: nothing was changed on GitHub" in text
+        assert "`gh issue create` “Lowercase titles” labels bug" in text
+        assert "**Data-quality check 2026-11-27**" in text

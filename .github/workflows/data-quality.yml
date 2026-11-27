@@ -11,18 +11,31 @@ name: Data quality
 # fix is merged but whose cleanup has not run yet becomes one "cleanup pending"
 # line instead of an issue), posts one
 # comment on the rolling "Daily data-quality report" issue, and closes issues
-# whose invariants passed on two consecutive days.
+# whose invariants passed on two consecutive days, if this check filed them
+# and no open pull request is linked to them.
 #
-# Secrets: HETZNER_HOST and HETZNER_SSH_KEY (shared with deploy and monitor),
-# DQ_DB_PASSWORD (the read-only MySQL user, see scripts/data_quality_check.py)
-# and CLAUDE_CODE_OAUTH_TOKEN (shared with claude.yml). The user name defaults
-# to dq_readonly; set the DQ_DB_USER repository variable to change it.
+# Dry run by default: scheduled runs change GitHub only when the repository
+# variable DQ_FILE_ISSUES is 'true' (until then they skip Claude and write the
+# would-be report to the run summary); manual runs take a dry_run input that
+# defaults to true and do run Claude, so the triage can be previewed.
+#
+# Secrets: HETZNER_HOST (shared with deploy and monitor); DQ_TUNNEL_SSH_KEY, a
+# key that can only forward to the server's MySQL port as the unprivileged
+# dqtunnel user; DQ_DB_PASSWORD for the SELECT-only dq_readonly MySQL user;
+# CLAUDE_CODE_OAUTH_TOKEN (shared with claude.yml). Setup steps are in the
+# docstring of scripts/data_quality_check.py. Variables: DQ_FILE_ISSUES,
+# optional DQ_SSH_USER (default dqtunnel) and DQ_DB_USER (default dq_readonly).
 
 on:
   schedule:
     # 07:47 UTC: 30 minutes after the 07:17 Monitor, before the 10:02 scrape.
     - cron: '47 7 * * *'
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Report what would change on GitHub without changing it
+        type: boolean
+        default: true
 
 concurrency:
   group: data-quality-production
@@ -38,7 +51,16 @@ jobs:
       issues: read
     outputs:
       needs_triage: ${{ steps.plan.outputs.needs_triage }}
+      file_issues: ${{ steps.mode.outputs.file_issues }}
     steps:
+      - name: Decide whether this run may change GitHub
+        id: mode
+        env:
+          FILE_ISSUES: >-
+            ${{ (github.event_name == 'schedule' && vars.DQ_FILE_ISSUES == 'true')
+            || (github.event_name == 'workflow_dispatch' && !inputs.dry_run) }}
+        run: echo "file_issues=$FILE_ISSUES" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v7
 
       - uses: actions/setup-python@v6
@@ -54,18 +76,24 @@ jobs:
       - name: Open a tunnel to the production database
         env:
           HETZNER_HOST: ${{ secrets.HETZNER_HOST }}
-          HETZNER_SSH_KEY: ${{ secrets.HETZNER_SSH_KEY }}
+          TUNNEL_KEY: ${{ secrets.DQ_TUNNEL_SSH_KEY }}
+          TUNNEL_USER: ${{ vars.DQ_SSH_USER || 'dqtunnel' }}
         # MySQL listens on the server's 127.0.0.1:3306 only; forward it to
-        # the runner's port 3307. The key stays on disk until the job ends
-        # because the tunnel process uses it.
+        # the runner's port 3307. The key is not the root deploy key: its
+        # authorized_keys line allows nothing but forwarding to that port.
+        # It stays on disk until the tunnel is closed below.
         run: |
+          if [ -z "$TUNNEL_KEY" ]; then
+            echo "::warning::the DQ_TUNNEL_SSH_KEY secret is not set"
+            exit 0
+          fi
           umask 077
-          printf '%s\n' "$HETZNER_SSH_KEY" > "$RUNNER_TEMP/dq_key"
+          printf '%s\n' "$TUNNEL_KEY" > "$RUNNER_TEMP/dq_key"
           for _ in 1 2 3; do
             ssh -i "$RUNNER_TEMP/dq_key" -o BatchMode=yes \
               -o StrictHostKeyChecking=accept-new -o ConnectTimeout=20 \
               -o ExitOnForwardFailure=yes -o ServerAliveInterval=30 \
-              -f -N -L 127.0.0.1:3307:127.0.0.1:3306 "root@$HETZNER_HOST" && break
+              -f -N -L 127.0.0.1:3307:127.0.0.1:3306 "$TUNNEL_USER@$HETZNER_HOST" && break
             sleep 20
           done
 
@@ -77,14 +105,18 @@ jobs:
           DB_USER: ${{ vars.DQ_DB_USER || 'dq_readonly' }}
           DB_PASSWORD: ${{ secrets.DQ_DB_PASSWORD }}
           DB_POOL_SIZE: "2"
+          TUNNEL_KEY_SET: ${{ secrets.DQ_TUNNEL_SSH_KEY != '' }}
         # A run that cannot reach the database writes complete=false; the
         # report job turns that into a "could not run" comment and a red run.
         run: |
           mkdir -p dq
-          if [ -z "$DB_PASSWORD" ]; then
-            echo '{"complete": false, "error": "the DQ_DB_PASSWORD secret is not set", "totals": {}, "invariants": [], "signals": []}' > dq/results.json
-            exit 0
-          fi
+          for missing in "$([ "$TUNNEL_KEY_SET" = true ] || echo DQ_TUNNEL_SSH_KEY)" \
+                         "$([ -n "$DB_PASSWORD" ] || echo DQ_DB_PASSWORD)"; do
+            if [ -n "$missing" ]; then
+              echo "{\"complete\": false, \"error\": \"the $missing secret is not set\", \"totals\": {}, \"invariants\": [], \"signals\": []}" > dq/results.json
+              exit 0
+            fi
+          done
           poetry run python scripts/data_quality_check.py run --out dq/results.json || true
 
       - name: Close the tunnel
@@ -110,7 +142,11 @@ jobs:
   triage:
     name: Claude triage
     needs: check
-    if: needs.check.outputs.needs_triage == 'true'
+    # Scheduled dry runs skip Claude: without saved state it would triage the
+    # same failures every day. Manual dry runs keep it to preview the triage.
+    if: >-
+      needs.check.outputs.needs_triage == 'true'
+      && (needs.check.outputs.file_issues == 'true' || github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-latest
     timeout-minutes: 15
     # Read-only token: Claude can search issues and pull requests but every
@@ -231,7 +267,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TRIAGE: ${{ needs.triage.outputs.triage }}
           DQ_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          FILE_ISSUES: ${{ needs.check.outputs.file_issues }}
+        # Without permission to file, --dry-run prints every GitHub change it
+        # would make and writes the report to the run summary instead.
         run: |
           mkdir -p dq
           printf '%s' "$TRIAGE" > dq/triage.json
-          python3 scripts/data_quality_check.py report dq/results.json --triage dq/triage.json
+          dry_run=--dry-run
+          [ "$FILE_ISSUES" = true ] && dry_run=
+          python3 scripts/data_quality_check.py report dq/results.json --triage dq/triage.json $dry_run
