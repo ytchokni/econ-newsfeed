@@ -15,11 +15,12 @@ from backend.config import fix_encoding
 
 from backend.database.search_helpers import (
     escape_like as _escape_like,
-    escape_fulltext as _escape_fulltext,
-    FT_MIN_TOKEN_SIZE as _FT_MIN_TOKEN_SIZE,
     TOP20_DEPT_KEYWORDS as _TOP20_DEPT_KEYWORDS,
     TOP5_JOURNAL_KEYWORDS as _TOP5_JOURNAL_KEYWORDS,
     top5_venue_clause as _top5_venue_clause,
+    name_relevance_sql as _name_relevance_sql,
+    name_search_words as _name_search_words,
+    name_words_clause as _name_words_clause,
 )
 
 _TOP5_VENUE_CLAUSE, _TOP5_VENUE_PARAMS = _top5_venue_clause("p.venue")
@@ -793,7 +794,7 @@ def search_researchers(
     - position: r.position LIKE %value%
     - preset='top20': affiliation matches top-20 economics department keywords
     - field_slug: single slug uses =, comma-separated uses IN
-    - search: FULLTEXT for >= _FT_MIN_TOKEN_SIZE chars, LIKE fallback for shorter
+    - search: every word in the name (any order), ranked by name relevance
     """
     conditions: list[str] = []
     params: list = []
@@ -860,23 +861,19 @@ def search_researchers(
             )
             params.extend(field_slugs)
 
-    search_term = (search or "").strip()
-    if search_term:
-        if len(search_term) >= _FT_MIN_TOKEN_SIZE:
-            conditions.append(
-                "(MATCH(r.first_name, r.last_name) AGAINST (%s IN BOOLEAN MODE)"
-                " OR CONCAT(r.first_name, ' ', r.last_name) LIKE %s ESCAPE '\\\\')"
-            )
-            params.append(_escape_fulltext(search_term))
-            params.append(f"%{_escape_like(search_term)}%")
-        else:
-            escaped = f"%{_escape_like(search_term)}%"
-            conditions.append(
-                "(r.first_name LIKE %s ESCAPE '\\\\'"
-                " OR r.last_name LIKE %s ESCAPE '\\\\'"
-                " OR CONCAT(r.first_name, ' ', r.last_name) LIKE %s ESCAPE '\\\\')"
-            )
-            params.extend([escaped, escaped, escaped])
+    # Every query word must appear in the name, in any order; the best name
+    # matches are listed first (see name_relevance_sql).
+    words = _name_search_words(search)
+    order_sql = "r.last_name, r.first_name"
+    order_params: list = []
+    if words:
+        clause, clause_params = _name_words_clause(
+            "CONCAT_WS(' ', r.first_name, r.last_name)", words
+        )
+        conditions.append(clause)
+        params.extend(clause_params)
+        rank_sql, order_params = _name_relevance_sql("r.first_name", "r.last_name", search)
+        order_sql = f"{rank_sql} DESC, {order_sql}"
 
     where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -891,10 +888,10 @@ def search_researchers(
         SELECT r.id, r.first_name, r.last_name, r.position, r.affiliation, r.description
         FROM researchers r
         {where}
-        ORDER BY r.last_name, r.first_name
+        ORDER BY {order_sql}, r.id
         LIMIT %s OFFSET %s
         """,
-        (*params, limit, offset),
+        (*params, *order_params, limit, offset),
     )
     return rows, total
 
@@ -908,13 +905,15 @@ def search_researcher_options(*, search: str = "", researcher_ids: list[int] | N
             f"FROM researchers WHERE id IN ({placeholders}) ORDER BY last_name, first_name LIMIT 50",
             tuple(researcher_ids),
         )
-    words = search.strip().split()
-    if len(search.strip()) < 2 or not words:
+    words = _name_search_words(search)
+    if len(" ".join(words)) < 2:
         return []
-    conditions = " AND ".join(["CONCAT_WS(' ', first_name, last_name) LIKE %s"] * len(words))
+    name = "CONCAT_WS(' ', first_name, last_name)"
+    clause, clause_params = _name_words_clause(name, words)
+    rank_sql, rank_params = _name_relevance_sql("first_name", "last_name", search)
     return fetch_all(
-        f"SELECT id, CONCAT_WS(' ', first_name, last_name) AS name, affiliation "
-        f"FROM researchers WHERE {conditions} "
-        "ORDER BY CONCAT_WS(' ', first_name, last_name) = %s DESC, last_name, first_name, id LIMIT 20",
-        (*[f"%{_escape_like(word)}%" for word in words], search.strip()),
+        f"SELECT id, {name} AS name, affiliation "
+        f"FROM researchers WHERE {clause} "
+        f"ORDER BY {rank_sql} DESC, last_name, first_name, id LIMIT 20",
+        (*clause_params, *rank_params),
     )

@@ -350,11 +350,16 @@ class TestSearchResearchers:
         assert "researcher_fields" in sql
         assert "research_fields" in sql
 
-    def test_search_fulltext_for_long_terms(self):
-        (_, _), mock_fetch = self._call(search="inflation")
+    def test_search_requires_every_word_and_ranks_by_name(self):
+        """Fulltext BOOLEAN MODE matched ANY word ("Thomas" alone), so every
+        Thomas was listed alphabetically ahead of Thomas Rieger."""
+        (_, _), mock_fetch = self._call(search="Thomas Rieger")
         sql, params = mock_fetch.call_args[0]
-        assert "MATCH" in sql
-        assert "BOOLEAN MODE" in sql
+        assert "MATCH" not in sql
+        assert "%Thomas%" in params and "%Rieger%" in params
+        assert "THEN 4" in sql
+        assert sql.index("THEN 4") > sql.index("ORDER BY")
+        assert sql.count("%s") == len(params)
 
     def test_search_like_for_short_terms(self):
         (_, _), mock_fetch = self._call(search="ab")  # 2 chars < default FT_MIN_TOKEN_SIZE=3
@@ -398,7 +403,7 @@ class TestSearchResearchers:
         assert _escape_like("a\\b") == "a\\\\b"
 
     def test_escape_fulltext_helper(self):
-        from backend.database.researchers import _escape_fulltext
+        from backend.database.search_helpers import escape_fulltext as _escape_fulltext
         assert _escape_fulltext("+inflation -recession") == "inflation recession"
         assert _escape_fulltext('"monetary policy"') == "monetary policy"
 
