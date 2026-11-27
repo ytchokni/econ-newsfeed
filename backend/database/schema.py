@@ -306,6 +306,15 @@ _TABLE_DEFINITIONS = {
             FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    # Latest provider quota/account refusal per caller (e.g. 'extraction'),
+    # so lower-priority LLM jobs (JEL classification) can yield to extraction.
+    "llm_quota_signals": """
+        CREATE TABLE IF NOT EXISTS llm_quota_signals (
+            source VARCHAR(32) NOT NULL PRIMARY KEY,
+            limited_at DATETIME NOT NULL,
+            retry_after_seconds INT DEFAULT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
     "paper_topics": """
         CREATE TABLE IF NOT EXISTS paper_topics (
             id INT AUTO_INCREMENT PRIMARY KEY,
