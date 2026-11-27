@@ -9,6 +9,7 @@
 !scripts/backfill_page_owner_authorship.py
 !scripts/cleanup_data_quality.py
 !scripts/cleanup_spurious_feed_events.py
+!scripts/recompute_has_top5.py
 !scripts/merge_fuzzy_duplicates.py
 !scripts/merge_renamed_papers.py
 !scripts/reverify_openalex_ids.py

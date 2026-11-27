@@ -79,54 +79,6 @@ def name_relevance_sql(
     return sql, params
 
 
-TOP20_DEPT_KEYWORDS = [
-    "MIT", "Massachusetts Institute of Technology",
-    "Harvard", "Princeton", "Stanford",
-    "University of Chicago",
-    "UC Berkeley", "University of California, Berkeley",
-    "Columbia", "Yale", "Northwestern",
-    "University of Pennsylvania",
-    "New York University", "NYU",
-    "Duke",
-    "University of Michigan",
-    "University of Minnesota",
-    "Cornell",
-    "UCLA", "University of California, Los Angeles",
-    "UC San Diego", "University of California, San Diego",
-    "University of Wisconsin",
-    "Boston University",
-    "Carnegie Mellon",
-]
-
-TOP5_JOURNAL_KEYWORDS = [
-    "American Economic Review",
-    "AER",
-    "Econometrica",
-    "Journal of Political Economy",
-    "JPE",
-    "Quarterly Journal of Economics",
-    "QJE",
-    "Review of Economic Studies",
-    "REStud",
-]
-
-TOP5_JOURNAL_EXCLUSIONS = [
-    "European Journal of Political Economy",
-]
-
-
-def top5_venue_clause(
-    col: str = "p.venue",
-) -> tuple[str, list[str]]:
-    """Return (sql_fragment, params) for a top-5 venue filter with exclusions."""
-    likes = " OR ".join([f"{col} LIKE %s"] * len(TOP5_JOURNAL_KEYWORDS))
-    not_likes = " AND ".join([f"{col} NOT LIKE %s"] * len(TOP5_JOURNAL_EXCLUSIONS))
-    clause = f"(({likes}) AND {not_likes})"
-    params: list[str] = [f"%{escape_like(kw)}%" for kw in TOP5_JOURNAL_KEYWORDS]
-    params.extend(f"%{escape_like(kw)}%" for kw in TOP5_JOURNAL_EXCLUSIONS)
-    return clause, params
-
-
 # Curated product selection, not an official journal ranking. Keep each journal
 # with its recognized aliases so that additions are explicit and reviewable.
 # Full-name equality matters: substring matching would admit, for example,

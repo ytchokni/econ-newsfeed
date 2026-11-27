@@ -137,7 +137,10 @@ def _evidence(*titles, topics=()):
 class _JobHarness:
     """Patches the job's collaborators; exposes the mocks."""
 
-    def __init__(self, candidates, inputs, outcomes=(), calls_today=0, author_topics=None):
+    def __init__(self, candidates, inputs, outcomes=(), calls_today=0, author_topics=None,
+                 last_refusal=None, backlog=0):
+        self.last_refusal = last_refusal
+        self.backlog = backlog
         self.candidates = candidates
         self.inputs = inputs
         self.outcomes = list(outcomes)
@@ -157,6 +160,11 @@ class _JobHarness:
             "touch": patch.object(jel_job, "touch_jel_state"),
             "authors": patch.object(jel_job, "_fetch_author_topics", return_value=self.author_topics),
             "model": patch.object(jel_job, "get_model", return_value="test-model"),
+            "refusal": patch.object(jel_job, "get_last_llm_quota_limit",
+                                    **({"side_effect": self.last_refusal}
+                                       if callable(self.last_refusal) or isinstance(self.last_refusal, list)
+                                       else {"return_value": self.last_refusal})),
+            "backlog": patch.object(jel_job, "count_extraction_backlog", return_value=self.backlog),
         }
         self.m = {k: p.start() for k, p in self.patches.items()}
         return self
@@ -358,3 +366,113 @@ def test_fetch_author_topics_batch_respects_budget():
          patch.object(openalex, "_get_session") as session:
         assert openalex.fetch_author_topics_batch(["A1"]) == {}
     session.assert_not_called()
+
+
+# ---- yielding to extraction ----
+
+def _minutes_ago(minutes):
+    from datetime import timedelta
+    return jel_job._utcnow() - timedelta(minutes=minutes)
+
+
+def test_recent_extraction_refusal_skips_run():
+    with _JobHarness([_row(1)], {1: _evidence("A")}, last_refusal=_minutes_ago(5)) as h:
+        stats = h.run()
+    assert stats["stopped"] == "extraction_quota"
+    h.m["cands"].assert_not_called()
+    h.m["classify"].assert_not_called()
+    h.m["refusal"].assert_called_with("extraction")
+
+
+def test_old_extraction_refusal_is_ignored():
+    with _JobHarness([_row(1)], {1: _evidence("A")}, last_refusal=_minutes_ago(30),
+                     outcomes=[ClassificationOutcome(["J"], ok=True)]) as h:
+        stats = h.run()
+    assert stats["classified"] == 1
+
+
+def test_large_extraction_backlog_skips_run():
+    with _JobHarness([_row(1)], {1: _evidence("A")},
+                     backlog=jel_job.MAX_EXTRACTION_BACKLOG + 1) as h:
+        stats = h.run()
+    assert stats["stopped"] == "extraction_backlog"
+    assert stats["extraction_backlog"] == jel_job.MAX_EXTRACTION_BACKLOG + 1
+    h.m["cands"].assert_not_called()
+
+
+def test_backlog_at_threshold_runs():
+    with _JobHarness([_row(1)], {1: _evidence("A")}, backlog=jel_job.MAX_EXTRACTION_BACKLOG,
+                     outcomes=[ClassificationOutcome(["J"], ok=True)]) as h:
+        stats = h.run()
+    assert stats["classified"] == 1
+
+
+def test_refusal_during_run_stops_before_next_call():
+    # Start check, then before call 1 (clear), then before call 2 (refused).
+    signals = [None, None, _minutes_ago(0)]
+    rows = [_row(1), _row(2)]
+    with _JobHarness(rows, {1: _evidence("A"), 2: _evidence("B")}, last_refusal=signals,
+                     outcomes=[ClassificationOutcome(["J"], ok=True)] * 2) as h:
+        stats = h.run()
+    assert stats["stopped"] == "extraction_quota"
+    assert h.m["classify"].call_count == 1
+    assert stats["classified"] == 1
+
+
+def test_no_yield_ignores_refusal_and_backlog():
+    with _JobHarness([_row(1)], {1: _evidence("A")}, last_refusal=_minutes_ago(1),
+                     backlog=10**6, outcomes=[ClassificationOutcome(["J"], ok=True)]) as h:
+        stats = h.run(yield_to_extraction=False)
+    assert stats["classified"] == 1
+    h.m["refusal"].assert_not_called()
+    h.m["backlog"].assert_not_called()
+
+
+def test_cli_no_yield_flag_passes_through():
+    from backend import main
+    stats = {"considered": 0, "stopped": "nothing_due"}
+    with patch("sys.argv", ["main", "classify-jel", "--no-yield"]), \
+         patch.object(main, "create_tables"), \
+         patch("backend.enrichment.jel_job.run_jel_classification_batch", return_value=stats) as run, \
+         patch("backend.database.get_jel_coverage_stats", return_value={}):
+        main.main()
+    assert run.call_args.kwargs["yield_to_extraction"] is False
+
+
+# ---- quota signal storage ----
+
+def test_extraction_refusal_is_recorded():
+    from backend.pipeline import extraction
+    with patch("backend.database.llm.record_llm_quota_limit") as record:
+        outcome = extraction._failed(42.0)
+        assert outcome.retry_after == 42.0
+        record.assert_called_once_with("extraction", 42.0)
+        extraction._failed(None)
+        record.assert_called_once()  # plain failures are not quota signals
+
+
+def test_record_llm_quota_limit_never_raises():
+    from backend.database import llm
+    with patch.object(llm, "execute_query", side_effect=RuntimeError("db down")) as eq:
+        llm.record_llm_quota_limit("extraction", 30.5)
+    sql, params = eq.call_args.args
+    assert "llm_quota_signals" in sql
+    assert params[0] == "extraction" and params[2] == 30
+
+
+def test_get_last_llm_quota_limit_handles_missing_table():
+    import mysql.connector
+    from backend.database import llm
+    err = mysql.connector.Error(errno=1146, msg="no table")
+    with patch.object(llm, "fetch_all", side_effect=err):
+        assert llm.get_last_llm_quota_limit("extraction") is None
+    with patch.object(llm, "fetch_all", return_value=[{"limited_at": "t"}]):
+        assert llm.get_last_llm_quota_limit("extraction") == "t"
+
+
+def test_count_extraction_backlog():
+    from backend.database import llm
+    with patch.object(llm, "fetch_all", return_value=[{"n": 11895}]) as fa:
+        assert llm.count_extraction_backlog() == 11895
+    sql = fa.call_args.args[0]
+    assert "extracted_hash != hc.content_hash" in sql and "is_active" in sql

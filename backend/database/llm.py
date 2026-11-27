@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
-from backend.database.connection import execute_query
+from backend.database.connection import execute_query, fetch_all
 
 # (prompt, completion) cost per 1M tokens — Google AI Studio Gemini 2.5 Flash.
 # Source: https://ai.google.dev/gemini-api/docs/pricing (May 2026).
@@ -42,3 +42,49 @@ def log_llm_usage(call_type: str, model: str, usage: object, context_url: str | 
         )
     except Exception as e:
         logging.warning(f"log_llm_usage failed (non-fatal): {e}")
+
+
+def record_llm_quota_limit(source: str, retry_after: float | None = None) -> None:
+    """Remember that ``source`` was refused by the provider just now. Never raises."""
+    try:
+        execute_query(
+            """INSERT INTO llm_quota_signals (source, limited_at, retry_after_seconds)
+               VALUES (%s, %s, %s)
+               ON DUPLICATE KEY UPDATE limited_at = VALUES(limited_at),
+                                       retry_after_seconds = VALUES(retry_after_seconds)""",
+            (source, datetime.now(timezone.utc).replace(tzinfo=None),
+             int(retry_after) if retry_after is not None else None),
+        )
+    except Exception as e:
+        logging.warning("record_llm_quota_limit failed (non-fatal): %s", e)
+
+
+def get_last_llm_quota_limit(source: str) -> datetime | None:
+    """When ``source`` was last refused by the provider (naive UTC), or None."""
+    try:
+        rows = fetch_all(
+            "SELECT limited_at FROM llm_quota_signals WHERE source = %s", (source,),
+        )
+    except Exception as e:
+        if getattr(e, "errno", None) == 1146:  # table not created yet
+            return None
+        raise
+    return rows[0]["limited_at"] if rows else None
+
+
+def count_extraction_backlog() -> int:
+    """Pages waiting for LLM extraction (same predicate as the extraction queue).
+
+    Reads only indexed html_content columns, so MySQL answers from
+    idx_extraction_state instead of loading stored pages.
+    """
+    rows = fetch_all(
+        """SELECT COUNT(*) AS n
+           FROM researcher_urls ru
+           JOIN html_content hc ON hc.url_id = ru.id
+           WHERE ru.is_active = TRUE
+             AND hc.content_hash IS NOT NULL
+             AND hc.has_stored_content = TRUE
+             AND (hc.extracted_hash IS NULL OR hc.extracted_hash != hc.content_hash)"""
+    )
+    return int(rows[0]["n"]) if rows else 0

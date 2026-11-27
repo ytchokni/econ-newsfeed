@@ -28,7 +28,7 @@ poetry run python -m backend.main extract --limit 5  # Extract a limited batch
 # Enrichment & classification
 poetry run python -m backend.main enrich            # Enrich papers via OpenAlex
 poetry run python -m backend.main classify-jel      # One budgeted JEL batch (bio + papers + OpenAlex topics)
-poetry run python -m backend.main classify-jel --until-done  # Repeat batches until nothing is due or the daily limit is hit
+poetry run python -m backend.main classify-jel --until-done  # Repeat batches until nothing is due, a limit is hit, or extraction needs the key
 poetry run python -m backend.main discover-domains  # Scan HTML for untrusted domains with paper-like links
 
 # Testing & validation
@@ -46,6 +46,7 @@ cd app && npx jest --testPathPattern=ComponentName  # Single frontend test
 # One-time scripts
 poetry run python scripts/backfill_paper_links.py   # Populate paper_links from stored HTML + enrich
 poetry run python scripts/cleanup_data_quality.py   # Fix rows flagged by data-quality checks (dry-run; add --apply to write)
+poetry run python scripts/recompute_has_top5.py     # Recompute researchers.has_top5_pub (dry-run; add --apply to write)
 poetry run python scripts/reverify_openalex_ids.py --max-requests 300 --apply  # #266: re-check pre-15-Oct OpenAlex IDs (~900 budgeted requests: pause ENRICHMENT_WORKER_ENABLED or raise OPENALEX_DAILY_BUDGET for ~3 days; DB-cached, resumable; --status, --undo, --purge-cache)
 poetry run python scripts/merge_renamed_papers.py   # #265: merge renames sharing an SSRN/NBER/arXiv/DOI link (dry-run; --apply)
 poetry run python scripts/cleanup_spurious_feed_events.py  # Delete stale new_paper / bogus "published" events (dry-run; --apply backs up first; --undo RUN)
@@ -82,9 +83,17 @@ due retry are sent to the LLM; others are skipped without a call. It has its own
 budget so extraction keeps priority on the shared free-tier key:
 `JEL_CLASSIFICATION_BATCH_CALLS` (40) per run, `JEL_CLASSIFICATION_DAILY_LIMIT`
 (600) per UTC day counted from `llm_usage`, `JEL_CLASSIFICATION_DELAY_SECONDS`
-(20) between calls, and a run stops at the first quota refusal. When the LLM
-finds nothing, codes mapped from OpenAlex topics are used. The `classify-jel`
-CLI runs the same batches under the same advisory lock and daily budget.
+(20) between calls, and a run stops at the first quota refusal. It also yields
+to extraction: extraction records every provider refusal in `llm_quota_signals`,
+and JEL skips a run (or stops before its next call) within
+`JEL_YIELD_AFTER_QUOTA_MINUTES` (15) of one. It also skips runs while more than
+`JEL_MAX_EXTRACTION_BACKLOG` (1000) pages wait for extraction. The DB signal
+works across processes, so the CLI yields too. When the LLM finds nothing, codes
+mapped from OpenAlex topics are used. The `classify-jel` CLI runs the same
+batches under the same advisory lock, daily budget and yield checks
+(`--no-yield` skips the checks). Catch-up after a large backlog, run overnight
+once the extraction backlog has cleared:
+`nohup docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T api python -m backend.main classify-jel --until-done --daily-limit 2000 --delay 30 > /root/jel-backfill.log 2>&1 &`
 
 **Paper merge:** `merge_duplicate_papers()` dedupes papers post-run.
 
@@ -116,6 +125,13 @@ alerts the owner straight away. Every other call uses the workflow token so the
 owner mention comes from a bot (a self-mention sends no email). The script is standard
 library only because it runs on the server's system Python. Run it by hand with
 `python3 scripts/monitor.py --external`, or `--host` on the server.
+
+"Has Top-5" means a published or accepted paper in exactly AER, Econometrica,
+JPE, QJE or REStud (sister journals, look-alikes and R&Rs do not count); the
+"Top-20" preset matches department names as whole words. Both are regexes in
+`backend/database/top_presets.py` that MySQL and Python apply identically.
+Both feed and directory presets read `researchers.has_top5_pub`, refreshed for a
+page's authors on save and in full after each scrape job's paper merge.
 
 `.github/workflows/data-quality.yml` runs at 07:47 UTC: `tests_data_quality`
 plus a few pipeline signals (`scripts/data_quality_check.py`) against prod

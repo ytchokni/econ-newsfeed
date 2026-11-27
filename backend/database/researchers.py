@@ -10,34 +10,87 @@ import unicodedata
 
 import mysql.connector
 
-from backend.database.connection import execute_query, fetch_one, fetch_all
+from backend.database.connection import execute_query, fetch_one, fetch_all, get_connection
 from backend.database.llm import log_llm_usage
 from backend.config import fix_encoding
 
 
 from backend.database.search_helpers import (
     escape_like as _escape_like,
-    TOP20_DEPT_KEYWORDS as _TOP20_DEPT_KEYWORDS,
-    TOP5_JOURNAL_KEYWORDS as _TOP5_JOURNAL_KEYWORDS,
-    top5_venue_clause as _top5_venue_clause,
     name_relevance_sql as _name_relevance_sql,
     name_search_words as _name_search_words,
     name_words_clause as _name_words_clause,
 )
+from backend.database.top_presets import (
+    top5_publication_clause as _top5_publication_clause,
+    top5_venue_clause as _top5_venue_clause,
+    top20_affiliation_clause as _top20_affiliation_clause,
+)
 
-_TOP5_VENUE_CLAUSE, _TOP5_VENUE_PARAMS = _top5_venue_clause("p.venue")
 
+def refresh_has_top5_for(researcher_ids) -> None:
+    """Recompute has_top5_pub for the given researchers.
 
-def refresh_has_top5(researcher_id: int) -> None:
-    """Recompute has_top5_pub for a single researcher."""
+    A researcher has a top-5 when they author a published or accepted paper in
+    one of the five core journals (see ``backend.database.top_presets``).
+    """
+    ids = sorted({int(i) for i in researcher_ids})
+    if not ids:
+        return
+    clause, params = _top5_publication_clause("p.venue", "p.status")
+    placeholders = ", ".join(["%s"] * len(ids))
     execute_query(
-        f"""UPDATE researchers SET has_top5_pub = EXISTS(
+        f"""UPDATE researchers r SET r.has_top5_pub = EXISTS(
                 SELECT 1 FROM authorship a
                 JOIN papers p ON p.id = a.publication_id
-                WHERE a.researcher_id = %s AND {_TOP5_VENUE_CLAUSE}
-            ) WHERE id = %s""",
-        (researcher_id, *_TOP5_VENUE_PARAMS, researcher_id),
+                WHERE a.researcher_id = r.id AND {clause}
+            ) WHERE r.id IN ({placeholders})""",
+        (*params, *ids),
     )
+
+
+def _has_top5_target_sql() -> tuple[str, list[str]]:
+    clause, params = _top5_publication_clause("p.venue", "p.status")
+    return (
+        "researchers r LEFT JOIN ("
+        "SELECT DISTINCT a.researcher_id FROM authorship a "
+        f"JOIN papers p ON p.id = a.publication_id WHERE {clause}"
+        ") t5 ON t5.researcher_id = r.id"
+    ), params
+
+
+def has_top5_flag_changes() -> dict:
+    """Count researchers whose stored has_top5_pub differs from the rule (read-only)."""
+    from_sql, params = _has_top5_target_sql()
+    tracked = "EXISTS (SELECT 1 FROM researcher_urls ru WHERE ru.researcher_id = r.id)"
+    row = fetch_one(
+        f"""SELECT
+                COALESCE(SUM(r.has_top5_pub), 0) AS flagged_before,
+                COALESCE(SUM(t5.researcher_id IS NOT NULL), 0) AS flagged_after,
+                COALESCE(SUM(r.has_top5_pub AND t5.researcher_id IS NULL), 0) AS cleared,
+                COALESCE(SUM(NOT r.has_top5_pub AND t5.researcher_id IS NOT NULL), 0) AS newly_set,
+                COALESCE(SUM(r.has_top5_pub AND {tracked}), 0) AS tracked_before,
+                COALESCE(SUM(t5.researcher_id IS NOT NULL AND {tracked}), 0) AS tracked_after
+            FROM {from_sql}""",
+        tuple(params),
+    )
+    return {k: int(v) for k, v in (row or {}).items()}
+
+
+def refresh_all_has_top5() -> int:
+    """Recompute has_top5_pub for every researcher; return the rows changed."""
+    from_sql, params = _has_top5_target_sql()
+    target = "(t5.researcher_id IS NOT NULL)"
+    with get_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute(
+                f"UPDATE {from_sql} SET r.has_top5_pub = {target} "
+                f"WHERE r.has_top5_pub <> {target}",
+                tuple(params),
+            )
+            changed = cursor.rowcount
+        conn.commit()
+    return changed
 
 
 def _strip_accents(s: str) -> str:
@@ -854,9 +907,9 @@ def search_researchers(
         params.append(f"%{_escape_like(position)}%")
 
     if preset == "top20":
-        dept_conditions = " OR ".join(["r.affiliation LIKE %s"] * len(_TOP20_DEPT_KEYWORDS))
-        conditions.append(f"({dept_conditions})")
-        params.extend(f"%{_escape_like(kw)}%" for kw in _TOP20_DEPT_KEYWORDS)
+        dept_clause, dept_params = _top20_affiliation_clause("r.affiliation")
+        conditions.append(dept_clause)
+        params.extend(dept_params)
 
     if preset == "top5_rr_accepted":
         venue_clause, venue_params = _top5_venue_clause("p.venue")

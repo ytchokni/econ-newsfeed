@@ -166,28 +166,27 @@ def test_options_exact_name_first(directory, query):
 
 @pytest.mark.parametrize("query", ["Thomas Rieger", "thomas rieger", "Rieger Thomas"])
 def test_feed_full_name_lists_that_authors_papers_first(feed, query):
-    rows, total, researcher_count = papers.search_feed_events(search=query)
+    rows, total = papers.search_feed_events(search=query)
     ids = [r["paper_id"] for r in rows]
     assert ids[0] == 4           # authored by Thomas Rieger
     assert set(ids) == {4, 3}    # Riegert still matches every word, ranked after
     assert total == 2
-    assert researcher_count == 3  # Rieger, Smith (coauthor of 4), Riegert
 
 
 def test_feed_last_name_boosts_whole_word_author_then_keeps_chronology(feed):
-    rows, total, _ = papers.search_feed_events(search="Rieger")
+    rows, total = papers.search_feed_events(search="Rieger")
     # Rieger (whole word) > Riegert (prefix) > newest-first for Krieger/title matches
     assert [r["paper_id"] for r in rows] == [4, 3, 1, 2]
     assert total == 4
 
 
 def test_feed_topic_search_stays_chronological(feed):
-    rows, _, _ = papers.search_feed_events(search="and")
+    rows, _ = papers.search_feed_events(search="and")
     assert [r["paper_id"] for r in rows] == [1, 3, 4, 5]
 
 
 def test_feed_without_search_is_chronological(feed):
-    rows, total, _ = papers.search_feed_events()
+    rows, total = papers.search_feed_events()
     assert [r["paper_id"] for r in rows] == [1, 2, 3, 4, 5]
     assert total == 5
 
