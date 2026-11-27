@@ -94,6 +94,35 @@ describe("ResearcherDetailContent", () => {
     expect(screen.getByText("Trade Shocks")).toBeInTheDocument();
   });
 
+  it("offers a prefilled removal request to the researcher", async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ ...researcher, website_url: "https://steinhardt.example/" }),
+    });
+
+    renderWithSWR(
+      <ResearcherDetailContent id={1} contactEmail="owner@example.test" siteUrl="https://site.example" />,
+    );
+
+    const link = await screen.findByRole("link", { name: "Request removal" });
+    const href = link.getAttribute("href")!;
+    expect(href.startsWith("mailto:owner@example.test?subject=")).toBe(true);
+    const params = new URLSearchParams(href.split("?")[1]);
+    expect(params.get("subject")).toBe("Removal request: Max Friedrich Steinhardt (researcher #1)");
+    expect(params.get("body")).toContain("Researcher ID: 1");
+    expect(params.get("body")).toContain("Profile: https://site.example/researchers/1");
+    expect(params.get("body")).toContain("Website: https://steinhardt.example/");
+  });
+
+  it("links removal to the contact page when no address is configured", async () => {
+    (global.fetch as jest.Mock).mockResolvedValueOnce({ ok: true, json: async () => researcher });
+    renderWithSWR(<ResearcherDetailContent id={1} />);
+    expect(await screen.findByRole("link", { name: "Request removal" })).toHaveAttribute(
+      "href",
+      "/contact#researchers",
+    );
+  });
+
   it("shows loading state", () => {
     (global.fetch as jest.Mock).mockReturnValueOnce(new Promise(() => {}));
 

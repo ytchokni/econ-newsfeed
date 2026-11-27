@@ -30,6 +30,11 @@ poetry run python -m backend.main enrich            # Enrich papers via OpenAlex
 poetry run python -m backend.main classify-jel      # Classify researchers into JEL codes via LLM
 poetry run python -m backend.main discover-domains  # Scan HTML for untrusted domains with paper-like links
 
+# Researcher removal requests (GDPR objection)
+poetry run python -m backend.main opt-out --researcher-id 123          # dry run: shows what would be removed
+poetry run python -m backend.main opt-out --researcher-id 123 --apply  # delete + tombstone
+poetry run python -m backend.main opt-out --list                       # recorded opt-outs (hashes only)
+
 # Testing & validation
 poetry run python scripts/check_env.py && poetry run pytest && cd app && npx tsc --noEmit && npm run lint && npx jest  # Full suite
 poetry run pytest tests_data_quality -v             # Data-quality invariants against real DB
@@ -107,6 +112,23 @@ headers and a footer button. `GET /api/users/unsubscribe` only redirects to the
 `/unsubscribe` confirmation page (link scanners prefetch GETs); `POST` unsubscribes
 with no login. Tokens are HMAC-signed with `NEXTAUTH_SECRET`, never expire, and
 only toggle that user's digest, so rotating the secret breaks old links.
+
+**Researcher opt-out:** researcher pages and `/privacy` link a prefilled
+`mailto:` to `CONTACT_EMAIL`; the owner then runs `opt-out --apply`
+(`backend/optout.py`). It deletes the researcher (cascading URLs, cached HTML,
+authorships, follows) and papers no other researcher with a crawled URL lists,
+then keeps a hash-only tombstone (`researcher_optouts`, `researcher_optout_urls`)
+and a rejected identity-hold row in `site_mining_candidates`. The tombstone is
+checked in `get_researcher_id()` (co-author extraction), `add_researcher_url()`
+(Searlo approvals, imports), `get_all_researcher_urls()`, the extraction queue,
+and the miner's enqueue/preflight. One-off scripts that `INSERT` URLs directly
+bypass `add_researcher_url()`, but crawl and extraction still skip those URLs.
+
+**Legal pages:** `/contact` (Impressum, § 5 DDG; `/impressum` redirects there)
+and `/privacy` read `CONTACT_EMAIL` on the Next.js server; owner name and address
+are placeholders in `app/src/lib/site-info.ts`. Crawlers send
+`EconNewsfeedBot/1.0 (+<FRONTEND_URL>/contact)` and honor robots.txt groups for
+`EconNewsfeedBot`.
 
 ## Architecture
 

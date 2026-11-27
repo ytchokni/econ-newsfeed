@@ -2,6 +2,7 @@ import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import ResearcherDetailContent from "./ResearcherDetailContent";
 import type { ResearcherDetail } from "@/lib/types";
+import { getContactEmail, getSiteUrl } from "@/lib/site-info";
 
 const API_BASE = process.env.API_INTERNAL_URL || "http://localhost:8000";
 
@@ -56,5 +57,12 @@ export default async function ResearcherDetailPage({
     notFound();
   }
 
-  return <ResearcherDetailContent id={numId} initialData={researcher} />;
+  return (
+    <ResearcherDetailContent
+      id={numId}
+      initialData={researcher}
+      contactEmail={getContactEmail()}
+      siteUrl={getSiteUrl()}
+    />
+  );
 }

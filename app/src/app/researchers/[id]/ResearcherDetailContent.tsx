@@ -9,8 +9,19 @@ import EmptyState from "@/components/EmptyState";
 import AffiliationLine from "@/components/AffiliationLine";
 import type { ResearcherDetail } from "@/lib/types";
 import FollowButton from "@/components/FollowButton";
+import { researcherRemovalMailto } from "@/lib/removal";
 
-export default function ResearcherDetailContent({ id, initialData }: { id: number; initialData?: ResearcherDetail }) {
+export default function ResearcherDetailContent({
+  id,
+  initialData,
+  contactEmail = null,
+  siteUrl = "",
+}: {
+  id: number;
+  initialData?: ResearcherDetail;
+  contactEmail?: string | null;
+  siteUrl?: string;
+}) {
   const { data: researcher, error, isLoading } = useResearcher(id, initialData);
 
   if (isLoading) {
@@ -37,6 +48,13 @@ export default function ResearcherDetailContent({ id, initialData }: { id: numbe
   const publications = researcher.publications.filter(
     (p) => p.status === "published"
   );
+  const removalHref =
+    researcherRemovalMailto(contactEmail, siteUrl, {
+      id,
+      firstName: researcher.first_name,
+      lastName: researcher.last_name,
+      websiteUrl: researcher.website_url,
+    }) ?? "/contact#researchers";
 
   return (
     <div className="max-w-[800px] mx-auto px-6 py-8">
@@ -103,6 +121,12 @@ export default function ResearcherDetailContent({ id, initialData }: { id: numbe
             ))}
           </div>
         )}
+        <p className="mt-5 pt-4 border-t border-[var(--border-light)] font-sans text-xs text-[var(--text-muted)]">
+          Are you this researcher?{" "}
+          <a href={removalHref} className="text-[var(--link)] hover:underline">
+            Request removal
+          </a>
+        </p>
       </div>
 
       {/* Early Stage section */}

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Source_Serif_4, DM_Sans } from "next/font/google";
 import "./globals.css";
 import Header from "@/components/Header";
+import SiteFooter from "@/components/SiteFooter";
 import { AuthProvider } from "@/lib/auth";
 
 const sourceSerif = Source_Serif_4({
@@ -38,6 +39,7 @@ export default function RootLayout({
         <AuthProvider>
           <Header />
           <main>{children}</main>
+          <SiteFooter />
         </AuthProvider>
       </body>
     </html>

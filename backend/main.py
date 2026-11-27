@@ -210,6 +210,12 @@ def main() -> None:
     mining_parser.add_argument('--max-seconds', type=int, default=None)
     mining_parser.add_argument('--status', action='store_true', help='Read recent runs, queue counts and held candidates; no network requests')
 
+    optout_parser = subparsers.add_parser(
+        'opt-out', help='Remove a researcher who asked to be removed and stop re-adding them (dry run by default)')
+    optout_parser.add_argument('--researcher-id', type=int, help='Researcher ID from the removal request')
+    optout_parser.add_argument('--apply', action='store_true', help='Delete and tombstone (default: show what would happen)')
+    optout_parser.add_argument('--list', action='store_true', help='List recorded opt-outs (hashes only)')
+
     review_parser = subparsers.add_parser('review', help='LLM quality review of feed events (GPT 5.4 Mini)')
     review_parser.add_argument('--limit', type=int, default=None, help='Max events to review')
     review_parser.add_argument('--batch-size', type=int, default=100, help='Batch size (default: 100)')
@@ -253,6 +259,18 @@ def main() -> None:
             result = run_site_mining_batch(apply=args.apply, mode=args.mode,
                 source_limit=args.source_limit, candidate_limit=args.limit,
                 max_requests=args.max_requests, max_seconds=args.max_seconds)
+        print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
+    elif args.command == 'opt-out':
+        create_tables()
+        from backend.optout import list_optouts, opt_out_researcher
+        if args.list:
+            result = list_optouts()
+        elif args.researcher_id is None:
+            parser.error('opt-out needs --researcher-id or --list')
+        else:
+            result = opt_out_researcher(args.researcher_id, apply=args.apply)
+            if not args.apply:
+                result['note'] = 'Dry run: nothing changed. Re-run with --apply.'
         print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
     elif args.command == 'review':
         create_tables()

@@ -35,6 +35,8 @@ class FakeConnection:
         self.url_inserts = 0
         self.raw_autocommit = False
         self.implicit_transaction = False
+        self.optout_names = set()
+        self.optout_url_keys = set()
 
     def __getattr__(self, name):
         # Match PooledMySQLConnection: reads delegate, assignments shadow the
@@ -179,6 +181,10 @@ class FakeCursor:
             self.rowcount = 1
         elif "from site_mining_sources" in q:
             self.rows = []
+        elif "from researcher_optouts" in q:
+            self.rows = [{"name_hash": h} for h in self.db.optout_names]
+        elif "from researcher_optout_urls" in q:
+            self.rows = [{"url_key_hash": h} for h in self.db.optout_url_keys]
         else:
             raise AssertionError(f"Unhandled SQL: {q}")
 
@@ -473,3 +479,47 @@ def test_directory_generation_refreshes_late_verified_profile_once_per_visit(db)
         db.candidates[row["id"]]["updated_at"] -= timedelta(days=9)
         assert not store.enqueue(new)
         assert not store.enqueue(candidate("directory_profile"))
+
+
+# --- Researcher opt-out: the miner never re-adds an opted-out researcher ----
+
+def test_enqueue_refuses_opted_out_name(db):
+    from backend.database.optouts import full_name_hash
+    db.optout_names.add(full_name_hash("alice  ECONOMIST"))
+    with MiningStore(apply=True) as store:
+        assert not store.enqueue(candidate())
+    assert not db.candidates
+
+
+def test_enqueue_refuses_opted_out_url_alias(db):
+    from backend.database.optouts import url_key_hash
+    db.optout_url_keys.add(url_key_hash("http://www.alice-economist.example"))
+    with MiningStore(apply=True) as store:
+        assert not store.enqueue(candidate())
+    assert not db.candidates
+
+
+def test_preflight_holds_bundle_with_url_opted_out_after_enqueue(db):
+    from backend.database.optouts import url_key_hash
+    with MiningStore(apply=True) as store:
+        row = queued(store)
+        db.optout_url_keys.add(url_key_hash(bundle()[1]["url"]))
+        store._optout_cache = None  # opt-out recorded while the candidate waited
+        result = approve(store, row)
+        assert result["held"] and "opted out" in result["reason"]
+    assert db.url_inserts == 0
+
+
+def test_opt_out_hold_row_blocks_urls_through_rejected_list(db):
+    hold_urls = [{"url": "https://alice-economist.example/research", "page_type": "RESEARCH"}]
+    db.candidates[99] = dict(
+        id=99, candidate_key="k", researcher_id=None, name="[opted-out researcher]",
+        url="https://alice-economist.example/research", source_url="https://alice-economist.example/research",
+        source_kind="opt_out", evidence=json.dumps({"identity_hold": True, "opt_out": True}),
+        status="rejected", urls=json.dumps(hold_urls), attempts=0,
+        updated_at=module._utcnow(), next_attempt_at=module._utcnow(),
+    )
+    with MiningStore(apply=True) as store:
+        result = approve(store, queued(store))
+        assert result["held"]
+    assert db.url_inserts == 0

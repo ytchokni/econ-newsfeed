@@ -88,6 +88,8 @@ def _render_digest_html(events: list[dict], user_name: str | None,
     unsub_href = escape(unsubscribe_url, quote=True)
     settings_href = escape(f"{FRONTEND_URL}/settings", quote=True)
     home_href = escape(FRONTEND_URL, quote=True)
+    contact_href = escape(f"{FRONTEND_URL}/contact", quote=True)
+    privacy_href = escape(f"{FRONTEND_URL}/privacy", quote=True)
 
     # Footer button: a table cell carries the border and background so the
     # button renders in Outlook (which ignores padding on <a>), while the
@@ -130,6 +132,12 @@ def _render_digest_html(events: list[dict], user_name: str | None,
         <a href="{home_href}" style="color:#2563eb;">Manage your follows</a>
       </td>
     </tr>
+    <tr>
+      <td style="font-size:12px;line-height:18px;color:#9ca3af;padding:12px 0 0;">
+        <a href="{contact_href}" style="color:#6b7280;">Contact &amp; Impressum</a> ·
+        <a href="{privacy_href}" style="color:#6b7280;">Privacy</a>
+      </td>
+    </tr>
   </table>
 </body>
 </html>"""
@@ -160,6 +168,8 @@ def _render_digest_text(events: list[dict], user_name: str | None,
         "You're receiving this weekly digest because you follow researchers on Econ Newsfeed.",
         f"Unsubscribe from the weekly digest: {unsubscribe_url}",
         f"Manage email preferences: {FRONTEND_URL}/settings",
+        f"Contact & Impressum: {FRONTEND_URL}/contact",
+        f"Privacy: {FRONTEND_URL}/privacy",
     ]
     return "\n".join(lines) + "\n"
 

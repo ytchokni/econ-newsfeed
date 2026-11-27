@@ -16,6 +16,7 @@ from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
+from backend.crawler_identity import BOT_NAME, with_bot_token
 from backend.database import execute_query, fetch_all, fetch_one, log_llm_usage
 from backend.database.researchers import record_url_fetch_failure, record_url_fetch_success
 from bs4 import BeautifulSoup
@@ -78,10 +79,14 @@ RATE_LIMIT_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_SECONDS', '2'))
 RATE_LIMIT_FAST_SECONDS = float(os.environ.get('SCRAPE_RATE_LIMIT_FAST_SECONDS', '0.5'))
 CONTENT_MAX_CHARS = int(os.environ.get('CONTENT_MAX_CHARS'))
 CONTENT_MAX_BYTES = 1_000_000  # 1 MB response size limit
-SCRAPER_USER_AGENT = os.environ.get(
+# Browser-compatible base so sites keep serving normal HTML, followed by a bot
+# token that names us and links the contact/removal page.
+SCRAPER_USER_AGENT = with_bot_token(os.environ.get(
     'SCRAPER_USER_AGENT',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
-)
+))
+# robots.txt groups that apply to us: our bot name, plus the legacy token.
+ROBOTS_AGENTS = (BOT_NAME, 'HTMLFetcher/1.0')
 _ROBOTS_CACHE_MAX = 500
 
 
@@ -197,7 +202,7 @@ class HTMLFetcher:
         rp = HTMLFetcher._get_robots_parser(url)
         if rp is None:
             return True
-        allowed = rp.can_fetch('HTMLFetcher/1.0', url)
+        allowed = all(rp.can_fetch(agent, url) for agent in ROBOTS_AGENTS)
         if not allowed:
             logging.info(f"URL disallowed by robots.txt: {url}")
         return allowed
