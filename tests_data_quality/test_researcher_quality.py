@@ -330,3 +330,23 @@ class TestDescriptionQuality:
                 LIMIT 50"""
         )
         assert not rows, "mojibake researcher descriptions:\n" + fmt_violations(rows)
+
+    def test_no_llm_reasoning_in_descriptions(self, db):
+        """Issue #258: the bio call stored the model's '<thought>* Task: …'
+        notes on 3,502 profiles. Fix with
+        `scripts/cleanup_data_quality.py --steps restore_reasoning_descriptions`."""
+        from backend.pipeline.description import looks_like_reasoning, reasoning_sql_condition
+
+        cond, params = reasoning_sql_condition("description")
+        for table in ("researchers", "researcher_snapshots"):
+            id_col = "researcher_id" if table == "researcher_snapshots" else "id"
+            rows = [
+                {"researcher_id": r["rid"], "head": r["description"][:80]}
+                for r in db.fetch_all(
+                    f"SELECT {id_col} AS rid, description FROM {table} "
+                    f"WHERE description IS NOT NULL AND {cond}", params)
+                if looks_like_reasoning(r["description"])
+            ]
+            assert not rows, (
+                f"LLM reasoning text stored as a bio in {table}:\n" + fmt_violations(rows)
+            )
