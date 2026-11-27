@@ -61,7 +61,7 @@ def test_late_inserted_event_is_delivered_once_despite_old_source_date():
         INSERT INTO feed_events VALUES(1,1,'status_change','working_paper','accepted',
           '2026-10-01','2026-10-07',1,'Journal');
         INSERT INTO digest_deliveries VALUES(7,1);
-        INSERT INTO feed_events VALUES(2,1,'status_change','accepted','published',
+        INSERT INTO feed_events VALUES(2,1,'status_change','revise_and_resubmit','accepted',
           '2026-10-02','2026-10-15',1,'Journal');
         INSERT INTO feed_events VALUES(3,1,'status_change','working_paper','accepted',
           '2026-09-20',NULL,1,'Journal');
