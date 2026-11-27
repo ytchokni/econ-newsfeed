@@ -58,8 +58,42 @@ def _fold(text: str) -> str:
     return ''.join(c for c in text if not unicodedata.combining(c)).casefold()
 
 
+_GERMAN = str.maketrans({'ä': 'ae', 'ö': 'oe', 'ü': 'ue', 'ß': 'ss', 'Ä': 'Ae', 'Ö': 'Oe', 'Ü': 'Ue'})
+
+
 def _name_tokens(name: str) -> set[str]:
-    return {t for t in re.split(r'[^\w]+', _fold(name)) if len(t) > 1}
+    """Tokens under both foldings: Müller -> {muller, mueller}."""
+    tokens = set()
+    for text in (name or '', (name or '').translate(_GERMAN)):
+        tokens |= {t for t in re.split(r'[^\w]+', _fold(text)) if len(t) > 1}
+    return tokens
+
+
+def _romanisation_ambiguous(authors: list[dict], work_names: list[str]) -> bool:
+    """A work author with our author's first name, or initial plus a similar
+    surname (Chou/Zhou), may be the same person under another spelling."""
+    from difflib import SequenceMatcher
+    for author in authors:
+        first = sorted(_name_tokens((author.get('first_name') or '').split(' ')[0]) or {''})[0]
+        last = _fold(author.get('last_name') or '')
+        for name in work_names:
+            parts = _fold(name).replace('.', ' ').split()
+            if len(parts) < 2 or not first:
+                continue
+            if parts[0] == first:
+                return True
+            if parts[0][0] == first[0] and SequenceMatcher(None, parts[-1], last).ratio() >= 0.5:
+                return True
+    return False
+
+
+def _book_title_variant(title: str | None, book_title: str | None) -> bool:
+    """The paper names the book itself: equal heads before ':'/',' or one a prefix."""
+    head = lambda t: normalize_title(re.split(r'[:,]', t or '', maxsplit=1)[0])
+    a, b = head(title), head(book_title)
+    if len(a.split()) < 2 or len(b.split()) < 2:
+        return False
+    return a.startswith(b) or b.startswith(a)
 
 
 def _surname_overlap(authors: list[dict], work_names: list[str]) -> bool:
@@ -119,6 +153,9 @@ def classify(paper: dict, work: dict | None, authors: list[dict],
     if title_ok and _full_name_match(authors, work_names):
         return Verdict('verified', 'title_and_author_match')
     if not title_ok and (work.get('type') or '').lower() in _BOOK_TYPES:
+        if _surname_overlap(authors, work_names) and _book_title_variant(paper.get('title'), work_title):
+            # The author's own book or volume with a subtitle/volume number.
+            return Verdict('review', 'book_title_variant')
         return Verdict('cleared', 'book_mismatch', clear_abstract=abstract_from_work)
     if not title_ok and title_owner_id and title_owner_id != paper['id']:
         if _near_identical(paper.get('title'), work_title):
@@ -133,6 +170,8 @@ def classify(paper: dict, work: dict | None, authors: list[dict],
         if title_ok:
             # Same title, no shared surname: a namesake work or a name we cannot match.
             return Verdict('review', 'title_match_no_author_overlap')
+        if _romanisation_ambiguous(authors, work_names):
+            return Verdict('review', 'possible_name_variant')
         return Verdict('cleared', 'no_author_overlap', clear_abstract=abstract_from_work)
     if title_ok:
         return Verdict('verified', 'title_match_surname_overlap')
@@ -300,7 +339,8 @@ def apply_verdict(paper: dict, work: dict | None, verdict: Verdict) -> bool:
                 )
                 cursor.execute('DELETE FROM openalex_coauthors WHERE paper_id = %s', (paper['id'],))
                 cursor.execute('DELETE FROM paper_topics WHERE paper_id = %s', (paper['id'],))
-                wrong = {d.casefold() for d in (normalize_doi(row['doi']), normalize_doi(work_doi)) if d}
+                # Only the work's (cleared) DOI: the paper's own kept DOI stays on its links.
+                wrong = {work_doi.casefold()} if work_doi else set()
                 if wrong:
                     cursor.execute('SELECT id, doi FROM paper_links WHERE paper_id = %s AND doi IS NOT NULL FOR UPDATE',
                                    (paper['id'],))

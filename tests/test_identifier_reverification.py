@@ -99,6 +99,29 @@ class TestClassify:
         assert classify(paper, w, ALTRUISM_AUTHORS).clear_abstract is False
 
 
+class TestReviewFixes:
+    def test_own_book_with_subtitle_is_review(self):
+        book = work("W8", "Capital in the Twenty-First Century: An Analysis", ["Thomas Piketty"], type_="book")
+        paper = {"id": 10, "title": "Capital in the Twenty-First Century"}
+        assert classify(paper, book, [{"first_name": "Thomas", "last_name": "Piketty"}]).reason == "book_title_variant"
+
+    def test_edited_volume_is_review(self):
+        book = work("W9", "NBER Macroeconomics Annual, Volume 35", ["Martin Eichenbaum"], type_="edited-book")
+        paper = {"id": 11, "title": "NBER Macroeconomics Annual 2020"}
+        authors = [{"first_name": "Martin", "last_name": "Eichenbaum"}]
+        assert classify(paper, book, authors).verdict == "review"
+
+    def test_umlaut_transliteration_overlaps(self):
+        w = work("W10", "Published Title", ["Hans Müller"])
+        paper = {"id": 12, "title": "Working Paper Title"}
+        assert classify(paper, w, [{"first_name": "Hans", "last_name": "Mueller"}]).reason == "title_differs"
+
+    def test_romanisation_variant_is_review(self):
+        w = work("W11", "Published Title", ["Wei Zhou"])
+        paper = {"id": 13, "title": "Working Paper Title"}
+        assert classify(paper, w, [{"first_name": "Wei", "last_name": "Chou"}]).reason == "possible_name_variant"
+
+
 class TestFetchWorks:
     def test_batches_filter_and_falls_back_to_singleton(self):
         ids = [f"W{i}" for i in range(60)]
@@ -181,11 +204,13 @@ class TestApplyVerdict:
     def test_keeps_doi_that_is_not_the_works(self, cursor):
         _, cur = cursor
         cur.fetchone.return_value = {"openalex_id": "W3025280704", "doi": "10.9999/merged", "abstract": None}
-        cur.fetchall.return_value = []
+        cur.fetchall.return_value = [{"id": 5, "doi": "10.9999/merged"}]
         paper = {**self.PAPER, "doi": "10.9999/merged"}
         iv.apply_verdict(paper, PHACK_WORK, Verdict("cleared", "no_author_overlap"))
         update = next(c for c in cur.execute.call_args_list if c.args[0].lstrip().startswith("UPDATE papers"))
         assert update.args[1][0] is False
+        # The kept DOI's link is not nulled.
+        assert not [c for c in cur.execute.call_args_list if c.args[0].startswith("UPDATE paper_links")]
 
     def test_skips_when_identifier_changed_since_planning(self, cursor):
         conn, cur = cursor
