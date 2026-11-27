@@ -548,15 +548,33 @@ def record_url_fetch_failure(url_id: int, error_type: str) -> None:
         logging.warning("Deactivated URL %d: %s", url_id, error_type)
         return
 
-    # Atomic increment + conditional deactivation (no TOCTOU race)
+    # Atomic increment + conditional deactivation (no TOCTOU race).
+    #
+    # A URL inactive as response_too_large is only fetched as a recheck
+    # (TOO_LARGE_RECHECK_DAYS). Any other failure there restarts its recheck
+    # clock and keeps the reason; counting it as an ordinary failure would
+    # relabel it consecutive_failures (never rechecked again) and, until
+    # then, leave deactivated_at old so every scrape fetched it again.
+    #
+    # MySQL applies SET assignments left to right, each seeing the values
+    # already assigned. So consecutive_failures is incremented last (the
+    # threshold tests see the old count: deactivation on the
+    # _URL_DEACTIVATION_THRESHOLD-th failure, not one earlier), and the
+    # recheck test stays true or false throughout because the clauses
+    # before it change is_active/deactivation_reason only when it is false.
+    recheck = "(is_active = FALSE AND deactivation_reason <=> 'response_too_large')"
+    reached = "consecutive_failures + 1 >= %s"
     execute_query(
-        """UPDATE researcher_urls
-           SET consecutive_failures = consecutive_failures + 1,
-               is_active = IF(consecutive_failures + 1 >= %s, FALSE, is_active),
-               deactivated_at = IF(consecutive_failures + 1 >= %s AND is_active = TRUE, NOW(), deactivated_at),
-               deactivation_reason = IF(consecutive_failures + 1 >= %s, %s, deactivation_reason)
+        f"""UPDATE researcher_urls
+           SET deactivated_at = IF({recheck}, NOW(),
+                   IF({reached} AND is_active = TRUE, NOW(), deactivated_at)),
+               deactivation_reason = IF({recheck}, deactivation_reason,
+                   IF({reached}, %s, deactivation_reason)),
+               is_active = IF({recheck}, is_active, IF({reached}, FALSE, is_active)),
+               consecutive_failures = IF({recheck}, consecutive_failures, consecutive_failures + 1)
            WHERE id = %s""",
-        (_URL_DEACTIVATION_THRESHOLD, _URL_DEACTIVATION_THRESHOLD, _URL_DEACTIVATION_THRESHOLD, "consecutive_failures", url_id),
+        (_URL_DEACTIVATION_THRESHOLD, _URL_DEACTIVATION_THRESHOLD, "consecutive_failures",
+         _URL_DEACTIVATION_THRESHOLD, url_id),
     )
     row = fetch_one(
         "SELECT consecutive_failures FROM researcher_urls WHERE id = %s", (url_id,),
