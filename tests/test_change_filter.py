@@ -19,6 +19,10 @@ def test_insignificant(old, new):
 
 @pytest.mark.parametrize("old,new", [
     ("Working paper 2025", "Working paper 2026"),                         # years are revisions
+    ("Working paper, 2025.", "Working paper, 2026."),                     # year before a full stop
+    ("Draft 03.2025", "Draft 11.2026"),                                   # dotted dates
+    ("Version of 11.2025", "Version of 02.2026"),
+    ("(2025)", "(2026)"),
     ("Revise and resubmit, JPE", "Accepted, JPE"),                        # status words
     ("Paper A. Paper B.", "Paper A. Paper C. Paper B."),                  # insertion
     ("Paper A. Paper B.", "Paper A."),                                    # removal

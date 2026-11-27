@@ -15,7 +15,15 @@ waited behind every change to older pages. The order is now, highest first:
 Within each tier, pages of researchers with a top-5 journal paper or a
 recent feed event, and publication/research pages, come first; each hour
 waited counts like an hour of head start, so nothing waits forever behind
-newer pages of the same tier. Ties go to the lower URL id (old behaviour).
+newer pages of the same tier. Waiting is measured from content_changed_at;
+rows that last changed before that column existed fall back to their last
+fetch, which understates their wait until they next change. Ties go to the
+lower URL id (old behaviour).
+
+A researcher's never-extracted pages wait for that researcher's pending
+changed pages (see prioritise), and while a backlog exists a fresh change
+waits up to 12 h before it overtakes the never-extracted pages: a deliberate
+trade of some feed latency for coverage.
 """
 from __future__ import annotations
 
@@ -38,17 +46,8 @@ SIGNALS_TTL_SECONDS = 3600
 
 _PAPER_PAGE_TYPES = frozenset({"RESEARCH", "PUBLICATIONS", "WORKING_PAPERS", "PAPERS"})
 
-# Venue spellings seen in production include split words
-# ("Journal of Polit ical Economy", "Review of Economic Stud ies").
-TOP5_VENUE_REGEXP = (
-    "american economic review|econometrica|journal of polit ?ical economy"
-    "|quarterly journal of economics|review of economic stud ?ies"
-)
-_TOP5_SQL = """
-    SELECT DISTINCT a.researcher_id
-    FROM papers p JOIN authorship a ON a.publication_id = p.id
-    WHERE p.venue REGEXP %s
-"""
+# Maintained by #277's exact Top-5 rule (backend.database.researchers).
+_TOP5_SQL = "SELECT id AS researcher_id FROM researchers WHERE has_top5_pub = TRUE"
 _RECENT_SQL = """
     SELECT DISTINCT a.researcher_id
     FROM feed_events fe JOIN authorship a ON a.publication_id = fe.paper_id
@@ -74,7 +73,7 @@ def researcher_signals() -> tuple[frozenset[int], frozenset[int]]:
         if _signals is not None and now - _signals[0] < SIGNALS_TTL_SECONDS:
             return _signals[1], _signals[2]
         try:
-            top5 = frozenset(r["researcher_id"] for r in fetch_all(_TOP5_SQL, (TOP5_VENUE_REGEXP,)))
+            top5 = frozenset(r["researcher_id"] for r in fetch_all(_TOP5_SQL))
             recent = frozenset(r["researcher_id"] for r in fetch_all(_RECENT_SQL, (RECENT_ACTIVITY_DAYS,)))
         except Exception as e:
             logger.warning("Extraction queue: researcher signals unavailable: %s: %s",
@@ -127,10 +126,28 @@ def priority_key(row: dict, top5: frozenset[int], recent: frozenset[int],
 
 def prioritise(rows: list[dict], limit: int | None = None,
                now: datetime | None = None) -> list[dict]:
-    """Return rows in extraction order, at most `limit` of them."""
+    """Return rows in extraction order, at most `limit` of them.
+
+    A researcher's never-extracted pages go after that researcher's pending
+    changed pages: a seed extraction saves papers silently, so a new paper
+    listed on both a new page and a changed page must reach the diff of the
+    changed page first to get its new_paper event.
+    """
     if not rows:
         return []
     top5, recent = researcher_signals()
     now = now or datetime.now(timezone.utc)
-    ordered = sorted(rows, key=lambda r: priority_key(r, top5, recent, now))
+    keys = {id(r): priority_key(r, top5, recent, now) for r in rows}
+    last_change: dict = {}
+    for r in rows:
+        if not r.get("never_extracted") and r.get("researcher_id") is not None:
+            key = keys[id(r)]
+            rid = r["researcher_id"]
+            if rid not in last_change or key > last_change[rid]:
+                last_change[rid] = key
+    for r in rows:
+        after = last_change.get(r.get("researcher_id")) if r.get("never_extracted") else None
+        if after is not None and keys[id(r)] < after:
+            keys[id(r)] = (after[0], after[1], after[2], keys[id(r)][2])
+    ordered = sorted(rows, key=lambda r: keys[id(r)])
     return ordered[:limit] if limit is not None else ordered

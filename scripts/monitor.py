@@ -54,6 +54,9 @@ EXTRACTION_MIN_PER_6H = 30
 # (backend.database.extraction_queue), so a changed page waiting three days
 # means extraction is not keeping up with the pages that feed the newsfeed.
 EXTRACTION_CHANGED_MAX_WAIT_HOURS = 72
+# A few pages that always fail must not keep the alert on; a real stall leaves
+# hundreds of changed pages behind.
+EXTRACTION_STALE_CHANGED_MAX = 20
 FEED_WINDOW_HOURS = 72
 ENRICHMENT_MAX_AGE_HOURS = 48
 LLM_ACCOUNT_ERRORS_PER_HOUR = 3
@@ -74,7 +77,7 @@ CLAUDE_REQUEST = (
 
 PIPELINE_COLUMNS = (
     "scrape_age_h", "stuck_scrapes", "pending", "extracted_6h", "feed_recent", "enrich_age_h",
-    "snapshot_guard", "never_extracted", "oldest_changed_h",
+    "snapshot_guard", "never_extracted", "oldest_changed_h", "stale_changed",
 )
 # Only idx_extraction_state columns: any other html_content column in these
 # filters makes MySQL read every stored page (~60 s on production).
@@ -84,10 +87,14 @@ _PENDING = """FROM researcher_urls ru JOIN html_content hc ON hc.url_id = ru.id
 # Wait of the oldest changed (previously extracted) page: index-only list
 # first, then row lookups for those few hundred pages. content_changed_at is
 # NULL on rows last changed before it existed; their last fetch stands in.
-_OLDEST_CHANGED = f"""SELECT /*+ NO_MERGE(p) */
-       TIMESTAMPDIFF(HOUR, MIN(COALESCE(h2.content_changed_at, h2.timestamp)), NOW())
-     FROM (SELECT hc.url_id {_PENDING} AND hc.extracted_hash IS NOT NULL) p
+_CHANGED = f"""FROM (SELECT hc.url_id {_PENDING} AND hc.extracted_hash IS NOT NULL) p
      JOIN html_content h2 ON h2.url_id = p.url_id"""
+_OLDEST_CHANGED = f"""SELECT /*+ NO_MERGE(p) */
+       TIMESTAMPDIFF(HOUR, MIN(COALESCE(h2.content_changed_at, h2.timestamp)), NOW()) {_CHANGED}"""
+_STALE_CHANGED = f"""SELECT /*+ NO_MERGE(p) */
+       COUNT(*) {_CHANGED}
+     WHERE COALESCE(h2.content_changed_at, h2.timestamp)
+           < NOW() - INTERVAL {EXTRACTION_CHANGED_MAX_WAIT_HOURS} HOUR"""
 PIPELINE_SQL = f"""
 SELECT
   TIMESTAMPDIFF(HOUR, (SELECT MAX(started_at) FROM scrape_log), NOW()),
@@ -100,7 +107,8 @@ SELECT
   (SELECT COUNT(*) FROM information_schema.TRIGGERS
      WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = 'trg_feed_events_snapshot_guard'),
   (SELECT COUNT(*) {_PENDING} AND hc.extracted_hash IS NULL),
-  ({_OLDEST_CHANGED});
+  ({_OLDEST_CHANGED}),
+  ({_STALE_CHANGED});
 """
 
 
@@ -241,9 +249,9 @@ def evaluate_pipeline(stats: dict) -> list[dict]:
               f"{stats['extracted_6h']} extracted in the last 6h, "
               + (f"clears in ~{stats['pending'] / (stats['extracted_6h'] * 4):.1f} days at that rate"
                  if stats["extracted_6h"] else "no extraction in 6h")),
-        check("extraction_backlog_age", changed_wait is None or changed_wait <= EXTRACTION_CHANGED_MAX_WAIT_HOURS,
-              f"oldest changed page waiting {changed_wait}h" if changed_wait is not None
-              else "no changed page waiting"),
+        check("extraction_backlog_age", stats["stale_changed"] <= EXTRACTION_STALE_CHANGED_MAX,
+              f"{stats['stale_changed']} changed pages waiting over {EXTRACTION_CHANGED_MAX_WAIT_HOURS}h"
+              + (f", oldest {changed_wait}h" if changed_wait is not None else "")),
         check("feed_fresh", stats["feed_recent"] > 0,
               f"{stats['feed_recent']} feed events in the last {FEED_WINDOW_HOURS}h"),
         check("enrichment_active", enrich_age is not None and enrich_age <= ENRICHMENT_MAX_AGE_HOURS,

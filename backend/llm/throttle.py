@@ -7,9 +7,14 @@ at once and this limiter keeps their sum, plus every other LLM caller in the
 process (description, disambiguation, JEL), under the minute caps instead
 of discovering them through 429s.
 
-Callers marked with ``budget_share`` (the extraction workers) may only use
-that fraction of the window, so lower-priority jobs on the same key still
-find room while the backlog is being cleared.
+Callers marked with ``budget_share`` get a lane: the extraction workers may
+use 80% of each minute and the JEL job 20%, whatever the other is doing, and
+all calls together stay under the budget.
+
+The limiter is per process. The API process runs the scheduler and every
+worker, so it sees all their calls; a CLI run (``backend.main extract`` or
+``classify-jel``) has its own limiter and, next to a running worker, can push
+the key over its cap. Don't run those CLIs while EXTRACTION_WORKER_ENABLED.
 
 The gate: extraction workers hold ``extraction_gate`` while they process a
 page and give it up only while waiting for the model in ``extract_json``.
@@ -55,15 +60,22 @@ def estimate_prompt_tokens(messages) -> int:
 
 
 class _Reservation:
-    __slots__ = ("at", "tokens")
+    __slots__ = ("at", "tokens", "lane")
 
-    def __init__(self, at: float, tokens: int):
+    def __init__(self, at: float, tokens: int, lane: str):
         self.at = at
         self.tokens = tokens
+        self.lane = lane
 
 
 class TokenRateLimiter:
-    """Sliding one-minute window over input tokens and request count."""
+    """Sliding one-minute window over input tokens and request count.
+
+    Each call belongs to a lane with a share of the budget (budget_share):
+    a lane's own reservations stay under its share and all reservations
+    together under the whole budget. So extraction at 0.8 and JEL at 0.2
+    each keep their part however busy the other is.
+    """
 
     def __init__(self, tokens_per_minute: float, requests_per_minute: float,
                  clock=time.monotonic, sleep=time.sleep):
@@ -83,31 +95,42 @@ class TokenRateLimiter:
         while self._window and now - self._window[0].at >= WINDOW_SECONDS:
             self._window.popleft()
 
-    def _wait_seconds(self, tokens: int, share: float, now: float) -> float:
+    @staticmethod
+    def _wait_for(reservations: list[_Reservation], used: float, need: float,
+                  limit: float, now: float) -> float:
+        """Seconds until `need` more fits under `limit`, given what is in the window."""
+        if used + need <= limit:
+            return 0.0
+        excess = used + need - limit
+        for r in reservations:  # oldest first
+            excess -= r.tokens
+            if excess <= 0:
+                return r.at + WINDOW_SECONDS - now
+        return reservations[-1].at + WINDOW_SECONDS - now if reservations else 0.0
+
+    def _wait_seconds(self, tokens: int, share: float, lane: str, now: float) -> float:
         if now < self._paused_until:
             return self._paused_until - now
         self._expire(now)
         if not self._window:
             return 0.0  # A single oversized prompt still goes out alone.
+        everyone = list(self._window)
+        mine = [r for r in everyone if r.lane == lane]
         waits = [0.0]
-        if self.requests_per_minute > 0 and len(self._window) + 1 > self.requests_per_minute * share:
-            waits.append(self._window[0].at + WINDOW_SECONDS - now)
+        if self.requests_per_minute > 0:
+            for group, limit in ((everyone, self.requests_per_minute),
+                                 (mine, self.requests_per_minute * share)):
+                if group and len(group) + 1 > limit:
+                    waits.append(group[0].at + WINDOW_SECONDS - now)
         if self.tokens_per_minute > 0:
-            budget = self.tokens_per_minute * share
-            used = sum(r.tokens for r in self._window)
-            if used + tokens > budget:
-                # Wait until enough of the oldest reservations leave the window.
-                excess = used + tokens - budget
-                for r in self._window:
-                    excess -= r.tokens
-                    if excess <= 0:
-                        waits.append(r.at + WINDOW_SECONDS - now)
-                        break
-                else:
-                    waits.append(self._window[-1].at + WINDOW_SECONDS - now)
+            for group, limit in ((everyone, self.tokens_per_minute),
+                                 (mine, self.tokens_per_minute * share)):
+                if group:
+                    waits.append(self._wait_for(group, sum(r.tokens for r in group),
+                                                tokens, limit, now))
         return max(waits)
 
-    def acquire(self, tokens: int, share: float = 1.0) -> _Reservation | None:
+    def acquire(self, tokens: int, share: float = 1.0, lane: str = "default") -> _Reservation | None:
         """Block until the call fits, then reserve it. Returns None when disabled."""
         if not self.enabled:
             return None
@@ -116,16 +139,16 @@ class TokenRateLimiter:
         with self._cond:
             while True:
                 now = self._clock()
-                delay = self._wait_seconds(tokens, share, now)
+                delay = self._wait_seconds(tokens, share, lane, now)
                 if delay <= 0:
-                    reservation = _Reservation(now, tokens)
+                    reservation = _Reservation(now, tokens, lane)
                     self._window.append(reservation)
                     break
                 delay = min(delay + 0.05, WINDOW_SECONDS)
                 waited += delay
                 self._cond.wait(delay) if self._sleep is time.sleep else self._sleep(delay)
         if waited >= 5:
-            logger.info("LLM throttle: waited %.0fs for %d input tokens", waited, tokens)
+            logger.info("LLM throttle: %s waited %.0fs for %d input tokens", lane, waited, tokens)
         return reservation
 
     def settle(self, reservation: _Reservation | None, actual_tokens: int | None) -> None:
@@ -161,15 +184,16 @@ limiter = TokenRateLimiter(
 _local = threading.local()
 
 
-def current_share() -> float:
-    return getattr(_local, "share", 1.0)
+def current_share() -> tuple[float, str]:
+    """(share, lane) of this thread's LLM calls."""
+    return getattr(_local, "share", (1.0, "default"))
 
 
 @contextlib.contextmanager
-def budget_share(share: float):
-    """Limit this thread's LLM calls to a fraction of the per-minute budget."""
+def budget_share(share: float, lane: str):
+    """Limit this thread's LLM calls, as `lane`, to a fraction of the per-minute budget."""
     previous = current_share()
-    _local.share = share
+    _local.share = (share, lane)
     try:
         yield
     finally:

@@ -204,10 +204,11 @@ _EXTRACTION_MAX_URL_FAILURES = 3
 _EXTRACTION_URL_COOLDOWN_SECONDS = 3600  # retry failed pages without a restart
 # Parallel extraction loops. Calls are latency-bound, so throughput scales with
 # this until the per-minute token budget (backend.llm.throttle) binds.
-_EXTRACTION_CONCURRENCY = max(1, int(os.environ.get('EXTRACTION_CONCURRENCY', '4')))
+_EXTRACTION_CONCURRENCY = max(1, int(os.environ.get('EXTRACTION_CONCURRENCY', '2')))
 # Share of the per-minute LLM budget extraction may use; the rest stays free
 # for lower-priority jobs on the same key (JEL classification, discovery).
 _EXTRACTION_BUDGET_SHARE = 0.8
+_JEL_BUDGET_SHARE = 0.2
 _EXTRACTION_CLAIMED_WAIT_SECONDS = 30
 
 _extraction_thread = None
@@ -539,7 +540,9 @@ def run_jel_classification_job() -> dict:
     """Scheduled, budgeted JEL classification batch (see backend.enrichment.jel_job)."""
     from backend.enrichment.jel_job import run_jel_classification_batch
     try:
-        return run_jel_classification_batch()
+        # Its own fifth of the per-minute LLM budget; extraction keeps 80%.
+        with throttle.budget_share(_JEL_BUDGET_SHARE, "jel"):
+            return run_jel_classification_batch()
     except Exception as e:
         logger.error("JEL classification job failed: %s: %s", type(e).__name__, e)
         return {"stopped": "error"}
@@ -703,7 +706,7 @@ def _extraction_worker_loop(claims: "_ExtractionClaims | None" = None) -> None:
             attempted += 1
             outcome = None
             try:
-                with throttle.extraction_gate.hold(), throttle.budget_share(_EXTRACTION_BUDGET_SHARE):
+                with throttle.extraction_gate.hold(), throttle.budget_share(_EXTRACTION_BUDGET_SHARE, "extraction"):
                     outcome = extract_one_url(row)
             except Exception as e:
                 logger.error("Extraction worker error on %s (id=%s): %s: %s",

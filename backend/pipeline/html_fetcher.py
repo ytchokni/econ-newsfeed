@@ -542,8 +542,11 @@ class HTMLFetcher:
             VALUES (%s, %s, %s, %s, %s, %s, %s) AS new_row
             ON DUPLICATE KEY UPDATE
                 -- Before content_hash: MySQL applies assignments left to right.
-                content_changed_at = IF(content_hash <=> new_row.content_hash,
-                                        content_changed_at, new_row.content_changed_at),
+                -- Table-qualified: with the new_row alias, bare names are
+                -- ambiguous (ERROR 1052) and the whole upsert fails.
+                content_changed_at = IF(html_content.content_hash <=> new_row.content_hash,
+                                        html_content.content_changed_at,
+                                        new_row.content_changed_at),
                 content = new_row.content,
                 content_hash = new_row.content_hash,
                 timestamp = new_row.timestamp,

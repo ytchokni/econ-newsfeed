@@ -17,7 +17,9 @@ import re
 _WHITESPACE = re.compile(r"\s+")
 # A number with optional surrounding punctuation: "35", "(35)", "1,234", "[12]".
 _NUMBER_TOKEN = re.compile(r"^(\W*)(\d[\d,.]*)(\W*)$")
-_YEAR = re.compile(r"^(1[89]|20|21)\d\d$")
+# Any 4-digit 1800-2199 run counts as a year, also inside dotted dates and
+# with punctuation ("2025.", "11.2025", "03.2025-04.2026").
+_YEAR = re.compile(r"(?<!\d)(1[89]|20|21)\d\d(?!\d)")
 
 
 def _is_counter_swap(old: str, new: str) -> bool:
@@ -26,8 +28,7 @@ def _is_counter_swap(old: str, new: str) -> bool:
         return False
     if a.group(1) != b.group(1) or a.group(3) != b.group(3):
         return False
-    digits_a, digits_b = a.group(2), b.group(2)
-    if _YEAR.match(digits_a.replace(",", "")) or _YEAR.match(digits_b.replace(",", "")):
+    if _YEAR.search(old) or _YEAR.search(new):
         return False
     return True
 

@@ -10,7 +10,7 @@ from scripts import monitor
 HEALTHY = {
     "scrape_age_h": 3, "stuck_scrapes": 0, "pending": 400,
     "extracted_6h": 300, "feed_recent": 250, "enrich_age_h": 12,
-    "snapshot_guard": 1, "never_extracted": 350, "oldest_changed_h": 10,
+    "snapshot_guard": 1, "never_extracted": 350, "oldest_changed_h": 10, "stale_changed": 0,
 }
 
 
@@ -29,6 +29,10 @@ class TestEvaluatePipeline:
 
     def test_large_backlog_that_is_draining_is_healthy(self):
         stats = {**HEALTHY, "pending": 14659, "extracted_6h": 360}
+        assert _failing(monitor.evaluate_pipeline(stats)) == []
+
+    def test_a_few_permanently_failing_pages_do_not_alert(self):
+        stats = {**HEALTHY, "oldest_changed_h": 400, "stale_changed": 3}
         assert _failing(monitor.evaluate_pipeline(stats)) == []
 
     def test_no_changed_page_waiting_is_healthy(self):
@@ -54,7 +58,7 @@ class TestEvaluatePipeline:
         ({"enrich_age_h": 49}, "enrichment_active"),
         ({"enrich_age_h": None}, "enrichment_active"),
         ({"snapshot_guard": 0}, "snapshot_guard_trigger"),
-        ({"oldest_changed_h": 73}, "extraction_backlog_age"),
+        ({"stale_changed": 21, "oldest_changed_h": 80}, "extraction_backlog_age"),
     ])
     def test_each_stage_alerts_on_its_own(self, override, expected):
         assert _failing(monitor.evaluate_pipeline({**HEALTHY, **override})) == [expected]
@@ -62,11 +66,12 @@ class TestEvaluatePipeline:
 
 class TestParsePipelineRow:
     def test_parses_integers_and_nulls(self):
-        row = monitor.parse_pipeline_row("3\t0\t14658\t17\t29\tNULL\t1\t11594\tNULL\n")
+        row = monitor.parse_pipeline_row("3\t0\t14658\t17\t29\tNULL\t1\t11594\tNULL\t0\n")
         assert row == {
             "scrape_age_h": 3, "stuck_scrapes": 0, "pending": 14658,
             "extracted_6h": 17, "feed_recent": 29, "enrich_age_h": None,
             "snapshot_guard": 1, "never_extracted": 11594, "oldest_changed_h": None,
+            "stale_changed": 0,
         }
 
     def test_rejects_unexpected_shape(self):

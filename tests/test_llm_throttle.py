@@ -1,7 +1,7 @@
 """Per-minute LLM pacing and the extraction workers' database gate."""
 import threading
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
@@ -70,13 +70,61 @@ def test_request_cap():
     assert sum(clock.slept) >= 59
 
 
-def test_budget_share_leaves_room_for_other_callers():
+def test_lanes_keep_their_share_whatever_the_other_does():
     limiter, clock = _limiter(tokens=1000)
-    limiter.acquire(700, share=0.8)
-    limiter.acquire(200, share=1.0)  # full-budget caller still fits
+    limiter.acquire(800, share=0.8, lane="extraction")
+    limiter.acquire(200, share=0.2, lane="jel")  # extraction's 80% does not crowd out JEL
     assert clock.slept == []
-    limiter.acquire(150, share=0.8)  # 1050 > 800
+    limiter.acquire(10, share=0.8, lane="extraction")  # over extraction's 800 (and the total)
     assert clock.slept
+
+
+def test_lane_cannot_exceed_its_share_even_with_room_left():
+    limiter, clock = _limiter(tokens=1000)
+    limiter.acquire(150, share=0.2, lane="jel")
+    limiter.acquire(100, share=0.2, lane="jel")  # 250 > 200
+    assert clock.slept
+
+
+def test_total_budget_binds_across_lanes():
+    limiter, clock = _limiter(tokens=1000)
+    limiter.acquire(700, share=1.0, lane="default")
+    limiter.acquire(250, share=0.8, lane="extraction")
+    assert clock.slept == []
+    limiter.acquire(100, share=0.8, lane="extraction")  # 1050 > 1000 in total
+    assert clock.slept
+
+
+def test_jel_job_runs_in_its_own_lane():
+    from backend.pipeline import scheduler
+    seen = []
+    with patch("backend.enrichment.jel_job.run_jel_classification_batch",
+               side_effect=lambda: seen.append(throttle.current_share()) or {}):
+        scheduler.run_jel_classification_job()
+    assert seen == [(0.2, "jel")]
+    assert throttle.current_share() == (1.0, "default")
+
+
+def test_disambiguation_call_releases_the_gate(monkeypatch):
+    from backend.database import researchers
+
+    gate = ExtractionGate()
+    monkeypatch.setattr(throttle, "extraction_gate", gate)
+    seen = []
+
+    def create(**kwargs):
+        seen.append(gate.held())
+        message = SimpleNamespace(content='{"match_id": null}')
+        return SimpleNamespace(usage=None, choices=[SimpleNamespace(message=message)])
+
+    fake = MagicMock()
+    fake.chat.completions.create.side_effect = create
+    monkeypatch.setattr("backend.llm.client.get_client", lambda: fake)
+    monkeypatch.setattr(researchers, "log_llm_usage", lambda *a, **k: None)
+    with gate.hold():
+        assert researchers._disambiguate_researcher("J.", "Smith", [{"id": 1, "first_name": "John", "last_name": "Smith"}]) is None
+        assert gate.held()
+    assert seen == [False]
 
 
 def test_pause_holds_every_caller():

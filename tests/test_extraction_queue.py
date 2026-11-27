@@ -62,6 +62,15 @@ def test_waiting_ages_pages_past_bonus_so_none_starves():
     assert _order([top5_new, plain_old], top5={20}) == [1, 2]
 
 
+def test_researchers_changed_pages_go_before_their_never_extracted_pages():
+    """A new paper on both a fresh page and a changed page must get its event
+    from the changed page's diff, not be saved silently by the seed."""
+    fresh_page = _row(1, never=True, researcher_id=7)
+    changed_page = _row(2, waited_h=1, researcher_id=7)
+    other_never = _row(3, never=True, researcher_id=8)
+    assert _order([fresh_page, changed_page, other_never]) == [3, 2, 1]
+
+
 def test_ties_keep_url_id_order_and_limit_applies():
     rows = [_row(i, never=True) for i in (5, 3, 4, 1, 2)]
     assert _order(rows, limit=3) == [1, 2, 3]
@@ -77,7 +86,7 @@ def test_signals_are_cached_and_failures_fall_back():
 
     def fake_fetch(sql, params=None):
         calls.append(sql)
-        if "REGEXP" in sql:
+        if "has_top5_pub" in sql:
             return [{"researcher_id": 7}]
         return [{"researcher_id": 8}]
 
@@ -109,8 +118,8 @@ def test_get_urls_needing_extraction_orders_all_pending_rows():
         if "extraction_retry_at" in sql:
             return []  # pages cooling down after failures (none here)
         if "IN (" in sql:
-            assert params == (1,)  # wait times are looked up for changed pages only
-            return [{"url_id": 1, "pending_since": waited}]
+            assert params == (1, 2)
+            return [{"url_id": 1, "pending_since": waited}, {"url_id": 2, "pending_since": None}]
         return [dict(changed), dict(never)]
 
     with patch("backend.database.researchers.fetch_all", side_effect=fake_fetch) as mock_fetch, \

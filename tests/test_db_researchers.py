@@ -430,12 +430,14 @@ class TestGetUrlsNeedingExtraction:
         from backend.database.researchers import get_urls_needing_extraction
         rows = [{"id": 1, "researcher_id": 10, "url": "https://a.com", "page_type": "PUBLICATIONS",
                  "never_extracted": 1}]
-        with patch("backend.database.researchers.fetch_all", return_value=rows) as mock_fetch, \
+        # Second call: wait times for the pending pages.
+        with patch("backend.database.researchers.fetch_all",
+                   side_effect=[rows, [{"url_id": 1, "pending_since": None}]]) as mock_fetch, \
              patch("backend.database.extraction_queue.researcher_signals",
                    return_value=(frozenset(), frozenset())):
             result = get_urls_needing_extraction()
         assert result == rows
-        query = mock_fetch.call_args[0][0]
+        query = mock_fetch.call_args_list[0][0][0]
         assert "is_active = TRUE" in query
         assert "content_hash IS NOT NULL" in query
         assert "extracted_hash IS NULL" in query

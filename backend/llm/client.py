@@ -61,8 +61,9 @@ def _throttle_completions(client: OpenAI) -> None:
     create = completions.create
 
     def throttled_create(*args, **kwargs):
+        share, lane = throttle.current_share()
         reservation = throttle.limiter.acquire(
-            throttle.estimate_prompt_tokens(kwargs.get("messages")), throttle.current_share(),
+            throttle.estimate_prompt_tokens(kwargs.get("messages")), share, lane,
         )
         try:
             response = create(*args, **kwargs)

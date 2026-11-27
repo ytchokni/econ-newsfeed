@@ -320,14 +320,20 @@ def _disambiguate_researcher(first_name: str, last_name: str, candidates: list[d
         f'Respond with JSON only: {{"match_id": <id or null>}}'
     )
     try:
+        from backend.llm import throttle
         from backend.llm.client import get_client, get_model
         client = get_client()
         model = get_model()
-        response = client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model=model,
-            max_tokens=256,  # {"match_id": N} is ~10 tokens; 256 headroom covers any preamble leak
-        )
+        # An extraction worker holds the save gate here; the call may wait for
+        # the per-minute token budget, so let the other workers save meanwhile.
+        # (This runs inside the caller's save transaction: another worker that
+        # needs one of its row locks waits until InnoDB's lock timeout at worst.)
+        with throttle.extraction_gate.released():
+            response = client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=model,
+                max_tokens=256,  # {"match_id": N} is ~10 tokens; 256 headroom covers any preamble leak
+            )
         log_llm_usage("researcher_disambiguation", model, response.usage)
         content = response.choices[0].message.content or ""
         match = re.search(r'\{.*?\}', content, re.DOTALL)
@@ -709,12 +715,15 @@ def get_urls_needing_extraction(exclude_url_ids: tuple[int, ...] = (),
         query += " AND ru.id NOT IN (" + ",".join(["%s"] * len(exclude_url_ids)) + ")"
     query += " ORDER BY ru.id"
     rows = fetch_all(query, exclude_url_ids) if exclude_url_ids else fetch_all(query)
-    _attach_pending_since([r for r in rows if not r.get('never_extracted')])
+    _attach_pending_since(rows)
     return prioritise(rows, limit=limit)
 
 
 def _attach_pending_since(rows: list[dict], chunk: int = 500) -> None:
-    """Add when each changed page's text changed (row lookups, so changed pages only)."""
+    """Add when each page's text last changed, by url_id lookups (~0.7 s for
+    12k pages on production; reading these columns in the queue query instead
+    scans every stored page). content_changed_at is NULL on rows last changed
+    before it existed; their last fetch time stands in."""
     by_id = {r['id']: r for r in rows}
     ids = list(by_id)
     for start in range(0, len(ids), chunk):
