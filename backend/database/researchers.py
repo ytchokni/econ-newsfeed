@@ -18,10 +18,8 @@ from backend.config import fix_encoding
 
 from backend.database.search_helpers import (
     escape_like as _escape_like,
-    name_relevance_sql as _name_relevance_sql,
-    name_search_words as _name_search_words,
-    name_words_clause as _name_words_clause,
 )
+from backend.database import researcher_index as _researcher_index
 from backend.database.top_presets import (
     top5_publication_clause as _top5_publication_clause,
     top5_venue_clause as _top5_venue_clause,
@@ -619,15 +617,33 @@ def record_url_fetch_failure(url_id: int, error_type: str) -> None:
         logging.warning("Deactivated URL %d: %s", url_id, error_type)
         return
 
-    # Atomic increment + conditional deactivation (no TOCTOU race)
+    # Atomic increment + conditional deactivation (no TOCTOU race).
+    #
+    # A URL inactive as response_too_large is only fetched as a recheck
+    # (TOO_LARGE_RECHECK_DAYS). Any other failure there restarts its recheck
+    # clock and keeps the reason; counting it as an ordinary failure would
+    # relabel it consecutive_failures (never rechecked again) and, until
+    # then, leave deactivated_at old so every scrape fetched it again.
+    #
+    # MySQL applies SET assignments left to right, each seeing the values
+    # already assigned. So consecutive_failures is incremented last (the
+    # threshold tests see the old count: deactivation on the
+    # _URL_DEACTIVATION_THRESHOLD-th failure, not one earlier), and the
+    # recheck test stays true or false throughout because the clauses
+    # before it change is_active/deactivation_reason only when it is false.
+    recheck = "(is_active = FALSE AND deactivation_reason <=> 'response_too_large')"
+    reached = "consecutive_failures + 1 >= %s"
     execute_query(
-        """UPDATE researcher_urls
-           SET consecutive_failures = consecutive_failures + 1,
-               is_active = IF(consecutive_failures + 1 >= %s, FALSE, is_active),
-               deactivated_at = IF(consecutive_failures + 1 >= %s AND is_active = TRUE, NOW(), deactivated_at),
-               deactivation_reason = IF(consecutive_failures + 1 >= %s, %s, deactivation_reason)
+        f"""UPDATE researcher_urls
+           SET deactivated_at = IF({recheck}, NOW(),
+                   IF({reached} AND is_active = TRUE, NOW(), deactivated_at)),
+               deactivation_reason = IF({recheck}, deactivation_reason,
+                   IF({reached}, %s, deactivation_reason)),
+               is_active = IF({recheck}, is_active, IF({reached}, FALSE, is_active)),
+               consecutive_failures = IF({recheck}, consecutive_failures, consecutive_failures + 1)
            WHERE id = %s""",
-        (_URL_DEACTIVATION_THRESHOLD, _URL_DEACTIVATION_THRESHOLD, _URL_DEACTIVATION_THRESHOLD, "consecutive_failures", url_id),
+        (_URL_DEACTIVATION_THRESHOLD, _URL_DEACTIVATION_THRESHOLD, "consecutive_failures",
+         _URL_DEACTIVATION_THRESHOLD, url_id),
     )
     row = fetch_one(
         "SELECT consecutive_failures FROM researcher_urls WHERE id = %s", (url_id,),
@@ -711,6 +727,16 @@ def get_urls_needing_extraction(exclude_url_ids: tuple[int, ...] = (),
           AND hc.has_stored_content = TRUE
           AND (hc.extracted_hash IS NULL OR hc.extracted_hash != hc.content_hash)
     """
+    # Pages cooling down after repeated failures (record_extraction_failure)
+    # are found separately and excluded by id: any other html_content column
+    # in the query above takes it off idx_extraction_state and makes MySQL
+    # read every MEDIUMTEXT row (~60 s on prod instead of 0.09 s).
+    cooling = fetch_all(
+        "SELECT url_id FROM html_content"
+        " WHERE extraction_retry_at > NOW() AND extraction_failed_hash <=> content_hash"
+    ) or []
+    exclude_url_ids = tuple(dict.fromkeys(
+        tuple(exclude_url_ids) + tuple(row['url_id'] for row in cooling)))
     if exclude_url_ids:
         query += " AND ru.id NOT IN (" + ",".join(["%s"] * len(exclude_url_ids)) + ")"
     query += " ORDER BY ru.id"
@@ -735,6 +761,41 @@ def _attach_pending_since(rows: list[dict], chunk: int = 500) -> None:
         )
         for f in found:
             by_id[f['url_id']]['pending_since'] = f['pending_since']
+
+
+EXTRACTION_MAX_FAILURES = 3
+EXTRACTION_COOLDOWN_SECONDS = 3600
+EXTRACTION_MAX_COOLDOWN_SECONDS = 7 * 24 * 3600
+
+
+def record_extraction_failure(url_id: int, content_hash: str | None) -> dict | None:
+    """Count a failed extraction of one page version, persisted across restarts.
+
+    The count is per content hash: a new page version starts again at one.
+    From EXTRACTION_MAX_FAILURES failures on, the page is left out of
+    get_urls_needing_extraction until extraction_retry_at, with the cooldown
+    doubling per further failure up to EXTRACTION_MAX_COOLDOWN_SECONDS, so a
+    page that always fails costs a few calls a week instead of one per poll.
+    mark_extracted clears the state.
+
+    MySQL applies SET clauses left to right: the count is updated first, and
+    extraction_retry_at deliberately reads the new count.
+    """
+    execute_query(
+        """UPDATE html_content
+           SET extraction_failures = IF(extraction_failed_hash <=> %s, extraction_failures + 1, 1),
+               extraction_failed_hash = %s,
+               extraction_retry_at = IF(extraction_failures >= %s,
+                   NOW() + INTERVAL LEAST(%s * POW(2, extraction_failures - %s), %s) SECOND,
+                   NULL)
+           WHERE url_id = %s""",
+        (content_hash, content_hash, EXTRACTION_MAX_FAILURES, EXTRACTION_COOLDOWN_SECONDS,
+         EXTRACTION_MAX_FAILURES, EXTRACTION_MAX_COOLDOWN_SECONDS, url_id),
+    )
+    return fetch_one(
+        "SELECT extraction_failures, extraction_retry_at FROM html_content WHERE url_id = %s",
+        (url_id,),
+    )
 
 
 def reactivate_url(url_id: int) -> None:
@@ -902,15 +963,56 @@ def search_researchers(
 
     Base conditions (always applied):
     - Only validated researchers: have openalex_author_id OR researcher_urls entry
-    - Hide initial-only names (CHAR_LENGTH > 2, not matching '^[A-Z]\\.$')
+    - Hide initials-only stubs ("A.", "A. Y.", "HTT Tran"); short names like Li stay
 
     Filters:
     - institution: r.affiliation LIKE %value%
     - position: r.position LIKE %value%
     - preset='top20': affiliation matches top-20 economics department keywords
     - field_slug: single slug uses =, comma-separated uses IN
-    - search: every word in the name (any order), ranked by name relevance
+    - search: matched and ranked by the in-process name index
+      (see backend/database/researcher_index.py); each row then carries
+      ``match``: "name", "affiliation" or "similar" (typo fallback)
     """
+    conditions, params = _directory_conditions(
+        institution=institution, field_slug=field_slug, position=position, preset=preset,
+    )
+    if _researcher_index.query_words(search):
+        return _search_ranked(search, conditions, params, offset=offset, limit=limit)
+
+    where = "WHERE " + " AND ".join(conditions)
+
+    count_row = fetch_one(
+        f"SELECT COUNT(*) AS cnt FROM researchers r {where}",
+        tuple(params),
+    )
+    total = count_row['cnt'] if count_row else 0
+
+    rows = fetch_all(
+        f"""
+        SELECT r.id, r.first_name, r.last_name, r.position, r.affiliation, r.description
+        FROM researchers r
+        {where}
+        ORDER BY r.last_name, r.first_name, r.id
+        LIMIT %s OFFSET %s
+        """,
+        (*params, limit, offset),
+    )
+    return rows, total
+
+
+_BASE_CONDITION_COUNT = 3
+_ID_CHUNK = 2000
+
+
+def _directory_conditions(
+    *,
+    institution: str | None,
+    field_slug: str | None,
+    position: str | None,
+    preset: str | None,
+) -> tuple[list[str], list]:
+    """WHERE fragments for the directory: the base guards, then user filters."""
     conditions: list[str] = []
     params: list = []
 
@@ -923,13 +1025,20 @@ def search_researchers(
         "EXISTS (SELECT 1 FROM authorship a WHERE a.researcher_id = r.id)"
     )
 
-    # Hide abbreviated/initial-only names
+    # Hide initials-only stubs ("A.", "A. Y.", "HTT Tran") but not short real
+    # names (Li, Wu, Xu); same rule as researcher_index.is_initials_stub.
     conditions.append(
-        "r.first_name IS NOT NULL AND CHAR_LENGTH(r.first_name) > 2 "
-        "AND r.first_name NOT REGEXP '^[A-Z]\\\\.$' "
-        "AND r.last_name IS NOT NULL AND CHAR_LENGTH(r.last_name) > 2 "
-        "AND r.last_name NOT REGEXP '^[A-Z]\\\\.$'"
+        "r.first_name IS NOT NULL AND TRIM(r.first_name) <> '' "
+        "AND r.last_name IS NOT NULL AND TRIM(r.last_name) <> '' "
+        "AND NOT REGEXP_LIKE(TRIM(r.first_name), %s, 'c') "
+        "AND NOT REGEXP_LIKE(TRIM(r.last_name), %s, 'c') "
+        "AND NOT (REGEXP_LIKE(TRIM(r.first_name), %s, 'c') "
+        "AND REGEXP_LIKE(TRIM(r.last_name), %s, 'c'))"
     )
+    params.extend([
+        _researcher_index.INITIALS_ONLY, _researcher_index.INITIALS_ONLY,
+        _researcher_index.CAPITAL_INITIALS, _researcher_index.HAS_LOWERCASE,
+    ])
 
     if institution:
         conditions.append("r.affiliation LIKE %s")
@@ -976,39 +1085,101 @@ def search_researchers(
             )
             params.extend(field_slugs)
 
-    # Every query word must appear in the name, in any order; the best name
-    # matches are listed first (see name_relevance_sql).
-    words = _name_search_words(search)
-    order_sql = "r.last_name, r.first_name"
-    order_params: list = []
-    if words:
-        clause, clause_params = _name_words_clause(
-            "CONCAT_WS(' ', r.first_name, r.last_name)", words
-        )
-        conditions.append(clause)
-        params.extend(clause_params)
-        rank_sql, order_params = _name_relevance_sql("r.first_name", "r.last_name", search)
-        order_sql = f"{rank_sql} DESC, {order_sql}"
+    return conditions, params
 
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
-    count_row = fetch_one(
-        f"SELECT COUNT(*) AS cnt FROM researchers r {where}",
-        tuple(params),
-    )
-    total = count_row['cnt'] if count_row else 0
+def _fetch_all_late(sql: str, params=()) -> list[dict]:
+    # Look fetch_all up at call time so tests can swap the module attribute.
+    return fetch_all(sql, params)
 
-    rows = fetch_all(
+
+def _name_index() -> _researcher_index.ResearcherIndex:
+    return _researcher_index.get_index(_fetch_all_late)
+
+
+def warm_researcher_index() -> None:
+    """Build the search index in the background at API start-up."""
+    _researcher_index.warm_index(_fetch_all_late)
+
+
+def _match_label(match: _researcher_index.Match) -> str:
+    if match.similar:
+        return "similar"
+    affiliation_only = (_researcher_index.TIER_AFFILIATION, _researcher_index.TIER_AFFILIATION_WORD)
+    return "affiliation" if match.tier in affiliation_only else "name"
+
+
+def _search_ranked(
+    search: str, conditions: list[str], params: list, *, offset: int, limit: int,
+) -> tuple[list[dict], int]:
+    """Directory search: the index ranks, SQL applies filters and loads the page.
+
+    The index already holds the base guards (``listed``); user filters are
+    checked in SQL for the ranked ids. The page query repeats every condition,
+    so a researcher changed since the index was built is never shown wrongly.
+    """
+    matches = list(_name_index().search(search, listed_only=True).matches)
+    if matches and len(conditions) > _BASE_CONDITION_COUNT:
+        allowed = _ids_matching(conditions, params, [m.researcher_id for m in matches])
+        matches = [m for m in matches if m.researcher_id in allowed]
+    total = len(matches)
+    page = matches[offset:offset + limit]
+    if not page:
+        return [], total
+    placeholders = ",".join(["%s"] * len(page))
+    found = fetch_all(
         f"""
         SELECT r.id, r.first_name, r.last_name, r.position, r.affiliation, r.description
         FROM researchers r
-        {where}
-        ORDER BY {order_sql}, r.id
-        LIMIT %s OFFSET %s
+        WHERE {" AND ".join(conditions)} AND r.id IN ({placeholders})
         """,
-        (*params, *order_params, limit, offset),
+        (*params, *[m.researcher_id for m in page]),
     )
+    by_id = {row["id"]: row for row in found}
+    rows = []
+    for match in page:
+        row = by_id.get(match.researcher_id)
+        if row is not None:
+            rows.append({**row, "match": _match_label(match)})
     return rows, total
+
+
+def _ids_matching(conditions: list[str], params: list, ids: list[int]) -> set[int]:
+    where = " AND ".join(conditions)
+    allowed: set[int] = set()
+    for start in range(0, len(ids), _ID_CHUNK):
+        chunk = ids[start:start + _ID_CHUNK]
+        placeholders = ",".join(["%s"] * len(chunk))
+        allowed.update(
+            row["id"]
+            for row in fetch_all(
+                f"SELECT r.id FROM researchers r WHERE {where} AND r.id IN ({placeholders})",
+                (*params, *chunk),
+            )
+        )
+    return allowed
+
+
+def researcher_search_suggestion(search: str | None, *, listed_only: bool = True) -> str | None:
+    """"Did you mean ...?" text when ``search`` only matched by similar spelling.
+
+    Uses the index's cached result for the same query, so calling it after
+    search_researchers costs one primary-key lookup.
+    """
+    if not _researcher_index.query_words(search):
+        return None
+    result = _name_index().search(search, listed_only=listed_only)
+    if not result.corrections or result.corrected_from is None:
+        return None
+    row = fetch_one(
+        "SELECT first_name, last_name FROM researchers WHERE id = %s",
+        (result.corrected_from,),
+    )
+    if not row:
+        return None
+    return _researcher_index.suggest_query(
+        search, dict(result.corrections), f"{row['first_name'] or ''} {row['last_name'] or ''}",
+    )
 
 
 def search_researcher_options(*, search: str = "", researcher_ids: list[int] | None = None) -> list[dict]:
@@ -1020,15 +1191,17 @@ def search_researcher_options(*, search: str = "", researcher_ids: list[int] | N
             f"FROM researchers WHERE id IN ({placeholders}) ORDER BY last_name, first_name LIMIT 50",
             tuple(researcher_ids),
         )
-    words = _name_search_words(search)
+    words = _researcher_index.query_words(search)
     if len(" ".join(words)) < 2:
         return []
-    name = "CONCAT_WS(' ', first_name, last_name)"
-    clause, clause_params = _name_words_clause(name, words)
-    rank_sql, rank_params = _name_relevance_sql("first_name", "last_name", search)
-    return fetch_all(
-        f"SELECT id, {name} AS name, affiliation "
-        f"FROM researchers WHERE {clause} "
-        f"ORDER BY {rank_sql} DESC, last_name, first_name, id LIMIT 20",
-        (*clause_params, *rank_params),
+    ids = _name_index().search(search, listed_only=False).ids[:20]
+    if not ids:
+        return []
+    placeholders = ",".join(["%s"] * len(ids))
+    rows = fetch_all(
+        f"SELECT id, CONCAT_WS(' ', first_name, last_name) AS name, affiliation "
+        f"FROM researchers WHERE id IN ({placeholders})",
+        tuple(ids),
     )
+    by_id = {row["id"]: row for row in rows}
+    return [by_id[i] for i in ids if i in by_id]

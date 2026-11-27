@@ -7,6 +7,15 @@ from backend.llm.client import _parse_retry_after
 from backend.pipeline.publication import PublicationExtraction
 
 
+
+@pytest.fixture(autouse=True)
+def _no_persisted_extraction_failures():
+    """The worker persists page failures (record_extraction_failure); these
+    tests exercise the in-process guard without a database."""
+    with patch("backend.pipeline.scheduler.record_extraction_failure", return_value=None):
+        yield
+
+
 @pytest.mark.parametrize("body", [
     {"error": {"details": [{"retryDelay": "120.5s"}]}},
     [{"error": {"details": [{"retryDelay": "120.5s"}]}}],
@@ -49,6 +58,19 @@ def test_other_api_errors_stay_page_level(status_code):
         result = llm_client.extract_json("prompt", PublicationExtractionList)
     assert result.parsed is None
     assert result.retry_after is None
+    # 5xx is the provider's fault: page-level now, but never persisted per page.
+    assert result.provider_error is (status_code >= 500)
+
+
+def test_connection_errors_are_provider_errors():
+    from openai import APIConnectionError
+    from backend.llm import client as llm_client
+    from backend.pipeline.publication import PublicationExtractionList
+    with patch.object(llm_client, "get_client") as get_client:
+        get_client.return_value.chat.completions.create.side_effect = APIConnectionError(
+            request=httpx.Request("POST", "https://example.invalid"))
+        result = llm_client.extract_json("prompt", PublicationExtractionList)
+    assert result.parsed is None and result.provider_error and not result.truncated
 
 
 @pytest.mark.parametrize("value", ["forthcoming", "TBD", "null", "0001", "03/2"])

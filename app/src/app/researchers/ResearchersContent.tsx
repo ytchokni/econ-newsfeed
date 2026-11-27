@@ -61,8 +61,10 @@ export default function ResearchersContent() {
   const hasAnyFilter = !!(filters.search || filters.institution || filters.field || filters.position || filters.preset);
   const { data, error, isLoading } = useResearchersPage(hasAnyFilter ? filters : undefined, page, !hasAnyFilter);
   const researchers = data?.items;
+  // While the next query loads, the previous results stay on screen, dimmed.
+  const isStale = isLoading && data !== undefined;
 
-  if (data && data.page === page && page > Math.max(1, data.pages)) {
+  if (data && !isStale && data.page === page && page > Math.max(1, data.pages)) {
     setPage(Math.max(1, data.pages));
   }
 
@@ -189,14 +191,7 @@ export default function ResearchersContent() {
       });
     }
 
-    if (filters.search) {
-      result.push({
-        key: "search",
-        label: `Search: ${filters.search}`,
-        onRemove: () => handleFilterChange({ ...filters, search: undefined }),
-      });
-    }
-
+    // The search box already shows the query and has its own clear button.
     return result;
   }, [filters, selectedInstitutions, selectedFields, selectedPositions, fieldOptions, handleFilterChange]);
 
@@ -208,7 +203,7 @@ export default function ResearchersContent() {
           <SearchInput
             value={filters.search ?? ""}
             onChange={(v) => handleFilterChange({ ...filters, search: v || undefined })}
-            placeholder="Search researchers by name..."
+            placeholder="Search by name or institution..."
           />
         </div>
         <div className="flex gap-2 flex-wrap">
@@ -260,15 +255,31 @@ export default function ResearchersContent() {
 
       {/* Results line */}
       {hasAnyFilter && (
-        <div className="mt-[18px] flex items-center gap-[14px]">
-          {!isLoading && data && researchers && (
-            <p aria-live="polite" className="m-0 text-[13px] text-[var(--muted)]">
-              {researchers.length === 0
-                ? "No researchers match the current filters"
-                : `Showing ${((data.page - 1) * data.per_page + 1).toLocaleString()}–${((data.page - 1) * data.per_page + researchers.length).toLocaleString()} of ${data.total.toLocaleString()} researchers`}
-            </p>
-          )}
+        <div className="mt-[18px] flex items-center gap-[14px] min-h-[20px]">
+          <p aria-live="polite" className="m-0 text-[13px] text-[var(--muted)]">
+            {isLoading
+              ? (data ? "Searching…" : "")
+              : data && researchers && researchers.length > 0
+                ? `Showing ${((data.page - 1) * data.per_page + 1).toLocaleString()}–${((data.page - 1) * data.per_page + researchers.length).toLocaleString()} of ${data.total.toLocaleString()} researchers`
+                : ""}
+          </p>
         </div>
+      )}
+
+      {hasAnyFilter && !isStale && data?.suggestion && filters.search && (
+        <p role="status" className="mt-2 mb-0 text-[13px] text-[var(--ink2)]">
+          {researchers?.every((r) => r.match === "similar") &&
+            <>No exact matches for “{filters.search}”. </>}
+          Did you mean{" "}
+          <button
+            type="button"
+            onClick={() => handleFilterChange({ ...filters, search: data.suggestion ?? undefined })}
+            className="p-0 bg-transparent border-none cursor-pointer font-semibold text-[var(--accent)] underline underline-offset-2"
+          >
+            {data.suggestion}
+          </button>
+          ?
+        </p>
       )}
 
       {/* Content */}
@@ -279,7 +290,7 @@ export default function ResearchersContent() {
           </p>
         )}
 
-        {hasAnyFilter && isLoading && (
+        {hasAnyFilter && isLoading && !data && (
           <div className="mt-8 space-y-0">
             {Array.from({ length: 3 }).map((_, i) => (
               <ResearcherCardSkeleton key={i} />
@@ -294,11 +305,28 @@ export default function ResearchersContent() {
         )}
 
         {hasAnyFilter && !isLoading && researchers && researchers.length === 0 && (
-          <EmptyState message="No researchers match the current filters." onClear={clearAll} />
+          filters.search ? (
+            <EmptyState
+              message={`No researchers match “${filters.search}”.`}
+              hint={
+                <>
+                  Check the spelling, try just the surname, or search an institution such as “DIW” or
+                  “Harvard”.
+                  {chips.length > 0 && " Other filters may be hiding matches."}
+                </>
+              }
+              onClear={chips.length > 0 ? clearAll : undefined}
+            />
+          ) : (
+            <EmptyState message="No researchers match the current filters." onClear={clearAll} />
+          )
         )}
 
         {hasAnyFilter && researchers && researchers.length > 0 && (
-          <div className="mt-2">
+          <div
+            className={`mt-2 transition-opacity ${isStale ? "opacity-50" : ""}`}
+            aria-busy={isStale}
+          >
             {researchers.map((r) => (
               <ResearcherCard key={r.id} researcher={r} />
             ))}

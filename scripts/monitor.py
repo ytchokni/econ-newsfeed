@@ -94,7 +94,10 @@ _OLDEST_CHANGED = f"""SELECT /*+ NO_MERGE(p) */
 _STALE_CHANGED = f"""SELECT /*+ NO_MERGE(p) */
        COUNT(*) {_CHANGED}
      WHERE COALESCE(h2.content_changed_at, h2.timestamp)
-           < NOW() - INTERVAL {EXTRACTION_CHANGED_MAX_WAIT_HOURS} HOUR"""
+           < NOW() - INTERVAL {EXTRACTION_CHANGED_MAX_WAIT_HOURS} HOUR
+       -- Pages that failed 3+ times on this version sit in the worker's
+       -- persisted backoff: a poisoned page, not a stalled worker.
+       AND NOT (h2.extraction_failed_hash <=> h2.content_hash AND h2.extraction_failures >= 3)"""
 PIPELINE_SQL = f"""
 SELECT
   TIMESTAMPDIFF(HOUR, (SELECT MAX(started_at) FROM scrape_log), NOW()),

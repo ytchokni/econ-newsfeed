@@ -71,7 +71,9 @@ REQUIRED_SCHEMA_QUERY = """SELECT (
     AND (SELECT COUNT(*) FROM information_schema.COLUMNS
          WHERE TABLE_SCHEMA = DATABASE() AND
            ((TABLE_NAME = 'feed_events' AND COLUMN_NAME = 'recorded_at') OR
-            (TABLE_NAME = 'html_content' AND COLUMN_NAME = 'has_stored_content'))) = 2
+            (TABLE_NAME = 'html_content' AND COLUMN_NAME = 'has_stored_content') OR
+            (TABLE_NAME = 'html_content' AND COLUMN_NAME = 'extraction_retry_at') OR
+            (TABLE_NAME = 'html_content' AND COLUMN_NAME = 'extracted_untruncated'))) = 4
     AND (SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS
          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'html_content'
            AND INDEX_NAME IN ('idx_extraction_state', 'idx_extracted_at')) = 2
@@ -140,6 +142,9 @@ def _ensure_content_metadata(cursor) -> None:
     for name, columns in (
         ('idx_extraction_state', 'has_stored_content, url_id, content_hash, extracted_hash'),
         ('idx_extracted_at', 'extracted_at'),
+        # Covers the cooled-down-page lookup in get_urls_needing_extraction,
+        # which must not read MEDIUMTEXT rows.
+        ('idx_extraction_retry', 'extraction_retry_at, url_id, extraction_failed_hash, content_hash'),
     ):
         cursor.execute(
             "SELECT COUNT(*) FROM information_schema.STATISTICS WHERE TABLE_SCHEMA = DATABASE() "
@@ -214,6 +219,10 @@ _TABLE_DEFINITIONS = {
             researcher_id INT,
             extracted_at DATETIME,
             extracted_hash VARCHAR(64),
+            extraction_failures INT NOT NULL DEFAULT 0,
+            extraction_failed_hash VARCHAR(64) DEFAULT NULL,
+            extraction_retry_at DATETIME DEFAULT NULL,
+            extracted_untruncated BOOLEAN NOT NULL DEFAULT FALSE,
             content_changed_at DATETIME DEFAULT NULL,
             UNIQUE KEY uq_url_id (url_id),
             INDEX idx_url_id_ts (url_id, timestamp),
@@ -610,6 +619,13 @@ def create_tables() -> None:
                         ("feed_events", "event_source_url", "VARCHAR(2048) DEFAULT NULL"),
                         ("feed_events", "event_metadata_captured", "BOOLEAN NOT NULL DEFAULT FALSE"),
                         ("feed_events", "recorded_at", "DATETIME(6) NULL DEFAULT NULL"),
+                        # Extraction poison-pill state; survives worker restarts.
+                        ("html_content", "extraction_failures", "INT NOT NULL DEFAULT 0"),
+                        ("html_content", "extraction_failed_hash", "VARCHAR(64) DEFAULT NULL"),
+                        ("html_content", "extraction_retry_at", "DATETIME DEFAULT NULL"),
+                        # FALSE for extractions made before chunking (first
+                        # CONTENT_MAX_CHARS only); see extract_one_url.
+                        ("html_content", "extracted_untruncated", "BOOLEAN NOT NULL DEFAULT FALSE"),
                         # When content_hash last changed (html_content.timestamp moves on
                         # every fetch). Orders the extraction queue; NULL on older rows.
                         ("html_content", "content_changed_at", "DATETIME DEFAULT NULL"),
