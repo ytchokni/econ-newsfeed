@@ -202,6 +202,7 @@ def test_extraction_deactivates_unowned_page_without_llm_call():
     with patch.object(extraction.HTMLFetcher, "get_extraction_payload", return_value=payload), \
          patch.object(extraction.HTMLFetcher, "mark_extracted") as mark, \
          patch.object(extraction, "page_owners", return_value=owners), \
+         patch.object(extraction, "url_owner_confirmed", return_value=False), \
          patch.object(extraction, "deactivate_unowned_url") as deactivate, \
          patch.object(extraction, "_extract_full") as full:
         out = extraction.extract_one_url({"id": 1, "url": "http://www.stanford.edu/research",
@@ -221,6 +222,7 @@ def test_extraction_flags_page_that_never_names_owner_and_keeps_extracting():
          patch.object(extraction.HTMLFetcher, "mark_extracted"), \
          patch.object(extraction, "page_owners",
                       return_value=[{"id": 1, "first_name": "Costas", "last_name": "Milas"}]), \
+         patch.object(extraction, "url_owner_confirmed", return_value=False), \
          patch.object(extraction, "deactivate_unowned_url") as deactivate, \
          patch.object(extraction, "flag_url_ownership") as flag, \
          patch.object(extraction, "_extract_full", return_value=extraction.ExtractionOutcome("empty")) as full:
@@ -254,3 +256,69 @@ def test_get_researcher_id_strips_repeated_surname(one, fetch_all, llm):
     from backend.database.researchers import get_researcher_id
     assert get_researcher_id("Peter Hull", "Hull") == 6330
     assert one.call_args_list[0].args[1] == ("Peter", "Hull")
+
+
+
+# ------------------------------------------------- admin-confirmed owner pages
+
+@pytest.mark.real_page_owners
+def test_confirmed_page_is_not_flagged_and_keeps_extracting():
+    from backend.pipeline import extraction
+    payload = {"content": "Research tab. " * 200, "raw_html": None, "content_hash": "h1",
+               "timestamp": None, "extracted_at": None}
+    with patch.object(extraction.HTMLFetcher, "get_extraction_payload", return_value=payload), \
+         patch.object(extraction.HTMLFetcher, "mark_extracted"), \
+         patch.object(extraction, "page_owners",
+                      return_value=[{"id": 1, "first_name": "Christopher A.", "last_name": "Hartwell"}]), \
+         patch.object(extraction, "url_owner_confirmed", return_value=True), \
+         patch.object(extraction, "flag_url_ownership") as flag, \
+         patch.object(extraction, "_extract_full", return_value=extraction.ExtractionOutcome("empty")):
+        extraction.extract_one_url({"id": 1, "url": "https://sites.google.com/view/institutionaleconomist",
+                                    "researcher_id": 1, "page_type": "research"})
+    flag.assert_called_once_with("https://sites.google.com/view/institutionaleconomist", None)
+
+
+def test_confirmed_page_credits_owner_for_bylineless_items():
+    page = ("Research tab " * 100, None, "research", "owner_confirmed")
+    conn, cursor = _conn([(77, "Christopher A.", "Hartwell")], page)
+    _save(conn, [], url="https://sites.google.com/view/institutionaleconomist")
+    assert _authorships(cursor) == [(77, 1, 0)]
+
+
+def test_confirmed_shared_page_is_still_shared():
+    from backend.database.identity import SHARED_PAGE, page_ownership_problem
+    owners = [{"first_name": "Ran", "last_name": "Abramitzky"}, {"first_name": "Nicholas", "last_name": "Bloom"}]
+    assert page_ownership_problem(owners, "x " * 2000, None, "http://www.stanford.edu/research",
+                                  confirmed=True) == SHARED_PAGE
+
+
+class TestConfirmUrlOwner:
+    @patch("backend.database.researchers.refresh_has_top5_for")
+    @patch("backend.database.researchers.execute_query")
+    @patch("backend.database.researchers.fetch_all")
+    @patch("backend.database.researchers.fetch_one", return_value={"url": "https://u", "researcher_id": 77})
+    def test_confirms_and_credits_only_bylineless_items(self, one, fetch_all, execute, refresh):
+        from backend.database.researchers import confirm_url_owner
+        fetch_all.side_effect = [[{"researcher_id": 77}], [{"paper_id": 5}, {"paper_id": 6}]]
+        assert confirm_url_owner(10) == {"url": "https://u", "papers_credited": 2}
+        sql = [c.args for c in execute.call_args_list]
+        assert "SET ownership_flag = 'owner_confirmed'" in sql[0][0] and sql[0][1] == ("https://u",)
+        assert [a[1] for a in sql[1:]] == [(77, 5), (77, 6)]
+        orphan_query = fetch_all.call_args_list[1].args[0]
+        assert "NOT EXISTS (SELECT 1 FROM authorship" in orphan_query
+        refresh.assert_called_once_with([77])
+
+    @patch("backend.database.researchers.execute_query")
+    @patch("backend.database.researchers.fetch_one", return_value=None)
+    def test_unknown_url_returns_none(self, one, execute):
+        from backend.database.researchers import confirm_url_owner
+        assert confirm_url_owner(999) is None
+        execute.assert_not_called()
+
+    @patch("backend.database.researchers.execute_query")
+    def test_flagging_never_overrides_confirmation(self, execute):
+        from backend.database.researchers import flag_url_ownership
+        flag_url_ownership("https://u", "owner_not_named")
+        flag_url_ownership("https://u", None)
+        for c in execute.call_args_list:
+            assert "owner_confirmed" in c.args[0]

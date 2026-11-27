@@ -341,6 +341,11 @@ export function useOwnershipReviewUrls() {
   );
 }
 
+/** Confirm a flagged page is its owner's (stops flagging, credits byline-less items). */
+export async function confirmUrlOwner(urlId: number): Promise<{ url: string; papers_credited: number }> {
+  return fetchJsonWithAuth(`/api/admin/confirm-url-owner/${urlId}`, { method: "POST" });
+}
+
 export async function reactivateUrl(urlId: number): Promise<void> {
   await fetchJsonWithAuth(`/api/admin/reactivate-url/${urlId}`, {
     method: "POST",

@@ -610,6 +610,7 @@ def assign_openalex_author_id(conn, researcher_id: int, openalex_author_id: str)
 # ---------------------------------------------------------------------------
 
 OWNER_NOT_NAMED = "owner_not_named"
+OWNER_CONFIRMED = "owner_confirmed"  # an admin confirmed the page is the owner's
 SHARED_PAGE = "shared_page"
 MIN_JUDGED_TEXT = 1000  # characters of page text needed before OWNER_NOT_NAMED
 
@@ -642,7 +643,8 @@ def _is_personal_page(url: str | None, page_type: str | None) -> bool:
 
 
 def page_ownership_problem(owners: list[dict], text: str | None, raw_html: str | None = None,
-                           url: str | None = None, page_type: str | None = None) -> str | None:
+                           url: str | None = None, page_type: str | None = None,
+                           confirmed: bool = False) -> str | None:
     """Why a tracked page should not be treated as its owners' personal page.
 
     owners: every researcher tracking the URL (dicts with first_name, last_name).
@@ -663,6 +665,8 @@ def page_ownership_problem(owners: list[dict], text: str | None, raw_html: str |
                 if not same_person(a['first_name'], a['last_name'], b['first_name'], b['last_name'],
                                    strong=True):
                     return SHARED_PAGE
+    if confirmed:  # admin confirmed the owner's page (OWNER_CONFIRMED)
+        return None
     text = text if isinstance(text, str) else None
     raw_html = raw_html if isinstance(raw_html, str) else None
     if not owners or not ((text or '').strip() or (raw_html or '').strip()):

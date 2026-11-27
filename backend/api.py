@@ -649,6 +649,17 @@ def get_ownership_review_urls(request: Request):
     return db_review()
 
 
+@app.post("/api/admin/confirm-url-owner/{url_id}")
+def confirm_url_owner(url_id: int, request: Request):
+    """Confirm a flagged page is its owner's: stop flagging, credit byline-less items."""
+    _require_api_key(request)
+    from backend.database.researchers import confirm_url_owner as db_confirm
+    result = db_confirm(url_id)
+    if result is None:
+        raise HTTPException(status_code=404, detail="URL not found")
+    return result
+
+
 @app.post("/api/admin/reactivate-url/{url_id}")
 def reactivate_url(url_id: int, request: Request):
     """Re-activate a deactivated URL."""

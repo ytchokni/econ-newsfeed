@@ -496,7 +496,7 @@ def strip_repeated_surnames() -> dict:
         """SELECT id, first_name, last_name FROM researchers
            WHERE first_name LIKE CONCAT('% ', last_name)
               OR first_name LIKE CONCAT('% ', REPLACE(last_name, '-', ' '))""")
-    renames, merges = [], []
+    renames, merges, conflicts = [], [], []
     for r in rows:
         fixed = strip_repeated_surname(r["first_name"], r["last_name"])
         if fixed == r["first_name"]:
@@ -505,10 +505,21 @@ def strip_repeated_surnames() -> dict:
                           (fixed, r["last_name"], r["id"]))
         if twins:
             weights = _weights([r["id"], *(t["id"] for t in twins)])
+            # Different OpenAlex authors behind one name (two Markus Goldsteins):
+            # neither merge nor rename; list the pair for review.
+            ids = {w["openalex_author_id"] for w in weights.values() if w["openalex_author_id"]}
+            if len(ids) > 1:
+                conflicts.append(sorted(weights.values(), key=lambda w: w["id"]))
+                continue
             ranked = sorted(weights.values(), key=canonical_order)
             merges.append((ranked[0], ranked[1:]))
         else:
             renames.append((r, fixed))
+    for group in conflicts:
+        log.info("  review (different OpenAlex IDs, left unchanged): %s",
+                 "; ".join(f"{w['id']} {_name(w)} {w['openalex_author_id']}" for w in group))
+        REPORT["strip_repeated_surnames_review"].append(
+            [{"id": w["id"], "name": _name(w), "openalex_author_id": w["openalex_author_id"]} for w in group])
     for r, fixed in renames[:SAMPLES]:
         log.info("  rename %s: %r -> %r (%s)", r["id"], r["first_name"], fixed, r["last_name"])
     _log_plan(merges)
@@ -525,6 +536,7 @@ def strip_repeated_surnames() -> dict:
         applied += _write(f"rename {r['id']}", writes)
     merged = _apply_merges("strip_repeated_surnames", merges)
     return {"renamed": len(renames), "merged_into_existing": sum(len(d) for _, d in merges),
+            "left_for_review_conflicting_openalex_ids": len(conflicts),
             "applied_renames": applied, "applied_merges": merged if APPLY else 0}
 
 
@@ -807,6 +819,7 @@ def _unnamed_pages(exclude: set[str]) -> dict[str, dict]:
            JOIN researchers r ON r.id = ru.researcher_id
            JOIN html_content hc ON hc.url_id = ru.id
            WHERE ru.is_active = TRUE
+             AND COALESCE(ru.ownership_flag, '') != 'owner_confirmed'
              AND (hc.content IS NOT NULL OR hc.raw_html IS NOT NULL)
              AND COALESCE(hc.content, '') NOT LIKE CONCAT('%', r.last_name, '%')
              AND COALESCE(hc.raw_html, '') NOT LIKE CONCAT('%', r.last_name, '%')""")
@@ -839,7 +852,7 @@ def flag_unowned_pages() -> dict:
             def writes(cur, chunk=chunk):
                 now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0, tzinfo=None)
                 rows = _select(cur, "researcher_urls", "url", chunk, "id, ownership_flag, ownership_flagged_at")
-                todo = [r for r in rows if r["ownership_flag"] != OWNER_NOT_NAMED]
+                todo = [r for r in rows if r["ownership_flag"] not in (OWNER_NOT_NAMED, "owner_confirmed")]
                 _group().append(["set", "researcher_urls", "ownership_flag",
                                  [[r["id"], r["ownership_flag"], OWNER_NOT_NAMED] for r in todo]])
                 _group().append(["set", "researcher_urls", "ownership_flagged_at",

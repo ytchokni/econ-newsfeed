@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { AdminDashboardData } from "@/lib/api";
-import { useDeactivatedUrls, useAtRiskUrls, useOwnershipReviewUrls, reactivateUrl } from "@/lib/api";
+import { useDeactivatedUrls, useAtRiskUrls, useOwnershipReviewUrls, reactivateUrl, confirmUrlOwner } from "@/lib/api";
 
 interface Props {
   data: AdminDashboardData["health"];
@@ -57,12 +57,26 @@ function formatRelativeTime(isoDate: string): string {
   return `${days}d ago`;
 }
 
-function DeactivatedUrlsSection() {
+export function DeactivatedUrlsSection() {
   const { data: deactivated, mutate: mutateDeactivated } = useDeactivatedUrls();
   const { data: atRisk } = useAtRiskUrls();
-  const { data: ownershipReview } = useOwnershipReviewUrls();
+  const { data: ownershipReview, mutate: mutateOwnershipReview } = useOwnershipReviewUrls();
   const [reactivating, setReactivating] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [confirming, setConfirming] = useState<number | null>(null);
+
+  async function handleConfirmOwner(urlId: number) {
+    setConfirming(urlId);
+    setError(null);
+    try {
+      await confirmUrlOwner(urlId);
+      await mutateOwnershipReview();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Could not confirm the page");
+    } finally {
+      setConfirming(null);
+    }
+  }
 
   async function handleReactivate(urlId: number) {
     setReactivating(urlId);
@@ -112,6 +126,14 @@ function DeactivatedUrlsSection() {
               <div key={u.id} className="flex items-center gap-2 text-xs text-zinc-400">
                 <span className="truncate flex-1">{u.url}</span>
                 <span className="text-zinc-500">{u.researcher_name}</span>
+                <button
+                  type="button"
+                  onClick={() => handleConfirmOwner(u.id)}
+                  disabled={confirming === u.id}
+                  className="px-2 py-0.5 rounded border border-zinc-600 text-zinc-300 hover:bg-zinc-700 disabled:opacity-50"
+                >
+                  {confirming === u.id ? "Confirming…" : "Confirm owner's page"}
+                </button>
               </div>
             ))}
           </div>

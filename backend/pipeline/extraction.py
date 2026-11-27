@@ -28,7 +28,9 @@ from backend.database import (
 from backend.pipeline.change_filter import is_insignificant_change
 from backend.pipeline.feed_events import FeedEventEmitter
 from backend.database.identity import SHARED_PAGE, page_ownership_problem
-from backend.database.researchers import deactivate_unowned_url, flag_url_ownership, page_owners
+from backend.database.researchers import (
+    deactivate_unowned_url, flag_url_ownership, page_owners, url_owner_confirmed,
+)
 from backend.database.papers import find_papers_by_titles
 from backend.pipeline.chunking import chunk_page
 from backend.pipeline.html_fetcher import CONTENT_MAX_CHARS, HTMLFetcher
@@ -118,7 +120,8 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
     # still be theirs (Google Sites, Cyrillic profiles): it is extracted, the
     # owner is not attached at position 0, and it is flagged for review.
     owners = page_owners(url)
-    problem = page_ownership_problem(owners, text, raw_html, url, page_type) if owners else None
+    problem = page_ownership_problem(owners, text, raw_html, url, page_type,
+                                     confirmed=url_owner_confirmed(url)) if owners else None
     if problem == SHARED_PAGE:
         deactivate_unowned_url(url, problem)
         HTMLFetcher.mark_extracted(url_id, content_hash)
