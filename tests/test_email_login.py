@@ -82,6 +82,8 @@ def store(monkeypatch):
     monkeypatch.setenv("FRONTEND_URL", "http://localhost:3000")
     monkeypatch.delenv("EMAIL_LOGIN_DEV_LOG_CODES", raising=False)
     monkeypatch.delenv("EMAIL_LOGIN_HOURLY_LIMIT", raising=False)
+    monkeypatch.delenv("LOGIN_FROM_EMAIL", raising=False)
+    monkeypatch.setenv("DIGEST_FROM_EMAIL", "Econ Newsfeed <digest@econnewsfeed.org>")
     monkeypatch.setattr(email_login.digest, "RESEND_API_KEY", "re_test")
     return fake
 
@@ -231,7 +233,7 @@ def test_send_failure_retires_the_code(store, monkeypatch):
 
 def test_login_sender_defaults_to_digest_sender_and_can_be_overridden(store, outbox, monkeypatch):
     email_login.request_code("alice@example.com", now=T0)
-    assert outbox[0]["from"] == email_login.digest.DIGEST_FROM_EMAIL
+    assert outbox[0]["from"] == "Econ Newsfeed <digest@econnewsfeed.org>"
 
     monkeypatch.setenv("LOGIN_FROM_EMAIL", "Econ Newsfeed <login@econnewsfeed.org>")
     email_login.request_code("bob@example.com", now=T0)
@@ -316,6 +318,18 @@ def test_dev_mode_ignored_outside_localhost(store, monkeypatch):
     monkeypatch.setenv("FRONTEND_URL", "https://econnewsfeed.org")
     assert email_login.dev_log_mode() is False
     assert email_login.is_available() is False
+
+
+@pytest.mark.parametrize("digest_from", ["", "digest@econ-newsfeed.com", "Digest <Digest@econ-newsfeed.com>"])
+def test_unavailable_without_explicit_sender(store, outbox, monkeypatch, digest_from):
+    """A Resend key alone is not enough: the compose placeholder sender would 502."""
+    monkeypatch.setenv("DIGEST_FROM_EMAIL", digest_from)
+    assert email_login.is_available() is False
+    with pytest.raises(email_login.EmailLoginError) as exc:
+        email_login.request_code("alice@example.com", now=T0)
+    assert exc.value.code == "email_login_unavailable"
+    monkeypatch.setenv("LOGIN_FROM_EMAIL", "Econ Newsfeed <login@econnewsfeed.org>")
+    assert email_login.is_available() is True
 
 
 def test_unavailable_without_signing_secret(store, monkeypatch):

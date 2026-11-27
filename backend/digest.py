@@ -72,21 +72,24 @@ def _render_digest_html(events: list[dict], user_name: str | None,
 </html>"""
 
 
-def _send_email(to: str, subject: str, html: str, *, text: str | None = None,
+def _send_email(to: str, subject: str, html: str, text: str | None = None,
+                headers: dict[str, str] | None = None, *,
                 from_email: str | None = None) -> bool:
     """Send an email via Resend. Returns True on success."""
     if not RESEND_API_KEY:
         logger.warning("RESEND_API_KEY not set, skipping email to %s", to)
         return False
     resend.api_key = RESEND_API_KEY
-    params = {
+    params: dict = {
         "from": from_email or DIGEST_FROM_EMAIL,
         "to": [to],
         "subject": subject,
         "html": html,
     }
-    if text is not None:
+    if text:
         params["text"] = text
+    if headers:
+        params["headers"] = headers
     try:
         resend.Emails.send(params)
         return True

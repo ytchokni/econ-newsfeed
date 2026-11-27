@@ -62,8 +62,28 @@ def _frontend_url() -> str:
     return os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
 
-def _from_email() -> str:
-    return os.environ.get("LOGIN_FROM_EMAIL") or digest.DIGEST_FROM_EMAIL
+# docker-compose fills DIGEST_FROM_EMAIL with this when .env leaves it out. It
+# is not a domain we send from, so it does not count as a configured sender.
+_PLACEHOLDER_SENDER = "digest@econ-newsfeed.com"
+
+
+def _sender_address(value: str) -> str:
+    """The bare address of ``"Name <addr>"`` or ``addr``, lowercased."""
+    match = re.search(r"<([^>]+)>", value)
+    return (match.group(1) if match else value).strip().lower()
+
+
+def _from_email() -> str | None:
+    """The configured sender for login codes, or None if none is set explicitly.
+
+    LOGIN_FROM_EMAIL wins; DIGEST_FROM_EMAIL is the fallback. Without either
+    (or with only the compose placeholder) Resend would reject every send.
+    """
+    for name in ("LOGIN_FROM_EMAIL", "DIGEST_FROM_EMAIL"):
+        value = os.environ.get(name, "").strip()
+        if value and _sender_address(value) != _PLACEHOLDER_SENDER:
+            return value
+    return None
 
 
 def _hourly_limit() -> int:
@@ -88,8 +108,16 @@ def dev_log_mode() -> bool:
 
 
 def is_available() -> bool:
-    """Whether this deployment can deliver login codes."""
-    return bool(_secret()) and (bool(digest.RESEND_API_KEY) or dev_log_mode())
+    """Whether this deployment can deliver login codes.
+
+    Sending needs a Resend key and an explicitly configured sender (whose
+    domain must be verified at Resend); dev mode needs neither.
+    """
+    if not _secret():
+        return False
+    if digest.RESEND_API_KEY:
+        return _from_email() is not None
+    return dev_log_mode()
 
 
 def normalize_email(raw: str) -> str | None:
