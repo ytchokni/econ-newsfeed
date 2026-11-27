@@ -1,5 +1,12 @@
 @import "tailwindcss";
 
+/* Self-hosted font subsets (app/src/app/fonts.ts), chained so each character
+   uses the subset whose unicode-range covers it. */
+:root {
+  --font-source-serif: var(--font-source-serif-latin), var(--font-source-serif-latin-ext), var(--font-source-serif-vietnamese), var(--font-source-serif-greek), var(--font-source-serif-cyrillic), var(--font-source-serif-cyrillic-ext);
+  --font-dm-sans: var(--font-dm-sans-latin), var(--font-dm-sans-latin-ext);
+}
+
 @theme {
   --font-serif: var(--font-source-serif), Georgia, "Times New Roman", serif;
   --font-sans: var(--font-dm-sans), system-ui, -apple-system, sans-serif;
