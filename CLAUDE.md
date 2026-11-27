@@ -52,6 +52,7 @@ poetry run python scripts/reverify_openalex_ids.py --max-requests 300 --apply  #
 poetry run python scripts/merge_renamed_papers.py   # #265: merge renames sharing an SSRN/NBER/arXiv/DOI link (dry-run; --apply)
 poetry run python scripts/repair_researcher_identity.py  # Merge split researchers, route page papers to owners, shared pages (dry-run; --apply --backup F; --undo F)
 poetry run python scripts/cleanup_spurious_feed_events.py  # Delete stale new_paper / bogus "published" events (dry-run; --apply backs up first; --undo RUN)
+poetry run python scripts/recheck_too_large_urls.py   # Queue response_too_large URLs for a recheck on the next scrape (dry-run; --apply)
 
 # Docker
 docker compose up         # Full stack (db + api + frontend)
@@ -69,7 +70,7 @@ docker compose up         # Full stack (db + api + frontend)
 
 Extraction is owned by the extraction worker (below) — the scrape job only refreshes stored HTML and the `content_hash ≠ extracted_hash` queue.
 
-**Large pages:** downloads are streamed and capped at `FETCH_MAX_BYTES` (10 MB). Pages over 1 MB are compacted (`compact_html`: inline CSS, SVG, comments, data: URIs and >1 KB attributes, then scripts) and stored if they fit 1 MB; smaller pages are stored byte-for-byte. Only pages still too large are deactivated as `response_too_large`. The full page text is stored and hashed. Extraction splits text over `CONTENT_MAX_CHARS` into chunks between HTML blocks (`backend/pipeline/chunking.py`), carries the publication-section heading into each chunk's prompt, and merges results by title hash; the diff path sends only changed hunks. An unchanged long page re-queued by a hash change is extracted as seed (`_backfill_long_page`), so tails cut off by the old 20k truncation are saved without feed events.
+**Large pages:** downloads are streamed and capped at `FETCH_MAX_BYTES` (10 MB). Pages over 1 MB are compacted (`compact_html`: inline CSS, SVG, comments, data: URIs and >1 KB attributes, then scripts) and stored if they fit 1 MB; smaller pages are stored byte-for-byte. Only pages still too large are deactivated as `response_too_large`. A redirect to a sign-in page (`accounts.google.com`: retired classic `sites.google.com/site/...` and private Google Sites) is not followed and deactivates the URL as `login_required`, so Google's 1.25 MB login screen is never stored as a researcher's page. Both reasons are rechecked by the scrape job after `TOO_LARGE_RECHECK_DAYS` (30) and reactivated when a fetch succeeds. The full page text is stored and hashed. Extraction splits text over `CONTENT_MAX_CHARS` into chunks between HTML blocks (`backend/pipeline/chunking.py`), carries the publication-section heading into each chunk's prompt, and merges results by title hash; the diff path sends only changed hunks. An unchanged long page re-queued by a hash change is extracted as seed (`_backfill_long_page`), so tails cut off by the old 20k truncation are saved without feed events.
 
 **Enrichment worker:** When `ENRICHMENT_WORKER_ENABLED=true`, a background thread in the API process continuously enriches unenriched papers via OpenAlex. Polls every 5 minutes, processes batches of 50, respects the daily budget. Backs off to 10-minute sleep after 5 consecutive failures. In local dev (worker disabled), run `python -m backend.main enrich` manually after scraping.
 
@@ -103,7 +104,7 @@ batches under the same advisory lock, daily budget and yield checks
 once the extraction backlog has cleared:
 `nohup docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T api python -m backend.main classify-jel --until-done --daily-limit 2000 --delay 30 > /root/jel-backfill.log 2>&1 &`
 
-**Paper merge:** `merge_duplicate_papers()` dedupes papers post-run.
+**Paper merge:** `merge_duplicate_papers()` dedupes papers post-run. A page renaming a paper to a title another paper already has (`PaperSaver.apply_title_rename`) merges the two via `merge_paper_group(as_title=...)` when their authors match (or they share an identifier), otherwise keeps both and logs `Skipped title rename` at WARNING; neither emits a feed event, and the page is still marked extracted.
 
 **Zombie scrape_log cleanup:** On scheduler start and hourly thereafter, `scrape_log` entries stuck in `'running'` are marked `'failed'` based on the scrape advisory lock: if no connection holds the lock, all running rows older than 5 minutes are zombies; if the lock is held, all but the newest running row are. Deploys that restart the container mid-scrape are swept on the next boot.
 

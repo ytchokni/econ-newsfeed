@@ -713,15 +713,20 @@ def get_ownership_review_urls() -> list[dict]:
 
 
 _URL_DEACTIVATION_THRESHOLD = 3
-# A URL deactivated as response_too_large is fetched again after this many
-# days (see Researcher.get_all_researcher_urls); sites get rebuilt or moved.
+# A URL deactivated for one of these reasons is fetched again after this many
+# days (see Researcher.get_all_researcher_urls); sites get rebuilt, moved or
+# made public again. Both are a property of the site's current build, so they
+# deactivate on the first failure rather than after _URL_DEACTIVATION_THRESHOLD.
 TOO_LARGE_RECHECK_DAYS = 30
+RECHECK_REASONS = ("response_too_large", "login_required")
+# SQL list of RECHECK_REASONS (constants, not user input).
+RECHECK_REASONS_SQL = ", ".join(f"'{r}'" for r in RECHECK_REASONS)
 
 
 def record_url_fetch_failure(url_id: int, error_type: str) -> None:
-    """Record a fetch failure for a URL. Deactivates immediately for response_too_large,
+    """Record a fetch failure for a URL. Deactivates immediately for RECHECK_REASONS,
     or after _URL_DEACTIVATION_THRESHOLD consecutive failures for other errors."""
-    if error_type == "response_too_large":
+    if error_type in RECHECK_REASONS:
         execute_query(
             """UPDATE researcher_urls
                SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = %s
@@ -733,8 +738,8 @@ def record_url_fetch_failure(url_id: int, error_type: str) -> None:
 
     # Atomic increment + conditional deactivation (no TOCTOU race).
     #
-    # A URL inactive as response_too_large is only fetched as a recheck
-    # (TOO_LARGE_RECHECK_DAYS). Any other failure there restarts its recheck
+    # A URL inactive for a RECHECK_REASONS reason is only fetched as a
+    # recheck (TOO_LARGE_RECHECK_DAYS). Any other failure there restarts its recheck
     # clock and keeps the reason; counting it as an ordinary failure would
     # relabel it consecutive_failures (never rechecked again) and, until
     # then, leave deactivated_at old so every scrape fetched it again.
@@ -745,7 +750,7 @@ def record_url_fetch_failure(url_id: int, error_type: str) -> None:
     # _URL_DEACTIVATION_THRESHOLD-th failure, not one earlier), and the
     # recheck test stays true or false throughout because the clauses
     # before it change is_active/deactivation_reason only when it is false.
-    recheck = "(is_active = FALSE AND deactivation_reason <=> 'response_too_large')"
+    recheck = f"(is_active = FALSE AND deactivation_reason IN ({RECHECK_REASONS_SQL}))"
     reached = "consecutive_failures + 1 >= %s"
     execute_query(
         f"""UPDATE researcher_urls
@@ -769,22 +774,23 @@ def record_url_fetch_failure(url_id: int, error_type: str) -> None:
 def record_url_fetch_success(url_id: int) -> None:
     """Reset failure tracking on a successful fetch (no-op if nothing to reset).
 
-    A URL deactivated as ``response_too_large`` that now fetches within the
-    size limit (see TOO_LARGE_RECHECK_DAYS) is reactivated. URLs deactivated
+    A URL deactivated for a RECHECK_REASONS reason that now fetches (within
+    the size limit, without a sign-in redirect; see TOO_LARGE_RECHECK_DAYS)
+    is reactivated. URLs deactivated
     for other reasons are not fetched, so they are never reactivated here.
 
     MySQL applies single-table SET assignments left to right, so is_active is
     assigned last: the IF()s must see its value before the update.
     """
     execute_query(
-        """UPDATE researcher_urls
+        f"""UPDATE researcher_urls
            SET consecutive_failures = 0,
                deactivated_at = IF(is_active, deactivated_at, NULL),
                deactivation_reason = IF(is_active, deactivation_reason, NULL),
                is_active = TRUE
            WHERE id = %s
              AND (consecutive_failures > 0
-                  OR (is_active = FALSE AND deactivation_reason = 'response_too_large'))""",
+                  OR (is_active = FALSE AND deactivation_reason IN ({RECHECK_REASONS_SQL})))""",
         (url_id,),
     )
 

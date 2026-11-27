@@ -4,7 +4,7 @@ import re
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse
 
-from backend.pipeline.html_fetcher import HTMLFetcher
+from backend.pipeline.html_fetcher import HTMLFetcher, LoginRequired, ResponseTooLarge
 
 logger = logging.getLogger(__name__)
 
@@ -61,12 +61,15 @@ def crawl_subpages(root_url: str) -> list[dict]:
         logger.warning("Skipping unsafe discovery crawl URL: %s", root_url)
         return []
 
-    html = HTMLFetcher.fetch_html(
-        root_url,
-        timeout=15,
-        max_retries=1,
-        resolved_ip=resolved_ip,
-    )
+    try:
+        html = HTMLFetcher.fetch_html(
+            root_url,
+            timeout=15,
+            max_retries=1,
+            resolved_ip=resolved_ip,
+        )
+    except (ResponseTooLarge, LoginRequired):
+        return []
     if html is None:
         return []
 

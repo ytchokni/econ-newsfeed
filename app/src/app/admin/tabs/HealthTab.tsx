@@ -24,11 +24,13 @@ function ReasonBadge({ reason }: { reason: string }) {
   const colors: Record<string, string> = {
     consecutive_failures: "bg-red-900/50 text-red-400 border-red-800",
     response_too_large: "bg-amber-900/50 text-amber-400 border-amber-800",
+    login_required: "bg-amber-900/50 text-amber-400 border-amber-800",
     shared_page: "bg-zinc-800 text-zinc-300 border-zinc-600",
   };
   const labels: Record<string, string> = {
     consecutive_failures: "Dead",
     response_too_large: "Too large",
+    login_required: "Login required",
     shared_page: "Shared page",
   };
   const cls = colors[reason] || "bg-zinc-800 text-zinc-400 border-zinc-700";

@@ -325,14 +325,23 @@ def _extract_via_diff(url_id: int, url: str, new_text: str, old_text: str,
     if result.pubs is None:
         return _failed(result.retry_after, result.provider_error)
 
-    count = _process_diff_changes(result.pubs, url, url_id, fetch_date)
+    try:
+        count = _process_diff_changes(result.pubs, url, url_id, fetch_date,
+                                      old_text=old_text, new_text=new_text)
+    except Exception as e:
+        # A failed outcome (not an exception) lets the worker persist the
+        # failure (html_content.extraction_*), so the page backs off across
+        # restarts instead of paying for the same LLM answer after each one.
+        logger.exception("Saving diff changes for %s failed: %s: %s", url, type(e).__name__, e)
+        return _failed(None)
 
     HTMLFetcher.mark_extracted(url_id, content_hash)
     return ExtractionOutcome("extracted" if count > 0 else "empty", pubs_count=count)
 
 
 def _process_diff_changes(changes: list[dict], url: str, url_id: int,
-                          fetch_date=None) -> int:
+                          fetch_date=None, *, old_text: str | None = None,
+                          new_text: str | None = None) -> int:
     """Process structured change events from diff extraction.
 
     Handles new_paper, status_change, and title_change events. Returns
@@ -352,12 +361,30 @@ def _process_diff_changes(changes: list[dict], url: str, url_id: int,
         _append_snapshots(status_changes, url, event_date=fetch_date)
 
     for tc in title_changes:
-        _apply_title_change(tc, url, fetch_date)
+        _apply_title_change(tc, url, fetch_date, old_text=old_text, new_text=new_text)
 
     return len(new_pubs) + len(status_changes) + len(title_changes)
 
 
-def _apply_title_change(change: dict, source_url: str, event_date) -> None:
+def _rename_has_page_evidence(old_title: str, new_title: str,
+                              old_text: str | None, new_text: str | None) -> bool:
+    """Whether the page itself shows old_title replaced by new_title.
+
+    The LLM sometimes reports a "rename" between two papers the page lists
+    side by side. Only a page where the new title was absent before and the
+    old title is gone now may merge two existing papers under the new title.
+    """
+    from backend.database.papers import normalize_title
+    if not old_text or not new_text:
+        return False
+    old_page = f" {normalize_title(old_text)} "
+    new_page = f" {normalize_title(new_text)} "
+    return (f" {normalize_title(new_title)} " not in old_page
+            and f" {normalize_title(old_title)} " not in new_page)
+
+
+def _apply_title_change(change: dict, source_url: str, event_date, *,
+                        old_text: str | None = None, new_text: str | None = None) -> None:
     """Apply a title change detected by diff extraction."""
     old_title = change.get('old_title')
     new_title = change.get('title')
@@ -375,9 +402,15 @@ def _apply_title_change(change: dict, source_url: str, event_date) -> None:
         return
 
     paper_id = row['id']
-    PaperSaver.apply_title_rename(paper_id, old_title, new_title, change, source_url)
-    FeedEventEmitter.emit_title_change(paper_id, old_title, new_title,
-                                      event_date=event_date, source_url=source_url)
+    # A collision with another paper's title is resolved inside (merge or
+    # skip) and never raises; other errors fail the page with backoff.
+    outcome = PaperSaver.apply_title_rename(
+        paper_id, old_title, new_title, change, source_url,
+        allow_merge=_rename_has_page_evidence(old_title, new_title, old_text, new_text),
+    )
+    if outcome == PaperSaver.RENAMED:
+        FeedEventEmitter.emit_title_change(paper_id, old_title, new_title,
+                                          event_date=event_date, source_url=source_url)
 
 
 def _update_home_description(researcher_id: int, text: str, url: str,
