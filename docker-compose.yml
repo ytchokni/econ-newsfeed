@@ -144,7 +144,9 @@ services:
       dockerfile: Dockerfile.api
     command: [python, -m, backend.pipeline.scrape_worker]
     restart: unless-stopped
-    mem_limit: 768m
+    # Fetch-only: peaks ~200-350 MB (6 workers, pages capped at 10 MB and
+    # compacted to 1 MB). The 4 GB host also runs api 1 GB, db 1.5 GB, miner 512 MB.
+    mem_limit: 512m
     cpus: 1.0
     stop_grace_period: 120s
     logging:
@@ -167,6 +169,10 @@ services:
       SCRAPE_RATE_LIMIT_SECONDS: ${SCRAPE_RATE_LIMIT_SECONDS:-2}
       SCRAPE_RATE_LIMIT_FAST_SECONDS: ${SCRAPE_RATE_LIMIT_FAST_SECONDS:-0.5}
       FETCH_MAX_BYTES: ${FETCH_MAX_BYTES:-10000000}
+      # Unset/empty: the fetcher's default User-Agent. FRONTEND_URL is for a
+      # crawler contact URL in the User-Agent (#256).
+      SCRAPER_USER_AGENT: ${SCRAPER_USER_AGENT:-}
+      FRONTEND_URL: ${FRONTEND_URL:-}
     depends_on:
       db:
         condition: service_healthy

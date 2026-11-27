@@ -120,8 +120,8 @@ CONTENT_MAX_BYTES = 1_000_000
 FETCH_MAX_BYTES = int(os.environ.get('FETCH_MAX_BYTES', '10000000'))
 _STREAM_CHUNK_BYTES = 64 * 1024
 _CURL_FILESIZE_EXCEEDED = 63  # curl exit code for --max-filesize
-SCRAPER_USER_AGENT = os.environ.get(
-    'SCRAPER_USER_AGENT',
+# Empty counts as unset: compose passes ${SCRAPER_USER_AGENT:-} through.
+SCRAPER_USER_AGENT = os.environ.get('SCRAPER_USER_AGENT') or (
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 )
 _ROBOTS_CACHE_MAX = 500
