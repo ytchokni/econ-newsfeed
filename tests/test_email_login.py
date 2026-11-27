@@ -1038,3 +1038,37 @@ def test_endpoints_answer_503_when_the_pool_is_exhausted(client):
             assert resp.status_code == 503
             assert resp.json()["error"]["code"] == "email_login_busy"
             assert resp.headers["Retry-After"] == "5"
+
+
+def test_consume_code_never_revives_a_retired_code(monkeypatch):
+    """If the code was retired between the read and the update, nothing changes."""
+    from unittest.mock import MagicMock
+    conn = MagicMock()
+    cursor = conn.cursor.return_value.__enter__.return_value
+    live_row = {"id": 9, "code_hash": "h", "attempts": 0, "expires_at": T0 + timedelta(minutes=10)}
+    cursor.fetchone.return_value = live_row
+    cursor.rowcount = 0  # discard_code got there first
+    monkeypatch.setattr(real_store, "_get_scoped_or_new_connection", lambda: (conn, True))
+
+    for candidate in ("h", "wrong"):  # neither a correct nor a wrong guess may act on it
+        assert real_store.consume_code("a@example.com", candidate, T0, 5) == "invalid"
+    update_sql = cursor.execute.call_args_list[-1].args[0]
+    assert "WHERE id = %s AND consumed_at IS NULL" in update_sql
+
+
+def test_failed_send_retires_the_code_under_the_address_lock(store, monkeypatch):
+    held = []
+
+    def discard(code_id, now):
+        held.append(store.locks["alice@example.com"].locked())
+        store.codes[code_id - 1]["consumed_at"] = now
+
+    monkeypatch.setattr(store, "discard_code", discard)
+    monkeypatch.setattr(email_login.digest, "_send_email", lambda *a, **k: False)
+    with pytest.raises(email_login.EmailLoginError):
+        email_login.request_code("alice@example.com", now=T0)
+    assert held == [True]
+
+
+def test_address_lock_timeout_is_short():
+    assert 1 <= real_store.ADDRESS_LOCK_TIMEOUT <= 2

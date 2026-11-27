@@ -322,7 +322,8 @@ def request_code(raw_email: str, now: datetime | None = None) -> CodeRequest:
         logger.warning("Email login DEV MODE: code for %s is %s (not emailed)", email, code)
         sent = True
     if not sent:
-        store.discard_code(code_id, now)
+        with _one_request_per_address(email):
+            store.discard_code(code_id, now)
         raise EmailLoginError(
             "email_send_failed", "We couldn't send the email. Try again in a moment.", 502,
         )

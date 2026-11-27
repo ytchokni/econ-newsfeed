@@ -28,8 +28,10 @@ from backend.database.connection import (
 # per-address windows (codes per hour, wrong codes per day), which count rows.
 CODE_RETENTION = timedelta(days=1)
 
-# Seconds a request waits for another request on the same address.
-ADDRESS_LOCK_TIMEOUT = 5
+# Seconds a request waits for another request on the same address. The work
+# under the lock is a few milliseconds of SQL, so a longer wait only means a
+# pile-up; the caller answers 429 "try again in a moment".
+ADDRESS_LOCK_TIMEOUT = 2
 
 
 class AddressBusy(Exception):
@@ -230,10 +232,15 @@ def consume_code(email: str, candidate_hash: str, now: datetime, max_attempts: i
                 row = cursor.fetchone()
                 result, attempts, consume = evaluate_attempt(row, candidate_hash, now, max_attempts)
                 if row is not None:
+                    # Only a still-live code: never revive one retired meanwhile
+                    # (e.g. by discard_code after a failed send).
                     cursor.execute(
-                        "UPDATE email_login_codes SET attempts = %s, consumed_at = %s WHERE id = %s",
+                        "UPDATE email_login_codes SET attempts = %s, consumed_at = %s "
+                        "WHERE id = %s AND consumed_at IS NULL",
                         (attempts, now if consume else None, row["id"]),
                     )
+                    if cursor.rowcount == 0:
+                        result = "invalid"
             conn.commit()
             return result
         except Exception:
