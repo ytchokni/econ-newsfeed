@@ -44,9 +44,11 @@ def test_crawl_list_excludes_opted_out_urls_including_too_large_rechecks():
     sql = " ".join(fetch.call_args.args[0].split())
     assert "researcher_optout_urls" in sql and "SHA2(ru.url, 256)" in sql
     # The opt-out guard applies to both ways a URL becomes eligible: active,
-    # or a response_too_large URL due for its recheck (which reactivates it).
+    # or a response_too_large / login_required URL due for its recheck
+    # (which reactivates it).
     where = sql.split(" WHERE ", 1)[1]
-    assert where.startswith("(ru.is_active = TRUE OR (ru.deactivation_reason = 'response_too_large'")
+    assert where.startswith("(ru.is_active = TRUE OR (ru.deactivation_reason IN (")
+    assert "'response_too_large'" in where and "'login_required'" in where
     assert where.index("researcher_optout_urls") > where.index("INTERVAL %s DAY))")
     assert ") AND NOT EXISTS" in where
 
@@ -97,6 +99,7 @@ def test_add_researcher_url_refuses_opted_out_url():
 def test_add_researcher_url_inserts_other_urls():
     from backend.database.researchers import add_researcher_url
     with patch("backend.database.researchers.fetch_one", return_value=None), \
+         patch("backend.database.researchers.fetch_all", return_value=[]), \
          patch("backend.database.researchers.execute_query") as execute:
         add_researcher_url(3, "HOME", "https://bob.example/")
     assert "INSERT IGNORE INTO researcher_urls" in execute.call_args.args[0]
