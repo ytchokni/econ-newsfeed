@@ -28,8 +28,8 @@ the cleanup step in the daily report, no new issue and no reopening, and no
 further triage until the invariant passes.
 
 Nothing changes on GitHub unless the workflow is told to file: scheduled runs
-need the repository variable DQ_FILE_ISSUES=true, manual runs an unticked
-dry_run input. Otherwise `report --dry-run` lists the changes it would make.
+are skipped entirely until the repository variable DQ_FILE_ISSUES is true,
+manual runs need an unticked dry_run input. Otherwise `report --dry-run` lists the changes it would make.
 
 One-time setup on the server (as root) and in the repository:
 

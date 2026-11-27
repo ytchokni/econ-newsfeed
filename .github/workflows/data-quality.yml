@@ -14,10 +14,11 @@ name: Data quality
 # whose invariants passed on two consecutive days, if this check filed them
 # and no open pull request is linked to them.
 #
-# Dry run by default: scheduled runs change GitHub only when the repository
-# variable DQ_FILE_ISSUES is 'true' (until then they skip Claude and write the
-# would-be report to the run summary); manual runs take a dry_run input that
-# defaults to true and do run Claude, so the triage can be previewed.
+# Off until enabled: scheduled runs do nothing until the repository variable
+# DQ_FILE_ISSUES is 'true', and then file issues. Manual runs take a dry_run
+# input that defaults to true; a dry run runs Claude (to preview the triage)
+# but changes nothing on GitHub and writes the would-be report to the run
+# summary.
 #
 # Secrets: HETZNER_HOST (shared with deploy and monitor); DQ_TUNNEL_SSH_KEY, a
 # key that can only forward to the server's MySQL port as the unprivileged
@@ -44,6 +45,10 @@ concurrency:
 jobs:
   check:
     name: Run the checks
+    # Scheduled runs stay off until the owner has set up the secrets and sets
+    # DQ_FILE_ISSUES=true, so an unconfigured repository is not emailed about
+    # a failing run every morning. Manual runs always work (dry by default).
+    if: github.event_name != 'schedule' || vars.DQ_FILE_ISSUES == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     permissions:
@@ -142,8 +147,8 @@ jobs:
   triage:
     name: Claude triage
     needs: check
-    # Scheduled dry runs skip Claude: without saved state it would triage the
-    # same failures every day. Manual dry runs keep it to preview the triage.
+    # Scheduled runs only happen once filing is enabled. A manual dry run
+    # still runs Claude so the triage can be previewed.
     if: >-
       needs.check.outputs.needs_triage == 'true'
       && (needs.check.outputs.file_issues == 'true' || github.event_name == 'workflow_dispatch')
@@ -246,7 +251,7 @@ jobs:
     needs: [check, triage]
     # Runs when triage succeeded, failed or was skipped, so the daily summary
     # is posted even if Claude was not needed or did not finish.
-    if: always() && needs.check.result != 'cancelled'
+    if: always() && needs.check.result != 'cancelled' && needs.check.result != 'skipped'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
