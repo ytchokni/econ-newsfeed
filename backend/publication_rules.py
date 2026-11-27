@@ -46,6 +46,20 @@ PUBLISHED_MAX_AGE_YEARS = int(os.environ.get("FEED_PUBLISHED_MAX_AGE_YEARS", "1"
 # which can legitimately be several years old.
 STATUS_CHANGE_MAX_AGE_YEARS = 10
 
+# Status transitions that earn a status_change event. Accepted -> published
+# is not news (the acceptance was), and the feed hides any such event
+# (backend.database.papers.feed_visible_event_sql).
+INTERESTING_STATUS_TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
+    ("working_paper", "revise_and_resubmit"),
+    ("working_paper", "accepted"),
+    ("working_paper", "published"),
+    ("work_in_progress", "revise_and_resubmit"),
+    ("work_in_progress", "accepted"),
+    ("work_in_progress", "published"),
+    ("revise_and_resubmit", "accepted"),
+    ("revise_and_resubmit", "published"),
+})
+
 # Statuses that claim a journal outcome and so must name a journal venue.
 JOURNAL_STATUSES = frozenset({"accepted", "published"})
 

@@ -35,7 +35,7 @@ from backend.pipeline.html_fetcher import CONTENT_MAX_CHARS, HTMLFetcher
 from backend.enrichment.link_extractor import match_and_save_paper_links
 from backend.pipeline.paper_saver import PaperSaver, validate_title_change
 from backend.pipeline.publication import Publication
-from backend.publication_rules import status_change_suppression_reason
+from backend.publication_rules import INTERESTING_STATUS_TRANSITIONS, status_change_suppression_reason
 
 logger = logging.getLogger(__name__)
 
@@ -177,12 +177,18 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
 
 def persist_extraction(url: str, url_id: int, pubs: list[dict],
                        is_seed: bool = False, event_date=None,
-                       reconcile_titles: bool = True) -> None:
+                       reconcile_titles: bool = True,
+                       existing_status_events: bool = False) -> None:
     """Persist extraction results in one call.
 
     Absorbs the full post-extraction sequence: save papers, emit feed events,
     reconcile title renames, match/save links, append snapshots.  Both
     extract_one_url() delegates here.
+
+    existing_status_events: on a seed extraction, still emit status_change
+    events for papers that were in the database before this extraction
+    (the long-page backfill, see _backfill_long_page). Papers it creates stay
+    silent, and new_paper / title_change events are never emitted for a seed.
     """
     results = PaperSaver.save_publications(url, pubs, is_seed=is_seed)
     FeedEventEmitter.emit_new_paper_events(results, url, is_seed=is_seed, event_date=event_date)
@@ -195,23 +201,32 @@ def persist_extraction(url: str, url_id: int, pubs: list[dict],
                                                   event_date=event_date, source_url=url)
 
     match_and_save_paper_links(url_id, pubs)
-    _append_snapshots(pubs, url, event_date, emit_events=not is_seed)
+    if not is_seed:
+        _append_snapshots(pubs, url, event_date)
+    elif existing_status_events:
+        _append_snapshots(pubs, url, event_date, event_paper_ids=_preexisting_paper_ids(results))
+    else:
+        _append_snapshots(pubs, url, event_date, emit_events=False)
 
 
-_INTERESTING_TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
-    ("working_paper", "revise_and_resubmit"),
-    ("working_paper", "accepted"),
-    ("working_paper", "published"),
-    ("work_in_progress", "revise_and_resubmit"),
-    ("work_in_progress", "accepted"),
-    ("work_in_progress", "published"),
-    ("revise_and_resubmit", "accepted"),
-    ("revise_and_resubmit", "published"),
-})
+def _preexisting_paper_ids(results) -> set[int]:
+    """Ids of saved papers that existed before this extraction created any.
+
+    A title listed twice is saved twice: the first save creates the paper
+    (is_new) and the second finds it. It is still new, so ids created by any
+    save are excluded.
+    """
+    created = {r.paper_id for r in results if r.is_new}
+    return {r.paper_id for r in results if r.paper_id not in created}
 
 
-def _append_snapshots(pubs: list[dict], source_url: str, event_date=None, *, emit_events=True) -> None:
-    """Append paper snapshots and emit status_change events when detected."""
+def _append_snapshots(pubs: list[dict], source_url: str, event_date=None, *, emit_events=True,
+                      event_paper_ids: set[int] | None = None) -> None:
+    """Append paper snapshots and emit status_change events when detected.
+
+    event_paper_ids, when given, limits events to those papers; every paper
+    still gets its snapshot.
+    """
     title_to_pub = {}
     for pub in pubs:
         title = pub.get('title')
@@ -234,8 +249,9 @@ def _append_snapshots(pubs: list[dict], source_url: str, event_date=None, *, emi
             source_url=source_url,
             title=pub.get('title'),
         )
-        if result.status_changed and emit_events:
-            if (result.old_status, result.new_status) not in _INTERESTING_TRANSITIONS:
+        if (result.status_changed and emit_events
+                and (event_paper_ids is None or row['id'] in event_paper_ids)):
+            if (result.old_status, result.new_status) not in INTERESTING_STATUS_TRANSITIONS:
                 logger.debug(
                     "Suppressed uninteresting transition %s→%s: %s",
                     result.old_status, result.new_status, pub.get('title', '')[:60],
@@ -275,18 +291,24 @@ def _backfill_long_page(url_id: int, url: str, text: str, raw_html: str | None,
     characters of extracted text, and extraction saw no more than that.
     Hashing the full text re-queues every longer page once, with
     text identical to its last snapshot, and papers past that point have
-    never been extracted. They have been on the page all along, so they are
-    saved as seed papers: no new_paper or status_change events. It runs
-    once per page: mark_extracted sets html_content.extracted_untruncated.
+    never been extracted. They have been on the page all along, so papers
+    this extraction creates are saved as seed papers with no events, and no
+    new_paper event is emitted. A paper the database already had whose
+    status advanced (a working paper now accepted at a journal) still gets its
+    status_change event under the usual rules (_append_snapshots): the
+    backfill is the first extraction to see the page's current entry for it.
+    It runs once per page: mark_extracted sets
+    html_content.extracted_untruncated.
     """
     logger.info("Backfilling long unchanged page %s (%d chars) as seed", url, len(text))
     return _extract_full(url_id, url, text, True, content_hash, scrape_log_id,
-                         fetch_date, raw_html=raw_html)
+                         fetch_date, raw_html=raw_html, existing_status_events=True)
 
 
 def _extract_full(url_id: int, url: str, text: str, is_seed: bool,
                   content_hash: str, scrape_log_id: int | None,
-                  fetch_date=None, raw_html: str | None = None) -> ExtractionOutcome:
+                  fetch_date=None, raw_html: str | None = None,
+                  existing_status_events: bool = False) -> ExtractionOutcome:
     """Full-page extraction path, in chunks for pages over CONTENT_MAX_CHARS."""
     chunks = chunk_page(text, raw_html, CONTENT_MAX_CHARS)
     if len(chunks) > 1:
@@ -298,7 +320,8 @@ def _extract_full(url_id: int, url: str, text: str, is_seed: bool,
         return _failed(result.retry_after, result.provider_error)
 
     if result.pubs:
-        persist_extraction(url, url_id, result.pubs, is_seed=is_seed, event_date=fetch_date)
+        persist_extraction(url, url_id, result.pubs, is_seed=is_seed, event_date=fetch_date,
+                           existing_status_events=existing_status_events)
 
     HTMLFetcher.mark_extracted(url_id, content_hash)
     return ExtractionOutcome("extracted" if result.pubs else "empty", pubs_count=len(result.pubs))
