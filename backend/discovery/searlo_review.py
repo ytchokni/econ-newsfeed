@@ -145,7 +145,8 @@ def _run(decisions: list[dict], *, apply: bool, manifest_path) -> dict:
     return stats
 
 
-_SUBPAGE_TYPES = {"research": "RESEARCH", "publications": "PUBLICATIONS"}
+_SUBPAGE_TYPES = {"research": "RESEARCH", "publications": "PUBLICATIONS",
+                  "working_papers": "WORKING_PAPERS"}
 
 
 def approve_one(discovery_id: int) -> dict:

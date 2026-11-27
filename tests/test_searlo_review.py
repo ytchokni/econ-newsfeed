@@ -124,6 +124,7 @@ def _patch_fetch(monkeypatch, db):
                                             {"page_type": "cv", "url": "https://alice-economist.example/cv.pdf"}]),
                     first_name="Alice", last_name="Economist")
     monkeypatch.setattr(connection, "fetch_one", fetch_one)
+    return fetch_one
 
 
 def test_admin_approve_one_uses_preflight_and_ignores_unknown_page_types(db, monkeypatch):
@@ -146,3 +147,12 @@ def test_admin_approve_one_rejects_non_pending(db, monkeypatch):
     db.discoveries[0]["status"] = "rejected"
     assert searlo_review.approve_one(11)["approved"] is False
     assert not db.urls
+
+
+def test_admin_approve_one_keeps_working_papers_subpage(db, monkeypatch):
+    from backend.database import connection
+    monkeypatch.setattr(connection, "fetch_one", lambda sql, params=None: dict(
+        db.discoveries[0], first_name="Alice", last_name="Economist",
+        subpages=json.dumps([{"page_type": "working_papers", "url": "https://alice-economist.example/research"}])))
+    assert searlo_review.approve_one(11)["approved"] is True
+    assert [u["page_type"] for u in db.urls] == ["HOME", "WORKING_PAPERS"]

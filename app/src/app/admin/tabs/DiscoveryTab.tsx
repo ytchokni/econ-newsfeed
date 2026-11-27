@@ -152,6 +152,7 @@ export default function DiscoveryTab({ data, onMutate }: Props) {
                   <button
                     onClick={() => handleApprove(d.id)}
                     disabled={acting === d.id}
+                    title="Runs the site miner's checks. Single approvals have no undo manifest."
                     className="px-2.5 py-1 text-xs rounded bg-emerald-900/50 text-emerald-400 border border-emerald-800 hover:bg-emerald-900/80 disabled:opacity-50"
                   >
                     Approve
