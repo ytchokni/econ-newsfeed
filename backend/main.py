@@ -59,6 +59,7 @@ def classify_jel(
     researcher_ids: list[int] | None = None,
     force: bool = False,
     until_done: bool = False,
+    yield_to_extraction: bool = True,
 ) -> None:
     """Classify tracked researchers into JEL codes (bio + papers + OpenAlex topics).
 
@@ -74,6 +75,7 @@ def classify_jel(
         stats = run_jel_classification_batch(
             max_calls=max_calls, daily_limit=daily_limit, delay_seconds=delay,
             researcher_ids=researcher_ids, force=force,
+            yield_to_extraction=yield_to_extraction,
         )
         for key, value in stats.items():
             if isinstance(value, int):
@@ -85,6 +87,7 @@ def classify_jel(
                 or stats["stopped"] not in ("done", "call_budget")):
             break
     totals.pop("calls_today_before", None)
+    totals.pop("extraction_backlog", None)
     logging.info("JEL classification finished (%s): %s", stats["stopped"], totals)
     logging.info("JEL coverage now: %s", get_jel_coverage_stats())
 
@@ -205,6 +208,7 @@ def main() -> None:
     jel_parser.add_argument('--delay', type=float, default=None, help='Seconds between LLM calls (default: JEL_CLASSIFICATION_DELAY_SECONDS)')
     jel_parser.add_argument('--researcher-id', type=int, action='append', default=None, help='Only these researchers (repeatable)')
     jel_parser.add_argument('--force', action='store_true', help='Ignore the due checks: reclassify every selected researcher')
+    jel_parser.add_argument('--no-yield', action='store_true', help='Run even if extraction was quota-limited recently or its backlog is large')
     jel_parser.add_argument('--until-done', action='store_true', help='Repeat batches until nothing is due or the daily limit is reached')
     subparsers.add_parser('enrich', help='Enrich publications with OpenAlex metadata')
     subparsers.add_parser('enrich-jel', help='Enrich researcher JEL codes from paper topics via OpenAlex')
@@ -238,7 +242,8 @@ def main() -> None:
     elif args.command == 'classify-jel':
         classify_jel(max_calls=args.max_calls, daily_limit=args.daily_limit,
                      delay=args.delay, researcher_ids=args.researcher_id,
-                     force=args.force, until_done=args.until_done)
+                     force=args.force, until_done=args.until_done,
+                     yield_to_extraction=not args.no_yield)
     elif args.command == 'enrich':
         create_tables()
         from backend.enrichment.openalex import enrich_new_publications
