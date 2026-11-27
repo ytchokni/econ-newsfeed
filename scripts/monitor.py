@@ -53,6 +53,9 @@ EXTRACTION_MIN_PER_6H = 30
 FEED_WINDOW_HOURS = 72
 ENRICHMENT_MAX_AGE_HOURS = 48
 LLM_ACCOUNT_ERRORS_PER_HOUR = 3
+# API scrape protection (backend/api_protection.py), over the last 24 hours.
+API_RATE_LIMITED_PER_DAY = 2000   # 429s; a burst from one scraper is expected, a flood is not
+API_INVALID_KEY_WARNINGS = 12     # logged at most every 5 min per worker: the frontend key is wrong
 
 # Claude gets until the next daily run; a same-day manual rerun must not
 # escalate before a fix could have been merged and deployed.
@@ -67,6 +70,7 @@ CLAUDE_REQUEST = (
 
 PIPELINE_COLUMNS = (
     "scrape_age_h", "stuck_scrapes", "pending", "extracted_6h", "feed_recent", "enrich_age_h",
+    "snapshot_guard",
 )
 PIPELINE_SQL = f"""
 SELECT
@@ -78,7 +82,9 @@ SELECT
        AND (hc.extracted_hash IS NULL OR hc.extracted_hash != hc.content_hash)),
   (SELECT COUNT(*) FROM html_content WHERE extracted_at >= NOW() - INTERVAL 6 HOUR),
   (SELECT COUNT(*) FROM feed_events WHERE recorded_at >= NOW() - INTERVAL {FEED_WINDOW_HOURS} HOUR),
-  TIMESTAMPDIFF(HOUR, (SELECT MAX(enrichment_attempted_at) FROM papers), NOW());
+  TIMESTAMPDIFF(HOUR, (SELECT MAX(enrichment_attempted_at) FROM papers), NOW()),
+  (SELECT COUNT(*) FROM information_schema.TRIGGERS
+     WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = 'trg_feed_events_snapshot_guard');
 """
 
 
@@ -220,6 +226,11 @@ def evaluate_pipeline(stats: dict) -> list[dict]:
         check("enrichment_active", enrich_age is not None and enrich_age <= ENRICHMENT_MAX_AGE_HOURS,
               f"last enrichment attempt {enrich_age}h ago" if enrich_age is not None
               else "no enrichment attempt recorded"),
+        # The daily data-quality check uses a SELECT-only user, which MySQL
+        # does not show triggers to, so the trigger is checked here as root.
+        check("snapshot_guard_trigger", stats["snapshot_guard"] == 1,
+              "feed_events snapshot-guard trigger "
+              + ("exists" if stats["snapshot_guard"] == 1 else "is missing (see PR #158)")),
     ]
 
 
@@ -250,6 +261,56 @@ def llm_provider_check() -> dict:
                  f"{rejected} LLM calls rejected for billing or credentials in the last hour")
 
 
+RATE_LIMITED_RE = re.compile(r"rate_limited ip=(\S+)")
+
+
+def summarize_api_traffic(lines) -> dict:
+    """Count 429s (per IP), blocked requests, bad internal keys and API requests."""
+    stats = {"rate_limited": 0, "blocked": 0, "invalid_key": 0, "requests": 0, "by_ip": {}}
+    for line in lines:
+        match = RATE_LIMITED_RE.search(line)
+        if match:
+            stats["rate_limited"] += 1
+            ip = match.group(1)
+            stats["by_ip"][ip] = stats["by_ip"].get(ip, 0) + 1
+        elif "api_blocked reason=" in line:
+            stats["blocked"] += 1
+        elif "internal_key_invalid" in line:
+            stats["invalid_key"] += 1
+        elif '"GET /api/' in line:
+            stats["requests"] += 1
+    return stats
+
+
+def evaluate_api_traffic(stats: dict) -> dict:
+    top = sorted(stats["by_ip"].items(), key=lambda kv: -kv[1])[:3]
+    top_text = ", ".join(f"{ip} x{n}" for ip, n in top) or "none"
+    detail = (
+        f"{stats['rate_limited']} rate-limited (top: {top_text}), {stats['blocked']} blocked, "
+        f"{stats['invalid_key']} wrong-internal-key warnings, {stats['requests']} API GETs in 24h"
+    )
+    ok = (stats["rate_limited"] < API_RATE_LIMITED_PER_DAY
+          and stats["invalid_key"] < API_INVALID_KEY_WARNINGS)
+    return check("api_traffic", ok, detail)
+
+
+def api_traffic_check() -> dict:
+    """Stream a day of API logs (they can be large) and summarize scraping signals."""
+    try:
+        proc = subprocess.Popen(
+            ["docker", "logs", "--since", "24h", API_CONTAINER],
+            stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, errors="replace",
+        )
+        try:
+            stats = summarize_api_traffic(proc.stdout)
+        finally:
+            proc.stdout.close()
+            proc.wait(timeout=120)
+    except (OSError, subprocess.SubprocessError) as e:
+        return check("api_traffic", False, f"could not read API logs: {e}")
+    return evaluate_api_traffic(stats)
+
+
 def host_checks() -> list[dict]:
     return [
         container_check(API_CONTAINER),
@@ -259,6 +320,7 @@ def host_checks() -> list[dict]:
         backup_check(),
         *pipeline_checks(),
         llm_provider_check(),
+        api_traffic_check(),
     ]
 
 

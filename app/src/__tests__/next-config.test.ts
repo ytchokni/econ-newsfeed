@@ -41,4 +41,20 @@ describe("next.config.mjs", () => {
       );
     });
   });
+
+  describe("search engines", () => {
+    it("redirects the vercel.app alias and apex to the canonical www host, except /api", () => {
+      expect(configContent).toContain('"https://www.econnewsfeed.org"');
+      expect(configContent).toContain('["econ-newsfeed.vercel.app", "econnewsfeed.org"]');
+      expect(configContent).toContain('source: "/:path((?!api/).*)"');
+      expect(configContent).toMatch(/type: "host"/);
+      expect(configContent).toMatch(/permanent: true/);
+    });
+
+    it("marks preview deployments and API responses noindex", () => {
+      expect(configContent).toMatch(/process\.env\.VERCEL_ENV !== "production"/);
+      expect(configContent).toContain('value: "noindex, nofollow"');
+      expect(configContent).toMatch(/source: "\/api\/:path\*",\s*headers: \[\{ key: "X-Robots-Tag", value: "noindex" \}\]/);
+    });
+  });
 });

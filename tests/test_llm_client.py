@@ -290,3 +290,20 @@ class TestTruncatedOutput:
         result = llm_client.extract_json("prompt", _ItemList)
 
         assert result.parsed is None and result.truncated is True and result.retry_after is None
+
+
+class TestExtractJsonThoughtSalvage:
+    """Gemma can write a <thought> block before its answer (issue #258);
+    braces inside the reasoning must not be parsed as the answer."""
+
+    @patch("backend.llm.client.get_client")
+    def test_thought_block_with_braces_is_skipped(self, mock_get_client):
+        import backend.llm.client as llm_client
+        mock_client = mock_get_client.return_value
+        mock_client.chat.completions.create.return_value = _mock_completion(
+            '<thought>* Task: return {"items": [...]} for the page.</thought>\n'
+            '{"items": [{"name": "c", "count": 3}]}'
+        )
+        result = llm_client.extract_json("prompt", _ItemList, retries=0)
+        assert result.parsed is not None
+        assert result.parsed.items[0].name == "c"

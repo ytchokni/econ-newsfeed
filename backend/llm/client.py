@@ -55,6 +55,10 @@ def get_model() -> str:
 
 T = TypeVar("T", bound=BaseModel)
 
+_THOUGHT_BLOCK_RE = re.compile(
+    r"<(thought|think|thinking)\b[^>]*>.*?</\1\s*>", re.IGNORECASE | re.DOTALL,
+)
+
 
 @dataclass
 class StructuredResponse(Generic[T]):
@@ -246,6 +250,9 @@ def _validate_content(model_class: type[T], content: str) -> T:
     try:
         return model_class.model_validate_json(content)
     except (ValidationError, json.JSONDecodeError) as strict_err:
+        # Gemma can prefix its answer with a <thought>…</thought> block
+        # (issue #258); braces inside it must not be mistaken for the answer.
+        content = _THOUGHT_BLOCK_RE.sub(" ", content)
         start = content.find("{")
         if start == -1:
             raise strict_err
