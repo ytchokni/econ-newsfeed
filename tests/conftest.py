@@ -61,8 +61,18 @@ def client():
         patch("backend.api.create_tables"),
         patch("backend.api.start_scheduler"),
         patch("backend.api.shutdown_scheduler"),
+        patch("backend.api.warm_researcher_index"),
         patch("backend.api.connection_scope", _noop_connection_scope),
     ):
         from backend.api import app
         with TestClient(app) as c:
             yield c
+
+
+@pytest.fixture(autouse=True)
+def _fresh_researcher_index():
+    """The researcher search index is process-wide; each test builds its own."""
+    from backend.database import researcher_index
+    researcher_index.reset_index()
+    yield
+    researcher_index.reset_index()

@@ -17,6 +17,7 @@ from backend.database import (
     update_draft_url_status,
 )
 from backend.config import db_config
+from backend.database.researchers import record_extraction_failure
 from backend.researcher import Researcher
 from backend.pipeline.html_fetcher import HTMLFetcher
 logger = logging.getLogger(__name__)
@@ -195,6 +196,11 @@ try:
     _JEL_INTERVAL_MINUTES = max(5, int(os.environ.get('JEL_CLASSIFICATION_INTERVAL_MINUTES', '60')))
 except ValueError:
     _JEL_INTERVAL_MINUTES = 60
+BIO_BACKFILL_ENABLED = os.environ.get('BIO_BACKFILL_ENABLED', 'false').lower() == 'true'
+try:
+    _BIO_BACKFILL_INTERVAL_MINUTES = max(5, int(os.environ.get('BIO_BACKFILL_INTERVAL_MINUTES', '60')))
+except ValueError:
+    _BIO_BACKFILL_INTERVAL_MINUTES = 60
 DIGEST_ENABLED = os.environ.get('RESEND_API_KEY', '') != ''
 _EXTRACTION_DELAY_SECONDS = float(os.environ.get('EXTRACTION_DELAY_SECONDS', '2'))
 _EXTRACTION_IDLE_SECONDS = 300       # queue empty → re-poll every 5 min
@@ -516,6 +522,16 @@ def run_jel_classification_job() -> dict:
         return {"stopped": "error"}
 
 
+def run_bio_backfill_job() -> dict:
+    """Scheduled, budgeted bio backfill batch (see backend.pipeline.bio_backfill)."""
+    from backend.pipeline.bio_backfill import run_bio_backfill_batch
+    try:
+        return run_bio_backfill_batch()
+    except Exception as e:
+        logger.error("Bio backfill job failed: %s: %s", type(e).__name__, e)
+        return {"stopped": "error"}
+
+
 def _start_lock_keepalive() -> None:
     global _keepalive_thread
     if _keepalive_thread is not None and _keepalive_thread.is_alive():
@@ -604,6 +620,22 @@ def stop_enrichment_worker() -> None:
     logger.info("Enrichment worker thread stopped")
 
 
+def _persist_extraction_failure(row: dict) -> None:
+    """Record a page failure in the database so the poison-pill guard
+    survives restarts (deploys restart the worker often). The in-memory
+    counters in _extraction_worker_loop still pace retries within a process."""
+    try:
+        state = record_extraction_failure(row['id'], row.get('content_hash'))
+    except Exception as e:
+        logger.error("Could not persist extraction failure for url_id=%s: %s: %s",
+                     row['id'], type(e).__name__, e)
+        return
+    if state and state.get('extraction_retry_at'):
+        logger.warning("Extraction worker: url_id=%s (%s) failed %d times on this version; "
+                       "skipped until %s", row['id'], row.get('url'),
+                       state['extraction_failures'], state['extraction_retry_at'])
+
+
 def _extraction_worker_loop() -> None:
     """Continuously extract publications from changed pages until stopped.
 
@@ -690,6 +722,12 @@ def _extraction_worker_loop() -> None:
                 continue
             else:
                 rate_limit_streak = 0
+                # Only failures caused by the page persist across restarts:
+                # an outage (5xx/connection) or an unexpected error (outcome
+                # None, e.g. a database blip) must not park every page it
+                # touches for hours. They still count in memory below.
+                if outcome is not None and not outcome.provider_error:
+                    _persist_extraction_failure(row)
                 url_failures[url_id] = url_failures.get(url_id, 0) + 1
                 if url_failures[url_id] >= _EXTRACTION_MAX_URL_FAILURES:
                     retry_at[url_id] = time.monotonic() + _EXTRACTION_URL_COOLDOWN_SECONDS
@@ -851,6 +889,18 @@ def start_scheduler() -> None:
         )
         logger.info("JEL classification scheduled every %d minutes", _JEL_INTERVAL_MINUTES)
 
+    if BIO_BACKFILL_ENABLED:
+        _scheduler.add_job(
+            run_bio_backfill_job,
+            'interval',
+            minutes=_BIO_BACKFILL_INTERVAL_MINUTES,
+            id='bio_backfill',
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=600,
+        )
+        logger.info("Bio backfill scheduled every %d minutes", _BIO_BACKFILL_INTERVAL_MINUTES)
+
     if QUALITY_REVIEW_ENABLED:
         from backend.enrichment.review_batch import submit_review_batch, check_review_batches
         _scheduler.add_job(
@@ -879,6 +929,8 @@ def shutdown_scheduler() -> None:
     if _scheduler is not None:
         from backend.enrichment.jel_job import request_stop as _stop_jel
         _stop_jel()
+        from backend.pipeline.bio_backfill import request_stop as _stop_bio_backfill
+        _stop_bio_backfill()
         _scheduler.shutdown(wait=True)
         _scheduler = None
         logger.info("Scheduler shut down")

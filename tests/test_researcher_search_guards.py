@@ -6,12 +6,20 @@ PR #147: initial-only names ("A." "B.") appeared as valid researchers.
 These tests verify the SQL WHERE clause structure, not the data — no DB needed.
 """
 import pytest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 def _get_sql(**kwargs):
-    """Call search_researchers with mocked fetch_one + fetch_all and return the SQL string + params."""
+    """Call search_researchers with mocked fetch_one + fetch_all and return the SQL string + params.
+
+    A name search is ranked by the in-memory index (stubbed to one match); the
+    page query that loads its rows must still carry every guard.
+    """
+    from backend.database.researcher_index import Match, SearchResult
+    index = MagicMock()
+    index.search.return_value = SearchResult((Match(researcher_id=7, tier=95),))
     with patch("backend.database.researchers.fetch_one", return_value={'cnt': 0}), \
+         patch("backend.database.researchers._name_index", return_value=index), \
          patch("backend.database.researchers.fetch_all", return_value=[]) as mock_fetch:
         from backend.database.researchers import search_researchers
         search_researchers(**kwargs)
@@ -48,21 +56,19 @@ class TestCoauthorGuard:
 class TestInitialOnlyNameGuard:
     """Initial-only names (e.g., "A.", "B. C.") must be hidden."""
 
-    def test_first_name_char_length_guard(self):
-        sql, _ = _get_sql()
-        assert "CHAR_LENGTH(r.first_name) > 2" in sql
+    def test_initials_patterns_are_case_sensitive_regexps(self):
+        """Pattern, not length: "A. Y." is hidden, "Li"/"Wu" are not (#263)."""
+        from backend.database.researcher_index import CAPITAL_INITIALS, INITIALS_ONLY
+        sql, params = _get_sql()
+        assert "CHAR_LENGTH" not in sql
+        assert "NOT REGEXP_LIKE(TRIM(r.first_name), %s, 'c')" in sql
+        assert "NOT REGEXP_LIKE(TRIM(r.last_name), %s, 'c')" in sql
+        assert list(params[:4]) == [INITIALS_ONLY, INITIALS_ONLY, CAPITAL_INITIALS, "[a-z]"]
 
-    def test_last_name_char_length_guard(self):
+    def test_empty_names_guarded(self):
         sql, _ = _get_sql()
-        assert "CHAR_LENGTH(r.last_name) > 2" in sql
-
-    def test_first_name_regexp_guard(self):
-        sql, _ = _get_sql()
-        assert "r.first_name NOT REGEXP" in sql
-
-    def test_last_name_regexp_guard(self):
-        sql, _ = _get_sql()
-        assert "r.last_name NOT REGEXP" in sql
+        assert "TRIM(r.first_name) <> ''" in sql
+        assert "TRIM(r.last_name) <> ''" in sql
 
     def test_null_names_guarded(self):
         sql, _ = _get_sql()
@@ -93,7 +99,7 @@ class TestGuardsNotRemovableByPagination:
     def test_guards_with_offset_and_limit(self):
         sql, _ = _get_sql(offset=100, limit=50)
         assert "EXISTS (SELECT 1 FROM authorship" in sql
-        assert "CHAR_LENGTH(r.first_name) > 2" in sql
+        assert "REGEXP_LIKE(TRIM(r.first_name)" in sql
         assert "openalex_author_id IS NOT NULL" in sql
 
 
@@ -107,6 +113,6 @@ class TestGuardsCombinedWithUserFilters:
             field_slug="labor",
         )
         assert "EXISTS (SELECT 1 FROM authorship" in sql
-        assert "CHAR_LENGTH(r.first_name) > 2" in sql
+        assert "REGEXP_LIKE(TRIM(r.first_name)" in sql
         assert "openalex_author_id IS NOT NULL" in sql
         assert "r.affiliation LIKE %s" in sql

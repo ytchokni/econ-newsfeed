@@ -1,5 +1,32 @@
 @import "tailwindcss";
 
+/* Metric-matched local fallbacks shown until the web fonts load (values from
+   the Google font loader's generated CSS), so swapping fonts doesn't shift layout. */
+@font-face {
+  font-family: "Source Serif 4 Fallback";
+  src: local("Times New Roman");
+  ascent-override: 87.87%;
+  descent-override: 28.41%;
+  line-gap-override: 0%;
+  size-adjust: 117.91%;
+}
+
+@font-face {
+  font-family: "DM Sans Fallback";
+  src: local("Arial");
+  ascent-override: 94.9%;
+  descent-override: 29.66%;
+  line-gap-override: 0%;
+  size-adjust: 104.53%;
+}
+
+/* Self-hosted font subsets (app/src/app/fonts.ts), chained so each character
+   uses the subset whose unicode-range covers it, then the fallback above. */
+:root {
+  --font-source-serif: var(--font-source-serif-latin), var(--font-source-serif-latin-ext), var(--font-source-serif-vietnamese), var(--font-source-serif-greek), var(--font-source-serif-cyrillic), var(--font-source-serif-cyrillic-ext), "Source Serif 4 Fallback";
+  --font-dm-sans: var(--font-dm-sans-latin), var(--font-dm-sans-latin-ext), "DM Sans Fallback";
+}
+
 @theme {
   --font-serif: var(--font-source-serif), Georgia, "Times New Roman", serif;
   --font-sans: var(--font-dm-sans), system-ui, -apple-system, sans-serif;

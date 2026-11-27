@@ -16,6 +16,7 @@ export default function SearchInput({ value, onChange, placeholder = "Search..."
     setLocal(value);
   }
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
   const onChangeRef = useRef(onChange);
 
   useEffect(() => {
@@ -40,11 +41,21 @@ export default function SearchInput({ value, onChange, placeholder = "Search..."
     }, 300);
   };
 
+  // Enter searches at once instead of waiting for the debounce.
+  const flush = () => {
+    if (!timerRef.current) return;
+    clearTimeout(timerRef.current);
+    timerRef.current = null;
+    onChangeRef.current(local);
+  };
+
   const handleClear = () => {
     setLocal("");
     if (timerRef.current) clearTimeout(timerRef.current);
     timerRef.current = null;
     onChange("");
+    // The clear button unmounts once the field is empty; keep typing focus.
+    inputRef.current?.focus();
   };
 
   return (
@@ -54,9 +65,16 @@ export default function SearchInput({ value, onChange, placeholder = "Search..."
         <line x1="21" y1="21" x2="16" y2="16" />
       </svg>
       <input
+        ref={inputRef}
         type="text"
+        inputMode="search"
+        enterKeyHint="search"
+        autoComplete="off"
+        spellCheck={false}
+        aria-label={placeholder.replace(/\.+$|…$/, "")}
         value={local}
         onChange={(e) => handleChange(e.target.value)}
+        onKeyDown={(e) => { if (e.key === "Enter") flush(); }}
         placeholder={placeholder}
         className="border-none outline-none bg-transparent text-sm text-[var(--ink)] w-full placeholder:text-[var(--muted)]"
       />

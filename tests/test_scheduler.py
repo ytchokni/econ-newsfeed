@@ -22,6 +22,15 @@ from backend.pipeline.scheduler import (
 # Fixtures / helpers
 # ---------------------------------------------------------------------------
 
+
+@pytest.fixture(autouse=True)
+def _no_persisted_extraction_failures():
+    """The worker persists page failures (record_extraction_failure); these
+    tests exercise the in-process guard without a database."""
+    with patch("backend.pipeline.scheduler.record_extraction_failure", return_value=None):
+        yield
+
+
 def _make_url_row(url_id=1, researcher_id=10, url="https://example.com/pubs",
                   page_type="PUBLICATIONS"):
     """Return a dict that mimics Researcher.get_all_researcher_urls() rows."""

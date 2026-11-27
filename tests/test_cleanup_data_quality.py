@@ -84,12 +84,17 @@ class TestDistinctMarkers:
 
 
 class TestRestoreReasoningDescriptions:
-    """Issue #258: bios holding <thought> reasoning are restored or NULLed."""
+    """Issue #258: bios holding <thought> reasoning are salvaged, restored or NULLed,
+    with backups that --undo can put back."""
 
     BAD = "<thought>* Source: Text from a researcher's homepage. * Task: Extract a bio"
+    SALVAGEABLE = ("<thought>* Task: Extract a professional description.</thought> "
+                   "Jane Doe is a professor at MIT. She studies trade and growth in")
     CLEAN = "Thomas Rieger is a researcher in behavioral finance."
 
     def _run(self, monkeypatch, researchers, snapshots_by_researcher, bad_snapshots, apply):
+        from unittest.mock import MagicMock
+
         def fake_fetch_all(sql, params=()):
             if sql.startswith("SELECT id, description FROM researchers "):
                 return researchers
@@ -97,37 +102,117 @@ class TestRestoreReasoningDescriptions:
                 return bad_snapshots
             return snapshots_by_researcher.get(params[0], [])
 
-        cursor = __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()
+        cursor = MagicMock()
         monkeypatch.setattr(cleanup, "fetch_all", fake_fetch_all)
         monkeypatch.setattr(cleanup, "APPLY", apply)
         monkeypatch.setattr(cleanup, "_run_writes", lambda label, fn: fn(cursor) if apply else None)
         n = cleanup.restore_reasoning_descriptions()
         return n, cursor
 
-    def test_restores_newest_clean_snapshot_or_nulls(self, monkeypatch):
+    @staticmethod
+    def _sql(cursor, prefix):
+        return [c.args for c in cursor.execute.call_args_list if c.args[0].lstrip().startswith(prefix)]
+
+    def test_salvage_then_snapshot_then_null(self, monkeypatch):
         researchers = [
+            {"id": 2, "description": self.SALVAGEABLE},
             {"id": 3, "description": self.BAD},
             {"id": 4, "description": self.BAD},
             {"id": 5, "description": "A genuine bio about an economist at MIT."},  # SQL over-select
         ]
         snaps = {
+            2: [{"description": self.CLEAN}],  # salvage wins over the snapshot
             3: [{"description": self.BAD}, {"description": self.CLEAN}],
             4: [{"description": self.BAD}],
         }
         bad_snaps = [{"id": 11, "description": self.BAD}, {"id": 12, "description": "fine bio"}]
         n, cursor = self._run(monkeypatch, researchers, snaps, bad_snaps, apply=True)
-        assert n == 3  # two researchers + one snapshot
-        updates = [c.args[1] for c in cursor.execute.call_args_list
-                   if c.args[0].startswith("UPDATE researchers")]
-        assert updates == [(self.CLEAN, 3, self.BAD), (None, 4, self.BAD)]
-        deletes = [c.args[1] for c in cursor.execute.call_args_list
-                   if c.args[0].startswith("DELETE FROM researcher_snapshots")]
-        assert deletes == [(11,)]
+        assert n == 4  # three researchers + one snapshot
+        updates = [args[1] for args in self._sql(cursor, "UPDATE researchers")]
+        assert updates == [
+            ("Jane Doe is a professor at MIT.", 2, self.SALVAGEABLE),
+            (self.CLEAN, 3, self.BAD),
+            (4, self.BAD),
+        ]
+        # Restored/salvaged bios bump description_updated_at; NULLed ones do not.
+        stmts = [args[0] for args in self._sql(cursor, "UPDATE researchers")]
+        assert ["description_updated_at" in s for s in stmts] == [True, True, False]
+        assert [args[1] for args in self._sql(cursor, "DELETE FROM researcher_snapshots")] == [(11,)]
+
+    def test_backups_are_written_before_changes(self, monkeypatch):
+        n, cursor = self._run(monkeypatch, [{"id": 4, "description": self.BAD}], {},
+                              [{"id": 11, "description": self.BAD}], apply=True)
+        order = [c.args[0].split()[0:3] for c in cursor.execute.call_args_list]
+        first_update = next(i for i, o in enumerate(order) if o[0] == "UPDATE")
+        first_delete = next(i for i, o in enumerate(order) if o[0] == "DELETE")
+        backup_snap = next(i for i, o in enumerate(order)
+                           if o[:3] == ["INSERT", "IGNORE", "INTO"])
+        assert cursor.executemany.called  # bio backup rows
+        assert backup_snap < first_delete
+        assert any("CREATE TABLE IF NOT EXISTS researchers_description_backup" in c.args[0]
+                   for c in cursor.execute.call_args_list[:first_update])
+        rows = cursor.executemany.call_args.args[1]
+        assert rows == [(4, self.BAD, None)]
 
     def test_dry_run_writes_nothing(self, monkeypatch):
         n, cursor = self._run(monkeypatch, [{"id": 3, "description": self.BAD}], {}, [], apply=False)
         assert n == 1
         cursor.execute.assert_not_called()
 
-    def test_step_is_registered(self):
+    def test_step_is_registered_with_undo(self):
         assert "restore_reasoning_descriptions" in cleanup.STEP_ORDER
+        assert "restore_reasoning_descriptions" in cleanup.UNDO_STEPS
+
+    def test_undo_only_reverts_unchanged_bios(self, monkeypatch):
+        from unittest.mock import MagicMock
+        backup = [
+            {"id": 9, "researcher_id": 3, "description": self.BAD, "new_description": self.CLEAN},
+            {"id": 5, "researcher_id": 3, "description": "older", "new_description": "x"},
+        ]
+        cursor = MagicMock()
+        monkeypatch.setattr(cleanup, "_table_exists", lambda name: True)
+        monkeypatch.setattr(cleanup, "fetch_all", lambda sql, params=(): backup)
+        monkeypatch.setattr(cleanup, "fetch_one", lambda sql, params=(): {"n": 0})
+        monkeypatch.setattr(cleanup, "_run_writes", lambda label, fn: fn(cursor))
+        cleanup.undo_restore_reasoning_descriptions()
+        updates = [c.args for c in cursor.execute.call_args_list
+                   if c.args[0].startswith("UPDATE researchers")]
+        # Newest backup per researcher; guarded on the value the cleanup wrote.
+        assert updates == [(
+            "UPDATE researchers SET description = %s WHERE id = %s AND description <=> %s",
+            (self.BAD, 3, self.CLEAN))]
+
+
+class TestSalvageDescription:
+    def test_answer_after_closed_thought_is_kept(self):
+        from backend.pipeline.description import salvage_description
+        assert salvage_description(
+            "<thought>notes</thought> Jane Doe is a professor of economics at MIT."
+        ) == "Jane Doe is a professor of economics at MIT."
+
+    def test_cut_off_answer_is_trimmed_to_last_sentence(self):
+        from backend.pipeline.description import salvage_description
+        assert salvage_description(
+            "<thought>notes</thought> Jane Doe is a professor at MIT. She studies trade in"
+        ) == "Jane Doe is a professor at MIT."
+
+    def test_too_short_after_trim_or_unclosed_is_none(self):
+        from backend.pipeline.description import salvage_description
+        assert salvage_description("<thought>notes</thought> Hi. She studies trade in") is None
+        assert salvage_description("<thought>* Task: Extract a bio") is None
+
+
+@pytest.mark.parametrize("cut, expected", [
+    # Prod examples (2026-11-27) that a plain ". " split cut after an abbreviation.
+    ("Harry Cooperman is a Ph.D. candidate at Yale. He studies",
+     "Harry Cooperman is a Ph.D. candidate at Yale."),
+    ("Dimitris Papanikolaou is the John L. and Helen Kellogg Professor of Finance. His research",
+     "Dimitris Papanikolaou is the John L. and Helen Kellogg Professor of Finance."),
+    ("Adlai Fisher is the A. Smith Chair at UBC. He", "Adlai Fisher is the A. Smith Chair at UBC."),
+    ("Jane Doe works at the U.S. Treasury in", None),
+    ("Adlai Fisher is the A.", None),
+    ("Jane Doe is a professor at MIT. She holds a Ph.D.", "Jane Doe is a professor at MIT."),
+])
+def test_salvage_does_not_split_on_abbreviations(cut, expected):
+    from backend.pipeline.description import salvage_description
+    assert salvage_description(f"<thought>notes</thought> {cut}") == expected

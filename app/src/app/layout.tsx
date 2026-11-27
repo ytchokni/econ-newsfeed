@@ -1,6 +1,6 @@
 import type { Metadata } from "next";
-import { Source_Serif_4, DM_Sans } from "next/font/google";
 import "./globals.css";
+import { fontVariables } from "./font-variables";
 import Header from "@/components/Header";
 import { AuthProvider } from "@/lib/auth";
 import {
@@ -11,20 +11,6 @@ import {
   openGraphFor,
   twitterFor,
 } from "@/lib/seo";
-
-const sourceSerif = Source_Serif_4({
-  subsets: ["latin"],
-  weight: ["400", "600", "700"],
-  variable: "--font-source-serif",
-  display: "swap",
-});
-
-const dmSans = DM_Sans({
-  subsets: ["latin"],
-  weight: ["400", "500", "600", "700"],
-  variable: "--font-dm-sans",
-  display: "swap",
-});
 
 const indexable = isIndexableDeployment();
 
@@ -56,7 +42,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }>) {
   return (
-    <html lang="en" className={`${sourceSerif.variable} ${dmSans.variable}`}>
+    <html lang="en" className={fontVariables}>
       <head>
         <link rel="alternate" type="application/atom+xml" title="Econ Newsfeed" href="/api/feed.xml" />
       </head>
