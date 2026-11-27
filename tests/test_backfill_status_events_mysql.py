@@ -21,6 +21,8 @@ import zlib
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+import pytest
+
 from backend.pipeline.publication import ExtractionLLMResult
 from tests.test_title_rename_collision_mysql import _exec, _q, _researcher, db  # noqa: F401
 
@@ -179,6 +181,37 @@ def test_advance_without_journal_venue_in_backfill_emits_nothing(db):
     assert _events() == []
 
 
+@pytest.mark.parametrize("old_status,new_status,venue", [
+    ("working_paper", "accepted", "Journal of International Economics"),
+    ("working_paper", "revise_and_resubmit", None),
+])
+def test_years_old_advance_in_backfill_emits_nothing(db, old_status, new_status, venue):
+    """An "accepted" or R&R sitting unread in a long page's tail for years is not
+    fresh news: backfill events need a recent year for every status."""
+    kang = _researcher("Elliot", "Kang")
+    url_id = _long_page(kang, _html())
+    blocs = _paper("Playing with Blocs", old_status, None, "2022", kang)
+
+    _extract(url_id, [_pub("Playing with Blocs", new_status, venue, year="2022")])
+
+    assert _events() == []
+    assert _q("SELECT status FROM papers WHERE id = %s", (blocs,))[0]["status"] == new_status
+
+
+def test_years_old_accepted_still_announced_outside_the_backfill(db):
+    """The normal path keeps the 10-year window for accepted (a 2022 working
+    paper accepted now is news): the tighter bound is the backfill's only."""
+    from backend.pipeline.extraction import _append_snapshots
+    kang = _researcher("Elliot", "Kang")
+    _long_page(kang, _html())
+    blocs = _paper("Playing with Blocs", "working_paper", None, "2022", kang)
+
+    _append_snapshots([_pub("Playing with Blocs", "accepted", "Journal of International Economics", "2022")],
+                      PAGE, FETCHED)
+
+    assert [(e["paper_id"], e["new_status"]) for e in _events()] == [(blocs, "accepted")]
+
+
 def test_noise_only_change_on_truncated_page_backfills_with_status_events(db):
     """The backfill taken from inside the insignificant-change branch."""
     kang = _researcher("Elliot", "Kang")
@@ -300,6 +333,13 @@ def test_recovery_script_skips_pages_first_extracted_after_cutoff(db):
     _exec("INSERT INTO paper_snapshots (paper_id, title, status, scraped_at, source_url, content_hash) "
           "SELECT id, title, 'working_paper', %s, 'https://elsewhere.org', 'x' FROM papers "
           "WHERE title = 'Playing with Blocs'", (BEFORE,))
+    assert _script().load_and_plan(_script().DEFAULT_SINCE) == []
+
+
+def test_recovery_script_skips_years_old_accepted(db):
+    blocs = _lost_event_world()
+    _exec("UPDATE paper_snapshots SET year = '2021' WHERE paper_id = %s", (blocs,))
+    _exec("UPDATE papers SET year = '2021' WHERE id = %s", (blocs,))
     assert _script().load_and_plan(_script().DEFAULT_SINCE) == []
 
 

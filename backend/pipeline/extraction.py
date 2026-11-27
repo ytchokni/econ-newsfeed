@@ -35,7 +35,9 @@ from backend.pipeline.html_fetcher import CONTENT_MAX_CHARS, HTMLFetcher
 from backend.enrichment.link_extractor import match_and_save_paper_links
 from backend.pipeline.paper_saver import PaperSaver, validate_title_change
 from backend.pipeline.publication import Publication
-from backend.publication_rules import INTERESTING_STATUS_TRANSITIONS, status_change_suppression_reason
+from backend.publication_rules import (
+    BACKFILL_STATUS_CHANGE_MAX_AGE_YEARS, INTERESTING_STATUS_TRANSITIONS, status_change_suppression_reason,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -224,9 +226,12 @@ def _append_snapshots(pubs: list[dict], source_url: str, event_date=None, *, emi
                       event_paper_ids: set[int] | None = None) -> None:
     """Append paper snapshots and emit status_change events when detected.
 
-    event_paper_ids, when given, limits events to those papers; every paper
-    still gets its snapshot.
+    event_paper_ids, when given, limits events to those papers (the
+    long-page backfill); every paper still gets its snapshot. Those events
+    also need a recent year for every status
+    (BACKFILL_STATUS_CHANGE_MAX_AGE_YEARS), not only for "published".
     """
+    max_age_years = BACKFILL_STATUS_CHANGE_MAX_AGE_YEARS if event_paper_ids is not None else None
     title_to_pub = {}
     for pub in pubs:
         title = pub.get('title')
@@ -261,6 +266,7 @@ def _append_snapshots(pubs: list[dict], source_url: str, event_date=None, *, emi
             reason = status_change_suppression_reason(
                 result.new_status, result.venue,
                 pub.get('year') or getattr(result, 'year', None), reference_year,
+                max_age_years=max_age_years,
             )
             if reason:
                 logger.info(
@@ -295,8 +301,10 @@ def _backfill_long_page(url_id: int, url: str, text: str, raw_html: str | None,
     this extraction creates are saved as seed papers with no events, and no
     new_paper event is emitted. A paper the database already had whose
     status advanced (a working paper now accepted at a journal) still gets its
-    status_change event under the usual rules (_append_snapshots): the
-    backfill is the first extraction to see the page's current entry for it.
+    status_change event under the usual rules (_append_snapshots), except
+    that every status, not only "published", must be at most
+    BACKFILL_STATUS_CHANGE_MAX_AGE_YEARS old: the backfill is the first
+    extraction to see the page's current entry for it, which may be old.
     It runs once per page: mark_extracted sets
     html_content.extracted_untruncated.
     """

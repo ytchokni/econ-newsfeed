@@ -12,7 +12,8 @@ deploy) that advanced the paper's status, where
   - the paper had an earlier snapshot (it existed before that extraction),
   - the transition is one the pipeline announces and passes the #280
     plausibility rules (backend.publication_rules), judged at the snapshot's
-    time,
+    time, with the backfill's age bound for every status
+    (BACKFILL_STATUS_CHANGE_MAX_AGE_YEARS),
   - no status_change event of the paper reaches that status already,
   - the snapshot's page had been extracted before --since and its text is
     still longer than CONTENT_MAX_CHARS (the backfill's pages; other pages
@@ -48,6 +49,7 @@ from dotenv import load_dotenv  # noqa: E402
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
 from backend.publication_rules import (  # noqa: E402
+    BACKFILL_STATUS_CHANGE_MAX_AGE_YEARS,
     INTERESTING_STATUS_TRANSITIONS,
     is_working_paper_series,
     status_change_suppression_reason,
@@ -117,7 +119,8 @@ def plan_events(snapshots: list[dict], papers: dict[int, dict], events: list[dic
                 continue
             event_venue = venue or paper.get("venue")
             event_year = year or paper.get("year")
-            if status_change_suppression_reason(new, event_venue, event_year, snap["scraped_at"].year):
+            if status_change_suppression_reason(new, event_venue, event_year, snap["scraped_at"].year,
+                                                max_age_years=BACKFILL_STATUS_CHANGE_MAX_AGE_YEARS):
                 continue
             reached[paper_id] = _RANK[new]
             planned.append({
