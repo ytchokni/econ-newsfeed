@@ -140,9 +140,10 @@ def test_directory_without_search_keeps_alphabetical_order(directory):
     assert total == len(PEOPLE)
 
 
-def test_directory_search_treats_wildcards_literally(directory):
-    rows, total = researchers.search_researchers(search="Rie%")
-    assert rows == [] and total == 0
+def test_directory_search_ignores_punctuation_rather_than_using_it_as_wildcards(directory):
+    # "%" and "_" are separators like other punctuation, never LIKE wildcards.
+    assert researchers.search_researchers(search="Rie%") == researchers.search_researchers(search="Rie")
+    assert researchers.search_researchers(search="%_") == researchers.search_researchers()
 
 
 # ---------------------------------------------------------------------------

@@ -18,10 +18,8 @@ from backend.database.search_helpers import (
     TOP20_DEPT_KEYWORDS as _TOP20_DEPT_KEYWORDS,
     TOP5_JOURNAL_KEYWORDS as _TOP5_JOURNAL_KEYWORDS,
     top5_venue_clause as _top5_venue_clause,
-    name_relevance_sql as _name_relevance_sql,
-    name_search_words as _name_search_words,
-    name_words_clause as _name_words_clause,
 )
+from backend.database import researcher_index as _researcher_index
 
 _TOP5_VENUE_CLAUSE, _TOP5_VENUE_PARAMS = _top5_venue_clause("p.venue")
 
@@ -812,8 +810,49 @@ def search_researchers(
     - position: r.position LIKE %value%
     - preset='top20': affiliation matches top-20 economics department keywords
     - field_slug: single slug uses =, comma-separated uses IN
-    - search: every word in the name (any order), ranked by name relevance
+    - search: matched and ranked by the in-process name index
+      (see backend/database/researcher_index.py); each row then carries
+      ``match``: "name", "affiliation" or "similar" (typo fallback)
     """
+    conditions, params = _directory_conditions(
+        institution=institution, field_slug=field_slug, position=position, preset=preset,
+    )
+    if _researcher_index.query_words(search):
+        return _search_ranked(search, conditions, params, offset=offset, limit=limit)
+
+    where = "WHERE " + " AND ".join(conditions)
+
+    count_row = fetch_one(
+        f"SELECT COUNT(*) AS cnt FROM researchers r {where}",
+        tuple(params),
+    )
+    total = count_row['cnt'] if count_row else 0
+
+    rows = fetch_all(
+        f"""
+        SELECT r.id, r.first_name, r.last_name, r.position, r.affiliation, r.description
+        FROM researchers r
+        {where}
+        ORDER BY r.last_name, r.first_name, r.id
+        LIMIT %s OFFSET %s
+        """,
+        (*params, limit, offset),
+    )
+    return rows, total
+
+
+_BASE_CONDITION_COUNT = 3
+_ID_CHUNK = 2000
+
+
+def _directory_conditions(
+    *,
+    institution: str | None,
+    field_slug: str | None,
+    position: str | None,
+    preset: str | None,
+) -> tuple[list[str], list]:
+    """WHERE fragments for the directory: the base guards, then user filters."""
     conditions: list[str] = []
     params: list = []
 
@@ -879,39 +918,101 @@ def search_researchers(
             )
             params.extend(field_slugs)
 
-    # Every query word must appear in the name, in any order; the best name
-    # matches are listed first (see name_relevance_sql).
-    words = _name_search_words(search)
-    order_sql = "r.last_name, r.first_name"
-    order_params: list = []
-    if words:
-        clause, clause_params = _name_words_clause(
-            "CONCAT_WS(' ', r.first_name, r.last_name)", words
-        )
-        conditions.append(clause)
-        params.extend(clause_params)
-        rank_sql, order_params = _name_relevance_sql("r.first_name", "r.last_name", search)
-        order_sql = f"{rank_sql} DESC, {order_sql}"
+    return conditions, params
 
-    where = ("WHERE " + " AND ".join(conditions)) if conditions else ""
 
-    count_row = fetch_one(
-        f"SELECT COUNT(*) AS cnt FROM researchers r {where}",
-        tuple(params),
-    )
-    total = count_row['cnt'] if count_row else 0
+def _fetch_all_late(sql: str, params=()) -> list[dict]:
+    # Look fetch_all up at call time so tests can swap the module attribute.
+    return fetch_all(sql, params)
 
-    rows = fetch_all(
+
+def _name_index() -> _researcher_index.ResearcherIndex:
+    return _researcher_index.get_index(_fetch_all_late)
+
+
+def warm_researcher_index() -> None:
+    """Build the search index in the background at API start-up."""
+    _researcher_index.warm_index(_fetch_all_late)
+
+
+def _match_label(match: _researcher_index.Match) -> str:
+    if match.similar:
+        return "similar"
+    affiliation_only = (_researcher_index.TIER_AFFILIATION, _researcher_index.TIER_AFFILIATION_WORD)
+    return "affiliation" if match.tier in affiliation_only else "name"
+
+
+def _search_ranked(
+    search: str, conditions: list[str], params: list, *, offset: int, limit: int,
+) -> tuple[list[dict], int]:
+    """Directory search: the index ranks, SQL applies filters and loads the page.
+
+    The index already holds the base guards (``listed``); user filters are
+    checked in SQL for the ranked ids. The page query repeats every condition,
+    so a researcher changed since the index was built is never shown wrongly.
+    """
+    matches = list(_name_index().search(search, listed_only=True).matches)
+    if matches and len(conditions) > _BASE_CONDITION_COUNT:
+        allowed = _ids_matching(conditions, params, [m.researcher_id for m in matches])
+        matches = [m for m in matches if m.researcher_id in allowed]
+    total = len(matches)
+    page = matches[offset:offset + limit]
+    if not page:
+        return [], total
+    placeholders = ",".join(["%s"] * len(page))
+    found = fetch_all(
         f"""
         SELECT r.id, r.first_name, r.last_name, r.position, r.affiliation, r.description
         FROM researchers r
-        {where}
-        ORDER BY {order_sql}, r.id
-        LIMIT %s OFFSET %s
+        WHERE {" AND ".join(conditions)} AND r.id IN ({placeholders})
         """,
-        (*params, *order_params, limit, offset),
+        (*params, *[m.researcher_id for m in page]),
     )
+    by_id = {row["id"]: row for row in found}
+    rows = []
+    for match in page:
+        row = by_id.get(match.researcher_id)
+        if row is not None:
+            rows.append({**row, "match": _match_label(match)})
     return rows, total
+
+
+def _ids_matching(conditions: list[str], params: list, ids: list[int]) -> set[int]:
+    where = " AND ".join(conditions)
+    allowed: set[int] = set()
+    for start in range(0, len(ids), _ID_CHUNK):
+        chunk = ids[start:start + _ID_CHUNK]
+        placeholders = ",".join(["%s"] * len(chunk))
+        allowed.update(
+            row["id"]
+            for row in fetch_all(
+                f"SELECT r.id FROM researchers r WHERE {where} AND r.id IN ({placeholders})",
+                (*params, *chunk),
+            )
+        )
+    return allowed
+
+
+def researcher_search_suggestion(search: str | None, *, listed_only: bool = True) -> str | None:
+    """"Did you mean ...?" text when ``search`` only matched by similar spelling.
+
+    Uses the index's cached result for the same query, so calling it after
+    search_researchers costs one primary-key lookup.
+    """
+    if not _researcher_index.query_words(search):
+        return None
+    result = _name_index().search(search, listed_only=listed_only)
+    if not result.corrections or result.corrected_from is None:
+        return None
+    row = fetch_one(
+        "SELECT first_name, last_name FROM researchers WHERE id = %s",
+        (result.corrected_from,),
+    )
+    if not row:
+        return None
+    return _researcher_index.suggest_query(
+        search, dict(result.corrections), f"{row['first_name'] or ''} {row['last_name'] or ''}",
+    )
 
 
 def search_researcher_options(*, search: str = "", researcher_ids: list[int] | None = None) -> list[dict]:
@@ -923,15 +1024,17 @@ def search_researcher_options(*, search: str = "", researcher_ids: list[int] | N
             f"FROM researchers WHERE id IN ({placeholders}) ORDER BY last_name, first_name LIMIT 50",
             tuple(researcher_ids),
         )
-    words = _name_search_words(search)
+    words = _researcher_index.query_words(search)
     if len(" ".join(words)) < 2:
         return []
-    name = "CONCAT_WS(' ', first_name, last_name)"
-    clause, clause_params = _name_words_clause(name, words)
-    rank_sql, rank_params = _name_relevance_sql("first_name", "last_name", search)
-    return fetch_all(
-        f"SELECT id, {name} AS name, affiliation "
-        f"FROM researchers WHERE {clause} "
-        f"ORDER BY {rank_sql} DESC, last_name, first_name, id LIMIT 20",
-        (*clause_params, *rank_params),
+    ids = _name_index().search(search, listed_only=False).ids[:20]
+    if not ids:
+        return []
+    placeholders = ",".join(["%s"] * len(ids))
+    rows = fetch_all(
+        f"SELECT id, CONCAT_WS(' ', first_name, last_name) AS name, affiliation "
+        f"FROM researchers WHERE id IN ({placeholders})",
+        tuple(ids),
     )
+    by_id = {row["id"]: row for row in rows}
+    return [by_id[i] for i in ids if i in by_id]

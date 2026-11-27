@@ -63,6 +63,8 @@ export interface PaginatedResponse<T> {
   per_page: number;
   pages: number;
   researcher_count?: number;
+  /** "Did you mean …?" query from /api/researchers when only similar names matched. */
+  suggestion?: string | null;
 }
 
 export interface ResearcherUrl {
@@ -94,6 +96,8 @@ export interface Researcher {
   publication_count: number;
   fields: ResearchField[];
   jel_codes: JelCode[];
+  /** Set by /api/researchers when searching; "similar" = spelling fallback. */
+  match?: "name" | "affiliation" | "similar" | null;
 }
 
 export interface FeedEvent {

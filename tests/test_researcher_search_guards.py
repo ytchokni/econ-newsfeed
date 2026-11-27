@@ -6,12 +6,20 @@ PR #147: initial-only names ("A." "B.") appeared as valid researchers.
 These tests verify the SQL WHERE clause structure, not the data — no DB needed.
 """
 import pytest
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 
 def _get_sql(**kwargs):
-    """Call search_researchers with mocked fetch_one + fetch_all and return the SQL string + params."""
+    """Call search_researchers with mocked fetch_one + fetch_all and return the SQL string + params.
+
+    A name search is ranked by the in-memory index (stubbed to one match); the
+    page query that loads its rows must still carry every guard.
+    """
+    from backend.database.researcher_index import Match, SearchResult
+    index = MagicMock()
+    index.search.return_value = SearchResult((Match(researcher_id=7, tier=95),))
     with patch("backend.database.researchers.fetch_one", return_value={'cnt': 0}), \
+         patch("backend.database.researchers._name_index", return_value=index), \
          patch("backend.database.researchers.fetch_all", return_value=[]) as mock_fetch:
         from backend.database.researchers import search_researchers
         search_researchers(**kwargs)

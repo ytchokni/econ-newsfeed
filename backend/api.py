@@ -66,7 +66,11 @@ from backend.database import (
 )
 from backend.auth import get_current_user, get_optional_user
 from backend.database.snapshots import STATUS_ORDER
-from backend.database.researchers import search_researcher_options
+from backend.database.researchers import (
+    researcher_search_suggestion,
+    search_researcher_options,
+    warm_researcher_index,
+)
 from backend.pipeline.publication import VALID_STATUSES
 
 FILTER_VALID_STATUSES = frozenset(STATUS_ORDER)
@@ -236,6 +240,8 @@ class ResearcherResponse(BaseModel):
     publication_count: int
     fields: list[ResearchFieldResponse]
     jel_codes: list[JelCodeResponse]
+    # Set when searching: "name", "affiliation", or "similar" (spelling fallback).
+    match: str | None = None
 
 class PaginatedResearchers(BaseModel):
     items: list[ResearcherResponse]
@@ -243,6 +249,8 @@ class PaginatedResearchers(BaseModel):
     page: int
     per_page: int
     pages: int
+    # "Did you mean ...?" query when the search matched only by similar spelling.
+    suggestion: str | None = None
 
 class HealthResponse(BaseModel):
     status: str
@@ -320,6 +328,7 @@ async def lifespan(app: FastAPI):
             )
             await asyncio.sleep(wait)
     start_scheduler()
+    warm_researcher_index()
     yield
     shutdown_scheduler()
 
@@ -1182,6 +1191,12 @@ def list_researchers(
         pub_counts = get_pub_counts_for_researchers(researcher_ids)
         fields_by_researcher = get_fields_for_researchers(researcher_ids)
         jel_map = get_jel_codes_for_researchers(researcher_ids)
+        # Similar-spelling matches rank after every strict one, so they reach
+        # the first page whenever they matter.
+        suggestion = (
+            researcher_search_suggestion(search)
+            if search and any(r.get('match') == "similar" for r in rows) else None
+        )
     items = [
         {
             "id": r['id'],
@@ -1195,6 +1210,7 @@ def list_researchers(
             "publication_count": pub_counts.get(r['id'], 0),
             "fields": fields_by_researcher.get(r['id'], []),
             "jel_codes": jel_map.get(r['id'], []),
+            "match": r.get('match'),
         }
         for r in rows
     ]
@@ -1205,6 +1221,7 @@ def list_researchers(
         "page": page,
         "per_page": per_page,
         "pages": pages,
+        "suggestion": suggestion,
     }
 
 
