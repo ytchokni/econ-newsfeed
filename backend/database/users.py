@@ -6,6 +6,7 @@ import hmac
 from datetime import datetime, timezone
 
 from backend.database.connection import execute_query, fetch_all, fetch_one, get_connection
+from backend.database.papers import feed_visible_event_sql
 
 
 def get_or_create_user(google_id: str, email: str, name: str | None = None,
@@ -113,13 +114,15 @@ def get_feed_events_for_researchers(
     Source/fetch dates can precede insertion by days. A per-event ledger avoids
     advancing a global timestamp past results committed after an earlier send.
     Historical rows without ingestion metadata fall back to their source date.
+    Only events the newsfeed shows are returned (``feed_visible_event_sql``).
     """
     if not researcher_ids:
         return []
     placeholders = ",".join(["%s"] * len(researcher_ids))
+    visible_sql, visible_params = feed_visible_event_sql("fe")
     delivery_filter = ""
     legacy_filter = ""
-    params = (*researcher_ids, since)
+    params = (*researcher_ids, since, *visible_params)
     if legacy_since is not None:
         # Pre-migration events have no ledger entries. Retain their old send
         # boundary without suppressing newly ingested, backdated events.
@@ -141,6 +144,7 @@ def get_feed_events_for_researchers(
             JOIN researchers r ON r.id = a.researcher_id
             WHERE a.researcher_id IN ({placeholders})
               AND COALESCE(fe.recorded_at, fe.created_at) >= %s
+              AND ({visible_sql})
               {legacy_filter}
               {delivery_filter}
             ORDER BY r.last_name, r.first_name, fe.created_at DESC""",
@@ -181,27 +185,60 @@ def researcher_exists(researcher_id: int) -> bool:
     return row is not None
 
 
+# Unsubscribe tokens are long-lived on purpose: links in old digests must keep
+# working for months. They carry no expiry and authorize exactly one thing --
+# switching the weekly digest for that user on or off. The purpose label keeps
+# the HMAC from matching any other value signed with the same secret.
+_UNSUBSCRIBE_PURPOSE = b"econ-newsfeed:digest-unsubscribe:v2:"
+_UNSUBSCRIBE_PREFIX = "u2."
+
+
+def _unsubscribe_signature(user_id: int, secret: str, *, legacy: bool = False) -> str:
+    message = str(user_id).encode() if legacy else _UNSUBSCRIBE_PURPOSE + str(user_id).encode()
+    return hmac.new(secret.encode(), message, hashlib.sha256).hexdigest()
+
+
 def generate_unsubscribe_token(user_id: int, secret: str) -> str:
-    """Generate an HMAC-signed unsubscribe token."""
-    signature = hmac.new(
-        secret.encode(), str(user_id).encode(), hashlib.sha256
-    ).hexdigest()
-    return f"{user_id}.{signature}"
+    """Generate a purpose-bound HMAC token that can only toggle the digest."""
+    if not secret:
+        raise ValueError("An unsubscribe secret is required")
+    return f"{_UNSUBSCRIBE_PREFIX}{int(user_id)}.{_unsubscribe_signature(user_id, secret)}"
 
 
 def verify_unsubscribe_token(token: str, secret: str) -> int | None:
-    """Verify an unsubscribe token and return user_id, or None if invalid."""
-    parts = token.split(".", 1)
+    """Return the user_id for a valid unsubscribe token, else None.
+
+    Accepts the current ``u2.<id>.<sig>`` tokens and the legacy ``<id>.<sig>``
+    tokens that already-sent digests contain.
+    """
+    if not secret or not token or len(token) > 200:
+        return None
+    legacy = not token.startswith(_UNSUBSCRIBE_PREFIX)
+    body = token if legacy else token[len(_UNSUBSCRIBE_PREFIX):]
+    parts = body.split(".", 1)
     if len(parts) != 2:
         return None
     user_id_str, signature = parts
-    try:
-        user_id = int(user_id_str)
-    except ValueError:
+    if not user_id_str.isdigit():
         return None
-    expected = hmac.new(
-        secret.encode(), str(user_id).encode(), hashlib.sha256
-    ).hexdigest()
-    if hmac.compare_digest(signature, expected):
+    user_id = int(user_id_str)
+    if user_id <= 0 or str(user_id) != user_id_str:
+        return None
+    expected = _unsubscribe_signature(user_id, secret, legacy=legacy)
+    if hmac.compare_digest(signature.encode(), expected.encode()):
         return user_id
     return None
+
+
+def set_digest_enabled_by_token(user_id: int, enabled: bool) -> None:
+    """Set only the weekly-digest flag for a token holder.
+
+    The INSERT ... SELECT is a no-op for deleted accounts instead of failing
+    the foreign key, so stale links still get a friendly answer.
+    """
+    execute_query(
+        "INSERT INTO user_notification_prefs (user_id, digest_enabled) "
+        "SELECT id, %s FROM users WHERE id = %s "
+        "ON DUPLICATE KEY UPDATE digest_enabled = %s",
+        (enabled, user_id, enabled),
+    )

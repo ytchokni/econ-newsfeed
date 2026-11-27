@@ -10,6 +10,8 @@
 !scripts/cleanup_data_quality.py
 !scripts/cleanup_spurious_feed_events.py
 !scripts/merge_fuzzy_duplicates.py
+!scripts/merge_renamed_papers.py
+!scripts/reverify_openalex_ids.py
 !scripts/fix_researcher_names.py
 !pyproject.toml
 !poetry.lock
