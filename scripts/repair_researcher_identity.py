@@ -3,6 +3,8 @@
 Dry run by default: prints what each step would change and its counts.
 Pass --apply to write. Steps run in this order (later steps see earlier merges):
 
+  strip_repeated_surnames         #249 "Peter Hull" + "Hull" -> "Peter" (merged into an
+                                  existing "Peter Hull" record when there is one)
   merge_openalex_twins            #259 records sharing an OpenAlex author ID whose
                                   names agree ("Andy"/"Andrew" Garin) become one
   clear_conflicting_openalex_ids  #259 an ID still on several people stays with the
@@ -482,6 +484,50 @@ def _plan_counts(plan) -> dict:
             "follows_moved": sum(int(d.get("n_follows") or 0) for d in dups)}
 
 
+# ---------------------------------------------------------------- #249
+
+def strip_repeated_surnames() -> dict:
+    """PR #249 data fix: first names ending in the surname ("Peter Hull" +
+    "Hull" shows as "Peter Hull Hull"). Renamed in place, or merged into an
+    existing record that already has the corrected name. Runs first, so the
+    later steps compare corrected names."""
+    from backend.database.identity import strip_repeated_surname
+    rows = fetch_all(
+        """SELECT id, first_name, last_name FROM researchers
+           WHERE first_name LIKE CONCAT('% ', last_name)
+              OR first_name LIKE CONCAT('% ', REPLACE(last_name, '-', ' '))""")
+    renames, merges = [], []
+    for r in rows:
+        fixed = strip_repeated_surname(r["first_name"], r["last_name"])
+        if fixed == r["first_name"]:
+            continue
+        twins = fetch_all("SELECT id FROM researchers WHERE first_name = %s AND last_name = %s AND id != %s",
+                          (fixed, r["last_name"], r["id"]))
+        if twins:
+            weights = _weights([r["id"], *(t["id"] for t in twins)])
+            ranked = sorted(weights.values(), key=canonical_order)
+            merges.append((ranked[0], ranked[1:]))
+        else:
+            renames.append((r, fixed))
+    for r, fixed in renames[:SAMPLES]:
+        log.info("  rename %s: %r -> %r (%s)", r["id"], r["first_name"], fixed, r["last_name"])
+    _log_plan(merges)
+    applied = 0
+    for r, fixed in renames:
+        REPORT["strip_repeated_surnames"].append({"id": r["id"], "from": r["first_name"], "to": fixed})
+        if not APPLY:
+            continue
+
+        def writes(cur, r=r, fixed=fixed):
+            _group().append(["set", "researchers", "first_name", [[r["id"], r["first_name"], fixed]]])
+            cur.execute("UPDATE researchers SET first_name = %s WHERE id = %s AND first_name = %s",
+                        (fixed, r["id"], r["first_name"]))
+        applied += _write(f"rename {r['id']}", writes)
+    merged = _apply_merges("strip_repeated_surnames", merges)
+    return {"renamed": len(renames), "merged_into_existing": sum(len(d) for _, d in merges),
+            "applied_renames": applied, "applied_merges": merged if APPLY else 0}
+
+
 # ---------------------------------------------------------------- #259
 
 def _openalex_groups() -> dict[str, list[dict]]:
@@ -914,6 +960,7 @@ def deactivate_shared_pages() -> dict:
 
 
 STEP_ORDER = [
+    strip_repeated_surnames,
     merge_openalex_twins,
     clear_conflicting_openalex_ids,
     merge_shared_url_twins,

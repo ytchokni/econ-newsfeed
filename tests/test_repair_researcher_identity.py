@@ -220,3 +220,22 @@ def test_undo_filters_by_step_and_unit(tmp_path, monkeypatch):
     seen.clear()
     repair.undo(str(path), unit_ids=repair._parse_units("2-3"))
     assert seen == ["undo 3 merge_openalex_twins", "undo 2 clear_conflicting_openalex_ids"]
+
+
+def test_strip_repeated_surnames_renames_or_merges_into_existing(monkeypatch):
+    def twins(sql, params):
+        return [{"id": 6330}] if params[0] == "Peter" else []
+    _fake_fetch(monkeypatch, [
+        ("LIKE CONCAT", [{"id": 1, "first_name": "Peter Hull", "last_name": "Hull"},
+                         {"id": 2, "first_name": "Paola Conconi", "last_name": "Conconi"},
+                         {"id": 3, "first_name": "Hullman", "last_name": "Hull"}]),
+        ("WHERE first_name = %s", twins),
+        ("FROM researchers r WHERE r.id IN",
+         lambda sql, params: [_rec(6330, "Peter", "Hull", None, urls=1, pubs=40),
+                              _rec(1, "Peter Hull", "Hull", None, pubs=2)]),
+    ])
+    counts = repair.strip_repeated_surnames()
+    assert counts["renamed"] == 1 and counts["merged_into_existing"] == 1
+    assert repair.REPORT["strip_repeated_surnames"] == [
+        {"id": 2, "from": "Paola Conconi", "to": "Paola"},
+        {"keep": 6330, "name": "Peter Hull", "merge": [{"id": 1, "name": "Peter Hull Hull"}]}]

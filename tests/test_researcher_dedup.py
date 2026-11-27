@@ -7,6 +7,7 @@ from backend.database.researchers import (
     get_researcher_id,
     merge_researchers,
 )
+from backend.database.identity import strip_repeated_surname
 
 
 class TestIsCompatibleName:
@@ -290,6 +291,76 @@ class TestMergeResearchers:
         conn, _ = self._make_mock_conn()
         with pytest.raises(ValueError, match="same"):
             merge_researchers(10, 10, conn)
+
+
+class TestStripRepeatedSurname:
+    """PR #249: LLM author splits like ["Peter Hull", "Hull"] must not keep the surname twice."""
+
+    @pytest.mark.parametrize("first,last,expected", [
+        ("Peter Hull", "Hull", "Peter"),
+        ("Peter hull", "Hull", "Peter"),
+        ("Ann Marie Smith-Jones", "Smith-Jones", "Ann Marie"),
+        ("Ana Pérez", "Perez", "Ana"),
+        ("Ana van der Berg", "van der Berg", "Ana"),
+        ("Peter", "Hull", "Peter"),
+        ("Hull", "Hull", "Hull"),            # nothing left -> keep as-is
+        ("Hullman", "Hull", "Hullman"),
+        ("Peter Hullman", "Hull", "Peter Hullman"),
+        ("Hull Peter", "Hull", "Hull Peter"),  # only a trailing copy is removed
+        ("", "Hull", ""),
+    ])
+    def test_cases(self, first, last, expected):
+        assert strip_repeated_surname(first, last) == expected
+
+
+class TestRepeatedSurnameNeverOverwritesName:
+    @patch("backend.database.researchers.fetch_all")
+    @patch("backend.database.researchers.fetch_one")
+    @patch("backend.database.researchers.execute_query")
+    def test_get_researcher_id_matches_exact_name_without_update(self, mock_exec, mock_one, mock_all):
+        """["Peter Hull", "Hull"] resolves to the existing "Peter Hull" by exact match."""
+        mock_one.side_effect = [{"id": 6330}]
+        result = get_researcher_id("Peter Hull", "Hull")
+        assert result == 6330
+        assert mock_one.call_args_list[0][0][1] == ("Peter", "Hull")
+        assert not any("SET first_name" in c[0][0] for c in mock_exec.call_args_list)
+
+    @patch("backend.database.researchers.fetch_all")
+    @patch("backend.database.researchers.fetch_one")
+    @patch("backend.database.researchers.execute_query")
+    def test_get_researcher_id_heals_stored_repeated_surname(self, mock_exec, mock_one, mock_all):
+        mock_one.side_effect = [None]
+        mock_all.return_value = [{"id": 6330, "first_name": "Peter Hull", "last_name": "Hull"}]
+        assert get_researcher_id("Peter", "Hull") == 6330
+        updates = [c[0][1] for c in mock_exec.call_args_list if "SET first_name" in c[0][0]]
+        assert updates == [("Peter", 6330)]
+
+    def test_merge_does_not_upgrade_to_repeated_surname(self):
+        conn = MagicMock()
+        cursor = MagicMock()
+        conn.cursor.return_value = cursor
+        cursor.fetchone.side_effect = [
+            {"first_name": "Peter", "last_name": "Hull", "affiliation": None,
+             "description": None, "position": None, "openalex_author_id": None},
+            {"first_name": "Peter Hull", "last_name": "Hull", "affiliation": None,
+             "description": None, "position": None, "openalex_author_id": None},
+        ]
+        merge_researchers(10, 20, conn)
+        assert not any("SET first_name" in c[0][0] for c in cursor.execute.call_args_list)
+
+    def test_merge_repairs_canonical_with_repeated_surname(self):
+        conn = MagicMock()
+        cursor = MagicMock()
+        conn.cursor.return_value = cursor
+        cursor.fetchone.side_effect = [
+            {"first_name": "Peter Hull", "last_name": "Hull", "affiliation": None,
+             "description": None, "position": None, "openalex_author_id": None},
+            {"first_name": "P.", "last_name": "Hull", "affiliation": None,
+             "description": None, "position": None, "openalex_author_id": None},
+        ]
+        merge_researchers(10, 20, conn)
+        updates = [c[0][1] for c in cursor.execute.call_args_list if "SET first_name" in c[0][0]]
+        assert updates == [("Peter", 10)]
 
 
 class TestIsBadResearcherName:
