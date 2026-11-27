@@ -130,9 +130,12 @@ function buildResearchersUrl(filters?: ResearcherFilters, page?: number) {
 }
 
 export function useResearchersPage(filters?: ResearcherFilters, page = 1, skip = false) {
+  // Keep showing the previous results while the next query loads, so typing
+  // does not flash a skeleton between every debounced keystroke.
   return useSWR<PaginatedResponse<Researcher>>(
     skip ? null : buildResearchersUrl(filters, page),
     fetchJson,
+    { keepPreviousData: true },
   );
 }
 

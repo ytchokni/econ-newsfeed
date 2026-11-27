@@ -159,7 +159,14 @@ retry. The sitemap fetches send `INTERNAL_API_KEY` without a visitor, so they
 are exempt from rate limits and paging caps (see API scrape protection below).
 
 Researcher filter choices are fetched on demand from `/api/researcher-options`
-(at most 50 results), rather than included in `/api/filter-options`. Weekly
+(at most 50 results), rather than included in `/api/filter-options`. Both that
+chooser and the researchers-tab search (`/api/researchers?search=`) rank names
+with the in-process index in `backend/database/researcher_index.py`: it ignores
+case, accents and punctuation, puts surnames before first names, matches
+affiliation words (plus `INSTITUTION_ALIASES` such as DIW), and falls back to
+similar spellings with a `suggestion`. It is rebuilt in the background every 10
+minutes, so new researchers appear in search within that time. The feed's free-text
+search still uses the SQL helpers in `search_helpers.py`. Weekly
 digest controls follow `/api/capabilities`; an unavailable delivery provider
 cannot be enabled through settings. Digest events use ingestion timestamps and
 a per-user delivery ledger so delayed extraction is not skipped.
@@ -206,7 +213,7 @@ Researcher URLs (DB) → HTMLFetcher (fetch + hash-based change detection)
 | File | Role |
 |------|------|
 | `backend/api.py` | FastAPI REST API — 20+ endpoints, CORS, rate limiting (`slowapi`), standardized error envelope |
-| `backend/database/` | Package with facade class (`Database`) — submodules: `connection.py` (pool), `schema.py` (DDL/migrations), `researchers.py`, `papers.py`, `snapshots.py`, `llm.py`, `admin.py` |
+| `backend/database/` | Package with facade class (`Database`) — submodules: `connection.py` (pool), `schema.py` (DDL/migrations), `researchers.py`, `researcher_index.py` (in-memory name search index), `papers.py`, `snapshots.py`, `llm.py`, `admin.py` |
 | `backend/main.py` | CLI entry points for scraping pipeline stages |
 | `backend/pipeline/html_fetcher.py` | Web scraper — per-domain rate limiting, robots.txt compliance, content hashing for change detection |
 | `backend/pipeline/publication.py` | LLM extraction (Google AI Studio/Gemini) — Pydantic structured outputs, title dedup via SHA-256 hash |
