@@ -5,7 +5,11 @@
  * resolves by account id (Google sessions keep the Google subject).
  */
 
-export const EMAIL_CODE_PROVIDER_ID = "email-code";
+// Server-only: internal-api reads INTERNAL_API_KEY. Client code imports the
+// provider id from email-code-provider instead.
+import { internalApiHeaders } from "@/lib/internal-api";
+
+export { EMAIL_CODE_PROVIDER_ID } from "@/lib/email-code-provider";
 
 export interface EmailCodeUser {
   id: string;
@@ -22,7 +26,7 @@ function firstHeader(headers: HeaderBag, name: string): string | undefined {
   return raw?.split(",")[0]?.trim() || undefined;
 }
 
-/** The visitor's address, so the backend rate-limits per visitor, not per Vercel function. */
+/** The visitor's IP as Vercel reports it (NextAuth hands `authorize` plain-object headers). */
 export function clientIp(headers: HeaderBag): string | undefined {
   return firstHeader(headers, "x-real-ip") ?? firstHeader(headers, "x-forwarded-for");
 }
@@ -46,9 +50,11 @@ export async function authorizeEmailCode(
   try {
     res = await fetch(`${apiBase}/api/email-login/verify-code`, {
       method: "POST",
+      // The internal key lets the backend trust the visitor IP, so its rate
+      // limit applies per visitor rather than per Vercel function.
       headers: {
         "Content-Type": "application/json",
-        ...(ip ? { "X-Real-IP": ip } : {}),
+        ...internalApiHeaders({ ip: ip ?? "unknown", source: "proxy" }),
       },
       body: JSON.stringify({ email, code }),
       cache: "no-store",

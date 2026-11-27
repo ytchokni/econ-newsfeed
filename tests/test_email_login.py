@@ -371,17 +371,15 @@ def test_capabilities_report_email_login(client, monkeypatch):
 def test_request_code_response_identical_for_new_and_existing_accounts(client, store, outbox):
     store.users.append({"id": 7, "google_id": "g7", "email": "known@example.com",
                         "name": "Known", "picture_url": None})
-    known = client.post("/api/email-login/request-code", json={"email": "known@example.com"},
-                        headers={"X-Real-IP": "198.51.100.1"})
-    unknown = client.post("/api/email-login/request-code", json={"email": "nobody@example.com"},
-                          headers={"X-Real-IP": "198.51.100.2"})
+    known = client.post("/api/email-login/request-code", json={"email": "known@example.com"})
+    unknown = client.post("/api/email-login/request-code", json={"email": "nobody@example.com"})
     assert known.status_code == unknown.status_code == 202
     assert known.json() == unknown.json()
     assert len(outbox) == 2
 
 
 def test_endpoint_flow_and_error_envelope(client, store, outbox):
-    ip = {"X-Real-IP": "198.51.100.3"}
+    ip = {"X-Forwarded-For": "198.51.100.3"}
     assert client.post("/api/email-login/request-code", json={"email": "Carol@Example.com"},
                        headers=ip).status_code == 202
     code = _code_from(outbox[0])
@@ -410,25 +408,82 @@ def test_request_code_unavailable_returns_503(client, monkeypatch):
     assert resp.json()["error"]["code"] == "email_login_unavailable"
 
 
-def test_request_code_rate_limited_per_ip(client, outbox):
-    ip = {"X-Real-IP": "203.0.113.9"}
-    codes = [
-        client.post("/api/email-login/request-code", json={"email": f"user{i}@example.com"}, headers=ip).status_code
-        for i in range(6)
+INTERNAL_KEY = "test-internal-key-0123456789abcdef"
+
+
+@pytest.fixture
+def internal_key(monkeypatch):
+    """Configure INTERNAL_API_KEY as in production; restore settings afterwards."""
+    from backend import api_protection
+    monkeypatch.setenv("INTERNAL_API_KEY", INTERNAL_KEY)
+    api_protection.reload_settings()
+    yield INTERNAL_KEY
+    monkeypatch.delenv("INTERNAL_API_KEY")
+    api_protection.reload_settings()
+
+
+def _via_frontend(visitor_ip: str) -> dict:
+    """Headers the NextAuth authorize call / Next proxy add (internalApiHeaders)."""
+    return {"X-Internal-Api-Key": INTERNAL_KEY, "X-Visitor-IP": visitor_ip, "X-Visitor-Source": "proxy"}
+
+
+def _request_statuses(client, headers_for, n):
+    return [
+        client.post("/api/email-login/request-code", json={"email": f"user{i}@example.com"},
+                    headers=headers_for(i)).status_code
+        for i in range(n)
     ]
-    assert codes[:5] == [202] * 5
-    assert codes[5] == 429
-    # A different visitor is not affected.
+
+
+def test_request_code_rate_limited_per_visitor(client, outbox, internal_key):
+    statuses = _request_statuses(client, lambda i: _via_frontend("203.0.113.9"), 6)
+    assert statuses == [202] * 5 + [429]
+    # A different visitor behind the same frontend is not affected.
     other = client.post("/api/email-login/request-code", json={"email": "z@example.com"},
-                        headers={"X-Real-IP": "203.0.113.10"})
+                        headers=_via_frontend("203.0.113.10"))
     assert other.status_code == 202
 
 
-def test_verify_code_rate_limited_per_ip(client, store, outbox):
-    ip = {"X-Real-IP": "203.0.113.20"}
+def test_spoofed_forwarding_headers_do_not_change_rate_limit_key(client, outbox, internal_key):
+    """A direct caller rotating forwarding headers stays in one bucket."""
+    def spoofed(i):
+        return {
+            # Caddy writes the real peer as the rightmost entry; the rest is client-supplied.
+            "X-Forwarded-For": f"10.{i}.0.1, 192.0.2.{i}, 198.51.100.50",
+            "X-Real-IP": f"192.0.2.{i}",
+            "X-Vercel-Forwarded-For": f"192.0.2.{i}",
+            "X-Visitor-IP": f"192.0.2.{i}",  # ignored without a valid key
+            "X-Internal-Api-Key": "wrong-guess-0000000000",
+        }
+
+    statuses = _request_statuses(client, spoofed, 6)
+    assert statuses == [202] * 5 + [429]
+
+
+def test_rate_limit_key_ignores_spoofed_headers(internal_key):
+    from starlette.requests import Request
+    from backend.api_protection import rate_limit_key
+
+    def key(headers):
+        scope = {"type": "http", "method": "POST", "path": "/api/email-login/request-code",
+                 "query_string": b"", "client": ("172.18.0.1", 5000),
+                 "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()]}
+        return rate_limit_key(Request(scope))
+
+    base = key({"X-Forwarded-For": "198.51.100.50"})
+    assert key({"X-Forwarded-For": "6.6.6.6, 198.51.100.50"}) == base
+    assert key({"X-Forwarded-For": "198.51.100.50", "X-Real-IP": "6.6.6.6",
+                "X-Vercel-Forwarded-For": "6.6.6.6", "X-Visitor-IP": "6.6.6.6"}) == base
+    assert key({"X-Forwarded-For": "198.51.100.50", "X-Visitor-IP": "6.6.6.6",
+                "X-Internal-Api-Key": "not-the-key-000000"}) == base
+    # Only the real key makes the forwarded visitor count.
+    assert key({"X-Forwarded-For": "198.51.100.50", **_via_frontend("6.6.6.6")}) != base
+
+
+def test_verify_code_rate_limited_per_visitor(client, store, outbox, internal_key):
     statuses = [
         client.post("/api/email-login/verify-code", json={"email": f"u{i}@example.com", "code": "123456"},
-                    headers=ip).status_code
+                    headers=_via_frontend("203.0.113.20")).status_code
         for i in range(21)
     ]
     assert statuses[:20] == [400] * 20

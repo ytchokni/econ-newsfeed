@@ -4,10 +4,18 @@
 import { authorizeEmailCode, clientIp } from "@/lib/email-code-auth";
 
 const fetchMock = jest.fn();
+const KEY = "test-internal-key-0123456789";
+const originalKey = process.env.INTERNAL_API_KEY;
 
 beforeEach(() => {
   fetchMock.mockReset();
   global.fetch = fetchMock as unknown as typeof fetch;
+  process.env.INTERNAL_API_KEY = KEY;
+});
+
+afterEach(() => {
+  if (originalKey === undefined) delete process.env.INTERNAL_API_KEY;
+  else process.env.INTERNAL_API_KEY = originalKey;
 });
 
 function jsonResponse(status: number, body: unknown): Response {
@@ -32,7 +40,21 @@ it("returns a user:<id> subject from the backend account", async () => {
   expect(url).toBe("http://backend.test/api/email-login/verify-code");
   expect(init.method).toBe("POST");
   expect(JSON.parse(init.body)).toEqual({ email: "a@example.com", code: "123456" });
-  expect(init.headers["X-Real-IP"]).toBe("198.51.100.7");
+  // The backend trusts the visitor IP only alongside the internal key.
+  expect(init.headers["X-Internal-Api-Key"]).toBe(KEY);
+  expect(init.headers["X-Visitor-IP"]).toBe("198.51.100.7");
+  expect(init.headers["X-Visitor-Source"]).toBe("proxy");
+  expect(init.headers["X-Real-IP"]).toBeUndefined();
+});
+
+it("sends no visitor headers when INTERNAL_API_KEY is unset", async () => {
+  delete process.env.INTERNAL_API_KEY;
+  fetchMock.mockResolvedValueOnce(
+    jsonResponse(200, { id: 1, email: "a@example.com", name: null, picture_url: null }),
+  );
+  await authorizeEmailCode({ email: "a@example.com", code: "123456" }, { "x-real-ip": "203.0.113.5" }, "http://backend.test");
+  const headers = fetchMock.mock.calls[0][1].headers;
+  expect(Object.keys(headers)).toEqual(["Content-Type"]);
 });
 
 it("throws the backend error code so the modal can explain it", async () => {

@@ -852,21 +852,6 @@ class EmailCodeVerifyBody(BaseModel):
     code: str = Field(max_length=32)
 
 
-def _client_ip(request: Request) -> str:
-    """Best-effort visitor address for rate limits.
-
-    Requests arrive through Vercel and Caddy, so the socket address is the
-    proxy's. Vercel sets x-real-ip / x-vercel-forwarded-for, which Caddy passes
-    through. Direct callers can forge them, so the per-email limits stored in
-    the database remain the binding control.
-    """
-    for header in ("x-vercel-forwarded-for", "x-real-ip", "x-forwarded-for"):
-        value = request.headers.get(header)
-        if value:
-            return value.split(",")[0].strip()
-    return get_remote_address(request)
-
-
 def _email_login_error(exc: "email_login.EmailLoginError") -> JSONResponse:
     headers = {"Retry-After": str(exc.retry_after)} if exc.retry_after else None
     return JSONResponse(
@@ -876,8 +861,11 @@ def _email_login_error(exc: "email_login.EmailLoginError") -> JSONResponse:
     )
 
 
+# Both limits use the limiter's resolved client (api_protection.py): the visitor
+# IP the frontend vouches for with INTERNAL_API_KEY, else the edge IP Caddy saw.
+# Forwarding headers a caller sets itself are ignored.
 @app.post("/api/email-login/request-code", status_code=202)
-@limiter.limit("5/minute;30/hour", key_func=_client_ip)
+@limiter.limit("5/minute;30/hour")
 def request_email_login_code(request: Request, body: EmailCodeRequestBody):
     """Email a one-time sign-in code. Same response whether or not an account exists."""
     try:
@@ -893,7 +881,7 @@ def request_email_login_code(request: Request, body: EmailCodeRequestBody):
 
 
 @app.post("/api/email-login/verify-code")
-@limiter.limit("20/minute", key_func=_client_ip)
+@limiter.limit("20/minute")
 def verify_email_login_code(request: Request, body: EmailCodeVerifyBody):
     """Check a code; on success return the account it signs into."""
     try:

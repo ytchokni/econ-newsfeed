@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import type { FormEvent } from "react";
 import { signIn } from "next-auth/react";
 import { EmailLoginRequestError, requestEmailLoginCode } from "@/lib/api";
-import { EMAIL_CODE_PROVIDER_ID } from "@/lib/email-code-auth";
+import { EMAIL_CODE_PROVIDER_ID } from "@/lib/email-code-provider";
 
 const VERIFY_ERRORS: Record<string, string> = {
   invalid_code: "That code is incorrect or no longer valid.",
