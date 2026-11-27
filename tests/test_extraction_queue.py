@@ -117,7 +117,7 @@ def test_get_urls_needing_extraction_orders_all_pending_rows():
          patch.object(eq, "researcher_signals", return_value=(frozenset(), frozenset())):
         result = get_urls_needing_extraction(limit=1)
     assert [r["id"] for r in result] == [1]  # overdue change before the never-extracted page
-    queue_sql = mock_fetch.call_args_list[0][0][0]
+    queue_sql = next(c[0][0] for c in mock_fetch.call_args_list if "FROM researcher_urls" in c[0][0])
     assert "LIMIT" not in queue_sql  # ordering needs the whole queue
     # Index-only columns: reading timestamp here scans every stored page.
     assert "timestamp" not in queue_sql and "extracted_at" not in queue_sql
