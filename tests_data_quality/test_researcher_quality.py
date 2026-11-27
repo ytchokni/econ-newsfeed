@@ -92,6 +92,21 @@ class TestResearcherFieldQuality:
         )
         assert not rows, "researchers with mojibake names:\n" + fmt_violations(rows)
 
+    def test_no_surname_repeated_in_first_name(self, db):
+        """LLM author splits like ["Peter Hull", "Hull"] render as "Peter Hull Hull"."""
+        from backend.database.researchers import strip_repeated_surname
+
+        rows = db.fetch_all(
+            "SELECT id, first_name, last_name FROM researchers "
+            "WHERE first_name LIKE CONCAT('% ', last_name)"
+        )
+        rows = [r for r in rows if strip_repeated_surname(r["first_name"], r["last_name"]) != r["first_name"]]
+        assert not rows, (
+            "researchers whose first name repeats the surname "
+            "(fix: scripts/cleanup_data_quality.py --steps strip_repeated_surnames,merge_researchers_exact_name):\n"
+            + fmt_violations(rows[:50])
+        )
+
     def test_no_blank_names(self, db):
         rows = db.fetch_all(
             """

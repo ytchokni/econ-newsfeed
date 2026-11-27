@@ -203,6 +203,28 @@ def matches_author_name(first_name: str, last_name: str, display_name: str) -> b
     return is_compatible_name(first_name, ' '.join(display[:-len(surname)]))
 
 
+def strip_repeated_surname(first_name: str, last_name: str) -> str:
+    """Drop a copy of the surname that the LLM appended to the given names.
+
+    Extraction sometimes returns ["Peter Hull", "Hull"]; stored as-is the
+    researcher displays as "Peter Hull Hull", and prefix matching would let
+    that variant overwrite a correct "Peter". Only a trailing copy is removed,
+    and only when given names remain.
+    """
+    if not first_name or not last_name:
+        return first_name
+
+    def norm(text: str) -> str:
+        return ' '.join(_strip_accents(text).replace('-', ' ').casefold().split())
+
+    surname = norm(last_name)
+    tokens = first_name.split()
+    for k in range(1, len(tokens)):
+        if norm(' '.join(tokens[-k:])) == surname:
+            return ' '.join(tokens[:-k])
+    return first_name
+
+
 def is_bad_researcher_name(first_name: str, last_name: str) -> bool:
     """Return True if the name is too malformed to create a researcher record.
 
@@ -313,6 +335,7 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
     # Fix any mojibake in name/affiliation fields
     first_name, _ = fix_encoding(first_name)
     last_name, _ = fix_encoding(last_name)
+    first_name = strip_repeated_surname(first_name.strip(), last_name.strip())
     if position:
         position, _ = fix_encoding(position)
     if affiliation:
@@ -393,7 +416,8 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
         ]
         if len(initial_matches) == 1:
             match = initial_matches[0]
-            longer_name = _longer_first_name(first_name, match['first_name'])
+            stored = strip_repeated_surname(match['first_name'], last_name)
+            longer_name = _longer_first_name(first_name, stored)
             if longer_name != match['first_name']:
                 _execute(
                     "UPDATE researchers SET first_name = %s WHERE id = %s",
@@ -478,8 +502,11 @@ def merge_researchers(canonical_id: int, duplicate_id: int, conn) -> None:
         (canonical_id, duplicate_id),
     )
 
-    # 4. Upgrade first_name to the longer variant
-    longer_name = _longer_first_name(canonical['first_name'], duplicate['first_name'])
+    # 4. Upgrade first_name to the longer variant (never to one that repeats the surname)
+    longer_name = _longer_first_name(
+        strip_repeated_surname(canonical['first_name'], canonical['last_name']),
+        strip_repeated_surname(duplicate['first_name'], canonical['last_name']),
+    )
     if longer_name != canonical['first_name']:
         c.execute(
             "UPDATE researchers SET first_name = %s WHERE id = %s",

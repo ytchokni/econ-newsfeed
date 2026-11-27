@@ -257,6 +257,28 @@ def trim_researcher_names():
 
 
 @step
+def strip_repeated_surnames():
+    """First names ending in the surname ("Peter Hull" + "Hull" shows as
+    "Peter Hull Hull") from LLM author splits. Runs before the exact-name
+    merge so a corrected profile merges with any existing twin."""
+    from backend.database.researchers import strip_repeated_surname
+
+    rows = fetch_all("SELECT id, first_name, last_name FROM researchers")
+    fixes = []
+    for r in rows:
+        fixed = strip_repeated_surname(r["first_name"], r["last_name"])
+        if fixed != r["first_name"]:
+            fixes.append((r["id"], fixed))
+            log.info("  researcher %s: %r %r -> %r", r["id"], r["first_name"], r["last_name"], fixed)
+
+    def writes(cur):
+        for rid, fixed in fixes:
+            cur.execute("UPDATE researchers SET first_name = %s WHERE id = %s", (fixed, rid))
+    _run_writes("strip_repeated_surnames", writes)
+    return len(fixes)
+
+
+@step
 def fix_researcher_url_schemes():
     """'https:/x' (single slash) typos break the fetcher."""
     rows = fetch_all(
@@ -776,6 +798,7 @@ STEP_ORDER = [
     "delete_author_blowup_papers",
     "delete_garbage_researchers",
     "trim_researcher_names",
+    "strip_repeated_surnames",
     "fix_researcher_url_schemes",
     "merge_researchers_shared_openalex",
     "merge_researchers_exact_name",

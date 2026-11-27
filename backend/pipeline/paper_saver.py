@@ -13,7 +13,9 @@ from backend.database import (
     get_researcher_id,
     normalize_title,
 )
-from backend.database.researchers import is_abbreviation_of, is_compatible_name, merge_researchers, refresh_has_top5
+from backend.database.researchers import (
+    is_abbreviation_of, is_compatible_name, merge_researchers, refresh_has_top5, strip_repeated_surname,
+)
 from backend.database.snapshots import _STATUS_RANK
 from backend.database.papers import title_hash_candidates
 from backend.publication_rules import is_working_paper_series
@@ -292,6 +294,7 @@ class PaperSaver:
                         else:
                             first_name = " ".join(author[:-1])
                             last_name = author[-1]
+                        first_name = strip_repeated_surname(first_name, last_name)
 
                         # Layer 1: check if a compatible-name author is already
                         # resolved for this paper (same last name, compatible first)
