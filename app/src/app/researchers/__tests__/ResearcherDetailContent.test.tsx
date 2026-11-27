@@ -101,6 +101,30 @@ describe("ResearcherDetailContent", () => {
     expect(screen.getByText(/Loading/i)).toBeInTheDocument();
   });
 
+  it("renders server-provided data immediately while SWR revalidates", () => {
+    // The page passes initialData from the server; crawlers must get the
+    // profile in the HTML, not the loading skeleton.
+    (global.fetch as jest.Mock).mockReturnValueOnce(new Promise(() => {}));
+
+    renderWithSWR(<ResearcherDetailContent id={1} initialData={researcher} />);
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Max Friedrich Steinhardt" })
+    ).toBeInTheDocument();
+    expect(screen.getByText("Immigration and Wages")).toBeInTheDocument();
+    expect(screen.queryByText(/Loading researcher/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps server-provided data when revalidation fails", async () => {
+    (global.fetch as jest.Mock).mockRejectedValueOnce(new Error("rate limited"));
+
+    renderWithSWR(<ResearcherDetailContent id={1} initialData={researcher} />);
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled());
+    expect(
+      screen.getByRole("heading", { level: 1, name: "Max Friedrich Steinhardt" })
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/rate limited/i)).not.toBeInTheDocument();
+  });
+
   it("shows placeholder when affiliation is null", async () => {
     const noAffiliation = { ...researcher, position: null, affiliation: null };
     (global.fetch as jest.Mock).mockResolvedValueOnce({

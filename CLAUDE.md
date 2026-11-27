@@ -97,6 +97,20 @@ owner mention comes from a bot (a self-mention sends no email). The script is st
 library only because it runs on the server's system Python. Run it by hand with
 `python3 scripts/monitor.py --external`, or `--host` on the server.
 
+**Search engines:** the canonical host is `https://www.econnewsfeed.org`
+(`SITE_URL` on Vercel overrides it). `next.config.mjs` 308-redirects pages on
+`econ-newsfeed.vercel.app` and the apex to it (not `/api/*`, so auth callbacks
+and unsubscribe POSTs keep working); preview deployments get `noindex` and a
+`Disallow: /` robots.txt. Per-page titles, descriptions, canonicals and JSON-LD
+come from `app/src/lib/seo.ts`. `/sitemap.xml` is an index over
+`/sitemaps/{pages,researchers-N,papers-N}.xml`, built from `/api/sitemap` and
+`/api/sitemap/{kind}?page=N` (10k ids per chunk). Researcher profiles are
+indexed only if tracked (have a URL) and have papers; keep
+`isIndexableResearcher` and `backend/database/sitemap.py` in sync. Detail
+pages 404 only on a backend 404 and error (5xx) on other failures, so crawlers
+retry. Set the same `INTERNAL_API_KEY` on Vercel and the API so server-side
+rendering skips the per-IP rate limit during crawls.
+
 Researcher filter choices are fetched on demand from `/api/researcher-options`
 (at most 50 results), rather than included in `/api/filter-options`. Weekly
 digest controls follow `/api/capabilities`; an unavailable delivery provider
