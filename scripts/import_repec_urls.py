@@ -15,6 +15,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from backend.database import execute_query, fetch_all, fetch_one
+from backend.database.optouts import name_optout_query
 from backend.database.researchers import add_researcher_url
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -150,6 +151,10 @@ def main():
         name = f"{c['full_first_name']} {c['last_name']}"
         if dry_run:
             logger.info("  NEW %s (%s) → %s", name, c["full_affiliation"] or "?", c["homepage"])
+        elif fetch_one(*name_optout_query(c["full_first_name"], c["last_name"])):
+            # This person asked to be removed (see backend/optout.py).
+            logger.info("  SKIP opted-out researcher")
+            continue
         else:
             execute_query(
                 "INSERT INTO researchers (first_name, last_name, affiliation) VALUES (%s, %s, %s)",
