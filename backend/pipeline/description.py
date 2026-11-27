@@ -37,7 +37,8 @@ _THOUGHT_BLOCK_RE = re.compile(
 _THOUGHT_TAG_RE = re.compile(r"</?\s*(thought|think|thinking|reasoning)\b", re.IGNORECASE)
 
 # Phrases that appear in the model's planning notes but never in a bio.
-# Checked case-insensitively against the whole text.
+# Matched case-insensitively, on word boundaries where the phrase starts or
+# ends with a letter, so "Delhi need to" does not match "i need to".
 REASONING_MARKERS = (
     "<thought",
     "</thought",
@@ -68,13 +69,22 @@ REASONING_MARKERS = (
     "the provided text",
     "the text provided",
     "the homepage text",
-    "let me ",
-    "i need to ",
+    "let me",
+    "i need to",
     "i will extract",
     "i'll extract",
     "reply with exactly",
     "return only the description",
 )
+
+
+def _marker_pattern(marker: str) -> str:
+    head = r"\b" if marker[0].isalnum() else ""
+    tail = r"\b" if marker[-1].isalnum() else ""
+    return head + re.escape(marker) + tail
+
+
+_MARKER_RE = re.compile("|".join(_marker_pattern(m) for m in REASONING_MARKERS), re.IGNORECASE)
 # A line that starts like a planning bullet: "* Task:", "- Source:", "1. Goal:".
 _BULLET_LABEL_RE = re.compile(r"(?m)^\s*(?:[*\-•]|\d+\.)\s+\**[A-Z][A-Za-z ]{1,30}\**:\s")
 
@@ -98,10 +108,47 @@ def looks_like_reasoning(text: str | None) -> bool:
     """True if `text` contains the model's reasoning rather than a bio."""
     if not text:
         return False
-    lowered = text.lower()
-    if any(marker in lowered for marker in REASONING_MARKERS):
+    if _MARKER_RE.search(text):
         return True
     return bool(_BULLET_LABEL_RE.search(text))
+
+
+# Words ending in "." that do not end a sentence.
+_ABBREVIATIONS = frozenset({
+    "dr", "mr", "mrs", "ms", "prof", "st", "jr", "sr", "inc", "co", "corp", "ltd",
+    "vs", "etc", "e.g", "i.e", "dept", "univ", "no", "vol", "approx", "assoc", "asst",
+})
+_SENTENCE_END_RE = re.compile(r"[.!?](?=\s+[\"'(\[]?[A-Z0-9])")
+
+
+def _is_abbreviation(word: str) -> bool:
+    word = word.lstrip("(\"'")
+    return len(word) <= 1 or "." in word or word.lower() in _ABBREVIATIONS
+
+
+def _ends_sentence(text: str) -> bool:
+    """True if `text` ends with sentence punctuation that is not an abbreviation."""
+    if text[-1:] in "!?":
+        return True
+    if text[-1:] != ".":
+        return False
+    return not _is_abbreviation(text[:-1].rsplit(None, 1)[-1] if text[:-1].strip() else "")
+
+
+def _last_sentence_end(text: str) -> int:
+    """Index of the last sentence-ending punctuation followed by more text, or -1.
+
+    A "." after an initial ("John L."), an abbreviation ("Prof.") or a dotted
+    token ("Ph.D.", "U.S.") does not end a sentence.
+    """
+    for m in reversed(list(_SENTENCE_END_RE.finditer(text))):
+        if m.group() != ".":
+            return m.start()
+        word = text[: m.start()].rsplit(None, 1)[-1] if text[: m.start()].strip() else ""
+        if _is_abbreviation(word):
+            continue
+        return m.start()
+    return -1
 
 
 def _truncate_words(text: str, max_words: int = MAX_DESCRIPTION_WORDS) -> str:
@@ -110,7 +157,7 @@ def _truncate_words(text: str, max_words: int = MAX_DESCRIPTION_WORDS) -> str:
     if len(words) <= max_words:
         return " ".join(words)
     clipped = " ".join(words[:max_words])
-    end = max(clipped.rfind(". "), clipped.rfind("! "), clipped.rfind("? "))
+    end = _last_sentence_end(clipped)
     if clipped[-1:] in ".!?":
         return clipped
     if end > len(clipped) // 2:
@@ -139,6 +186,26 @@ def clean_description(raw: str | None) -> str | None:
     if len(text.split()) < MIN_DESCRIPTION_WORDS:
         return None
     return _truncate_words(text)
+
+
+def salvage_description(stored: str | None) -> str | None:
+    """Recover the real bio from a polluted stored one, or None.
+
+    Many stored bios hold a closed ``<thought>…</thought>`` block followed by
+    the actual answer, cut at 200 words by the old code. Keep the answer if
+    it ends a sentence; otherwise trim to its last full sentence, provided
+    that leaves at least MIN_DESCRIPTION_WORDS words.
+    """
+    text = clean_description(stored)
+    if not text:
+        return None
+    if _ends_sentence(text):
+        return text
+    end = _last_sentence_end(text)
+    if end <= 0:
+        return None
+    trimmed = text[: end + 1]
+    return trimmed if len(trimmed.split()) >= MIN_DESCRIPTION_WORDS else None
 
 
 def _build_prompt(text_content: str, url: str) -> str:

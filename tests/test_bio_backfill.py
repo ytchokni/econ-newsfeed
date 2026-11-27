@@ -29,6 +29,7 @@ def env():
     """Patch DB access; yields the mocks and a results list for request_description."""
     results = []
     with patch.object(bio_backfill, "count_backfill_calls_since", return_value=0) as count, \
+         patch.object(bio_backfill, "count_extraction_backlog", return_value=0) as backlog, \
          patch.object(bio_backfill, "get_backfill_candidates") as cands, \
          patch.object(bio_backfill, "fetch_one") as fetch_one, \
          patch.object(bio_backfill, "_record_attempt") as record, \
@@ -41,7 +42,7 @@ def env():
                 return {"content": "Home page text about Jane Doe", "content_hash": f"h{params[0]}"}
             return {"position": "Professor", "affiliation": "MIT", "description": None}
         fetch_one.side_effect = fake_fetch_one
-        yield {"count": count, "cands": cands, "record": record, "snap": snap,
+        yield {"backlog": backlog, "count": count, "cands": cands, "record": record, "snap": snap,
                "req": req, "wait": wait, "results": results, "fetch_one": fetch_one}
 
 
@@ -133,3 +134,20 @@ def test_scheduler_job_is_off_by_default():
     from backend.pipeline import scheduler
     if os.environ.get("BIO_BACKFILL_ENABLED") is None:
         assert scheduler.BIO_BACKFILL_ENABLED is False
+
+
+def test_yields_while_extraction_backlog_is_large(env):
+    env["backlog"].return_value = 51
+    stats = _run(max_calls=10, daily_limit=150, delay_seconds=0, max_backlog=50)
+    assert stats["stopped"] == "extraction_backlog"
+    env["cands"].assert_not_called()
+    env["req"].assert_not_called()
+
+
+def test_runs_when_backlog_is_small_or_check_disabled(env):
+    env["backlog"].return_value = 5000
+    env["cands"].return_value = [_cand(1)]
+    env["results"].append(DescriptionResult(description=BIO))
+    stats = _run(max_calls=10, daily_limit=150, delay_seconds=0, max_backlog=-1)
+    assert stats["saved"] == 1
+    env["backlog"].assert_not_called()

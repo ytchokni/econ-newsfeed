@@ -13,7 +13,9 @@ would stay empty. Each run:
    ``BIO_BACKFILL_DAILY_LIMIT`` per UTC day (counted in
    ``researcher_bio_backfill``, so CLI and scheduled runs share it);
 3. stops at the first quota/account refusal, so the extraction worker, which
-   uses the same free-tier key, gets the quota back at once.
+   uses the same free-tier key, gets the quota back at once;
+4. does nothing while more than ``BIO_BACKFILL_MAX_BACKLOG`` pages wait for
+   extraction, so it only uses quota once the extraction backlog is cleared.
 
 Bios are only written while the researcher still has none, so a bio that
 normal extraction saved in the meantime is never replaced. The job is off by
@@ -56,6 +58,7 @@ def _env_float(name: str, default: float) -> float:
 BATCH_CALLS = _env_int("BIO_BACKFILL_BATCH_CALLS", 10)
 DAILY_LIMIT = _env_int("BIO_BACKFILL_DAILY_LIMIT", 150)
 DELAY_SECONDS = _env_float("BIO_BACKFILL_DELAY_SECONDS", 30.0)
+MAX_BACKLOG = _env_int("BIO_BACKFILL_MAX_BACKLOG", 50)
 RETRY_FAILED_AFTER_HOURS = 24
 _MAX_CONSECUTIVE_FAILURES = 3
 
@@ -77,6 +80,7 @@ class BioBackfillStats:
     failed: int = 0
     skipped_has_bio: int = 0
     calls_today_before: int = 0
+    extraction_backlog: int = 0
     stopped: str = "done"
 
 
@@ -118,6 +122,20 @@ def count_backfill_calls_since(since: datetime) -> int:
     row = fetch_one(
         "SELECT COUNT(*) AS n FROM researcher_bio_backfill WHERE attempted_at >= %s",
         (since,),
+    )
+    return int(row["n"]) if row else 0
+
+
+def count_extraction_backlog() -> int:
+    """Pages waiting for extraction (same filter as the extraction worker's queue)."""
+    row = fetch_one(
+        """SELECT COUNT(*) AS n
+           FROM researcher_urls ru
+           JOIN html_content hc ON hc.url_id = ru.id
+           WHERE ru.is_active = TRUE
+             AND hc.content_hash IS NOT NULL
+             AND hc.has_stored_content = TRUE
+             AND (hc.extracted_hash IS NULL OR hc.extracted_hash != hc.content_hash)"""
     )
     return int(row["n"]) if row else 0
 
@@ -172,9 +190,14 @@ def run_bio_backfill_batch(
     max_calls: int | None = None,
     daily_limit: int | None = None,
     delay_seconds: float | None = None,
+    max_backlog: int | None = None,
     use_lock: bool = True,
 ) -> dict:
-    """Run one bounded backfill batch. Returns run statistics."""
+    """Run one bounded backfill batch. Returns run statistics.
+
+    ``max_backlog`` < 0 disables the extraction-backlog check (CLI use).
+    """
+    max_backlog = MAX_BACKLOG if max_backlog is None else max_backlog
     max_calls = BATCH_CALLS if max_calls is None else max_calls
     daily_limit = DAILY_LIMIT if daily_limit is None else daily_limit
     delay_seconds = DELAY_SECONDS if delay_seconds is None else delay_seconds
@@ -187,7 +210,7 @@ def run_bio_backfill_batch(
         return asdict(stats)
     _stop_event.clear()
     try:
-        _run(stats, max_calls, daily_limit, delay_seconds)
+        _run(stats, max_calls, daily_limit, delay_seconds, max_backlog)
     finally:
         if lock_conn is not None:
             _release_lock(lock_conn)
@@ -195,7 +218,8 @@ def run_bio_backfill_batch(
     return asdict(stats)
 
 
-def _run(stats: BioBackfillStats, max_calls: int, daily_limit: int, delay_seconds: float) -> None:
+def _run(stats: BioBackfillStats, max_calls: int, daily_limit: int, delay_seconds: float,
+         max_backlog: int = -1) -> None:
     from backend.pipeline.description import request_description
     from backend.pipeline.html_fetcher import CONTENT_MAX_CHARS
 
@@ -206,6 +230,13 @@ def _run(stats: BioBackfillStats, max_calls: int, daily_limit: int, delay_second
     if budget <= 0:
         stats.stopped = "daily_limit"
         return
+    if max_backlog >= 0:
+        stats.extraction_backlog = count_extraction_backlog()
+        if stats.extraction_backlog > max_backlog:
+            stats.stopped = "extraction_backlog"
+            logger.info("Bio backfill: %d pages wait for extraction (> %d); yielding",
+                        stats.extraction_backlog, max_backlog)
+            return
 
     candidates = get_backfill_candidates(budget, now)
     if not candidates:
