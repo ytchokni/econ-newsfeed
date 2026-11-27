@@ -69,6 +69,12 @@ from backend.auth import get_current_user, get_optional_user
 from backend.database.snapshots import STATUS_ORDER
 from backend.database.researchers import search_researcher_options
 from backend.database.users import set_digest_enabled_by_token
+from backend.database.sitemap import (
+    count_sitemap_papers,
+    count_sitemap_researchers,
+    get_sitemap_papers,
+    get_sitemap_researchers,
+)
 from backend.pipeline.publication import VALID_STATUSES
 
 FILTER_VALID_STATUSES = frozenset(STATUS_ORDER)
@@ -257,6 +263,21 @@ class HealthResponse(BaseModel):
 _SCRAPE_API_KEY = os.environ.get("SCRAPE_API_KEY", "")
 
 
+# Server-side rendering on the frontend host (Vercel) reaches this API from a
+# few shared IPs, so a search engine crawl of researcher and paper pages would
+# otherwise exhaust the per-IP limits and turn into errors. The frontend sends
+# this shared secret on its server-side fetches; requests carrying it skip the
+# rate limit on the read-only endpoints that pages render from. Unset = off.
+_INTERNAL_API_KEY = os.environ.get("INTERNAL_API_KEY", "")
+
+
+def _is_internal_render(request: Request) -> bool:
+    if len(_INTERNAL_API_KEY) < 16:
+        return False
+    supplied = request.headers.get("X-Internal-Api-Key", "")
+    return bool(supplied) and hmac.compare_digest(supplied, _INTERNAL_API_KEY)
+
+
 def _require_api_key(request: Request) -> None:
     """Constant-time API key check to prevent timing oracle attacks."""
     api_key = request.headers.get("X-API-Key", "")
@@ -370,6 +391,10 @@ async def add_security_headers(request: Request, call_next):
     response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    # API responses (JSON, the Atom feed) are not pages: keep them out of
+    # search results on every host that serves them (www via the Vercel
+    # rewrite, vercel.app, and the API's own domain).
+    response.headers["X-Robots-Tag"] = "noindex"
     return response
 
 
@@ -991,7 +1016,7 @@ def _build_publication_detail(publication_id: int, include_history: bool) -> dic
 
 
 @app.get("/api/publications/{publication_id}")
-@limiter.limit("60/minute")
+@limiter.limit("60/minute", exempt_when=_is_internal_render)
 def get_publication(
     request: Request,
     publication_id: int,
@@ -1298,6 +1323,7 @@ def _build_researcher_detail(researcher_id: int, include_history: bool) -> dict 
         "position": row['position'],
         "affiliation": row['affiliation'],
         "description": row['description'],
+        "openalex_author_id": row.get('openalex_author_id'),
         "urls": urls,
         "website_url": _get_website_url(urls),
         "publication_count": pub_count,
@@ -1322,7 +1348,7 @@ def _build_researcher_detail(researcher_id: int, include_history: bool) -> dict 
 
 
 @app.get("/api/researchers/{researcher_id}")
-@limiter.limit("60/minute")
+@limiter.limit("60/minute", exempt_when=_is_internal_render)
 def get_researcher(
     request: Request,
     researcher_id: int,
@@ -1335,6 +1361,79 @@ def get_researcher(
     )
     if result is None:
         raise HTTPException(status_code=404, detail="Researcher not found")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Sitemap data (ids + last-modified times for the frontend's sitemap.xml)
+# ---------------------------------------------------------------------------
+
+# A sitemap file may hold 50,000 URLs; smaller chunks keep each query and
+# response light.
+SITEMAP_PAGE_SIZE = 10_000
+_SITEMAP_KINDS = {
+    "researchers": (count_sitemap_researchers, get_sitemap_researchers),
+    "papers": (count_sitemap_papers, get_sitemap_papers),
+}
+_sitemap_cache = _KeyedTTLCache(3600, max_keys=64)  # 1 hour
+
+
+def _build_sitemap_index() -> dict:
+    with connection_scope():
+        counts = {kind: count() for kind, (count, _) in _SITEMAP_KINDS.items()}
+    return {
+        "page_size": SITEMAP_PAGE_SIZE,
+        **{
+            kind: {"count": n, "pages": math.ceil(n / SITEMAP_PAGE_SIZE)}
+            for kind, n in counts.items()
+        },
+    }
+
+
+def _sitemap_lastmod(value: datetime | str | None) -> str | None:
+    """W3C datetime (UTC) for <lastmod>. GREATEST() over mixed operands can
+    come back from MySQL as a 'YYYY-MM-DD HH:MM:SS' string."""
+    if not value:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.strip().rstrip("Z"))
+        except ValueError:
+            return None
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.replace(microsecond=0).isoformat() + "Z"
+
+
+def _build_sitemap_page(kind: str, page: int) -> dict:
+    _, fetch = _SITEMAP_KINDS[kind]
+    with connection_scope():
+        rows = fetch(page * SITEMAP_PAGE_SIZE, SITEMAP_PAGE_SIZE)
+    return {
+        "items": [
+            {"id": r["id"], "lastmod": _sitemap_lastmod(r["lastmod"])}
+            for r in rows
+        ]
+    }
+
+
+@app.get("/api/sitemap")
+@limiter.limit("30/minute", exempt_when=_is_internal_render)
+def sitemap_index(request: Request, response: Response):
+    """How many sitemap chunks of each kind exist (for /sitemap.xml)."""
+    result = _sitemap_cache.get_or_set("index", _build_sitemap_index)
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return result
+
+
+@app.get("/api/sitemap/{kind}")
+@limiter.limit("30/minute", exempt_when=_is_internal_render)
+def sitemap_page(request: Request, response: Response, kind: str, page: int = Query(0, ge=0, le=1000)):
+    """One chunk of ids with last-modified times, ordered by id."""
+    if kind not in _SITEMAP_KINDS:
+        raise HTTPException(status_code=404, detail="Unknown sitemap")
+    result = _sitemap_cache.get_or_set(f"{kind}:{page}", lambda: _build_sitemap_page(kind, page))
+    response.headers["Cache-Control"] = "public, max-age=3600"
     return result
 
 

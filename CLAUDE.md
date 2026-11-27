@@ -27,7 +27,8 @@ poetry run python -m backend.main extract --limit 5  # Extract a limited batch
 
 # Enrichment & classification
 poetry run python -m backend.main enrich            # Enrich papers via OpenAlex
-poetry run python -m backend.main classify-jel      # Classify researchers into JEL codes via LLM
+poetry run python -m backend.main classify-jel      # One budgeted JEL batch (bio + papers + OpenAlex topics)
+poetry run python -m backend.main classify-jel --until-done  # Repeat batches until nothing is due or the daily limit is hit
 poetry run python -m backend.main discover-domains  # Scan HTML for untrusted domains with paper-like links
 
 # Researcher removal requests (GDPR objection)
@@ -71,6 +72,20 @@ Extraction is owned by the extraction worker (below) — the scrape job only ref
 
 **Extraction circuit breaker (CLI):** The `extract` CLI stops after 10 consecutive failed extractions (e.g. LLM quota exhausted). Fetched HTML is preserved — extraction resumes on the next run for URLs where `content_hash ≠ extracted_hash`. The continuous worker uses backoff + per-URL retry limits instead of stopping.
 
+**JEL classification:** When `JEL_CLASSIFICATION_ENABLED=true`, a scheduler job
+(every `JEL_CLASSIFICATION_INTERVAL_MINUTES`, default 60) classifies tracked
+researchers into top-level JEL codes from their bio, up to 20 paper titles (3
+abstracts) and OpenAlex topics (stored paper topics plus the author's topics).
+Bios containing leaked `<thought>`/reasoning text are ignored. Only researchers
+that are new, have changed evidence (`researcher_jel_state.input_hash`), or a
+due retry are sent to the LLM; others are skipped without a call. It has its own
+budget so extraction keeps priority on the shared free-tier key:
+`JEL_CLASSIFICATION_BATCH_CALLS` (40) per run, `JEL_CLASSIFICATION_DAILY_LIMIT`
+(600) per UTC day counted from `llm_usage`, `JEL_CLASSIFICATION_DELAY_SECONDS`
+(20) between calls, and a run stops at the first quota refusal. When the LLM
+finds nothing, codes mapped from OpenAlex topics are used. The `classify-jel`
+CLI runs the same batches under the same advisory lock and daily budget.
+
 **Paper merge:** `merge_duplicate_papers()` dedupes papers post-run.
 
 **Zombie scrape_log cleanup:** On scheduler start and hourly thereafter, `scrape_log` entries stuck in `'running'` are marked `'failed'` based on the scrape advisory lock: if no connection holds the lock, all running rows older than 5 minutes are zombies; if the lock is held, all but the newest running row are. Deploys that restart the container mid-scrape are swept on the next boot.
@@ -101,6 +116,20 @@ alerts the owner straight away. Every other call uses the workflow token so the
 owner mention comes from a bot (a self-mention sends no email). The script is standard
 library only because it runs on the server's system Python. Run it by hand with
 `python3 scripts/monitor.py --external`, or `--host` on the server.
+
+**Search engines:** the canonical host is `https://www.econnewsfeed.org`
+(`SITE_URL` on Vercel overrides it). `next.config.mjs` 308-redirects pages on
+`econ-newsfeed.vercel.app` and the apex to it (not `/api/*`, so auth callbacks
+and unsubscribe POSTs keep working); preview deployments get `noindex` and a
+`Disallow: /` robots.txt. Per-page titles, descriptions, canonicals and JSON-LD
+come from `app/src/lib/seo.ts`. `/sitemap.xml` is an index over
+`/sitemaps/{pages,researchers-N,papers-N}.xml`, built from `/api/sitemap` and
+`/api/sitemap/{kind}?page=N` (10k ids per chunk). Researcher profiles are
+indexed only if tracked (have a URL) and have papers; keep
+`isIndexableResearcher` and `backend/database/sitemap.py` in sync. Detail
+pages 404 only on a backend 404 and error (5xx) on other failures, so crawlers
+retry. Set the same `INTERNAL_API_KEY` on Vercel and the API so server-side
+rendering skips the per-IP rate limit during crawls.
 
 Researcher filter choices are fetched on demand from `/api/researcher-options`
 (at most 50 results), rather than included in `/api/filter-options`. Weekly
@@ -159,8 +188,9 @@ Researcher URLs (DB) → HTMLFetcher (fetch + hash-based change detection)
 | `backend/enrichment/link_extractor.py` | Trusted-domain link extraction from HTML, DOI-based and anchor text matching to papers |
 | `backend/enrichment/doi_resolver.py` | DOI resolution from publisher URLs — regex extraction + Crossref PII-to-DOI lookup |
 | `backend/enrichment/openalex.py` | OpenAlex API client — DOI lookup, title search, coauthor/abstract enrichment, researcher ID backfill |
-| `backend/enrichment/jel_classifier.py` | JEL code classification via LLM |
-| `backend/enrichment/jel_enrichment.py` | Applies JEL classifications to researchers |
+| `backend/enrichment/jel_classifier.py` | JEL code classification via LLM — bio cleaning, prompt from bio + papers + topics, evidence hash |
+| `backend/enrichment/jel_job.py` | Incremental, budgeted JEL classification batch (scheduler job + `classify-jel` CLI) |
+| `backend/enrichment/jel_enrichment.py` | Maps OpenAlex topics to JEL codes (`enrich-jel` CLI; topic fallback for the JEL job) |
 | `backend/enrichment/paper_merge.py` | Deduplicates papers post-extraction |
 | `backend/researcher.py` | Researcher data access layer |
 | `backend/config.py` | Env var validation + encoding guard — raises `EnvironmentError` on import if required vars missing |
