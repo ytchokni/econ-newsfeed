@@ -239,3 +239,33 @@ def test_strip_repeated_surnames_renames_or_merges_into_existing(monkeypatch):
     assert repair.REPORT["strip_repeated_surnames"] == [
         {"id": 2, "from": "Paola Conconi", "to": "Paola"},
         {"keep": 6330, "name": "Peter Hull", "merge": [{"id": 1, "name": "Peter Hull Hull"}]}]
+
+
+
+def test_strip_repeated_surnames_leaves_conflicting_openalex_twins_for_review(monkeypatch):
+    """Markus Goldstein 2614 / 168866: two OpenAlex authors behind one name."""
+    _fake_fetch(monkeypatch, [
+        ("LIKE CONCAT", [{"id": 168866, "first_name": "Markus Goldstein", "last_name": "Goldstein"}]),
+        ("WHERE first_name = %s", [{"id": 2614}]),
+        ("FROM researchers r WHERE r.id IN",
+         lambda sql, params: [_rec(2614, "Markus", "Goldstein", "A1", urls=1, pubs=30),
+                              _rec(168866, "Markus Goldstein", "Goldstein", "A2", pubs=1)]),
+    ])
+    counts = repair.strip_repeated_surnames()
+    assert counts["renamed"] == 0 and counts["merged_into_existing"] == 0
+    assert counts["left_for_review_conflicting_openalex_ids"] == 1
+    assert "strip_repeated_surnames" not in repair.REPORT
+    assert [r["id"] for r in repair.REPORT["strip_repeated_surnames_review"][0]] == [2614, 168866]
+
+
+def test_strip_repeated_surnames_merges_when_only_one_side_has_an_id(monkeypatch):
+    _fake_fetch(monkeypatch, [
+        ("LIKE CONCAT", [{"id": 66623, "first_name": "Massimo Anelli", "last_name": "Anelli"}]),
+        ("WHERE first_name = %s", [{"id": 3979}]),
+        ("FROM researchers r WHERE r.id IN",
+         lambda sql, params: [_rec(3979, "Massimo", "Anelli", "A1", urls=2, pubs=31),
+                              _rec(66623, "Massimo Anelli", "Anelli", None, pubs=1)]),
+    ])
+    counts = repair.strip_repeated_surnames()
+    assert counts["merged_into_existing"] == 1
+    assert counts["left_for_review_conflicting_openalex_ids"] == 0
