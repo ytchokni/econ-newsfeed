@@ -13,7 +13,9 @@ import FollowButton from "@/components/FollowButton";
 export default function ResearcherDetailContent({ id, initialData }: { id: number; initialData?: ResearcherDetail }) {
   const { data: researcher, error, isLoading } = useResearcher(id, initialData);
 
-  if (isLoading) {
+  // Server-rendered pages pass initialData; SWR still reports isLoading while
+  // it revalidates, so only show the skeleton when there is nothing to show.
+  if (isLoading && !researcher) {
     return (
       <div className="space-y-4">
         <p className="font-sans text-sm text-[var(--text-muted)]">Loading researcher...</p>
@@ -24,7 +26,7 @@ export default function ResearcherDetailContent({ id, initialData }: { id: numbe
     );
   }
 
-  if (error || !researcher) {
+  if (!researcher) {
     return <ErrorMessage message={error?.message || "Researcher not found."} />;
   }
 
