@@ -14,7 +14,8 @@ from backend.database import (
     normalize_title,
 )
 from backend.database.researchers import (
-    is_abbreviation_of, is_compatible_name, merge_researchers, refresh_has_top5_for,
+    disambiguation_prefetch, is_abbreviation_of, is_compatible_name, merge_researchers,
+    prefetch_disambiguation, refresh_has_top5_for,
 )
 from backend.database.identity import (
     SHARED_PAGE, match_score, on_merge, page_ownership_problem, same_person, strip_repeated_surname,
@@ -293,6 +294,17 @@ def _owner_byline_index(owners: list[dict], authors: list[tuple[str, str]]) -> d
     return routed
 
 
+def _split_author(author) -> tuple[str, str]:
+    """(given names, surname) of an extracted author; ["Peter Hull", "Hull"] -> Peter / Hull."""
+    if len(author) == 1:
+        return "", author[0]
+    if len(author) == 2:
+        first, last = author[0], author[1]
+    else:
+        first, last = " ".join(author[:-1]), author[-1]
+    return strip_repeated_surname(first, last), last
+
+
 class PaperSaver:
     @staticmethod
     def save_publications(
@@ -300,7 +312,32 @@ class PaperSaver:
         publications: list[dict],
         is_seed: bool = False,
     ) -> list[SaveResult]:
-        """Save extracted publications. Returns SaveResult per successfully saved paper."""
+        """Save extracted publications. Returns SaveResult per successfully saved paper.
+
+        Authors that need an LLM disambiguation are asked about first, outside
+        the save transaction, so the model call holds no row locks.
+        """
+        with disambiguation_prefetch():
+            for pub in publications:
+                for author in pub.get('authors') or ():
+                    if not author:
+                        continue
+                    first_name, last_name = _split_author(author)
+                    if (first_name, last_name) in _author_id_cache:
+                        continue
+                    try:
+                        prefetch_disambiguation(first_name, last_name)
+                    except Exception as e:  # the in-transaction path still works
+                        logging.warning("Disambiguation prefetch failed for %s %s: %s",
+                                        first_name, last_name, e)
+            return PaperSaver._save_publications(url, publications, is_seed)
+
+    @staticmethod
+    def _save_publications(
+        url: str,
+        publications: list[dict],
+        is_seed: bool = False,
+    ) -> list[SaveResult]:
         results = []
         with get_connection() as conn:
             lookup = conn.cursor(buffered=True)
@@ -411,14 +448,8 @@ class PaperSaver:
                     for author in pub['authors']:
                         if not author:
                             byline.append(None)
-                        elif len(author) == 1:
-                            byline.append(("", author[0]))
-                        elif len(author) == 2:
-                            byline.append((author[0], author[1]))
                         else:
-                            byline.append((" ".join(author[:-1]), author[-1]))
-                    # ["Peter Hull", "Hull"] -> "Peter" / "Hull"
-                    byline = [(strip_repeated_surname(b[0], b[1]), b[1]) if b else None for b in byline]
+                            byline.append(_split_author(author))
                     # A byline name that is the page owner's resolves to the
                     # owner, never to a same-name stub record.
                     owner_at = _owner_byline_index(

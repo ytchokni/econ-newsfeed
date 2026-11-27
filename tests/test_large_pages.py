@@ -556,6 +556,47 @@ class TestExtractOneUrlLongPages:
         mocks["try_changes"].assert_not_called()
         mocks["mark"].assert_called_once_with(1, "h1")
 
+    def test_long_page_with_only_noise_changes_is_still_backfilled(self):
+        """The insignificant-change skip (spacing/counters) must not hide the
+        backfill of a previously truncated page: the backfill check runs first."""
+        html = self.HTML.replace("</ul>", "</ul><p>Visitors: 42</p>")
+        from backend.pipeline.extraction import extract_one_url
+        patches = _extraction_patches(_text(html), _text(self.HTML.replace("</ul>", "</ul><p>Visitors: 41</p>")), html)
+        patches["try_extract"] = patch(
+            "backend.pipeline.extraction.Publication.try_extract_publications",
+            return_value=ExtractionLLMResult(pubs=[_pub("Paper number 499 on trade")]))
+        patches["try_changes"] = patch("backend.pipeline.extraction.Publication.try_extract_changes")
+        mocks = {k: p.start() for k, p in patches.items()}
+        try:
+            outcome = extract_one_url({"id": 1, "researcher_id": 2, "url": "https://x.org",
+                                       "page_type": "PUBLICATIONS"})
+        finally:
+            for p in patches.values():
+                p.stop()
+        assert outcome.status == "extracted"
+        chunks = mocks["try_extract"].call_args.kwargs["chunks"]
+        assert any("Paper number 499" in c.text for c in chunks)
+        assert mocks["persist"].call_args.kwargs["is_seed"] is True
+        mocks["try_changes"].assert_not_called()
+
+    def test_long_page_with_only_noise_changes_and_full_extraction_is_skipped(self):
+        html = self.HTML.replace("</ul>", "</ul><p>Visitors: 42</p>")
+        from backend.pipeline.extraction import extract_one_url
+        patches = _extraction_patches(_text(html), _text(self.HTML.replace("</ul>", "</ul><p>Visitors: 41</p>")),
+                                      html, untruncated=True)
+        patches["try_extract"] = patch("backend.pipeline.extraction.Publication.try_extract_publications")
+        patches["try_changes"] = patch("backend.pipeline.extraction.Publication.try_extract_changes")
+        mocks = {k: p.start() for k, p in patches.items()}
+        try:
+            outcome = extract_one_url({"id": 1, "researcher_id": 2, "url": "https://x.org",
+                                       "page_type": "PUBLICATIONS"})
+        finally:
+            for p in patches.values():
+                p.stop()
+        assert outcome.status == "empty"
+        mocks["try_extract"].assert_not_called()
+        mocks["try_changes"].assert_not_called()
+
     def test_first_extraction_of_long_page_is_not_truncated(self):
         outcome, mocks = self._run(previous_text=None)
         text_arg = mocks["try_extract"].call_args.args[0]

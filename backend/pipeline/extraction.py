@@ -25,6 +25,7 @@ from backend.database import (
     fetch_one, fetch_all, compute_title_hash, append_paper_snapshot,
     append_researcher_snapshot,
 )
+from backend.pipeline.change_filter import is_insignificant_change
 from backend.pipeline.feed_events import FeedEventEmitter
 from backend.database.identity import SHARED_PAGE, page_ownership_problem
 from backend.database.researchers import deactivate_unowned_url, flag_url_ownership, page_owners
@@ -140,11 +141,15 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
     tail_never_extracted = (was_truncated and not is_seed
                             and not payload.get('extracted_untruncated'))
 
-    if previous_text is not None and HTMLFetcher.normalize_text(previous_text) == HTMLFetcher.normalize_text(text):
+    if previous_text is not None and is_insignificant_change(
+            HTMLFetcher.normalize_text(previous_text), HTMLFetcher.normalize_text(text)):
+        # Checked before the skip below: an unchanged long page whose tail was
+        # never extracted still needs its backfill.
         if tail_never_extracted:
             return _backfill_long_page(url_id, url, text, raw_html, content_hash,
                                        scrape_log_id, fetch_date)
-        # Cleaning/hash changes alone must not create fresh publication events.
+        # Cleaning/hash changes, spacing and counters alone must not cost a
+        # call or create fresh publication events.
         HTMLFetcher.mark_extracted(url_id, content_hash)
         return ExtractionOutcome("empty")
 

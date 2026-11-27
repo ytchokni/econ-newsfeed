@@ -4,6 +4,8 @@ Covers the scrape orchestration logic: locking, log creation/update,
 URL processing with change detection, error handling, and lock release.
 All external dependencies (DB, network, LLM) are mocked.
 """
+import threading
+import time
 from unittest.mock import MagicMock, patch, call
 
 import pytest
@@ -888,7 +890,8 @@ class TestExtractionWorkerLoop:
 
 class TestStartStopExtractionWorker:
     def test_start_creates_daemon_thread(self):
-        with patch("backend.pipeline.scheduler.threading.Thread") as mock_thread_cls:
+        with patch("backend.pipeline.scheduler.threading.Thread") as mock_thread_cls, \
+             patch.object(scheduler, "_EXTRACTION_CONCURRENCY", 1):
             mock_thread = MagicMock()
             mock_thread_cls.return_value = mock_thread
 
@@ -900,7 +903,24 @@ class TestStartStopExtractionWorker:
             mock_thread.start.assert_called_once()
 
             backend.pipeline.scheduler._extraction_thread = None
+            backend.pipeline.scheduler._extraction_threads = []
             backend.pipeline.scheduler._extraction_stop_event.clear()
+
+    def test_start_runs_parallel_loops_sharing_claims(self):
+        with patch("backend.pipeline.scheduler.threading.Thread") as mock_thread_cls, \
+             patch.object(scheduler, "_EXTRACTION_CONCURRENCY", 3):
+            start_extraction_worker()
+            try:
+                assert mock_thread_cls.call_count == 3
+                names = [c[1]["name"] for c in mock_thread_cls.call_args_list]
+                assert names == ["extraction-worker", "extraction-worker-2", "extraction-worker-3"]
+                claims = {id(c[1]["args"][0]) for c in mock_thread_cls.call_args_list}
+                assert len(claims) == 1
+                assert len(backend.pipeline.scheduler._extraction_threads) == 3
+            finally:
+                stop_extraction_worker()
+        assert backend.pipeline.scheduler._extraction_threads == []
+        backend.pipeline.scheduler._extraction_stop_event.clear()
 
     def test_start_is_idempotent(self):
         backend.pipeline.scheduler._extraction_thread = MagicMock(is_alive=MagicMock(return_value=True))
@@ -1000,3 +1020,76 @@ class TestSchedulerStartsExtractionWorker:
             shutdown_scheduler()
 
             mock_stop_worker.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Parallel extraction loops
+# ---------------------------------------------------------------------------
+
+class TestParallelExtractionLoops:
+    def setup_method(self):
+        backend.pipeline.scheduler._extraction_stop_event.clear()
+
+    def teardown_method(self):
+        backend.pipeline.scheduler._extraction_stop_event.clear()
+
+    def test_claims_keep_pages_and_researchers_exclusive(self):
+        claims = scheduler._ExtractionClaims()
+        a = {"id": 1, "researcher_id": 10, "content_hash": "x"}
+        b = {"id": 2, "researcher_id": 10, "content_hash": "y"}
+        c = {"id": 3, "researcher_id": 11, "content_hash": "z"}
+        assert claims.claim(a)
+        assert not claims.claim(a)
+        assert not claims.claim(b)  # same researcher
+        assert claims.claim(c)
+        claims.release(a, completed=True)
+        assert not claims.claim(a)  # finished by another loop from a stale batch
+        assert claims.claim(dict(a, content_hash="changed-again"))
+        claims.release(c, completed=False)
+        assert claims.claim(c)  # failures may be retried
+
+    def test_parallel_loops_extract_each_page_once_and_overlap_model_calls(self):
+        """Four loops over one queue: every page once, calls overlap, saves never do."""
+        from backend.llm import throttle as llm_throttle
+        rows = [_make_url_row(url_id=i, researcher_id=100 + i) for i in range(1, 9)]
+        done, lock = [], threading.Lock()
+        in_call, max_in_call, in_save, max_in_save = [0], [0], [0], [0]
+
+        def queue():
+            with lock:
+                return [r for r in rows if r["id"] not in done]
+
+        def fake_extract(row, scrape_log_id=None):
+            with llm_throttle.extraction_gate.released():  # the model call
+                with lock:
+                    in_call[0] += 1
+                    max_in_call[0] = max(max_in_call[0], in_call[0])
+                time.sleep(0.05)
+                with lock:
+                    in_call[0] -= 1
+            with lock:  # saving runs under the gate
+                in_save[0] += 1
+                max_in_save[0] = max(max_in_save[0], in_save[0])
+            time.sleep(0.005)
+            with lock:
+                in_save[0] -= 1
+                done.append(row["id"])
+                if len(done) == len(rows):
+                    backend.pipeline.scheduler._extraction_stop_event.set()
+            return _outcome("extracted", pubs_count=1)
+
+        claims = scheduler._ExtractionClaims()
+        with patch("backend.pipeline.scheduler.get_urls_needing_extraction", side_effect=queue), \
+             patch("backend.pipeline.extraction.extract_one_url", side_effect=fake_extract), \
+             patch.object(scheduler, "_EXTRACTION_DELAY_SECONDS", 0), \
+             patch.object(scheduler, "_EXTRACTION_IDLE_SECONDS", 0.01), \
+             patch.object(scheduler, "_EXTRACTION_CLAIMED_WAIT_SECONDS", 0.01):
+            threads = [threading.Thread(target=_extraction_worker_loop, args=(claims,)) for _ in range(4)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=10)
+
+        assert sorted(done) == list(range(1, 9))
+        assert max_in_call[0] > 1
+        assert max_in_save[0] == 1

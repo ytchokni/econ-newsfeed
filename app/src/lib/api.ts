@@ -218,7 +218,12 @@ export interface AdminDashboardData {
   };
   extraction: {
     worker_enabled: boolean;
-    queue: { never_extracted: number; changed_pending: number; total: number };
+    queue: {
+      never_extracted: number;
+      changed_pending: number;
+      total: number;
+      oldest_changed_hours?: number | null;
+    };
     throughput: {
       completions: { last_hour: number; last_24h: number; last_7d: number };
       attempts: { last_hour: number; last_24h: number; last_7d: number };

@@ -6,11 +6,14 @@ import json
 import logging
 import os
 import re
+import threading
 import unicodedata
+from contextlib import contextmanager
 
 from backend.database.connection import execute_query, fetch_one, fetch_all, get_connection
 from backend.database.identity import merge_researcher_into, same_person, strip_repeated_surname
 from backend.database.llm import log_llm_usage
+from backend.database.extraction_queue import prioritise
 from backend.config import fix_encoding
 
 
@@ -299,7 +302,71 @@ def _longer_first_name(a: str, b: str) -> str:
     return a if len(a.rstrip('.')) > len(b.rstrip('.')) else b
 
 
+_prefetch_local = threading.local()
+
+
+def _disambiguation_key(first_name: str, last_name: str, candidates: list[dict]) -> tuple:
+    return (first_name, last_name, tuple(sorted(c['id'] for c in candidates)))
+
+
+@contextmanager
+def disambiguation_prefetch():
+    """Collect LLM disambiguation answers made before a save transaction.
+
+    Inside, prefetch_disambiguation() asks the model and remembers the answer;
+    get_researcher_id() inside the transaction then reuses it instead of
+    calling the model while holding row locks (and the extraction gate). A
+    candidate list that changed in between misses the cache and is asked again.
+    """
+    previous = getattr(_prefetch_local, "answers", None)
+    _prefetch_local.answers = {}
+    try:
+        yield
+    finally:
+        _prefetch_local.answers = previous
+
+
+def prefetch_disambiguation(first_name: str, last_name: str) -> None:
+    """Run get_researcher_id's read-only steps and, where it would ask the
+    model (tier 3), ask now and cache the answer. Writes nothing."""
+    answers = getattr(_prefetch_local, "answers", None)
+    if answers is None or is_bad_researcher_name(first_name, last_name):
+        return
+    first_name, _ = fix_encoding(first_name)
+    last_name, _ = fix_encoding(last_name)
+    first_name = normalize_name_case(first_name)
+    last_name = normalize_name_case(last_name)
+    if fetch_one("SELECT id FROM researchers WHERE first_name = %s AND last_name = %s",
+                 (first_name, last_name)):
+        return
+    candidates = fetch_all("SELECT id, first_name, last_name FROM researchers WHERE last_name = %s",
+                           (last_name,))
+    if not candidates:
+        return
+    initial_matches = [c for c in candidates
+                       if is_compatible_name(first_name, c['first_name'])
+                       and first_name.lower() != c['first_name'].lower()]
+    if len(initial_matches) == 1:
+        return
+    key = _disambiguation_key(first_name, last_name, candidates)
+    if key not in answers:
+        answers[key] = _ask_disambiguation(first_name, last_name, candidates)
+
+
 def _disambiguate_researcher(first_name: str, last_name: str, candidates: list[dict]) -> int | None:
+    """Return the matching researcher id among same-last-name candidates, or None.
+
+    Uses an answer prefetched before the save transaction when there is one.
+    """
+    answers = getattr(_prefetch_local, "answers", None)
+    if answers:
+        key = _disambiguation_key(first_name, last_name, candidates)
+        if key in answers:
+            return answers[key]
+    return _ask_disambiguation(first_name, last_name, candidates)
+
+
+def _ask_disambiguation(first_name: str, last_name: str, candidates: list[dict]) -> int | None:
     """Use LLM to check if any same-last-name candidate is the same person.
     Returns the matching researcher id (int) or None if no match.
     candidates: list of dicts with keys id, first_name, last_name."""
@@ -316,14 +383,20 @@ def _disambiguate_researcher(first_name: str, last_name: str, candidates: list[d
         f'Respond with JSON only: {{"match_id": <id or null>}}'
     )
     try:
+        from backend.llm import throttle
         from backend.llm.client import get_client, get_model
         client = get_client()
         model = get_model()
-        response = client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model=model,
-            max_tokens=256,  # {"match_id": N} is ~10 tokens; 256 headroom covers any preamble leak
-        )
+        # An extraction worker holds the save gate; the call may wait for the
+        # per-minute token budget, so let the other workers save meanwhile.
+        # PaperSaver prefetches answers before its transaction, so this
+        # normally holds no row locks (a cache miss still can).
+        with throttle.extraction_gate.released():
+            response = client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=model,
+                max_tokens=256,  # {"match_id": N} is ~10 tokens; 256 headroom covers any preamble leak
+            )
         log_llm_usage("researcher_disambiguation", model, response.usage)
         content = response.choices[0].message.content or ""
         match = re.search(r'\{.*?\}', content, re.DOTALL)
@@ -700,18 +773,24 @@ def get_at_risk_urls() -> list[dict]:
     )
 
 
-def get_urls_needing_extraction(exclude_url_ids: tuple[int, ...] = ()) -> list[dict]:
+def get_urls_needing_extraction(exclude_url_ids: tuple[int, ...] = (),
+                                limit: int | None = 200) -> list[dict]:
     """Active researcher URLs whose stored HTML changed since last extraction.
 
     A URL needs extraction when its content_hash differs from extracted_hash
     (changed since last LLM run, or never extracted). URLs with no stored
     HTML are excluded (nothing to extract).
 
-    Returns at most 200 rows — the worker processes them one at a time and
-    re-polls when the batch is done.
+    Returns at most `limit` rows (all of them for None) in priority order, see
+    backend.database.extraction_queue — the worker processes a batch and
+    re-polls when it is done, so the order is recomputed every batch.
     """
+    # Only columns of idx_extraction_state (plus researcher_urls): reading any
+    # other html_content column makes MySQL fetch every stored page (~60 s on
+    # production) instead of answering from the index (~0.2 s).
     query = """
-        SELECT ru.id, ru.researcher_id, ru.url, ru.page_type, hc.content_hash
+        SELECT ru.id, ru.researcher_id, ru.url, ru.page_type, hc.content_hash,
+               hc.extracted_hash IS NULL AS never_extracted
         FROM researcher_urls ru
         JOIN html_content hc ON hc.url_id = ru.id
         WHERE ru.is_active = TRUE
@@ -731,8 +810,28 @@ def get_urls_needing_extraction(exclude_url_ids: tuple[int, ...] = ()) -> list[d
         tuple(exclude_url_ids) + tuple(row['url_id'] for row in cooling)))
     if exclude_url_ids:
         query += " AND ru.id NOT IN (" + ",".join(["%s"] * len(exclude_url_ids)) + ")"
-    query += " ORDER BY ru.id LIMIT 200"
-    return fetch_all(query, exclude_url_ids) if exclude_url_ids else fetch_all(query)
+    query += " ORDER BY ru.id"
+    rows = fetch_all(query, exclude_url_ids) if exclude_url_ids else fetch_all(query)
+    _attach_pending_since(rows)
+    return prioritise(rows, limit=limit)
+
+
+def _attach_pending_since(rows: list[dict], chunk: int = 500) -> None:
+    """Add when each page's text last changed, by url_id lookups (~0.7 s for
+    12k pages on production; reading these columns in the queue query instead
+    scans every stored page). content_changed_at is NULL on rows last changed
+    before it existed; their last fetch time stands in."""
+    by_id = {r['id']: r for r in rows}
+    ids = list(by_id)
+    for start in range(0, len(ids), chunk):
+        part = ids[start:start + chunk]
+        found = fetch_all(
+            "SELECT url_id, COALESCE(content_changed_at, timestamp) AS pending_since "
+            "FROM html_content WHERE url_id IN (" + ",".join(["%s"] * len(part)) + ")",
+            tuple(part),
+        )
+        for f in found:
+            by_id[f['url_id']]['pending_since'] = f['pending_since']
 
 
 EXTRACTION_MAX_FAILURES = 3
