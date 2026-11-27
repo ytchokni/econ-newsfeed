@@ -255,10 +255,11 @@ def test_rename_snapshot_joins_transaction_only_after_collision_check(collision)
     conn.cursor.return_value = cursor
     cursor.fetchone.return_value = (2,) if collision else None
     with patch('backend.pipeline.paper_saver.get_connection', return_value=conn), \
-         patch('backend.pipeline.paper_saver.append_paper_snapshot') as snapshot:
+         patch('backend.pipeline.paper_saver.append_paper_snapshot') as snapshot, \
+         patch('backend.enrichment.paper_merge.merge_paper_group', return_value=False):
         if collision:
-            with pytest.raises(ValueError, match='require a validated merge'):
-                PaperSaver.apply_title_rename(1, 'Old title', 'New title', {'status': 'published'}, 'https://source.test')
+            outcome = PaperSaver.apply_title_rename(1, 'Old title', 'New title', {'status': 'published'}, 'https://source.test')
+            assert outcome == PaperSaver.SKIPPED
             snapshot.assert_not_called()
             assert all(c.args[0].startswith('SELECT') for c in cursor.execute.call_args_list)
             conn.commit.assert_not_called()

@@ -175,13 +175,20 @@ def _rename_keys(cursor, paper_ids, placeholders):
     return keys, cleared
 
 
-def merge_paper_group(paper_ids: list[int], rename: bool = False) -> bool:
+def merge_paper_group(paper_ids: list[int], rename: bool = False,
+                      as_title: str | None = None) -> bool:
     """Merge verified identities only; preserve coherent metadata and every source.
 
     With rename=True, pairs that are not spelling variants may still merge when
     they share a strong link identifier (rename_merge.compatible_rename); the
     caller has checked that no page lists both titles. The canonical row then
     takes the most recently discovered title.
+
+    With as_title, the caller has title evidence that the rows are one work
+    under that title (a page renamed one row's title to another row's title):
+    rows are compared as if they carried as_title, so authors and identifiers
+    must still agree, and the canonical row takes as_title. A refusal is then
+    left for the caller to report.
     """
     paper_ids = sorted(set(paper_ids))
     if len(paper_ids) < 2:
@@ -216,8 +223,11 @@ def merge_paper_group(paper_ids: list[int], rename: bool = False) -> bool:
                     paper_key = identifier_key_from_doi(paper.get('doi'))
                     paper['paper_keys'] = {paper_key} - cleared[paper['id']] if paper_key else set()
                 compatible = lambda a, b: _compatible_identity(a, b) or compatible_rename(a, b)
+            elif as_title is not None:
+                compatible = lambda a, b: _compatible_identity({**a, 'title': as_title}, {**b, 'title': as_title})
             if any(not compatible(a, b) for i, a in enumerate(papers) for b in papers[i + 1:]):
-                logger.warning('Refused incompatible duplicate candidate group: %s', paper_ids)
+                logger.log(logging.INFO if as_title is not None else logging.WARNING,
+                           'Refused incompatible duplicate candidate group: %s', paper_ids)
                 conn.rollback()
                 return False
 
@@ -290,6 +300,9 @@ def merge_paper_group(paper_ids: list[int], rename: bool = False) -> bool:
                     cursor.execute('UPDATE papers SET title = %s, title_hash = %s WHERE id = %s',
                                    (newest['title'], newest['title_hash'] or compute_title_hash(newest['title']),
                                     canonical_id))
+            elif as_title is not None and papers[0]['title'] != as_title:
+                cursor.execute('UPDATE papers SET title = %s, title_hash = %s WHERE id = %s',
+                               (as_title, compute_title_hash(as_title), canonical_id))
             conn.commit()
             logger.info('Merged %d verified duplicates into paper %s', len(papers) - 1, canonical_id)
             return True
