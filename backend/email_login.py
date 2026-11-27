@@ -15,9 +15,12 @@ import re
 import secrets
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from html import escape
+
+import mysql.connector
 
 import backend.digest as digest
 from backend.database import email_login as store
@@ -155,6 +158,45 @@ def _check_guess_limits(email: str, now: datetime) -> bool:
     return failed_today >= MAX_FAILED_PER_EMAIL_PER_DAY
 
 
+def pool_busy_error() -> "EmailLoginError":
+    """What a request gets when no pooled database connection is free."""
+    logger.warning("Email login: database connection pool exhausted")
+    return EmailLoginError(
+        "email_login_busy", "Email sign-in is busy. Try again in a moment.", 503, 5,
+    )
+
+
+# Deadlock and lock-wait timeout: transient, the client should simply retry.
+_TRANSIENT_MYSQL_ERRNOS = (1213, 1205)
+
+
+@contextmanager
+def _one_request_per_address(email: str):
+    """Run checks and writes for ``email`` under its lock; map contention to 429/503.
+
+    Without this, parallel requests all passed the cooldown and hourly checks
+    before any of them stored a code (one email each), and their writes
+    deadlocked into 500s.
+    """
+    try:
+        with store.address_lock(email):
+            yield
+    except store.AddressBusy:
+        raise EmailLoginError(
+            "try_again", "Another sign-in request for this address is in progress. Try again in a moment.",
+            429, 2,
+        )
+    except mysql.connector.errors.PoolError:
+        raise pool_busy_error()
+    except mysql.connector.Error as e:
+        if getattr(e, "errno", None) in _TRANSIENT_MYSQL_ERRNOS:
+            logger.warning("Email login: transient database error %s", e.errno)
+            raise EmailLoginError(
+                "try_again", "Sign-in is busy right now. Try again in a moment.", 429, 2,
+            )
+        raise
+
+
 def dev_log_mode() -> bool:
     """Log codes instead of emailing them: local development only.
 
@@ -244,30 +286,34 @@ def request_code(raw_email: str, now: datetime | None = None) -> CodeRequest:
         )
     email = _require_email(raw_email)
     now = now or _utcnow()
-    guarded = _check_guess_limits(email, now)
 
-    latest = store.latest_code_created_at(email)
-    if latest is not None and now - latest < RESEND_COOLDOWN:
-        # Clamped: a code stamped slightly ahead (clock skew) must not ask for hours.
-        remaining = (RESEND_COOLDOWN - (now - latest)).total_seconds()
-        wait = max(1, min(int(remaining) + 1, int(RESEND_COOLDOWN.total_seconds())))
-        raise EmailLoginError(
-            "resend_too_soon", f"Wait {wait} seconds before requesting another code.", 429, wait,
-        )
-    max_codes = MAX_CODES_PER_EMAIL_GUARDED if guarded else MAX_CODES_PER_EMAIL
-    if store.count_codes_for_email_since(email, now - PER_EMAIL_WINDOW) >= max_codes:
-        raise EmailLoginError(
-            "too_many_codes", "Too many codes requested for this address. Try again in an hour.",
-            429, int(PER_EMAIL_WINDOW.total_seconds()),
-        )
-    if store.count_codes_since(now - timedelta(hours=1)) >= _hourly_limit():
-        logger.warning("Email login: hourly send cap reached")
-        raise EmailLoginError(
-            "email_login_busy", "Email sign-in is busy. Try again in a few minutes.", 503, 300,
-        )
+    # Checks and the insert must not interleave with another request for this
+    # address; the email itself is sent after the lock is released.
+    with _one_request_per_address(email):
+        guarded = _check_guess_limits(email, now)
 
-    code = generate_code()
-    code_id = store.store_code(email, hash_code(email, code), now, now + CODE_TTL)
+        latest = store.latest_code_created_at(email)
+        if latest is not None and now - latest < RESEND_COOLDOWN:
+            # Clamped: a code stamped slightly ahead (clock skew) must not ask for hours.
+            remaining = (RESEND_COOLDOWN - (now - latest)).total_seconds()
+            wait = max(1, min(int(remaining) + 1, int(RESEND_COOLDOWN.total_seconds())))
+            raise EmailLoginError(
+                "resend_too_soon", f"Wait {wait} seconds before requesting another code.", 429, wait,
+            )
+        max_codes = MAX_CODES_PER_EMAIL_GUARDED if guarded else MAX_CODES_PER_EMAIL
+        if store.count_codes_for_email_since(email, now - PER_EMAIL_WINDOW) >= max_codes:
+            raise EmailLoginError(
+                "too_many_codes", "Too many codes requested for this address. Try again in an hour.",
+                429, int(PER_EMAIL_WINDOW.total_seconds()),
+            )
+        if store.count_codes_since(now - timedelta(hours=1)) >= _hourly_limit():
+            logger.warning("Email login: hourly send cap reached")
+            raise EmailLoginError(
+                "email_login_busy", "Email sign-in is busy. Try again in a few minutes.", 503, 300,
+            )
+
+        code = generate_code()
+        code_id = store.store_code(email, hash_code(email, code), now, now + CODE_TTL)
     subject, text, html = _render_email(code)
 
     if digest.RESEND_API_KEY:
@@ -301,10 +347,11 @@ def verify_code(raw_email: str, raw_code: str, now: datetime | None = None) -> d
     if not re.fullmatch(rf"\d{{{CODE_LENGTH}}}", code):
         raise EmailLoginError("invalid_code", f"Enter the {CODE_LENGTH}-digit code from the email.", 400)
     now = now or _utcnow()
-    guarded = _check_guess_limits(email, now)
 
-    max_attempts = MAX_ATTEMPTS_GUARDED if guarded else MAX_ATTEMPTS
-    result = store.consume_code(email, hash_code(email, code), now, max_attempts)
+    with _one_request_per_address(email):
+        guarded = _check_guess_limits(email, now)
+        max_attempts = MAX_ATTEMPTS_GUARDED if guarded else MAX_ATTEMPTS
+        result = store.consume_code(email, hash_code(email, code), now, max_attempts)
     if result == "expired":
         raise EmailLoginError("code_expired", "This code has expired. Request a new one.", 400)
     if result == "locked":

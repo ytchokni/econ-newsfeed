@@ -66,6 +66,7 @@ from backend.database import (
 )
 from backend.auth import get_current_user, get_optional_user
 import backend.email_login as email_login
+import mysql.connector
 from backend import api_protection
 from backend.api_protection import (
     cap_pages,
@@ -942,6 +943,9 @@ def request_email_login_code(request: Request, body: EmailCodeRequestBody):
             result = email_login.request_code(body.email)
     except email_login.EmailLoginError as exc:
         return _email_login_error(exc)
+    except mysql.connector.errors.PoolError:
+        # Opening the scope found no free pooled connection: a 503, not a 500.
+        return _email_login_error(email_login.pool_busy_error())
     return {
         "message": "If that address can receive email, a sign-in code is on its way.",
         "expires_in": result.expires_in,
@@ -958,6 +962,9 @@ def verify_email_login_code(request: Request, body: EmailCodeVerifyBody):
             user = email_login.verify_code(body.email, body.code)
     except email_login.EmailLoginError as exc:
         return _email_login_error(exc)
+    except mysql.connector.errors.PoolError:
+        # Opening the scope found no free pooled connection: a 503, not a 500.
+        return _email_login_error(email_login.pool_busy_error())
     return {
         "id": user["id"],
         "email": user["email"],
