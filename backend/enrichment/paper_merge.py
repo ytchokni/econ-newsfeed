@@ -5,6 +5,8 @@ sharing the same identifier and merges them into a single canonical record.
 Also finds matching normalized titles with identical author sets.
 """
 import logging
+import re
+import unicodedata
 from difflib import SequenceMatcher
 from backend.database import fetch_all, get_connection
 from backend.database.snapshots import STATUS_ORDER, _STATUS_RANK
@@ -76,8 +78,70 @@ def _compatible_identity(a, b):
     if not shared_id and (aa != ba or len(aa) < 2):
         return False
     # A single changed place, intervention, or negation can identify a different
-    # paper despite near-perfect fuzzy similarity. Renames need source review.
-    return normalize_title(a['title']) == normalize_title(b['title'])
+    # paper despite near-perfect fuzzy similarity. Renames need source review;
+    # only spelling variants and a revised sample period count as the same title.
+    return same_paper_title(a['title'], b['title'])
+
+
+# A four-digit sample-period range such as "1957-2020" or "1850–2020". Two-digit
+# ends ("2018-19") are fiscal/edition labels and deliberately not matched.
+_YEAR_RANGE = re.compile(
+    r'(?<!\d)((?:1[5-9]|20)\d\d)\s*[-‐-―−]\s*((?:1[5-9]|20)\d\d)(?!\d)'
+)
+_MIN_SAMPLE_SPAN = 3
+
+
+def _fold_latin_marks(text: str) -> str:
+    """Drop accents on Latin letters (Naïve/Naive); keep marks other scripts need."""
+    out = []
+    for ch in unicodedata.normalize('NFD', text):
+        if unicodedata.combining(ch) and out and 'LATIN' in unicodedata.name(out[-1], ''):
+            continue
+        out.append(ch)
+    return unicodedata.normalize('NFC', ''.join(out))
+
+
+def _title_identity(title: str) -> tuple[str, list[tuple[int, int]]]:
+    """Spacing-, hyphen- and accent-insensitive title key plus its year ranges.
+
+    normalize_title deletes hyphens, so "Infinite-Horizon" and "Infinite Horizon"
+    differ only by a space; dropping spaces makes them equal without merging
+    titles whose words differ.
+    """
+    text = unicodedata.normalize('NFKC', title or '')
+    parts = _YEAR_RANGE.split(text)
+    ranges = [(int(parts[i]), int(parts[i + 1])) for i in range(1, len(parts), 3)]
+    key = '#'.join(normalize_title(_fold_latin_marks(p)).replace(' ', '') for p in parts[::3])
+    return key, ranges
+
+
+def _sample_period_revision(r1: tuple[int, int], r2: tuple[int, int]) -> bool:
+    """One endpoint kept, the other moved: an updated sample, not a new report.
+
+    Consecutive editions ("2020-2021" vs "2021-2022") move both endpoints.
+    """
+    if any(end - start < _MIN_SAMPLE_SPAN for start, end in (r1, r2)):
+        return False
+    return (r1[0] == r2[0]) != (r1[1] == r2[1])
+
+
+def same_paper_title(t1: str | None, t2: str | None) -> bool:
+    """Whether two titles name the same paper, given otherwise verified identity.
+
+    Accepts normalize_title equality, hyphen/space/accent spelling variants, and
+    at most one revised sample-period range. Any other wording or number change
+    ("Part 1"/"Part 2", "Report 2022"/"Report 2023") is a different paper.
+    """
+    if not has_title_identity(t1) or not has_title_identity(t2):
+        return False
+    if normalize_title(t1) == normalize_title(t2):
+        return True
+    key1, ranges1 = _title_identity(t1)
+    key2, ranges2 = _title_identity(t2)
+    if key1 != key2 or len(ranges1) != len(ranges2):
+        return False
+    changed = [(r1, r2) for r1, r2 in zip(ranges1, ranges2) if r1 != r2]
+    return len(changed) <= 1 and all(_sample_period_revision(r1, r2) for r1, r2 in changed)
 
 
 def highest_known_status(statuses) -> str | None:
