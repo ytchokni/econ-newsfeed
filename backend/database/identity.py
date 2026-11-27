@@ -346,11 +346,12 @@ _RESEARCHER_COLUMNS = ("first_name", "last_name", "position", "affiliation", "de
 
 
 def _fetch_researcher(cursor, rid: int) -> dict | None:
-    cursor.execute(f"SELECT {', '.join(_RESEARCHER_COLUMNS)} FROM researchers WHERE id = %s", (rid,))
+    cursor.execute("SELECT * FROM researchers WHERE id = %s", (rid,))
     row = cursor.fetchone()
     if row is None or isinstance(row, dict):
         return row
-    return dict(zip(_RESEARCHER_COLUMNS, row))
+    names = [d[0] for d in (cursor.description or [])]
+    return dict(zip(names, row)) if len(names) == len(row) else dict(zip(_RESEARCHER_COLUMNS, row))
 
 
 def merge_researcher_into(cursor, canonical_id: int, duplicate_id: int) -> bool:
@@ -423,23 +424,27 @@ def merge_researcher_into(cursor, canonical_id: int, duplicate_id: int) -> bool:
             and len(duplicate['first_name'].rstrip('.')) > len(canonical['first_name'].rstrip('.'))):
         new_first = duplicate['first_name']  # "J." -> "Jane Q." (same surname, longer spelling)
 
+    present = [k for k in _RESEARCHER_COLUMNS if k in canonical or k in duplicate]
     canonical = {k: canonical.get(k) for k in _RESEARCHER_COLUMNS}
     duplicate = {k: duplicate.get(k) for k in _RESEARCHER_COLUMNS}
     oa_id = canonical['openalex_author_id'] or duplicate['openalex_author_id']
     cursor.execute("DELETE FROM researchers WHERE id = %s", (duplicate_id,))
     if new_first != canonical['first_name']:
         cursor.execute("UPDATE researchers SET first_name = %s WHERE id = %s", (new_first, canonical_id))
-    cursor.execute(
-        """UPDATE researchers SET
-             position = COALESCE(position, %s), affiliation = COALESCE(affiliation, %s),
-             description = COALESCE(description, %s),
-             description_updated_at = COALESCE(description_updated_at, %s),
-             bio = COALESCE(bio, %s), openalex_author_id = %s,
-             has_top5_pub = has_top5_pub OR %s
-           WHERE id = %s""",
-        (duplicate['position'], duplicate['affiliation'], duplicate['description'],
-         duplicate['description_updated_at'], duplicate['bio'], oa_id,
-         bool(duplicate['has_top5_pub']), canonical_id))
+    # Fill what the survivor lacks (bio exists only on migrated databases).
+    sets, params = [], []
+    for col in ("position", "affiliation", "description", "description_updated_at", "bio"):
+        if col in present:
+            sets.append(f"{col} = COALESCE({col}, %s)")
+            params.append(duplicate[col])
+    if "openalex_author_id" in present:
+        sets.append("openalex_author_id = %s")
+        params.append(oa_id)
+    if "has_top5_pub" in present:
+        sets.append("has_top5_pub = has_top5_pub OR %s")
+        params.append(bool(duplicate['has_top5_pub']))
+    if sets:
+        cursor.execute(f"UPDATE researchers SET {', '.join(sets)} WHERE id = %s", (*params, canonical_id))
 
     logger.info("Merged researcher #%s (%s %s) into #%s (%s %s)",
                 duplicate_id, duplicate['first_name'], duplicate['last_name'],

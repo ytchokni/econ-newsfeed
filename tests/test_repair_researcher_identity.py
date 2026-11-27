@@ -143,3 +143,39 @@ def test_route_page_papers_skips_tracked_namesakes_and_conflicting_ids(monkeypat
 def test_main_rejects_unknown_step():
     with pytest.raises(SystemExit):
         repair.main(["--steps", "nope"])
+
+
+def test_apply_requires_backup():
+    with pytest.raises(SystemExit):
+        repair.main(["--apply"])
+
+
+def test_backup_round_trips_values_and_undo_skips_uncommitted_units(tmp_path, monkeypatch):
+    import datetime
+    path = tmp_path / "b.jsonl"
+    bk = repair.Backup(str(path))
+    when = datetime.datetime(2026, 11, 27, 14, 20, 47, 139131)
+    done = bk.record("merge_openalex_twins", "a", [[["insert", "papers", [{"id": 1, "at": when, "blob": b"\x00z"}]]]])
+    bk.committed(done)
+    bk.record("merge_openalex_twins", "b", [[["insert", "papers", [{"id": 2}]]]])  # never committed
+    assert repair.Backup(str(path)).next_id == 3
+
+    applied = []
+    monkeypatch.setattr(repair, "APPLY", True)
+    monkeypatch.setattr(repair, "_write", lambda label, fn, record=True: applied.append(label) or True)
+    counts = repair.undo(str(path))
+    assert counts["units"] == 1 and applied == ["undo 1 a"]
+
+    unit = repair._decode(__import__("json").loads(path.read_text().splitlines()[0]))
+    row = unit["groups"][0][0][2][0]
+    assert row["at"] == when and row["blob"] == b"\x00z"
+
+
+def test_undo_pairs_removes_only_rows_moved_onto_survivor():
+    from unittest.mock import MagicMock
+    cur = MagicMock()
+    cur.fetchall.return_value = []
+    rows = [{"user_id": 1, "researcher_id": 42608}, {"user_id": 2, "researcher_id": 9583}]
+    repair._undo_op(cur, ["pairs", "user_follows", "user_id", [9583, 42608], rows])
+    deletes = [c.args[1] for c in cur.execute.call_args_list if c.args[0].startswith("DELETE")]
+    assert deletes == [(9583, 1)]

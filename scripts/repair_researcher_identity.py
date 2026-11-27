@@ -16,22 +16,31 @@ Pass --apply to write. Steps run in this order (later steps see earlier merges):
                                   attachments that came only from them are removed
 
     poetry run python scripts/repair_researcher_identity.py                  # dry run
-    poetry run python scripts/repair_researcher_identity.py --apply
-    poetry run python scripts/repair_researcher_identity.py --steps merge_openalex_twins --apply
+    poetry run python scripts/repair_researcher_identity.py --apply --backup /backups/identity.jsonl
+    poetry run python scripts/repair_researcher_identity.py --steps merge_openalex_twins --apply --backup b.jsonl
+    poetry run python scripts/repair_researcher_identity.py --undo /backups/identity.jsonl          # dry run
+    poetry run python scripts/repair_researcher_identity.py --undo /backups/identity.jsonl --apply
     poetry run python scripts/repair_researcher_identity.py --report plan.json   # every action
 
 Each merge or move is its own short transaction, so the script can run while
 the API and workers are up. Researcher merges never touch feed_events: events
 belong to papers. Only deactivate_unowned_pages deletes papers (and with them
 their events): items with no remaining author that came only from unowned pages.
-Safe to re-run: every step selects the current violations.
+Safe to re-run: every step selects the current violations. --apply requires
+--backup: before each transaction commits, the rows it replaces or deletes
+(including cascaded children of deleted papers and URLs) are appended to that
+file; --undo restores them, newest change first.
 """
 from __future__ import annotations
 
 import argparse
+import base64
 import collections
+import datetime
+import decimal
 import json
 import logging
+import os
 import sys
 import time
 from pathlib import Path
@@ -68,16 +77,253 @@ def _chunks(items: list, size: int = 2000):
         yield items[i:i + size]
 
 
-def _write(label: str, fn) -> bool:
+
+# ---------------------------------------------------------------- backup / undo
+#
+# With --apply every transaction first records the rows it is about to change
+# (full rows for anything deleted or rewritten) as one JSON line in the
+# --backup file, and a commit marker once it has committed. --undo replays the
+# committed units newest first. Feed events and other children of deleted
+# papers are captured through the foreign keys, so undo re-creates them.
+
+class Backup:
+    def __init__(self, path: str):
+        self.path = path
+        self.next_id = 1
+        if Path(path).exists():
+            for line in Path(path).read_text().splitlines():
+                rec = json.loads(line)
+                self.next_id = max(self.next_id, int(rec.get("unit") or rec.get("commit") or 0) + 1)
+
+    def _append(self, rec: dict) -> None:
+        with open(self.path, "a") as fh:
+            fh.write(json.dumps(rec, default=_encode) + "\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+
+    def record(self, step: str, label: str, groups: list) -> int:
+        unit = self.next_id
+        self.next_id += 1
+        self._append({"unit": unit, "step": step, "label": label, "groups": groups})
+        return unit
+
+    def committed(self, unit: int) -> None:
+        self._append({"commit": unit})
+
+
+BACKUP: Backup | None = None
+CURRENT_STEP = ""
+_GROUPS: list[list] = []
+
+
+def _encode(value):
+    if isinstance(value, (datetime.datetime, datetime.date)):
+        return {"__dt__": value.isoformat()}
+    if isinstance(value, (bytes, bytearray)):
+        return {"__b64__": base64.b64encode(bytes(value)).decode()}
+    if isinstance(value, decimal.Decimal):
+        return {"__dec__": str(value)}
+    if isinstance(value, set):
+        return sorted(value)
+    raise TypeError(type(value))
+
+
+def _decode(value):
+    if isinstance(value, dict):
+        if "__dt__" in value:
+            return datetime.datetime.fromisoformat(value["__dt__"])
+        if "__b64__" in value:
+            return base64.b64decode(value["__b64__"])
+        if "__dec__" in value:
+            return decimal.Decimal(value["__dec__"])
+        return {k: _decode(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_decode(v) for v in value]
+    return value
+
+
+def _select(cur, table: str, col: str, values, columns: str = "*") -> list[dict]:
+    values = list(values)
+    if not values:
+        return []
+    try:
+        cur.execute(f"SELECT {columns} FROM `{table}` WHERE `{col}` IN ({','.join(['%s'] * len(values))})",
+                    tuple(values))
+    except Exception as exc:
+        if getattr(exc, "errno", None) == 1146:  # optional table not created
+            return []
+        raise
+    return [dict(r) for r in cur.fetchall()]
+
+
+def _group() -> list:
+    """Start a new group of restore operations (undone newest group first)."""
+    _GROUPS.append([])
+    return _GROUPS[-1]
+
+
+def _capture_merge(cur, canonical_id: int, duplicate_id: int) -> None:
+    """Everything merge_researcher_into changes or deletes for this pair."""
+    ops = _group()
+    ids = (canonical_id, duplicate_id)
+    ops.append(["rows", "researchers", ["id"], _select(cur, "researchers", "id", ids)])
+    urls = _select(cur, "researcher_urls", "researcher_id", ids)
+    ops.append(["rows", "researcher_urls", ["id"], urls])
+    canonical_urls = {u["url"][:500] for u in urls if u["researcher_id"] == canonical_id}
+    dup_url_ids = [u["id"] for u in urls if u["researcher_id"] == duplicate_id]
+    doomed = [u["id"] for u in urls
+              if u["researcher_id"] == duplicate_id and u["url"][:500] in canonical_urls]
+    ops.append(["rows", "html_content", ["id"], _select(cur, "html_content", "url_id", doomed)])
+    ops.append(["rows", "html_snapshots", ["id"], _select(cur, "html_snapshots", "url_id", doomed)])
+    refs = _select(cur, "html_content", "researcher_id", ids, "id, researcher_id")
+    refs += [r for r in _select(cur, "html_content", "url_id", dup_url_ids, "id, researcher_id")
+             if r not in refs]
+    ops.append(["set", "html_content", "researcher_id", [[r["id"], r["researcher_id"]] for r in refs]])
+    for table in ("authorship", "researcher_snapshots", "url_discoveries"):
+        ops.append(["rows", table, ["id"], _select(cur, table, "researcher_id", ids)])
+    for table, key in (("user_follows", "user_id"), ("researcher_jel_codes", "jel_code"),
+                       ("researcher_fields", "field_id")):
+        ops.append(["pairs", table, key, list(ids), _select(cur, table, "researcher_id", ids)])
+    ops.append(["rows", "researcher_jel_state", ["researcher_id"],
+                _select(cur, "researcher_jel_state", "researcher_id", ids)])
+    mining = _select(cur, "site_mining_candidates", "researcher_id", ids, "id, researcher_id")
+    ops.append(["set", "site_mining_candidates", "researcher_id", [[r["id"], r["researcher_id"]] for r in mining]])
+
+
+_FK_CHILDREN: dict[str, list[tuple[str, str, str]]] = {}
+
+
+def _fk_children(cur, table: str) -> list[tuple[str, str, str]]:
+    if table not in _FK_CHILDREN:
+        cur.execute(
+            """SELECT TABLE_NAME AS t, COLUMN_NAME AS c, REFERENCED_COLUMN_NAME AS p
+               FROM information_schema.KEY_COLUMN_USAGE
+               WHERE TABLE_SCHEMA = DATABASE() AND REFERENCED_TABLE_NAME = %s""", (table,))
+        _FK_CHILDREN[table] = [(r["t"], r["c"], r["p"]) for r in cur.fetchall()]
+    return _FK_CHILDREN[table]
+
+
+def _capture_tree(cur, table: str, col: str, values, ops: list, depth: int = 0) -> None:
+    """Rows about to be deleted with every row that cascades from them, parents first."""
+    rows = _select(cur, table, col, values)
+    if not rows:
+        return
+    ops.append(["insert", table, rows])
+    if depth < 4:
+        for child, child_col, parent_col in _fk_children(cur, table):
+            _capture_tree(cur, child, child_col, {r[parent_col] for r in rows}, ops, depth + 1)
+
+
+_GENERATED: dict[str, set[str]] = {}
+
+
+def _writable(cur, table: str, row: dict) -> dict:
+    """Row without generated columns (html_content.has_stored_content)."""
+    if table not in _GENERATED:
+        cur.execute("""SELECT COLUMN_NAME AS c FROM information_schema.COLUMNS
+                       WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s
+                         AND (EXTRA LIKE '%%VIRTUAL GENERATED%%' OR EXTRA LIKE '%%STORED GENERATED%%')""",
+                    (table,))
+        _GENERATED[table] = {r["c"] for r in cur.fetchall()}
+    return {k: v for k, v in row.items() if k not in _GENERATED[table]}
+
+
+def _insert(cur, table: str, row: dict, ignore: bool = False) -> None:
+    row = _writable(cur, table, row)
+    cols = list(row)
+    cur.execute(f"INSERT {'IGNORE ' if ignore else ''}INTO `{table}` ({', '.join(f'`{c}`' for c in cols)}) "
+                f"VALUES ({', '.join(['%s'] * len(cols))})", [row[c] for c in cols])
+
+
+def _restore_rows(cur, table: str, pk: list[str], rows: list[dict]) -> None:
+    for row in rows:
+        row = _writable(cur, table, row)
+        where = " AND ".join(f"`{c}` = %s" for c in pk)
+        key = [row[c] for c in pk]
+        cur.execute(f"SELECT 1 FROM `{table}` WHERE {where}", key)
+        if cur.fetchone():
+            cols = [c for c in row if c not in pk]
+            if cols:
+                cur.execute(f"UPDATE `{table}` SET {', '.join(f'`{c}` = %s' for c in cols)} WHERE {where}",
+                            [row[c] for c in cols] + key)
+        else:
+            _insert(cur, table, row)
+
+
+def _undo_op(cur, op: list) -> None:
+    kind = op[0]
+    if kind == "rows":
+        _, table, pk, rows = op
+        _restore_rows(cur, table, pk, rows)
+    elif kind == "set":
+        _, table, col, pairs = op
+        for row_id, value in pairs:
+            cur.execute(f"UPDATE `{table}` SET `{col}` = %s WHERE id = %s", (value, row_id))
+    elif kind == "pairs":
+        # (researcher_id, key) tables: drop what the merge moved onto the
+        # surviving record, then put the original rows back.
+        _, table, key, ids, rows = op
+        canonical = ids[0]
+        own = {r[key] for r in rows if r["researcher_id"] == canonical}
+        moved = {r[key] for r in rows if r["researcher_id"] != canonical} - own
+        for k in moved:
+            cur.execute(f"DELETE FROM `{table}` WHERE researcher_id = %s AND `{key}` = %s", (canonical, k))
+        for r in rows:
+            _insert(cur, table, r, ignore=True)
+    elif kind == "insert":
+        _, table, rows = op
+        for r in rows:
+            try:
+                _insert(cur, table, r, ignore=True)
+            except Exception as exc:
+                # The feed-event snapshot guard refuses a new_paper event whose
+                # page lost its snapshots; restore everything else.
+                if getattr(exc, "errno", None) != 1644:
+                    raise
+                log.warning("  could not restore %s row %s: %s", table, r.get("id"), exc)
+    else:
+        raise ValueError(f"unknown backup operation {kind}")
+
+
+def undo(path: str) -> dict:
+    """Restore every committed unit of a backup file, newest first."""
+    units, committed = {}, set()
+    for line in Path(path).read_text().splitlines():
+        rec = json.loads(line)
+        if "unit" in rec:
+            units[rec["unit"]] = _decode(rec)
+        elif "commit" in rec:
+            committed.add(rec["commit"])
+    todo = [units[u] for u in sorted(committed, reverse=True) if u in units]
+    by_step = collections.Counter(u["step"] for u in todo)
+    log.info("  %d committed units to undo (%d recorded): %s", len(todo), len(units), dict(by_step))
+    restored = 0
+    for unit in todo:
+        def writes(cur, unit=unit):
+            for group in reversed(unit["groups"]):
+                for op in group:
+                    _undo_op(cur, op)
+        if APPLY:
+            restored += _write(f"undo {unit['unit']} {unit['label']}", writes, record=False)
+    if APPLY and restored < len(todo):
+        log.error("  %d units could not be restored (see FAILED above)", len(todo) - restored)
+    return {"units": len(todo), "restored": restored, **{f"units_{k}": v for k, v in by_step.items()}}
+
+
+def _write(label: str, fn, record: bool = True) -> bool:
     """Run fn(cursor) in its own transaction (retrying deadlocks) when --apply."""
     if not APPLY:
         return True
     for attempt in range(3):
         with get_connection() as conn:
             cursor = conn.cursor(dictionary=True, buffered=True)
+            _GROUPS.clear()
             try:
                 fn(cursor)
+                unit = BACKUP.record(CURRENT_STEP, label, list(_GROUPS)) if record and BACKUP else None
                 conn.commit()
+                if unit is not None:
+                    BACKUP.committed(unit)
                 return True
             except Exception as exc:
                 conn.rollback()
@@ -121,6 +367,7 @@ def _apply_merges(step: str, plan: list[tuple[dict, list[dict]]]) -> int:
 
         def writes(cur, canonical=canonical, dups=dups):
             for d in dups:
+                _capture_merge(cur, canonical["id"], d["id"])
                 merge_researcher_into(cur, canonical["id"], d["id"])
         if _write(f"{step} {canonical['id']}", writes):
             done += 1
@@ -223,6 +470,7 @@ def clear_conflicting_openalex_ids() -> dict:
         ids = [r["id"] for r in losers]
 
         def writes(cur, oa=oa, ids=ids):
+            _group().append(["set", "researchers", "openalex_author_id", [[i, oa] for i in ids]])
             cur.execute(f"UPDATE researchers SET openalex_author_id = NULL "
                         f"WHERE openalex_author_id = %s AND id IN ({','.join(['%s'] * len(ids))})",
                         (oa, *ids))
@@ -364,6 +612,11 @@ def route_page_papers_to_owner() -> dict:
             {"owner": owner_id, "moves": [{"paper": pid, "from": a["researcher_id"]} for pid, a, _ in ms]})
 
         def writes(cur, owner_id=owner_id, ms=ms):
+            touched = {owner_id} | {a["researcher_id"] for _, a, _ in ms}
+            pids = {pid for pid, _, _ in ms}
+            _group().append(["rows", "authorship", ["id"],
+                             [r for r in _select(cur, "authorship", "publication_id", pids)
+                              if r["researcher_id"] in touched]])
             for pid, a, owner_order in ms:
                 if owner_order is None:
                     cur.execute("UPDATE IGNORE authorship SET researcher_id = %s "
@@ -376,6 +629,7 @@ def route_page_papers_to_owner() -> dict:
                 cur.execute("DELETE FROM authorship WHERE researcher_id = %s AND publication_id = %s",
                             (a["researcher_id"], pid))
             for sid in {a["researcher_id"] for _, a, _ in ms} & emptied:
+                _capture_merge(cur, owner_id, sid)
                 merge_researcher_into(cur, owner_id, sid)
         if APPLY and _write(f"route to owner {owner_id}", writes):
             applied += 1
@@ -491,12 +745,18 @@ def deactivate_unowned_pages() -> dict:
     if APPLY:
         for url in urls:
             def writes(cur, url=url):
+                _group().append(["rows", "researcher_urls", ["id"], _select(cur, "researcher_urls", "url", [url])])
                 cur.execute("""UPDATE researcher_urls SET is_active = FALSE, deactivated_at = NOW(),
                                  deactivation_reason = %s WHERE url = %s AND is_active = TRUE""",
                             (flagged[url], url))
             applied += _write(f"deactivate {url}", writes)
         for chunk in _chunks(detached, 500):
             def writes(cur, chunk=chunk):
+                pairs = set(chunk)
+                _group().append(["insert", "authorship",
+                                 [r for r in _select(cur, "authorship", "publication_id", {p for _, p in chunk})
+                                  if (r["researcher_id"], r["publication_id"]) in pairs
+                                  and not r["author_order"]]])
                 for rid, pid in chunk:
                     cur.execute("DELETE FROM authorship WHERE researcher_id = %s AND publication_id = %s "
                                 "AND COALESCE(author_order, 0) = 0", (rid, pid))
@@ -504,8 +764,13 @@ def deactivate_unowned_pages() -> dict:
         for chunk in _chunks(sorted(doomed), 200):
             def writes(cur, chunk=chunk):
                 ph = ",".join(["%s"] * len(chunk))
-                cur.execute(f"DELETE FROM papers WHERE id IN ({ph}) AND NOT EXISTS "
+                cur.execute(f"SELECT id FROM papers WHERE id IN ({ph}) AND NOT EXISTS "
                             f"(SELECT 1 FROM authorship a WHERE a.publication_id = papers.id)", tuple(chunk))
+                ids = [r["id"] for r in cur.fetchall()]
+                if not ids:
+                    return
+                _capture_tree(cur, "papers", "id", ids, _group())
+                cur.execute(f"DELETE FROM papers WHERE id IN ({','.join(['%s'] * len(ids))})", tuple(ids))
             _write("delete unowned items", writes)
         for rid in {rid for rid, _ in detached}:
             refresh_has_top5(rid)
@@ -531,8 +796,21 @@ def main(argv=None) -> dict:
     parser.add_argument("--apply", action="store_true", help="write changes (default: dry run)")
     parser.add_argument("--steps", help=f"comma-separated subset of: {', '.join(STEPS)}")
     parser.add_argument("--report", help="write every planned action to this JSON file")
+    parser.add_argument("--backup", help="with --apply: append the rows each change replaces to this "
+                                         "JSON-lines file (required)")
+    parser.add_argument("--undo", metavar="BACKUP", help="restore a --backup file, newest change first "
+                                                         "(dry run unless --apply)")
     args = parser.parse_args(argv)
     APPLY = args.apply
+    global BACKUP, CURRENT_STEP
+    if args.undo:
+        log.info("=== repair_researcher_identity --undo %s (%s) ===", args.undo, "APPLY" if APPLY else "DRY RUN")
+        counts = undo(args.undo)
+        log.info("  %s", counts)
+        return {"undo": counts}
+    if APPLY and not args.backup:
+        parser.error("--apply requires --backup PATH (restore later with --undo PATH --apply)")
+    BACKUP = Backup(args.backup) if APPLY else None
 
     selected = STEP_ORDER
     if args.steps:
@@ -548,6 +826,7 @@ def main(argv=None) -> dict:
     for fn in selected:
         log.info("\n--- %s ---", fn.__name__)
         started = time.time()
+        CURRENT_STEP = fn.__name__
         summary[fn.__name__] = fn()
         log.info("  %s  (%.0fs)", summary[fn.__name__], time.time() - started)
     log.info("\n=== summary (%s) ===", mode)

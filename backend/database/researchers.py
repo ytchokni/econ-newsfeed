@@ -8,8 +8,6 @@ import os
 import re
 import unicodedata
 
-import mysql.connector
-
 from backend.database.connection import execute_query, fetch_one, fetch_all
 from backend.database.identity import merge_researcher_into, same_person
 from backend.database.llm import log_llm_usage
