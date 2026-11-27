@@ -20,6 +20,7 @@ from backend.config import db_config
 from backend.database.researchers import record_extraction_failure
 from backend.researcher import Researcher
 from backend.pipeline.html_fetcher import HTMLFetcher
+from backend.llm import throttle
 logger = logging.getLogger(__name__)
 
 _LOCK_NAME = 'econ_newsfeed_scrape'
@@ -207,9 +208,54 @@ _EXTRACTION_IDLE_SECONDS = 300       # queue empty → re-poll every 5 min
 _EXTRACTION_BACKOFF_SECONDS = 600    # 10 min (rides out free-tier quota exhaustion)
 _EXTRACTION_MAX_URL_FAILURES = 3
 _EXTRACTION_URL_COOLDOWN_SECONDS = 3600  # retry failed pages without a restart
+# Parallel extraction loops. Calls are latency-bound, so throughput scales with
+# this until the per-minute token budget (backend.llm.throttle) binds.
+_EXTRACTION_CONCURRENCY = max(1, int(os.environ.get('EXTRACTION_CONCURRENCY', '2')))
+# Share of the per-minute LLM budget extraction may use; the rest stays free
+# for lower-priority jobs on the same key (JEL classification, discovery).
+_EXTRACTION_BUDGET_SHARE = 0.8
+# JEL classification and the bio backfill share this lane.
+_BACKGROUND_BUDGET_SHARE = 0.2
+_EXTRACTION_CLAIMED_WAIT_SECONDS = 30
 
 _extraction_thread = None
+_extraction_threads: list[threading.Thread] = []
 _extraction_stop_event = threading.Event()
+
+
+class _ExtractionClaims:
+    """Pages being extracted by the parallel loops, shared between them.
+
+    Each loop polls the same prioritised queue; a page is taken by one loop
+    at a time, two pages of one researcher are never extracted at once (they
+    often list the same papers), and a page another loop finished from a
+    stale batch is skipped rather than extracted twice.
+    """
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._urls: set[int] = set()
+        self._researchers: set = set()
+        self._done: dict[int, str | None] = {}
+
+    def claim(self, row: dict) -> bool:
+        url_id, researcher_id = row['id'], row.get('researcher_id')
+        with self._lock:
+            if url_id in self._urls or (researcher_id is not None and researcher_id in self._researchers):
+                return False
+            if url_id in self._done and self._done[url_id] == row.get('content_hash'):
+                return False
+            self._urls.add(url_id)
+            if researcher_id is not None:
+                self._researchers.add(researcher_id)
+            return True
+
+    def release(self, row: dict, completed: bool) -> None:
+        with self._lock:
+            self._urls.discard(row['id'])
+            self._researchers.discard(row.get('researcher_id'))
+            if completed:
+                self._done[row['id']] = row.get('content_hash')
 
 
 def create_scrape_log() -> int:
@@ -516,7 +562,10 @@ def run_jel_classification_job() -> dict:
     """Scheduled, budgeted JEL classification batch (see backend.enrichment.jel_job)."""
     from backend.enrichment.jel_job import run_jel_classification_batch
     try:
-        return run_jel_classification_batch()
+        # The background lane (with the bio backfill): 20% of each minute's
+        # LLM budget; extraction keeps 80%.
+        with throttle.budget_share(_BACKGROUND_BUDGET_SHARE, "background"):
+            return run_jel_classification_batch()
     except Exception as e:
         logger.error("JEL classification job failed: %s: %s", type(e).__name__, e)
         return {"stopped": "error"}
@@ -526,7 +575,10 @@ def run_bio_backfill_job() -> dict:
     """Scheduled, budgeted bio backfill batch (see backend.pipeline.bio_backfill)."""
     from backend.pipeline.bio_backfill import run_bio_backfill_batch
     try:
-        return run_bio_backfill_batch()
+        # Shares the background lane with JEL: together at most 20% of each
+        # minute's LLM budget, so extraction keeps its 80%.
+        with throttle.budget_share(_BACKGROUND_BUDGET_SHARE, "background"):
+            return run_bio_backfill_batch()
     except Exception as e:
         logger.error("Bio backfill job failed: %s: %s", type(e).__name__, e)
         return {"stopped": "error"}
@@ -636,7 +688,7 @@ def _persist_extraction_failure(row: dict) -> None:
                        state['extraction_failures'], state['extraction_retry_at'])
 
 
-def _extraction_worker_loop() -> None:
+def _extraction_worker_loop(claims: "_ExtractionClaims | None" = None) -> None:
     """Continuously extract publications from changed pages until stopped.
 
     Free-tier Gemma pacing (measured 2026-06-09, see spec): calls take
@@ -645,6 +697,9 @@ def _extraction_worker_loop() -> None:
     """
     from backend.pipeline.extraction import extract_one_url
 
+    # Parallel loops share one registry (start_extraction_worker); a loop
+    # started on its own has nobody to share pages with.
+    claims = claims if claims is not None else _ExtractionClaims()
     logger.info("Extraction worker started")
     url_failures: dict[int, int] = {}
     retry_at: dict[int, float] = {}
@@ -693,16 +748,23 @@ def _extraction_worker_loop() -> None:
         logger.info("Extraction worker: %d URLs pending (%d temporarily cooling down)",
                     len(pending), len(retry_at))
 
+        attempted = 0
         for row in pending:
             if _extraction_stop_event.is_set():
                 break
             url_id = row['id']
+            if not claims.claim(row):
+                continue  # another loop has this page or researcher
+            attempted += 1
+            outcome = None
             try:
-                outcome = extract_one_url(row)
+                with throttle.extraction_gate.hold(), throttle.budget_share(_EXTRACTION_BUDGET_SHARE, "extraction"):
+                    outcome = extract_one_url(row)
             except Exception as e:
                 logger.error("Extraction worker error on %s (id=%s): %s: %s",
                              row['url'], url_id, type(e).__name__, e)
-                outcome = None
+            finally:
+                claims.release(row, completed=outcome is not None and outcome.ok)
 
             processed += 1
             if outcome is not None and outcome.ok:
@@ -743,36 +805,52 @@ def _extraction_worker_loop() -> None:
             # pause the provider for every page.
             _extraction_stop_event.wait(_EXTRACTION_DELAY_SECONDS)
 
+        if not attempted and not _extraction_stop_event.is_set():
+            # Every pending page is with another loop: wait for them instead
+            # of re-polling the queue in a tight loop.
+            _extraction_stop_event.wait(_EXTRACTION_CLAIMED_WAIT_SECONDS)
+
     logger.info("Extraction worker stopped (%d attempts, %d completed URLs, %d pubs)",
                 processed, completed, pubs_total)
 
 
 def start_extraction_worker() -> None:
-    """Start the extraction background worker thread."""
-    global _extraction_thread
+    """Start the extraction worker: _EXTRACTION_CONCURRENCY parallel loops."""
+    global _extraction_thread, _extraction_threads
     if _extraction_thread is not None and _extraction_thread.is_alive():
         logger.warning("Extraction worker already running")
         return
 
     _extraction_stop_event.clear()
-    _extraction_thread = threading.Thread(
-        target=_extraction_worker_loop,
-        name="extraction-worker",
-        daemon=True,
-    )
-    _extraction_thread.start()
-    logger.info("Extraction worker thread started")
+    claims = _ExtractionClaims()
+    _extraction_threads = []
+    for n in range(_EXTRACTION_CONCURRENCY):
+        thread = threading.Thread(
+            target=_extraction_worker_loop,
+            args=(claims,),
+            name="extraction-worker" if n == 0 else f"extraction-worker-{n + 1}",
+            daemon=True,
+        )
+        thread.start()
+        _extraction_threads.append(thread)
+    _extraction_thread = _extraction_threads[0]
+    logger.info("Extraction worker started with %d parallel loops", _EXTRACTION_CONCURRENCY)
 
 
 def stop_extraction_worker() -> None:
     """Stop the extraction worker gracefully."""
-    global _extraction_thread
+    global _extraction_thread, _extraction_threads
     if _extraction_thread is None:
         return
     _extraction_stop_event.set()
-    _extraction_thread.join(timeout=30)
+    threads = _extraction_threads or [_extraction_thread]
+    deadline = time.monotonic() + 30
+    threads[0].join(timeout=30)
+    for thread in threads[1:]:  # all within the same 30 s
+        thread.join(timeout=max(deadline - time.monotonic(), 0.1))
     _extraction_thread = None
-    logger.info("Extraction worker thread stopped")
+    _extraction_threads = []
+    logger.info("Extraction worker threads stopped")
 
 
 def start_scheduler() -> None:

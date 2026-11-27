@@ -184,10 +184,12 @@ def test_admin_dashboard_caches_result(client):
     _admin_dashboard_cache.clear()
 
 
-def _extraction_fetch_one(queue=None, completions=None, attempts=None, last_extracted=None):
-    """Build a fetch_one side_effect for _get_extraction_stats's four queries, in call order."""
+def _extraction_fetch_one(queue=None, completions=None, attempts=None, last_extracted=None,
+                          waiting=None):
+    """Build a fetch_one side_effect for _get_extraction_stats's queries, in call order."""
     rows = [
         queue or {"never_extracted": 0, "changed_pending": 0},
+        waiting or {"oldest_changed_hours": None},
         completions or {"last_hour": 0, "last_24h": 0, "last_7d": 0},
         attempts or {"last_hour": 0, "last_24h": 0, "last_7d": 0,
                      "last_call_at": None, "tokens_last_24h": 0},
@@ -206,10 +208,24 @@ def test_extraction_stats_queue_split_and_eta():
     with patch("backend.database.admin.fetch_one", mock_one), \
          patch("backend.database.admin.fetch_all", MagicMock(return_value=[])):
         stats = _get_extraction_stats()
-    assert stats["queue"] == {"never_extracted": 6000, "changed_pending": 4000, "total": 10000}
+    assert stats["queue"] == {"never_extracted": 6000, "changed_pending": 4000, "total": 10000,
+                              "oldest_changed_hours": None}
     # 40/hour → 960/day → 10000/960 = 10.4 days
     assert stats["eta_days"] == 10.4
     assert stats["throughput"]["completions"]["last_24h"] == 1000
+
+
+def test_extraction_stats_reports_oldest_change_wait():
+    from backend.database.admin import _get_extraction_stats
+    mock_one = _extraction_fetch_one(queue={"never_extracted": 5, "changed_pending": 2},
+                                     waiting={"oldest_changed_hours": 7})
+    with patch("backend.database.admin.fetch_one", mock_one), \
+         patch("backend.database.admin.fetch_all", MagicMock(return_value=[])):
+        stats = _get_extraction_stats()
+    assert stats["queue"]["oldest_changed_hours"] == 7
+    # Index-only pending list, then row lookups (a full read takes ~60 s in prod).
+    waiting_sql = mock_one.call_args_list[1][0][0]
+    assert "NO_MERGE" in waiting_sql
 
 
 def test_extraction_stats_eta_null_when_no_completions():
