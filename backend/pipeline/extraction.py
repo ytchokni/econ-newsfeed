@@ -10,6 +10,12 @@ Two extraction paths:
     page text side-by-side, extracting only new/changed publications.
   - **Full path** (seed or no previous snapshot): extracts all publications from
     the full page text (original behaviour).
+
+Pages longer than CONTENT_MAX_CHARS are never truncated: the full path splits
+them into chunks (backend.pipeline.chunking) and merges the results, and the
+diff path sends only the changed sections. Before chunking, text past that
+length was cut off, so long pages carry papers that were never extracted;
+see _backfill_long_page.
 """
 import logging
 from dataclasses import dataclass
@@ -21,6 +27,7 @@ from backend.database import (
 )
 from backend.pipeline.feed_events import FeedEventEmitter
 from backend.database.papers import find_papers_by_titles
+from backend.pipeline.chunking import chunk_page
 from backend.pipeline.html_fetcher import CONTENT_MAX_CHARS, HTMLFetcher
 from backend.enrichment.link_extractor import match_and_save_paper_links
 from backend.pipeline.paper_saver import PaperSaver, validate_title_change
@@ -80,8 +87,12 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
         raw_html = HTMLFetcher.get_raw_html(url_id)
     if raw_html:
         # Re-clean caches written before boilerplate filtering was introduced.
-        text = HTMLFetcher.extract_text_content(raw_html)
-        text = HTMLFetcher.normalize_text(text[:CONTENT_MAX_CHARS])
+        raw_text = HTMLFetcher.extract_text_content(raw_html)
+        text = HTMLFetcher.normalize_text(raw_text)
+        # Earlier extractions only saw raw_text[:CONTENT_MAX_CHARS].
+        was_truncated = len(raw_text) > CONTENT_MAX_CHARS
+    else:
+        was_truncated = len(text or '') > CONTENT_MAX_CHARS
     content_hash = payload['content_hash']
     if not text:
         if raw_html:
@@ -105,16 +116,19 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
     previous_text = None if is_seed else HTMLFetcher.get_previous_text(url_id)
 
     if previous_text is not None and HTMLFetcher.normalize_text(previous_text) == HTMLFetcher.normalize_text(text):
+        if was_truncated:
+            return _backfill_long_page(url_id, url, text, raw_html, content_hash,
+                                       scrape_log_id, fetch_date)
         # Cleaning/hash changes alone must not create fresh publication events.
         HTMLFetcher.mark_extracted(url_id, content_hash)
         return ExtractionOutcome("empty")
 
     if previous_text is not None:
         outcome = _extract_via_diff(url_id, url, text, previous_text, content_hash,
-                                    scrape_log_id, fetch_date)
+                                    scrape_log_id, fetch_date, raw_html=raw_html)
     else:
         outcome = _extract_full(url_id, url, text, is_seed, content_hash,
-                                scrape_log_id, fetch_date)
+                                scrape_log_id, fetch_date, raw_html=raw_html)
 
     if outcome.ok and is_home_page(page_type):
         _update_home_description(researcher_id, text, url, scrape_log_id)
@@ -203,11 +217,35 @@ def _append_snapshots(pubs: list[dict], source_url: str, event_date=None, *, emi
             )
 
 
+def _backfill_long_page(url_id: int, url: str, text: str, raw_html: str | None,
+                        content_hash: str, scrape_log_id: int | None,
+                        fetch_date=None) -> ExtractionOutcome:
+    """Extract a long page whose text has not changed, as a seed extraction.
+
+    The fetcher used to store and hash only the first CONTENT_MAX_CHARS
+    characters of extracted text, and extraction saw no more than that.
+    Hashing the full text re-queues every longer page once, with
+    text identical to its last snapshot, and papers past that point have
+    never been extracted. They have been on the page all along, so they are
+    saved as seed papers: no new_paper or status_change events. This also
+    runs when an unchanged long page is re-queued later (rare: it takes a
+    change in text cleaning), which costs calls but creates no events.
+    """
+    logger.info("Backfilling long unchanged page %s (%d chars) as seed", url, len(text))
+    return _extract_full(url_id, url, text, True, content_hash, scrape_log_id,
+                         fetch_date, raw_html=raw_html)
+
+
 def _extract_full(url_id: int, url: str, text: str, is_seed: bool,
                   content_hash: str, scrape_log_id: int | None,
-                  fetch_date=None) -> ExtractionOutcome:
-    """Original full-page extraction path."""
-    result = Publication.try_extract_publications(text, url, scrape_log_id=scrape_log_id)
+                  fetch_date=None, raw_html: str | None = None) -> ExtractionOutcome:
+    """Full-page extraction path, in chunks for pages over CONTENT_MAX_CHARS."""
+    chunks = chunk_page(text, raw_html, CONTENT_MAX_CHARS)
+    if len(chunks) > 1:
+        result = Publication.try_extract_publications(text, url, scrape_log_id=scrape_log_id,
+                                                      chunks=chunks)
+    else:
+        result = Publication.try_extract_publications(text, url, scrape_log_id=scrape_log_id)
     if result.pubs is None:
         return ExtractionOutcome("failed", retry_after=result.retry_after)
 
@@ -220,9 +258,19 @@ def _extract_full(url_id: int, url: str, text: str, is_seed: bool,
 
 def _extract_via_diff(url_id: int, url: str, new_text: str, old_text: str,
                       content_hash: str, scrape_log_id: int | None,
-                      fetch_date=None) -> ExtractionOutcome:
-    """Diff-based extraction: compare old and new page, extract only changes."""
+                      fetch_date=None, raw_html: str | None = None) -> ExtractionOutcome:
+    """Diff-based extraction: compare old and new page, extract only changes.
+
+    A rewritten page too long to send as old + new text is extracted in full,
+    in chunks, as a non-seed extraction. Feed events stay guarded there:
+    new_paper needs baseline snapshots and is suppressed for titles found in
+    the previous snapshot (FeedEventEmitter.emit_new_paper_events), and
+    status changes go through the same snapshot comparison as the diff path.
+    """
     result = Publication.try_extract_changes(old_text, new_text, url, scrape_log_id=scrape_log_id)
+    if result.needs_full_extraction:
+        return _extract_full(url_id, url, new_text, False, content_hash, scrape_log_id,
+                             fetch_date, raw_html=raw_html)
     if result.pubs is None:
         return ExtractionOutcome("failed", retry_after=result.retry_after)
 

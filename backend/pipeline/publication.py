@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 from backend.database import log_llm_usage
-from backend.database.papers import has_title_identity
+from backend.database.papers import compute_title_hash, has_title_identity
 from backend.llm.client import get_model, extract_json
 from backend.publication_rules import is_working_paper_series
 from pydantic import BaseModel, field_validator
@@ -9,9 +9,18 @@ import difflib
 import re
 import logging
 import os
+import time
 from urllib.parse import urlparse
 
+# Per-call content budget. Longer pages are split into chunks of at most this
+# many characters (backend.pipeline.chunking); nothing is truncated.
 CONTENT_MAX_CHARS = int(os.environ['CONTENT_MAX_CHARS'])
+# Pause between the calls for one chunked page, as the worker does between
+# pages, to stay under the free-tier requests-per-minute cap.
+EXTRACTION_DELAY_SECONDS = float(os.environ.get('EXTRACTION_DELAY_SECONDS', '2'))
+# A chunk rejected by a per-minute quota is retried once within the page if
+# the provider asks for at most this long a wait.
+_CHUNK_RATE_LIMIT_WAIT_SECONDS = 90
 
 
 @dataclass
@@ -20,9 +29,13 @@ class ExtractionLLMResult:
 
     pubs is None on failure, [] on success with no publications.
     retry_after is set when the failure was a rate limit.
+    needs_full_extraction is set (with pubs None) when a page was rewritten
+    and is too long to compare as old + new text in one call; the caller
+    extracts the new page in chunks instead.
     """
     pubs: list[dict] | None
     retry_after: float | None = None
+    needs_full_extraction: bool = False
 
 
 VALID_STATUSES = frozenset({
@@ -361,6 +374,49 @@ def verify_publication_evidence(pub: dict, source_text: str, other_titles: tuple
         ]
 
 
+_MERGE_FILL_FIELDS = ('year', 'venue', 'draft_url', 'abstract')
+
+
+def _richness(pub: dict) -> int:
+    fields = ('year', 'venue', 'status', 'draft_url', 'abstract')
+    return sum(1 for f in fields if pub.get(f)) + (1 if pub.get('authors') else 0)
+
+
+def merge_publications(pubs: list[dict], key_fields: tuple[str, ...] = ()) -> list[dict]:
+    """Merge duplicate extractions of one paper, keeping page order.
+
+    Chunks overlap at seams and a page may list a paper twice, so the same
+    title can come back from more than one call. Titles are matched by the
+    title hash papers are stored under. The fuller record wins; it takes
+    missing year/venue/link/abstract from the other, and a status (with its
+    evidence) only if it has none, so a status is never paired with another
+    entry's evidence. key_fields (e.g. 'change_type') keep records apart.
+    """
+    merged: dict[tuple, dict] = {}
+    for pub in pubs:
+        title = clean_title(pub.get('title') or '')
+        key = tuple(pub.get(f) for f in key_fields) + (compute_title_hash(title),)
+        seen = merged.get(key)
+        if seen is None:
+            merged[key] = pub
+            continue
+        base, other = (pub, seen) if _richness(pub) > _richness(seen) else (seen, pub)
+        base = dict(base)
+        for field in _MERGE_FILL_FIELDS:
+            if not base.get(field) and other.get(field):
+                base[field] = other[field]
+        if not base.get('status') and other.get('status'):
+            base['status'] = other['status']
+            base['status_evidence'] = other.get('status_evidence')
+        if len(other.get('authors') or []) > len(base.get('authors') or []):
+            base['authors'] = other['authors']
+            base.pop('_authors_complete', None)
+            if other.get('_authors_complete'):
+                base['_authors_complete'] = True
+        merged[key] = base
+    return list(merged.values())
+
+
 _EVIDENCE_INSTRUCTIONS = """\
 - status_evidence: for accepted, revise_and_resubmit, or reject_and_resubmit, copy ONE CONTIGUOUS verbatim excerpt from THIS paper's entry containing BOTH its title and its explicit editorial decision. Include EVERY word between the title and decision, including any authors/byline, date, or other intervening text. Do not join separate excerpts, omit words, insert ellipses, or paraphrase. For example, if the source says "Title / Authors: Jane Example / R&R", the quote must include "Authors: Jane Example", not just "Title / R&R". Otherwise null. Generic "under revision", "revised", "under review", or "submitted" is NOT an R&R decision. Never infer R&R from these phrases. A journal may legitimately be undisclosed; preserve an explicit R&R even then, with venue null. Working paper series distribute papers and cannot issue journal R&R or acceptance decisions; do not use their names as the editorial venue.
 - authors_evidence: quote a verbatim excerpt containing this paper's title and an explicit complete "Authors:" or "by" byline, if shown; otherwise null. A list introduced by "with" contains coauthors only, not a complete byline. Ignore unrelated publications in site navigation, footer recommendations, or news widgets."""
@@ -389,10 +445,29 @@ class Publication:
         return HTMLFetcher.extract_text_content(html_content, include_links=True)
 
     @staticmethod
-    def build_extraction_prompt(text_content: str, url: str) -> str:
-        """Build the LLM prompt for publication extraction."""
-        return f"""Extract all academic publications from the following researcher page content from {url}.
+    def build_extraction_prompt(text_content: str, url: str,
+                                part: tuple[int, int, str | None] | None = None) -> str:
+        """Build the LLM prompt for publication extraction.
 
+        part is (index, total, section) when the page was split into chunks;
+        section is the publication-section heading in effect where the chunk
+        starts, which the status rules below rely on.
+        """
+        part_note = ''
+        if part is not None:
+            index, total, section = part
+            part_note = (
+                f"\nThe page is long, so its content is given in {total} consecutive parts, split between entries. "
+                f"This is part {index} of {total}. Extract the publications whose entries appear in this part."
+            )
+            if section:
+                part_note += (
+                    f' The page section in effect at the start of this part is "{section}"; '
+                    "treat it as the section header for entries before the next header in this part."
+                )
+            part_note += '\n'
+        return f"""Extract all academic publications from the following researcher page content from {url}.
+{part_note}
 For each publication, extract:
 - title: the full publication title, copied EXACTLY as it appears on the page. Do not add subtitles, correct spelling, or reword. Do not use your prior knowledge of the paper — only extract what is written in the content below.
 - authors: a list of [first_name, last_name] pairs. Use full first names when available (e.g., "John" not "J."). If only an initial appears, use it as given.
@@ -557,26 +632,34 @@ If no changes were detected, return an empty changes list."""
         Returns ExtractionLLMResult with pubs=None on LLM failure, pubs=[]
         when no changes detected. Each dict has a 'change_type' key.
         """
-        prompt = Publication.build_diff_extraction_prompt(old_text, new_text, url)
+        prompts = Publication._diff_prompts(old_text, new_text, url)
+        if prompts is None:
+            logging.info("Rewritten long page %s: extracting the new version in chunks", url)
+            return ExtractionLLMResult(pubs=None, needs_full_extraction=True)
         model = get_model()
-        logging.info("Diff-extracting changes from %s using LLM (%s)", url, model)
+        logging.info("Diff-extracting changes from %s using LLM (%s, %d call(s))", url, model, len(prompts))
 
-        result = extract_json(prompt, PublicationChangeList)
+        changes = []
+        for index, prompt in enumerate(prompts):
+            if index and EXTRACTION_DELAY_SECONDS > 0:
+                time.sleep(EXTRACTION_DELAY_SECONDS)
+            result = extract_json(prompt, PublicationChangeList)
 
-        if result.usage is not None:
-            log_llm_usage(
-                "diff_extraction", model, result.usage,
-                context_url=url, scrape_log_id=scrape_log_id,
-            )
+            if result.usage is not None:
+                log_llm_usage(
+                    "diff_extraction", model, result.usage,
+                    context_url=url, scrape_log_id=scrape_log_id,
+                )
 
-        if result.parsed is None:
-            logging.warning("Diff extraction returned no parsed result for %s", url)
-            return ExtractionLLMResult(pubs=None, retry_after=result.retry_after)
+            if result.parsed is None:
+                logging.warning("Diff extraction returned no parsed result for %s", url)
+                return ExtractionLLMResult(pubs=None, retry_after=result.retry_after)
+            changes.extend(result.parsed.changes)
 
         validated = []
         norm_html = _normalize_for_token_match(new_text)
-        entry_titles = tuple(_normalize_for_token_match(change.title) for change in result.parsed.changes)
-        for change in result.parsed.changes:
+        entry_titles = tuple(_normalize_for_token_match(change.title) for change in changes)
+        for change in changes:
             d = change.model_dump()
             if d['change_type'] == 'removed':
                 validated.append(d)
@@ -589,16 +672,127 @@ If no changes were detected, return an empty changes list."""
                 validated.append(d)
             else:
                 logging.info("Validation dropped change: %s", d.get('title', '<no title>'))
+        if len(prompts) > 1:
+            validated = merge_publications(validated, key_fields=('change_type',))
         return ExtractionLLMResult(pubs=validated)
 
     @staticmethod
-    def try_extract_publications(text_content: str, url: str, scrape_log_id: int | None = None) -> ExtractionLLMResult:
+    def _split_diff(diff_text: str, budget: int) -> list[str]:
+        """Split a unified diff into parts of at most budget characters.
+
+        Parts break between hunks; a hunk larger than the budget breaks
+        between its lines, each piece keeping the file and hunk headers.
+        """
+        lines = diff_text.splitlines(keepends=True)
+        header = ''.join(line for line in lines[:2] if line.startswith(('---', '+++')))
+        hunks: list[list[str]] = []
+        for line in lines[len(header.splitlines()):]:
+            if line.startswith('@@') or not hunks:
+                hunks.append([])
+            hunks[-1].append(line)
+
+        pieces: list[str] = []
+        room = budget - len(header)
+        for hunk in hunks:
+            text = ''.join(hunk)
+            if len(text) <= room:
+                pieces.append(text)
+                continue
+            head = hunk[0] if hunk[0].startswith('@@') else ''
+            body = hunk[1:] if head else hunk
+            width = room - len(head) - 2
+            split_body = []
+            for line in body:
+                # An over-long line is re-emitted as several lines with the same
+                # +/-/space marker, so no text is cut.
+                marker, content = line[:1], line[1:].rstrip('\n')
+                while len(content) > width:
+                    split_body.append(f"{marker}{content[:width]}\n")
+                    content = content[width:]
+                split_body.append(f"{marker}{content}\n")
+            current = head
+            for line in split_body:
+                if len(current) + len(line) > room and current != head:
+                    pieces.append(current)
+                    current = head
+                current += line
+            pieces.append(current)
+
+        parts: list[str] = []
+        current = ''
+        for piece in pieces:
+            if current and len(current) + len(piece) > room:
+                parts.append(header + current)
+                current = ''
+            current += piece
+        if current:
+            parts.append(header + current)
+        return parts
+
+    @staticmethod
+    def _diff_prompts(old_text: str, new_text: str, url: str) -> list[str] | None:
+        """Prompts for diff extraction, each within the per-call budget.
+
+        A page within the budget gets the single prompt it always did. For a
+        longer page only the changed sections are sent: the compact diff,
+        split between hunks if needed. Returns None when the page was
+        rewritten (diff larger than the page) and old + new do not fit one
+        call; extract_one_url then extracts the new page in chunks.
+        """
+        if len(old_text) <= CONTENT_MAX_CHARS and len(new_text) <= CONTENT_MAX_CHARS:
+            return [Publication.build_diff_extraction_prompt(old_text, new_text, url)]
+        diff_text = Publication._compute_compact_diff(old_text, new_text)
+        if diff_text is None:
+            return None
+        if diff_text == "":
+            return [Publication.build_diff_extraction_prompt(old_text, new_text, url)]
+        return [Publication._build_compact_diff_prompt(part, url)
+                for part in Publication._split_diff(diff_text, CONTENT_MAX_CHARS)]
+
+    @staticmethod
+    def try_extract_publications(text_content: str, url: str, scrape_log_id: int | None = None,
+                                 chunks: list | None = None) -> ExtractionLLMResult:
         """Extract publications via the LLM.
+
+        chunks (backend.pipeline.chunking.Chunk) splits a long page into
+        several calls whose results are merged; a page in one chunk, or no
+        chunks, is a single call on text_content. Any failed call fails the
+        whole page, so a partial list never reaches title reconciliation.
 
         Returns ExtractionLLMResult with pubs=None on LLM failure, pubs=[]
         when the page genuinely has no publications.
         """
-        prompt = Publication.build_extraction_prompt(text_content, url)
+        if not chunks or len(chunks) == 1:
+            return Publication._extract_publications_call(text_content, url, scrape_log_id)
+
+        total = len(chunks)
+        logging.info("Extracting %s in %d chunks", url, total)
+        pubs: list[dict] = []
+        for index, chunk in enumerate(chunks, start=1):
+            if index > 1 and EXTRACTION_DELAY_SECONDS > 0:
+                time.sleep(EXTRACTION_DELAY_SECONDS)
+            result = Publication._extract_publications_call(
+                chunk.text, url, scrape_log_id, part=(index, total, chunk.section))
+            if (result.pubs is None and result.retry_after is not None
+                    and result.retry_after <= _CHUNK_RATE_LIMIT_WAIT_SECONDS):
+                # A per-minute token limit hit mid-page: wait once rather than
+                # discard the chunks already extracted.
+                logging.info("Chunk %d/%d rate limited for %s; retrying in %.0fs",
+                             index, total, url, result.retry_after)
+                time.sleep(result.retry_after)
+                result = Publication._extract_publications_call(
+                    chunk.text, url, scrape_log_id, part=(index, total, chunk.section))
+            if result.pubs is None:
+                logging.warning("Chunk %d/%d failed for %s; page will be retried", index, total, url)
+                return result
+            pubs.extend(result.pubs)
+        return ExtractionLLMResult(pubs=merge_publications(pubs))
+
+    @staticmethod
+    def _extract_publications_call(text_content: str, url: str, scrape_log_id: int | None = None,
+                                   part: tuple[int, int, str | None] | None = None) -> ExtractionLLMResult:
+        """One extraction call; titles and evidence are verified against text_content."""
+        prompt = Publication.build_extraction_prompt(text_content, url, part=part)
         model = get_model()
         logging.info(f"Extracting publications from {url} using LLM ({model})")
 

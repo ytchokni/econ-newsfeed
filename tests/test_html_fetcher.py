@@ -111,9 +111,12 @@ class TestFetchHtml:
         assert result is None
 
     def test_rejects_oversized_response(self):
+        """A body past FETCH_MAX_BYTES is abandoned while streaming."""
+        from backend.pipeline.html_fetcher import FETCH_MAX_BYTES
         mock_resp = MagicMock()
         mock_resp.status_code = 200
-        mock_resp.content = b"x" * 1_000_001  # Just over CONTENT_MAX_BYTES (1MB)
+        mock_resp.headers = {}
+        mock_resp.iter_content.return_value = iter([b"x" * (FETCH_MAX_BYTES // 2)] * 3)
 
         mock_session = MagicMock()
         mock_session.get.return_value = mock_resp
