@@ -37,6 +37,8 @@ FRONTEND_URL = os.environ.get("MONITOR_FRONTEND_URL", "https://econ-newsfeed.ver
 LOCAL_API_URL = "http://localhost:8000"
 API_CONTAINER = "econ-newsfeed-api-1"
 DB_CONTAINER = "econ-newsfeed-db-1"
+# Optional `scraper` Compose service; checked only once it has been created.
+SCRAPER_CONTAINER = "econ-newsfeed-scraper-1"
 BACKUP_DIR = Path("/backups")
 ALERT_LABEL = "monitor-alert"
 
@@ -45,6 +47,10 @@ DISK_MAX_PERCENT = 90
 BACKUP_MAX_AGE_HOURS = 30         # daily at 03:00 UTC
 BACKUP_MIN_BYTES = 100 * 1024 * 1024
 SCRAPE_MAX_AGE_HOURS = 36         # daily scrape
+# A full fetch pass takes ~3 h and starts every SCRAPE_INTERVAL_HOURS (24), so a
+# completed pass is normally under ~27 h old; 36 h means one cycle failed to finish
+# (e.g. restarts cutting it off, a stopped scraper service).
+SCRAPE_COMPLETED_MAX_AGE_HOURS = 36
 STUCK_SCRAPE_HOURS = 24
 # The 2026-11 billing outage still completed 1-3 pages an hour, so a "last
 # success" age check stayed green for ten days. Compare throughput to backlog.
@@ -79,6 +85,7 @@ CLAUDE_REQUEST = (
 PIPELINE_COLUMNS = (
     "scrape_age_h", "stuck_scrapes", "pending", "extracted_6h", "feed_recent", "enrich_age_h",
     "snapshot_guard", "never_extracted", "oldest_changed_h", "stale_changed",
+    "scrape_completed_h",
 )
 # Only idx_extraction_state columns: any other html_content column in these
 # filters makes MySQL read every stored page (~60 s on production).
@@ -112,7 +119,10 @@ SELECT
      WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = 'trg_feed_events_snapshot_guard'),
   (SELECT COUNT(*) {_PENDING} AND hc.extracted_hash IS NULL),
   ({_OLDEST_CHANGED}),
-  ({_STALE_CHANGED});
+  ({_STALE_CHANGED}),
+  -- Last full fetch pass that finished (extract CLI rows check no URLs).
+  TIMESTAMPDIFF(HOUR, (SELECT MAX(finished_at) FROM scrape_log
+                       WHERE status = 'completed' AND urls_checked > 0), NOW());
 """
 
 
@@ -196,6 +206,15 @@ def container_check(container: str) -> dict:
     return check(name, running, f"{container} is {'running' if running else 'not running'}")
 
 
+def optional_container_check(container: str) -> list[dict]:
+    """container_check for a service that may not be deployed (no container yet)."""
+    try:
+        exists = run(["docker", "inspect", container]).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        exists = False
+    return [container_check(container)] if exists else []
+
+
 def disk_check(path: str = "/") -> dict:
     usage = shutil.disk_usage(path)
     percent = usage.used / usage.total * 100
@@ -246,6 +265,11 @@ def evaluate_pipeline(stats: dict) -> list[dict]:
         check("scrape_recent", scrape_age is not None and scrape_age <= SCRAPE_MAX_AGE_HOURS,
               f"last scrape started {scrape_age}h ago" if scrape_age is not None
               else "no scrape has ever started"),
+        check("scrape_completed",
+              stats["scrape_completed_h"] is not None
+              and stats["scrape_completed_h"] <= SCRAPE_COMPLETED_MAX_AGE_HOURS,
+              f"last full scrape finished {stats['scrape_completed_h']}h ago"
+              if stats["scrape_completed_h"] is not None else "no scrape has ever finished"),
         check("scrape_not_stuck", stats["stuck_scrapes"] == 0,
               f"{stats['stuck_scrapes']} scrape(s) running for over {STUCK_SCRAPE_HOURS}h"),
         check("extraction_throughput", not stalled,
@@ -367,6 +391,7 @@ def host_checks() -> list[dict]:
     return [
         container_check(API_CONTAINER),
         container_check(DB_CONTAINER),
+        *optional_container_check(SCRAPER_CONTAINER),
         http_check("api_ready", f"{LOCAL_API_URL}/api/ready"),
         disk_check(),
         backup_check(),

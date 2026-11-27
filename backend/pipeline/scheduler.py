@@ -3,7 +3,7 @@ import os
 import signal
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import mysql.connector
 import mysql.connector.errors
@@ -20,6 +20,7 @@ from backend.config import db_config
 from backend.database.researchers import record_extraction_failure
 from backend.researcher import Researcher
 from backend.pipeline.html_fetcher import HTMLFetcher
+from backend.pipeline.fetch_lanes import HostLanes
 from backend.llm import throttle
 logger = logging.getLogger(__name__)
 
@@ -181,6 +182,30 @@ def is_scrape_running() -> bool:
 
 SCRAPE_INTERVAL_HOURS = int(os.environ.get('SCRAPE_INTERVAL_HOURS', '24'))
 SCRAPE_ON_STARTUP = os.environ.get('SCRAPE_ON_STARTUP', 'false').lower() == 'true'
+# false when the separate `scraper` Compose service (backend.pipeline.scrape_worker)
+# owns the fetch pass: the API then schedules no scrape, so deploys never cut one off.
+SCRAPE_IN_API = os.environ.get('SCRAPE_IN_API', 'true').lower() == 'true'
+
+
+def _env_int(name: str, default: int, low: int, high: int) -> int:
+    try:
+        return min(high, max(low, int(os.environ.get(name, str(default)))))
+    except ValueError:
+        return default
+
+
+# Parallel fetch workers. Each works on a different host (fetch_lanes), so
+# per-host rate limits are unchanged; 6 workers bring a full pass from ~17 h
+# to ~3 h (the sites.google.com lane alone needs ~2.2 h).
+SCRAPE_CONCURRENCY = _env_int('SCRAPE_CONCURRENCY', 6, 1, 32)
+_PROGRESS_FLUSH_SECONDS = 15
+_PROGRESS_FLUSH_URLS = 25
+# On a stop request, how long in-flight fetches may finish (a fetch is bounded
+# by its timeouts and retries: ~70 s in the worst case). Keep below the
+# scraper service's stop_grace_period (120 s).
+_SCRAPE_STOP_GRACE_SECONDS = 90
+_FAILED_RUN_RETRY_SECONDS = 300
+_scrape_stop_event = threading.Event()
 ENRICHMENT_WORKER_ENABLED = os.environ.get('ENRICHMENT_WORKER_ENABLED', 'false').lower() == 'true'
 _ENRICHMENT_IDLE_SECONDS = 300  # 5 minutes
 _ENRICHMENT_BATCH_SIZE = 50
@@ -258,13 +283,111 @@ class _ExtractionClaims:
                 self._done[row['id']] = row.get('content_hash')
 
 
-def create_scrape_log() -> int:
-    """Create a new scrape_log entry and return its ID."""
+def create_scrape_log(fetch_run: bool = False, started_at: datetime | None = None) -> int:
+    """Create a new scrape_log entry and return its ID.
+
+    fetch_run marks a fetch pass (run_scrape_job): only those are resumed.
+    """
+    if fetch_run:
+        return execute_query(
+            "INSERT INTO scrape_log (started_at, status, is_fetch_run) VALUES (%s, 'running', TRUE)",
+            (started_at or datetime.now(timezone.utc),),
+        )
     query = """
         INSERT INTO scrape_log (started_at, status)
         VALUES (%s, 'running')
     """
-    return execute_query(query, (datetime.now(timezone.utc),))
+    return execute_query(query, (started_at or datetime.now(timezone.utc),))
+
+
+def _utc_naive(dt: datetime) -> datetime:
+    """scrape_log stores UTC in DATETIME columns (naive)."""
+    return dt.astimezone(timezone.utc).replace(tzinfo=None) if dt.tzinfo else dt
+
+
+def _latest_fetch_run() -> dict | None:
+    return fetch_one(
+        """SELECT id, started_at, status, urls_checked, urls_changed
+           FROM scrape_log WHERE is_fetch_run = TRUE ORDER BY id DESC LIMIT 1"""
+    )
+
+
+def _is_resumable(row: dict | None, now: datetime) -> bool:
+    """An unfinished fetch pass still inside its duration budget.
+
+    'interrupted' (stopped on SIGTERM), 'failed' (an error, or a zombie the
+    sweep found after a SIGKILL) and 'running' (killed before the sweep ran;
+    the caller holds the scrape lock, so no live process owns it).
+    """
+    if not row or row.get('status') == 'completed' or not row.get('started_at'):
+        return False
+    started = _utc_naive(row['started_at'])
+    return _utc_naive(now) - started < timedelta(hours=_MAX_SCRAPE_DURATION_HOURS)
+
+
+def scrape_due(now: datetime | None = None) -> tuple[bool, float]:
+    """(due, seconds until due) for the next fetch pass.
+
+    Due when an unfinished pass can be resumed, or SCRAPE_INTERVAL_HOURS after
+    the last pass started. Read from scrape_log, so restarts and deploys do not
+    shift the schedule (APScheduler intervals restart with the process).
+    """
+    now = now or datetime.now(timezone.utc)
+    row = _latest_fetch_run()
+    if row is None or _is_resumable(row, now):
+        return True, 0.0
+    next_at = _utc_naive(row['started_at']) + timedelta(hours=SCRAPE_INTERVAL_HOURS)
+    wait = (next_at - _utc_naive(now)).total_seconds()
+    return wait <= 0, max(wait, 0.0)
+
+
+def _start_or_resume_run() -> dict:
+    """Resume the newest unfinished fetch pass, or start a new one.
+
+    Must be called with the scrape advisory lock held.
+    """
+    now = datetime.now(timezone.utc)
+    row = _latest_fetch_run()
+    if _is_resumable(row, now):
+        execute_query(
+            """UPDATE scrape_log
+               SET status = 'running', finished_at = NULL, error_message = NULL,
+                   resumed_count = resumed_count + 1
+               WHERE id = %s""",
+            (row['id'],),
+        )
+        logger.info("Resuming fetch pass #%d started %s (%s urls checked so far)",
+                    row['id'], row['started_at'], row.get('urls_checked') or 0)
+        return {
+            'id': row['id'], 'started_at': _utc_naive(row['started_at']),
+            'urls_checked': row.get('urls_checked') or 0,
+            'urls_changed': row.get('urls_changed') or 0, 'resumed': True,
+        }
+    started_at = _utc_naive(now)
+    log_id = create_scrape_log(fetch_run=True, started_at=started_at)
+    return {'id': log_id, 'started_at': started_at, 'urls_checked': 0,
+            'urls_changed': 0, 'resumed': False}
+
+
+def _mark_urls_checked(url_ids: list[int], checked_at: datetime) -> None:
+    """Record that this pass processed these URLs (resume skips them)."""
+    if not url_ids:
+        return
+    placeholders = ", ".join(["%s"] * len(url_ids))
+    execute_query(
+        f"UPDATE researcher_urls SET scrape_checked_at = %s WHERE id IN ({placeholders})",
+        (checked_at, *url_ids),
+    )
+
+
+def _mark_interrupted(log_id: int, urls_checked: int, urls_changed: int) -> None:
+    execute_query(
+        """UPDATE scrape_log
+           SET finished_at = %s, status = 'interrupted', urls_checked = %s,
+               urls_changed = %s, error_message = 'Stopped (shutdown); the next run resumes'
+           WHERE id = %s""",
+        (datetime.now(timezone.utc), urls_checked, urls_changed, log_id),
+    )
 
 
 def _update_progress(log_id: int, **counters) -> None:
@@ -444,79 +567,197 @@ def _with_db_retry(fn, *args, max_retries: int = 3, **kwargs):
             time.sleep(delay)
 
 
-def run_scrape_job() -> None:
+class _PassState:
+    """Counters and not-yet-flushed URL ids shared by the fetch workers."""
+
+    def __init__(self, urls_checked: int, urls_changed: int):
+        self.lock = threading.Lock()
+        self.urls_checked = urls_checked
+        self.urls_changed = urls_changed
+        self.unflushed: list[int] = []
+        self.lock_lost = False
+
+    def record(self, url_id: int, changed: bool) -> int:
+        with self.lock:
+            self.urls_checked += 1
+            if changed:
+                self.urls_changed += 1
+            self.unflushed.append(url_id)
+            return self.urls_checked
+
+    def take_unflushed(self) -> tuple[list[int], int, int]:
+        with self.lock:
+            ids, self.unflushed = self.unflushed, []
+            return ids, self.urls_checked, self.urls_changed
+
+
+def _flush_progress(log_id: int, state: _PassState) -> None:
+    """Persist processed URL ids and counters (dashboard + resume point)."""
+    ids, checked, changed = state.take_unflushed()
+    try:
+        # Never before the pass's start (same clock), so a resume skips them.
+        _with_db_retry(_mark_urls_checked, ids, _utc_naive(datetime.now(timezone.utc)))
+        _with_db_retry(_update_progress, log_id, urls_checked=checked, urls_changed=changed)
+    except Exception as e:
+        # The URLs are fetched again if the pass is resumed; nothing is lost.
+        logger.warning("Could not record scrape progress: %s: %s", type(e).__name__, e)
+
+
+def _fetch_pass(urls: list[dict], log_id: int, state: _PassState,
+                stop_event: threading.Event, deadline: float) -> str:
+    """Fetch every URL with SCRAPE_CONCURRENCY workers, one host at a time each.
+
+    Returns 'done', 'stopped' (stop_event set: URLs left for the resumed run)
+    or 'deadline'. Progress is flushed every _PROGRESS_FLUSH_SECONDS or
+    _PROGRESS_FLUSH_URLS, and once more at the end.
+    """
+    lanes = HostLanes(urls)
+    total = state.urls_checked + len(urls)
+    workers = min(SCRAPE_CONCURRENCY, max(1, len(urls)))
+    finished = threading.Event()
+    alive = [workers]
+    alive_lock = threading.Lock()
+
+    def should_stop() -> bool:
+        return stop_event.is_set() or time.time() > deadline or state.lock_lost
+
+    def worker() -> None:
+        try:
+            while not should_stop():
+                row = lanes.take()
+                if row is None:
+                    return
+                url_id, url = row['id'], row['url']
+                changed = False
+                try:
+                    _ensure_scrape_lock_held()
+                except RuntimeError:
+                    state.lock_lost = True
+                    lanes.close()
+                    lanes.done(row)
+                    return
+                try:
+                    t0 = time.time()
+                    changed = bool(_with_db_retry(
+                        HTMLFetcher.fetch_and_save_if_changed, url_id, url, row['researcher_id']))
+                    n = state.record(url_id, changed)
+                    logger.info("[%d/%d] fetch %s — %.0fms (changed=%s)",
+                                n, total, url, (time.time() - t0) * 1000, changed)
+                except _TRANSIENT_MYSQL_ERRORS as e:
+                    state.record(url_id, False)
+                    logger.error("MySQL connection error fetching URL %s (id=%s) after retries: %s", url, url_id, e)
+                except Exception as e:
+                    state.record(url_id, False)
+                    logger.error("Error fetching URL %s (id=%s): %s", url, url_id, e)
+                finally:
+                    lanes.done(row)
+        finally:
+            with alive_lock:
+                alive[0] -= 1
+                if alive[0] == 0:
+                    finished.set()
+
+    threads = [threading.Thread(target=worker, name=f"scrape-fetch-{n + 1}", daemon=True)
+               for n in range(workers)]
+    for thread in threads:
+        thread.start()
+
+    last_flush = time.monotonic()
+    while not finished.wait(1.0):
+        with state.lock:
+            pending = len(state.unflushed)
+        if pending >= _PROGRESS_FLUSH_URLS or time.monotonic() - last_flush >= _PROGRESS_FLUSH_SECONDS:
+            _flush_progress(log_id, state)
+            last_flush = time.monotonic()
+        if should_stop():
+            break
+
+    if not finished.is_set():
+        # Stop handing out URLs; let in-flight fetches finish so their
+        # results are saved and counted, then flush.
+        lanes.close()
+        if not finished.wait(_SCRAPE_STOP_GRACE_SECONDS):
+            logger.warning("%d fetch(es) still running after %ds; they are fetched again on resume",
+                           lanes.busy, _SCRAPE_STOP_GRACE_SECONDS)
+    _flush_progress(log_id, state)
+
+    if lanes.remaining == 0 and lanes.busy == 0:
+        return 'done'
+    if stop_event.is_set():
+        return 'stopped'
+    if time.time() > deadline:
+        return 'deadline'
+    return 'done'
+
+
+def run_scrape_job(stop_event: threading.Event | None = None) -> str | None:
     """Fetch HTML for all researcher URLs (change detection via content hash).
 
     Extraction is owned by the continuous extraction worker — this job only
     downloads pages and validates draft URLs.
+
+    The pass is resumable: every processed URL gets
+    researcher_urls.scrape_checked_at, and an unfinished pass (interrupted,
+    failed or killed) is continued by the next call instead of starting over.
+    Setting stop_event ends it gracefully as 'interrupted'.
+
+    Returns the final scrape_log status, or None if another process holds
+    the scrape lock.
     """
     global _lock_conn, _scrape_lock_lost
+    stop_event = stop_event if stop_event is not None else _scrape_stop_event
     lock_conn = _acquire_db_lock()
     if lock_conn is None:
         logger.warning("Scrape already in progress, skipping")
-        return
+        return None
     with _lock_conn_guard:
         _lock_conn = lock_conn
         _scrape_lock_lost = False
 
-    HTMLFetcher._robots_cache.clear()
+    HTMLFetcher.clear_robots_cache()
 
     log_id = None
+    status = None
     try:
-        log_id = create_scrape_log()
-        urls = Researcher.get_all_researcher_urls()
-        urls_checked = 0
-        urls_changed = 0
+        run = _start_or_resume_run()
+        log_id = run['id']
+        urls = Researcher.get_all_researcher_urls(checked_before=run['started_at'])
+        state = _PassState(run['urls_checked'], run['urls_changed'])
+        logger.info("Fetch pass #%d: %d URLs to check (%d already checked), %d workers",
+                    log_id, len(urls), state.urls_checked, min(SCRAPE_CONCURRENCY, max(1, len(urls))))
 
         scrape_start = time.time()
-        scrape_deadline = scrape_start + _MAX_SCRAPE_DURATION_HOURS * 3600
-        for url_row in urls:
-            _ensure_scrape_lock_held()
-            if time.time() > scrape_deadline:
-                logger.warning("Scrape deadline reached (%dh), stopping at %d/%d URLs",
-                               _MAX_SCRAPE_DURATION_HOURS, urls_checked, len(urls))
-                break
-
-            url_id = url_row['id']
-            researcher_id = url_row['researcher_id']
-            url = url_row['url']
-            urls_checked += 1
-
-            try:
-                t0 = time.time()
-                changed = _with_db_retry(HTMLFetcher.fetch_and_save_if_changed, url_id, url, researcher_id)
-                fetch_ms = (time.time() - t0) * 1000
-                logger.info(f"[{urls_checked}/{len(urls)}] fetch {url} — {fetch_ms:.0f}ms (changed={changed})")
-
-                if changed:
-                    urls_changed += 1
-
-                if urls_checked % 10 == 0:
-                    _with_db_retry(_update_progress, log_id, urls_checked=urls_checked, urls_changed=urls_changed)
-
-            except _TRANSIENT_MYSQL_ERRORS as e:
-                logger.error("MySQL connection error fetching URL %s (id=%s) after retries: %s", url, url_id, e)
-                continue
-            except Exception as e:
-                logger.error("Error fetching URL %s (id=%s): %s", url, url_id, e)
-                continue
-
-        _update_progress(log_id, urls_checked=urls_checked, urls_changed=urls_changed)
+        # The duration budget counts from the pass's first start, across resumes.
+        started_epoch = run['started_at'].replace(tzinfo=timezone.utc).timestamp()
+        deadline = started_epoch + _MAX_SCRAPE_DURATION_HOURS * 3600
+        outcome = _fetch_pass(urls, log_id, state, stop_event, deadline)
+        if outcome == 'deadline':
+            logger.warning("Scrape deadline reached (%dh), stopping at %d/%d URLs",
+                           _MAX_SCRAPE_DURATION_HOURS, state.urls_checked, state.urls_checked + len(urls))
+        urls_checked, urls_changed = state.urls_checked, state.urls_changed
         fetch_phase_s = time.time() - scrape_start
         logger.info(f"Fetch phase done: {fetch_phase_s:.1f}s — {urls_checked} checked, {urls_changed} changed")
 
         _ensure_scrape_lock_held()
-        t0 = time.time()
-        _validate_draft_urls()
-        validate_s = time.time() - t0
-        logger.info(f"Draft URL validation: {validate_s:.1f}s")
+        if outcome == 'stopped':
+            _mark_interrupted(log_id, urls_checked, urls_changed)
+            status = 'interrupted'
+            logger.info("Fetch pass #%d interrupted at %d URLs; the next run resumes it",
+                        log_id, urls_checked)
+        else:
+            t0 = time.time()
+            _validate_draft_urls()
+            validate_s = time.time() - t0
+            logger.info(f"Draft URL validation: {validate_s:.1f}s")
 
-        total_s = time.time() - scrape_start
-        update_scrape_log(log_id, "completed", urls_checked, urls_changed)
-        logger.info(f"Scrape completed: {urls_checked} checked, {urls_changed} changed — {total_s:.1f}s total")
+            total_s = time.time() - scrape_start
+            update_scrape_log(log_id, "completed", urls_checked, urls_changed)
+            status = 'completed'
+            logger.info(f"Scrape completed: {urls_checked} checked, {urls_changed} changed — {total_s:.1f}s total")
 
     except Exception as e:
         logger.error("Scrape job failed: %s: %s", type(e).__name__, e)
+        status = 'failed'
         if log_id:
             update_scrape_log(log_id, "failed", error_message=f"{type(e).__name__}: {e}")
     finally:
@@ -529,6 +770,9 @@ def run_scrape_job() -> None:
             _release_db_lock(lock_to_release)
         elif not lock_was_lost:
             _release_db_lock(lock_conn)
+
+    if status == 'interrupted':
+        return status  # shutting down; the post-pass steps run after the resumed pass
 
     t0 = time.time()
     try:
@@ -550,6 +794,18 @@ def run_scrape_job() -> None:
     if os.environ.get("SITE_MINING_ENABLED", "false").lower() == "true" and _scheduler:
         _scheduler.add_job(run_site_mining_job, 'date', id='site_mining_after_scrape',
                            replace_existing=True, max_instances=1)
+    return status
+
+
+def _run_scrape_if_due() -> None:
+    """API scheduler: resume an unfinished pass or start one that is due."""
+    try:
+        due, _ = scrape_due()
+    except Exception as e:
+        logger.error("Could not check scrape schedule: %s: %s", type(e).__name__, e)
+        return
+    if due:
+        run_scrape_job()
 
 
 def run_site_mining_job() -> dict:
@@ -890,13 +1146,17 @@ def start_scheduler() -> None:
     signal.signal(signal.SIGTERM, _handle_sigterm)
     signal.signal(signal.SIGINT, _handle_sigterm)
 
+    _scrape_stop_event.clear()
     _scheduler = BackgroundScheduler()
-    _scheduler.add_job(
-        run_scrape_job,
-        'interval',
-        hours=SCRAPE_INTERVAL_HOURS,
-        id='scrape_job',
-    )
+    if SCRAPE_IN_API:
+        _scheduler.add_job(
+            run_scrape_job,
+            'interval',
+            hours=SCRAPE_INTERVAL_HOURS,
+            id='scrape_job',
+        )
+    # Also with SCRAPE_IN_API=false: the advisory lock is shared across
+    # processes, so the sweep stays correct for the scraper service's runs.
     _scheduler.add_job(
         _cleanup_stale_scrape_logs,
         'interval',
@@ -912,7 +1172,10 @@ def start_scheduler() -> None:
         coalesce=True,
     )
     _scheduler.start()
-    logger.info(f"Scheduler started: scraping every {SCRAPE_INTERVAL_HOURS} hours")
+    if SCRAPE_IN_API:
+        logger.info(f"Scheduler started: scraping every {SCRAPE_INTERVAL_HOURS} hours")
+    else:
+        logger.info("Scheduler started: SCRAPE_IN_API=false, the scraper service runs the fetch pass")
 
     _start_lock_keepalive()
 
@@ -922,9 +1185,11 @@ def start_scheduler() -> None:
                            misfire_grace_time=600)
         logger.info("Cheap site mining scheduled hourly; department directories refresh weekly")
 
-    if SCRAPE_ON_STARTUP:
-        logger.info("SCRAPE_ON_STARTUP is true, triggering immediate scrape in background")
-        threading.Thread(target=run_scrape_job, name="startup-scrape").start()
+    if SCRAPE_ON_STARTUP and SCRAPE_IN_API:
+        # Resumes a pass the last restart interrupted, or starts one if due;
+        # a restart no longer begins a new full pass.
+        logger.info("SCRAPE_ON_STARTUP is true, resuming or starting a due scrape in background")
+        threading.Thread(target=_run_scrape_if_due, name="startup-scrape").start()
 
     if ENRICHMENT_WORKER_ENABLED:
         start_enrichment_worker()
@@ -1001,6 +1266,9 @@ def start_scheduler() -> None:
 def shutdown_scheduler() -> None:
     """Shut down the scheduler gracefully, waiting for any running job to complete."""
     global _scheduler, _scheduler_lock_conn
+    # A running fetch pass finishes its in-flight URLs, records its progress
+    # and ends as 'interrupted'; the next run resumes it.
+    _scrape_stop_event.set()
     _stop_lock_keepalive()
     stop_enrichment_worker()
     stop_extraction_worker()
