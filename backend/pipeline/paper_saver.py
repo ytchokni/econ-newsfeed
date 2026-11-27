@@ -13,7 +13,13 @@ from backend.database import (
     get_researcher_id,
     normalize_title,
 )
-from backend.database.researchers import is_abbreviation_of, is_compatible_name, merge_researchers, refresh_has_top5_for
+from backend.database.researchers import (
+    disambiguation_prefetch, is_abbreviation_of, is_compatible_name, merge_researchers,
+    prefetch_disambiguation, refresh_has_top5_for,
+)
+from backend.database.identity import (
+    SHARED_PAGE, match_score, on_merge, page_ownership_problem, same_person, strip_repeated_surname,
+)
 from backend.database.snapshots import _STATUS_RANK
 from backend.database.papers import title_hash_candidates
 from backend.publication_rules import is_working_paper_series
@@ -23,6 +29,29 @@ from datetime import datetime, timezone
 import logging
 
 _author_id_cache: dict[tuple[str, str], int] = {}
+
+
+_merged_into: dict[int, int] = {}
+
+
+def _forget_merged(duplicate_id: int, canonical_id: int) -> None:
+    """Point cached names at the surviving record after a researcher merge."""
+    _merged_into[duplicate_id] = canonical_id
+    for key, rid in list(_author_id_cache.items()):
+        if rid == duplicate_id:
+            _author_id_cache[key] = canonical_id
+
+
+on_merge(_forget_merged)
+
+
+def _current_id(researcher_id: int) -> int:
+    """Follow merges made since the ID was looked up (e.g. by a Layer 2 merge)."""
+    seen = set()
+    while researcher_id in _merged_into and researcher_id not in seen:
+        seen.add(researcher_id)
+        researcher_id = _merged_into[researcher_id]
+    return researcher_id
 
 _SHARED_PAPER_THRESHOLD = 2
 _SHARED_PAPER_THRESHOLD_WEAK = 5
@@ -122,12 +151,14 @@ def _merge_compatible_authors(paper_id: int) -> None:
     Any same-last-name pair: 5+ shared papers, no conflicting personal websites.
     """
     authors = fetch_all(
-        """SELECT a.researcher_id, r.first_name, r.last_name
+        """SELECT a.researcher_id, r.first_name, r.last_name, r.openalex_author_id
            FROM authorship a JOIN researchers r ON r.id = a.researcher_id
            WHERE a.publication_id = %s""",
         (paper_id,),
     )
     if len(authors) < 2:
+        return
+    if _merge_openalex_twins(authors):
         return
 
     by_last: dict[str, list[dict]] = {}
@@ -176,16 +207,152 @@ def _merge_compatible_authors(paper_id: int) -> None:
                 return
 
 
+def _merge_openalex_twins(authors: list[dict]) -> bool:
+    """Merge two authors of one paper that share an OpenAlex ID and a name.
+
+    One person listed twice ("Andrew Garin" and "Andy Garin") because the
+    paper came from several pages that spell the name differently.
+    """
+    by_oa: dict[str, list[dict]] = {}
+    for a in authors:
+        if a.get('openalex_author_id'):
+            by_oa.setdefault(a['openalex_author_id'], []).append(a)
+    for group in by_oa.values():
+        if len(group) != 2:
+            continue
+        a, b = group
+        # Default strength: OpenAlex itself conflates Zhang/Zheng, Meyer/Mayer.
+        if not same_person(a['first_name'], a['last_name'], b['first_name'], b['last_name']):
+            continue
+        from backend.database.identity import canonical_order, merge_researcher_into, researcher_weights
+        try:
+            with get_connection() as conn:
+                cursor = conn.cursor(dictionary=True, buffered=True)
+                try:
+                    ranked = sorted(researcher_weights(cursor, [a['researcher_id'], b['researcher_id']]),
+                                    key=canonical_order)
+                    if len(ranked) == 2:
+                        merge_researcher_into(cursor, ranked[0]['id'], ranked[1]['id'])
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+                finally:
+                    cursor.close()
+            return True
+        except Exception:
+            logging.exception("OpenAlex twin merge failed: %s / %s", a['researcher_id'], b['researcher_id'])
+    return False
+
+
+def _page_owners(cursor, url: str) -> tuple[list[dict], str | None]:
+    """Researchers tracking this URL (lowest ID first) and why the page should
+    not be credited to them (see identity.page_ownership_problem), if any."""
+    cursor.execute(
+        """SELECT DISTINCT r.id, r.first_name, r.last_name FROM researchers r
+           JOIN researcher_urls ru ON ru.researcher_id = r.id
+           WHERE ru.url = %s ORDER BY r.id""",
+        (url,),
+    )
+    owners = [{"id": row[0], "first_name": row[1], "last_name": row[2]}
+              for row in cursor.fetchall() or []]
+    if not owners:
+        return [], None
+    cursor.execute(
+        """SELECT hc.content, hc.raw_html, ru.page_type FROM html_content hc
+           JOIN researcher_urls ru ON ru.id = hc.url_id
+           WHERE ru.url = %s AND (hc.content IS NOT NULL OR hc.raw_html IS NOT NULL)
+           ORDER BY hc.timestamp DESC LIMIT 1""",
+        (url,),
+    )
+    page = cursor.fetchall() or []
+    text, raw = (page[0][0], page[0][1]) if page else (None, None)
+    page_type = page[0][2] if page and len(page[0]) > 2 else None
+    return owners, page_ownership_problem(owners, text, raw, url, page_type)
+
+
+def _owner_byline_index(owners: list[dict], authors: list[tuple[str, str]]) -> dict[int, int]:
+    """Map byline positions to the page owner they name ({index: owner_id}).
+
+    Each owner takes at most one byline author: the most specific match
+    ("Dora L. Costa" over a co-author "D. Costa" is impossible to tell apart,
+    so an exact name beats a full first name, which beats initials).
+    """
+    routed: dict[int, int] = {}
+    for owner in owners:
+        best = None
+        for idx, (first, last) in enumerate(authors):
+            if idx in routed or not first:
+                continue
+            if not same_person(owner['first_name'], owner['last_name'], first, last, strong=True):
+                continue
+            score = match_score(owner['first_name'], owner['last_name'], first, last)
+            if best is None or score > best[0]:
+                best = (score, idx)
+        if best is not None:
+            routed[best[1]] = owner['id']
+    return routed
+
+
+def _split_author(author) -> tuple[str, str]:
+    """(given names, surname) of an extracted author; ["Peter Hull", "Hull"] -> Peter / Hull."""
+    if len(author) == 1:
+        return "", author[0]
+    if len(author) == 2:
+        first, last = author[0], author[1]
+    else:
+        first, last = " ".join(author[:-1]), author[-1]
+    return strip_repeated_surname(first, last), last
+
+
 class PaperSaver:
+    # apply_title_rename outcomes
+    RENAMED = 'renamed'
+    MERGED = 'merged'      # the new title belonged to the same work: rows merged
+    SKIPPED = 'skipped'    # the new title belongs to a different work: both kept
+
     @staticmethod
     def save_publications(
         url: str,
         publications: list[dict],
         is_seed: bool = False,
     ) -> list[SaveResult]:
-        """Save extracted publications. Returns SaveResult per successfully saved paper."""
+        """Save extracted publications. Returns SaveResult per successfully saved paper.
+
+        Authors that need an LLM disambiguation are asked about first, outside
+        the save transaction, so the model call holds no row locks.
+        """
+        with disambiguation_prefetch():
+            for pub in publications:
+                for author in pub.get('authors') or ():
+                    if not author:
+                        continue
+                    first_name, last_name = _split_author(author)
+                    if (first_name, last_name) in _author_id_cache:
+                        continue
+                    try:
+                        prefetch_disambiguation(first_name, last_name)
+                    except Exception as e:  # the in-transaction path still works
+                        logging.warning("Disambiguation prefetch failed for %s %s: %s",
+                                        first_name, last_name, e)
+            return PaperSaver._save_publications(url, publications, is_seed)
+
+    @staticmethod
+    def _save_publications(
+        url: str,
+        publications: list[dict],
+        is_seed: bool = False,
+    ) -> list[SaveResult]:
         results = []
         with get_connection() as conn:
+            lookup = conn.cursor(buffered=True)
+            try:
+                owners, ownership_problem = _page_owners(lookup, url)
+            finally:
+                lookup.close()
+            if ownership_problem:
+                logging.info("Not crediting page owner(s) %s with papers from %s: %s",
+                             [o['id'] for o in owners], url, ownership_problem)
             for pub in publications:
                 cursor = None
                 try:
@@ -282,20 +449,35 @@ class PaperSaver:
                     # for within-paper dedup of name variants
                     resolved_by_last: dict[str, list[tuple[int, str]]] = {}
 
-                    for author_order, author in enumerate(pub['authors'], start=1):
+                    byline = []
+                    for author in pub['authors']:
                         if not author:
-                            continue
-                        if len(author) == 1:
-                            first_name, last_name = "", author[0]
-                        elif len(author) == 2:
-                            first_name, last_name = author
+                            byline.append(None)
                         else:
-                            first_name = " ".join(author[:-1])
-                            last_name = author[-1]
+                            byline.append(_split_author(author))
+                    # A byline name that is the page owner's resolves to the
+                    # owner, never to a same-name stub record.
+                    owner_at = _owner_byline_index(
+                        owners, [b if b else ("", "") for b in byline]) if ownership_problem != SHARED_PAGE else {}
+
+                    for author_order, name in enumerate(byline, start=1):
+                        if not name:
+                            continue
+                        first_name, last_name = name
+
+                        # Page owner named in the byline
+                        last_key = last_name.lower().strip()
+                        if (author_order - 1) in owner_at:
+                            author_id = _current_id(owner_at[author_order - 1])
+                            resolved_by_last.setdefault(last_key, []).append((author_id, first_name))
+                            cursor.execute(
+                                "INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order) VALUES (%s, %s, %s)",
+                                (author_id, publication_id, author_order),
+                            )
+                            continue
 
                         # Layer 1: check if a compatible-name author is already
                         # resolved for this paper (same last name, compatible first)
-                        last_key = last_name.lower().strip()
                         author_id = None
                         if first_name and last_key in resolved_by_last:
                             for rid, resolved_first in resolved_by_last[last_key]:
@@ -318,31 +500,28 @@ class PaperSaver:
                                 (author_id, publication_id, author_order),
                             )
 
-                    # Page owner — skip if a compatible-name author is already on this paper
-                    cursor.execute(
-                        """SELECT r.id, r.first_name, r.last_name FROM researchers r
-                           JOIN researcher_urls ru ON ru.researcher_id = r.id
-                           WHERE ru.url = %s LIMIT 1""",
-                        (url,),
-                    )
-                    owner_row = cursor.fetchone()
-                    if owner_row:
-                        owner_id, owner_first, owner_last = owner_row
-                        owner_last_key = owner_last.lower().strip()
-                        already_represented = False
-                        if owner_first and owner_last_key in resolved_by_last:
-                            for rid, resolved_first in resolved_by_last[owner_last_key]:
-                                if is_compatible_name(owner_first, resolved_first):
-                                    already_represented = True
-                                    break
-                        if not already_represented and not pub.get('_authors_complete'):
-                            cursor.execute(
-                                "INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order) VALUES (%s, %s, %s)",
-                                (owner_id, publication_id, 0),
-                            )
-                        elif not already_represented:
-                            logging.info("Did not attach page owner %s to explicit byline for %s",
-                                         owner_id, title)
+                    # Page owner not in the byline: attach at position 0 when the
+                    # extractor could not see the full author list. Never on a
+                    # page that does not name its owner or that several
+                    # unrelated researchers track (department/news pages).
+                    if owners and not ownership_problem:
+                        named = set(owner_at.values())
+                        for owner in owners:
+                            if owner['id'] in named:
+                                continue
+                            owner_last_key = owner['last_name'].lower().strip()
+                            if any(is_compatible_name(owner['first_name'], resolved_first)
+                                   for _, resolved_first in resolved_by_last.get(owner_last_key, [])
+                                   if owner['first_name']):
+                                continue
+                            if not pub.get('_authors_complete'):
+                                cursor.execute(
+                                    "INSERT IGNORE INTO authorship (researcher_id, publication_id, author_order) VALUES (%s, %s, %s)",
+                                    (_current_id(owner['id']), publication_id, 0),
+                                )
+                            else:
+                                logging.info("Did not attach page owner %s to explicit byline for %s",
+                                             owner['id'], title)
 
                     conn.commit()
 
@@ -393,19 +572,27 @@ class PaperSaver:
 
     @staticmethod
     def apply_title_rename(paper_id: int, old_title: str, new_title: str,
-                           metadata: dict, source_url: str) -> None:
-        """Apply a known title rename; refuse collisions with another identity.
+                           metadata: dict, source_url: str, *, allow_merge: bool = False) -> str:
+        """Apply a known title rename. Returns RENAMED, MERGED or SKIPPED.
+
+        A paper may already carry the new title (often from another
+        researcher's page). That is not an error: see _resolve_rename_collision.
+        allow_merge: the page text shows the old title replaced by the new one
+        (extraction._rename_has_page_evidence); without it a collision is skipped.
+        Only RENAMED changes this paper's title and warrants a title_change event.
 
         metadata should contain status, venue, abstract, draft_url, year.
         """
         new_hash = compute_title_hash(new_title)
+        collision_id = None
 
         with get_connection() as conn:
             cursor = conn.cursor(buffered=True)
             try:
                 # A paper with the target title may already exist (typically
-                # saved as "new" earlier in the same run). Abstain rather than
-                # deleting that record without validated title/author evidence.
+                # saved from a coauthor's page). Never overwrite or delete it
+                # here: _resolve_rename_collision decides after this
+                # connection is back in the pool.
                 hashes = title_hash_candidates(new_title)
                 cursor.execute(
                     f"SELECT id FROM papers WHERE title_hash IN ({','.join(['%s'] * len(hashes))}) AND id != %s FOR UPDATE",
@@ -413,18 +600,20 @@ class PaperSaver:
                 )
                 dup = cursor.fetchone()
                 if dup:
-                    raise ValueError('Title rename collides with another paper; require a validated merge')
-                cursor.execute(
-                    "UPDATE papers SET title = %s, title_hash = %s WHERE id = %s",
-                    (new_title, new_hash, paper_id),
-                )
-                append_paper_snapshot(
-                    paper_id=paper_id, status=metadata.get('status'),
-                    venue=metadata.get('venue'), abstract=metadata.get('abstract'),
-                    draft_url=metadata.get('draft_url'), year=metadata.get('year'),
-                    source_url=source_url, title=old_title, conn=conn,
-                )
-                conn.commit()
+                    collision_id = dup[0]
+                    conn.rollback()
+                else:
+                    cursor.execute(
+                        "UPDATE papers SET title = %s, title_hash = %s WHERE id = %s",
+                        (new_title, new_hash, paper_id),
+                    )
+                    append_paper_snapshot(
+                        paper_id=paper_id, status=metadata.get('status'),
+                        venue=metadata.get('venue'), abstract=metadata.get('abstract'),
+                        draft_url=metadata.get('draft_url'), year=metadata.get('year'),
+                        source_url=source_url, title=old_title, conn=conn,
+                    )
+                    conn.commit()
             except Exception as e:
                 conn.rollback()
                 logging.error("Error applying title rename %s → %s: %s",
@@ -432,6 +621,44 @@ class PaperSaver:
                 raise
             finally:
                 cursor.close()
+
+        if collision_id is not None:
+            return PaperSaver._resolve_rename_collision(
+                paper_id, collision_id, old_title, new_title, source_url, allow_merge,
+            )
+        return PaperSaver.RENAMED
+
+    @staticmethod
+    def _resolve_rename_collision(paper_id: int, other_id: int, old_title: str,
+                                  new_title: str, source_url: str, allow_merge: bool) -> str:
+        """The new title already belongs to another paper: merge or keep both.
+
+        The page replacing this paper's title with the other paper's title
+        (allow_merge) is the title evidence; merge_paper_group(as_title=...)
+        still requires the same authors (or a shared identifier) before
+        treating them as one work, and creates no feed events. Anything else
+        keeps both papers unchanged. Never raises, so the page's other results
+        are still saved.
+        """
+        merged = False
+        if allow_merge:
+            from backend.enrichment.paper_merge import merge_paper_group
+            try:
+                merged = merge_paper_group([paper_id, other_id], as_title=new_title)
+            except Exception:
+                logging.exception("Title rename merge of papers %d and %d failed", paper_id, other_id)
+        if merged:
+            logging.info(
+                "Title rename '%s' → '%s' on %s matched paper %d; merged with paper %d",
+                old_title[:50], new_title[:50], source_url, other_id, paper_id,
+            )
+            return PaperSaver.MERGED
+        logging.warning(
+            "Skipped title rename of paper %d to the title of paper %d (not verified as "
+            "the same work) on %s: '%s' → '%s'",
+            paper_id, other_id, source_url, old_title[:80], new_title[:80],
+        )
+        return PaperSaver.SKIPPED
 
     @staticmethod
     def reconcile_title_renames(source_url: str, extracted_pubs: list[dict]) -> list[TitleRename]:
@@ -501,10 +728,12 @@ class PaperSaver:
             new_title = new_pub['title'].strip()
 
             try:
-                PaperSaver.apply_title_rename(
+                outcome = PaperSaver.apply_title_rename(
                     old_id, old_title, new_title, new_pub, source_url,
                 )
             except Exception:
+                continue
+            if outcome != PaperSaver.RENAMED:
                 continue
 
             renames.append(TitleRename(

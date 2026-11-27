@@ -6,13 +6,15 @@ import json
 import logging
 import os
 import re
+import threading
 import unicodedata
-
-import mysql.connector
+from contextlib import contextmanager
 
 from backend.database.connection import execute_query, fetch_one, fetch_all, get_connection
+from backend.database.identity import merge_researcher_into, same_person, strip_repeated_surname
 from backend.database.llm import log_llm_usage
 from backend.database.optouts import name_optout_query, url_not_opted_out_sql, url_optout_query
+from backend.database.extraction_queue import prioritise
 from backend.config import fix_encoding
 
 
@@ -301,7 +303,71 @@ def _longer_first_name(a: str, b: str) -> str:
     return a if len(a.rstrip('.')) > len(b.rstrip('.')) else b
 
 
+_prefetch_local = threading.local()
+
+
+def _disambiguation_key(first_name: str, last_name: str, candidates: list[dict]) -> tuple:
+    return (first_name, last_name, tuple(sorted(c['id'] for c in candidates)))
+
+
+@contextmanager
+def disambiguation_prefetch():
+    """Collect LLM disambiguation answers made before a save transaction.
+
+    Inside, prefetch_disambiguation() asks the model and remembers the answer;
+    get_researcher_id() inside the transaction then reuses it instead of
+    calling the model while holding row locks (and the extraction gate). A
+    candidate list that changed in between misses the cache and is asked again.
+    """
+    previous = getattr(_prefetch_local, "answers", None)
+    _prefetch_local.answers = {}
+    try:
+        yield
+    finally:
+        _prefetch_local.answers = previous
+
+
+def prefetch_disambiguation(first_name: str, last_name: str) -> None:
+    """Run get_researcher_id's read-only steps and, where it would ask the
+    model (tier 3), ask now and cache the answer. Writes nothing."""
+    answers = getattr(_prefetch_local, "answers", None)
+    if answers is None or is_bad_researcher_name(first_name, last_name):
+        return
+    first_name, _ = fix_encoding(first_name)
+    last_name, _ = fix_encoding(last_name)
+    first_name = normalize_name_case(first_name)
+    last_name = normalize_name_case(last_name)
+    if fetch_one("SELECT id FROM researchers WHERE first_name = %s AND last_name = %s",
+                 (first_name, last_name)):
+        return
+    candidates = fetch_all("SELECT id, first_name, last_name FROM researchers WHERE last_name = %s",
+                           (last_name,))
+    if not candidates:
+        return
+    initial_matches = [c for c in candidates
+                       if is_compatible_name(first_name, c['first_name'])
+                       and first_name.lower() != c['first_name'].lower()]
+    if len(initial_matches) == 1:
+        return
+    key = _disambiguation_key(first_name, last_name, candidates)
+    if key not in answers:
+        answers[key] = _ask_disambiguation(first_name, last_name, candidates)
+
+
 def _disambiguate_researcher(first_name: str, last_name: str, candidates: list[dict]) -> int | None:
+    """Return the matching researcher id among same-last-name candidates, or None.
+
+    Uses an answer prefetched before the save transaction when there is one.
+    """
+    answers = getattr(_prefetch_local, "answers", None)
+    if answers:
+        key = _disambiguation_key(first_name, last_name, candidates)
+        if key in answers:
+            return answers[key]
+    return _ask_disambiguation(first_name, last_name, candidates)
+
+
+def _ask_disambiguation(first_name: str, last_name: str, candidates: list[dict]) -> int | None:
     """Use LLM to check if any same-last-name candidate is the same person.
     Returns the matching researcher id (int) or None if no match.
     candidates: list of dicts with keys id, first_name, last_name."""
@@ -318,14 +384,20 @@ def _disambiguate_researcher(first_name: str, last_name: str, candidates: list[d
         f'Respond with JSON only: {{"match_id": <id or null>}}'
     )
     try:
+        from backend.llm import throttle
         from backend.llm.client import get_client, get_model
         client = get_client()
         model = get_model()
-        response = client.chat.completions.create(
-            messages=[{"role": "user", "content": prompt}],
-            model=model,
-            max_tokens=256,  # {"match_id": N} is ~10 tokens; 256 headroom covers any preamble leak
-        )
+        # An extraction worker holds the save gate; the call may wait for the
+        # per-minute token budget, so let the other workers save meanwhile.
+        # PaperSaver prefetches answers before its transaction, so this
+        # normally holds no row locks (a cache miss still can).
+        with throttle.extraction_gate.released():
+            response = client.chat.completions.create(
+                messages=[{"role": "user", "content": prompt}],
+                model=model,
+                max_tokens=256,  # {"match_id": N} is ~10 tokens; 256 headroom covers any preamble leak
+            )
         log_llm_usage("researcher_disambiguation", model, response.usage)
         content = response.choices[0].message.content or ""
         match = re.search(r'\{.*?\}', content, re.DOTALL)
@@ -376,6 +448,7 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
     # Normalize capitalization (fixes ALL CAPS / all lowercase from LLM / HTML)
     first_name = normalize_name_case(first_name)
     last_name = normalize_name_case(last_name)
+    first_name = strip_repeated_surname(first_name.strip(), last_name.strip())
 
     def _fetch_one(query, params):
         if conn is not None:
@@ -419,9 +492,8 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
             "SELECT id, first_name, last_name FROM researchers WHERE openalex_author_id = %s",
             (openalex_author_id,),
         )
-        compatible = [c for c in id_candidates if matches_author_name(
-            first_name, last_name, f"{c['first_name']} {c['last_name']}"
-        )]
+        compatible = [c for c in id_candidates if same_person(
+            first_name, last_name, c['first_name'], c['last_name'])]
         if len(compatible) == 1:
             logging.info(
                 "OpenAlex ID and name matched '%s %s' to researcher id=%s",
@@ -439,17 +511,19 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
         (last_name,),
     )
 
-    # 2.5. Compatible name match — initials, prefixes, multi-initials
+    # 2.5. Compatible name match — initials, prefixes, multi-initials,
+    # nicknames ("Andy" for an existing "Andrew"), accent variants
     if candidates:
         initial_matches = [
             c for c in candidates
-            if is_compatible_name(first_name, c['first_name'])
+            if same_person(first_name, last_name, c['first_name'], c['last_name'])
             and first_name.lower() != c['first_name'].lower()
         ]
         if len(initial_matches) == 1:
             match = initial_matches[0]
-            longer_name = _longer_first_name(first_name, match['first_name'])
-            if longer_name != match['first_name']:
+            stored = strip_repeated_surname(match['first_name'], last_name)
+            longer_name = _longer_first_name(first_name, stored)
+            if longer_name != match['first_name'] and is_compatible_name(first_name, stored):
                 _execute(
                     "UPDATE researchers SET first_name = %s WHERE id = %s",
                     (longer_name, match['id']),
@@ -488,95 +562,21 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
 
 
 def merge_researchers(canonical_id: int, duplicate_id: int, conn) -> None:
-    """Merge duplicate researcher into canonical: transfer authorship, JEL codes, metadata, then delete.
+    """Merge duplicate researcher into canonical and commit.
 
-    Commits after all operations complete. The caller is responsible for rollback on exception.
+    Moves authorship, URLs, follows, JEL codes and the rest (see
+    identity.merge_researcher_into), then deletes the duplicate. The caller
+    is responsible for rollback on exception.
     """
     if canonical_id == duplicate_id:
         raise ValueError(f"Cannot merge researcher into itself (same id={canonical_id})")
-
-    c = conn.cursor(dictionary=True)
-
-    # Fetch both researchers (need metadata columns for backfill)
-    c.execute(
-        "SELECT first_name, last_name, affiliation, description, position, openalex_author_id "
-        "FROM researchers WHERE id = %s", (canonical_id,),
-    )
-    canonical = c.fetchone()
-    c.execute(
-        "SELECT first_name, last_name, affiliation, description, position, openalex_author_id "
-        "FROM researchers WHERE id = %s", (duplicate_id,),
-    )
-    duplicate = c.fetchone()
-
-    if not canonical or not duplicate:
-        c.close()
-        raise ValueError(f"Researcher not found: canonical={canonical_id} duplicate={duplicate_id}")
-
-    # 1. Transfer authorship (two-step to avoid unique constraint violations)
-    c.execute(
-        "DELETE FROM authorship WHERE researcher_id = %s "
-        "AND publication_id IN (SELECT publication_id FROM "
-        "(SELECT publication_id FROM authorship WHERE researcher_id = %s) AS tmp)",
-        (duplicate_id, canonical_id),
-    )
-    c.execute(
-        "UPDATE authorship SET researcher_id = %s WHERE researcher_id = %s",
-        (canonical_id, duplicate_id),
-    )
-
-    # 2. Transfer JEL codes (IGNORE skips duplicates)
-    c.execute(
-        "UPDATE IGNORE researcher_jel_codes SET researcher_id = %s WHERE researcher_id = %s",
-        (canonical_id, duplicate_id),
-    )
-    # The merged researcher has more papers: let the JEL job classify it again.
+    c = conn.cursor(dictionary=True, buffered=True)
     try:
-        c.execute(
-            "DELETE FROM researcher_jel_state WHERE researcher_id = %s",
-            (canonical_id,),
-        )
-    except mysql.connector.Error as e:
-        if getattr(e, "errno", None) != 1146:  # table not created yet
-            raise
-
-    # 3. Transfer user follows (IGNORE skips duplicates; CASCADE cleans up leftovers)
-    c.execute(
-        "UPDATE IGNORE user_follows SET researcher_id = %s WHERE researcher_id = %s",
-        (canonical_id, duplicate_id),
-    )
-
-    # 4. Upgrade first_name to the longer variant
-    longer_name = _longer_first_name(canonical['first_name'], duplicate['first_name'])
-    if longer_name != canonical['first_name']:
-        c.execute(
-            "UPDATE researchers SET first_name = %s WHERE id = %s",
-            (longer_name, canonical_id),
-        )
-
-    # 5. Backfill metadata where canonical has NULL
-    c.execute(
-        "UPDATE researchers SET "
-        "affiliation = COALESCE(affiliation, %s), "
-        "description = COALESCE(description, %s), "
-        "position = COALESCE(position, %s), "
-        "openalex_author_id = COALESCE(openalex_author_id, %s) "
-        "WHERE id = %s",
-        (duplicate.get('affiliation'), duplicate.get('description'),
-         duplicate.get('position'), duplicate.get('openalex_author_id'),
-         canonical_id),
-    )
-
-    # 6. Delete duplicate (cascade handles researcher_urls, html_content, researcher_fields, etc.)
-    c.execute("DELETE FROM researchers WHERE id = %s", (duplicate_id,))
-
-    c.close()
+        if not merge_researcher_into(c, canonical_id, duplicate_id):
+            raise ValueError(f"Researcher not found: canonical={canonical_id} duplicate={duplicate_id}")
+    finally:
+        c.close()
     conn.commit()
-
-    logging.info(
-        f"Merged researcher #{duplicate_id} ({duplicate['first_name']} {duplicate['last_name']}) "
-        f"into #{canonical_id} ({canonical['first_name']} {canonical['last_name']})"
-    )
 
 
 def update_researcher_bio(researcher_id: int, bio: str) -> None:
@@ -592,9 +592,15 @@ def add_researcher_url(researcher_id: int, page_type: str, url: str) -> None:
     """Insert a new URL for a researcher into the researcher_urls table.
 
     URLs of researchers who opted out are refused (Searlo approvals, imports).
+    A URL already tracked for someone with a different name is a shared
+    (department, institute or news) page, not a personal page: refused.
     """
     if researcher_id is None or fetch_one(*url_optout_query(url)):
         logging.info("Skipping URL that belongs to an opted-out researcher or no researcher")
+        return
+    if url_tracked_for_someone_else(researcher_id, url):
+        logging.warning("Not adding %s for researcher %s: tracked for another researcher",
+                        url, researcher_id)
         return
     execute_query(
         "INSERT IGNORE INTO researcher_urls (researcher_id, page_type, url) VALUES (%s, %s, %s)",
@@ -602,16 +608,91 @@ def add_researcher_url(researcher_id: int, page_type: str, url: str) -> None:
     )
 
 
+def url_tracked_for_someone_else(researcher_id: int, url: str) -> bool:
+    """True if another researcher whose name differs tracks this URL."""
+    rows = fetch_all(
+        """SELECT r.id, r.first_name, r.last_name FROM researcher_urls ru
+           JOIN researchers r ON r.id = ru.researcher_id
+           WHERE ru.url = %s AND ru.researcher_id != %s""",
+        (url, researcher_id),
+    )
+    me = fetch_one("SELECT first_name, last_name FROM researchers WHERE id = %s", (researcher_id,))
+    if not me:
+        return False
+    return any(not same_person(me['first_name'], me['last_name'], r['first_name'], r['last_name'], strong=True)
+               for r in rows)
+
+
+def page_owners(url: str) -> list[dict]:
+    """Researchers tracking a URL, lowest ID first."""
+    return fetch_all(
+        """SELECT DISTINCT r.id, r.first_name, r.last_name FROM researchers r
+           JOIN researcher_urls ru ON ru.researcher_id = r.id
+           WHERE ru.url = %s ORDER BY r.id""",
+        (url,),
+    )
+
+
+def deactivate_unowned_url(url: str, reason: str) -> None:
+    """Stop crawling a page that is not its owners' personal page (every row of it)."""
+    execute_query(
+        """UPDATE researcher_urls
+           SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = %s
+           WHERE url = %s AND is_active = TRUE""",
+        (reason, url),
+    )
+    logging.warning("Deactivated %s: %s", url, reason)
+
+
+def flag_url_ownership(url: str, flag: str | None) -> None:
+    """Mark (or, with None, clear) a page whose owner it never names.
+
+    Flagged pages stay active; their owner is not credited by position-0
+    attachment, and they are listed for review in the admin Health tab.
+    """
+    if flag:
+        execute_query(
+            """UPDATE researcher_urls SET ownership_flag = %s, ownership_flagged_at = NOW()
+               WHERE url = %s AND (ownership_flag IS NULL OR ownership_flag != %s)""",
+            (flag, url, flag),
+        )
+    else:
+        execute_query(
+            "UPDATE researcher_urls SET ownership_flag = NULL, ownership_flagged_at = NULL "
+            "WHERE url = %s AND ownership_flag IS NOT NULL",
+            (url,),
+        )
+
+
+def get_ownership_review_urls() -> list[dict]:
+    """Active URLs flagged because the page never names its owner."""
+    return fetch_all(
+        """SELECT ru.id, ru.url, ru.page_type, ru.ownership_flag, ru.ownership_flagged_at,
+                  CONCAT(r.first_name, ' ', r.last_name) AS researcher_name,
+                  r.id AS researcher_id
+           FROM researcher_urls ru
+           JOIN researchers r ON r.id = ru.researcher_id
+           WHERE ru.is_active = TRUE AND ru.ownership_flag IS NOT NULL
+           ORDER BY ru.ownership_flagged_at DESC
+           LIMIT 500"""
+    )
+
+
 _URL_DEACTIVATION_THRESHOLD = 3
-# A URL deactivated as response_too_large is fetched again after this many
-# days (see Researcher.get_all_researcher_urls); sites get rebuilt or moved.
+# A URL deactivated for one of these reasons is fetched again after this many
+# days (see Researcher.get_all_researcher_urls); sites get rebuilt, moved or
+# made public again. Both are a property of the site's current build, so they
+# deactivate on the first failure rather than after _URL_DEACTIVATION_THRESHOLD.
 TOO_LARGE_RECHECK_DAYS = 30
+RECHECK_REASONS = ("response_too_large", "login_required")
+# SQL list of RECHECK_REASONS (constants, not user input).
+RECHECK_REASONS_SQL = ", ".join(f"'{r}'" for r in RECHECK_REASONS)
 
 
 def record_url_fetch_failure(url_id: int, error_type: str) -> None:
-    """Record a fetch failure for a URL. Deactivates immediately for response_too_large,
+    """Record a fetch failure for a URL. Deactivates immediately for RECHECK_REASONS,
     or after _URL_DEACTIVATION_THRESHOLD consecutive failures for other errors."""
-    if error_type == "response_too_large":
+    if error_type in RECHECK_REASONS:
         execute_query(
             """UPDATE researcher_urls
                SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = %s
@@ -623,8 +704,8 @@ def record_url_fetch_failure(url_id: int, error_type: str) -> None:
 
     # Atomic increment + conditional deactivation (no TOCTOU race).
     #
-    # A URL inactive as response_too_large is only fetched as a recheck
-    # (TOO_LARGE_RECHECK_DAYS). Any other failure there restarts its recheck
+    # A URL inactive for a RECHECK_REASONS reason is only fetched as a
+    # recheck (TOO_LARGE_RECHECK_DAYS). Any other failure there restarts its recheck
     # clock and keeps the reason; counting it as an ordinary failure would
     # relabel it consecutive_failures (never rechecked again) and, until
     # then, leave deactivated_at old so every scrape fetched it again.
@@ -635,7 +716,7 @@ def record_url_fetch_failure(url_id: int, error_type: str) -> None:
     # _URL_DEACTIVATION_THRESHOLD-th failure, not one earlier), and the
     # recheck test stays true or false throughout because the clauses
     # before it change is_active/deactivation_reason only when it is false.
-    recheck = "(is_active = FALSE AND deactivation_reason <=> 'response_too_large')"
+    recheck = f"(is_active = FALSE AND deactivation_reason IN ({RECHECK_REASONS_SQL}))"
     reached = "consecutive_failures + 1 >= %s"
     execute_query(
         f"""UPDATE researcher_urls
@@ -659,22 +740,23 @@ def record_url_fetch_failure(url_id: int, error_type: str) -> None:
 def record_url_fetch_success(url_id: int) -> None:
     """Reset failure tracking on a successful fetch (no-op if nothing to reset).
 
-    A URL deactivated as ``response_too_large`` that now fetches within the
-    size limit (see TOO_LARGE_RECHECK_DAYS) is reactivated. URLs deactivated
+    A URL deactivated for a RECHECK_REASONS reason that now fetches (within
+    the size limit, without a sign-in redirect; see TOO_LARGE_RECHECK_DAYS)
+    is reactivated. URLs deactivated
     for other reasons are not fetched, so they are never reactivated here.
 
     MySQL applies single-table SET assignments left to right, so is_active is
     assigned last: the IF()s must see its value before the update.
     """
     execute_query(
-        """UPDATE researcher_urls
+        f"""UPDATE researcher_urls
            SET consecutive_failures = 0,
                deactivated_at = IF(is_active, deactivated_at, NULL),
                deactivation_reason = IF(is_active, deactivation_reason, NULL),
                is_active = TRUE
            WHERE id = %s
              AND (consecutive_failures > 0
-                  OR (is_active = FALSE AND deactivation_reason = 'response_too_large'))""",
+                  OR (is_active = FALSE AND deactivation_reason IN ({RECHECK_REASONS_SQL})))""",
         (url_id,),
     )
 
@@ -706,18 +788,24 @@ def get_at_risk_urls() -> list[dict]:
     )
 
 
-def get_urls_needing_extraction(exclude_url_ids: tuple[int, ...] = ()) -> list[dict]:
+def get_urls_needing_extraction(exclude_url_ids: tuple[int, ...] = (),
+                                limit: int | None = 200) -> list[dict]:
     """Active researcher URLs whose stored HTML changed since last extraction.
 
     A URL needs extraction when its content_hash differs from extracted_hash
     (changed since last LLM run, or never extracted). URLs with no stored
     HTML are excluded (nothing to extract).
 
-    Returns at most 200 rows — the worker processes them one at a time and
-    re-polls when the batch is done.
+    Returns at most `limit` rows (all of them for None) in priority order, see
+    backend.database.extraction_queue — the worker processes a batch and
+    re-polls when it is done, so the order is recomputed every batch.
     """
+    # Only columns of idx_extraction_state (plus researcher_urls): reading any
+    # other html_content column makes MySQL fetch every stored page (~60 s on
+    # production) instead of answering from the index (~0.2 s).
     query = """
-        SELECT ru.id, ru.researcher_id, ru.url, ru.page_type, hc.content_hash
+        SELECT ru.id, ru.researcher_id, ru.url, ru.page_type, hc.content_hash,
+               hc.extracted_hash IS NULL AS never_extracted
         FROM researcher_urls ru
         JOIN html_content hc ON hc.url_id = ru.id
         WHERE ru.is_active = TRUE
@@ -738,8 +826,28 @@ def get_urls_needing_extraction(exclude_url_ids: tuple[int, ...] = ()) -> list[d
         tuple(exclude_url_ids) + tuple(row['url_id'] for row in cooling)))
     if exclude_url_ids:
         query += " AND ru.id NOT IN (" + ",".join(["%s"] * len(exclude_url_ids)) + ")"
-    query += " ORDER BY ru.id LIMIT 200"
-    return fetch_all(query, exclude_url_ids) if exclude_url_ids else fetch_all(query)
+    query += " ORDER BY ru.id"
+    rows = fetch_all(query, exclude_url_ids) if exclude_url_ids else fetch_all(query)
+    _attach_pending_since(rows)
+    return prioritise(rows, limit=limit)
+
+
+def _attach_pending_since(rows: list[dict], chunk: int = 500) -> None:
+    """Add when each page's text last changed, by url_id lookups (~0.7 s for
+    12k pages on production; reading these columns in the queue query instead
+    scans every stored page). content_changed_at is NULL on rows last changed
+    before it existed; their last fetch time stands in."""
+    by_id = {r['id']: r for r in rows}
+    ids = list(by_id)
+    for start in range(0, len(ids), chunk):
+        part = ids[start:start + chunk]
+        found = fetch_all(
+            "SELECT url_id, COALESCE(content_changed_at, timestamp) AS pending_since "
+            "FROM html_content WHERE url_id IN (" + ",".join(["%s"] * len(part)) + ")",
+            tuple(part),
+        )
+        for f in found:
+            by_id[f['url_id']]['pending_since'] = f['pending_since']
 
 
 EXTRACTION_MAX_FAILURES = 3

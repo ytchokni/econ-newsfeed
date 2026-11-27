@@ -3,9 +3,11 @@ from __future__ import annotations
 
 import os
 import threading
+import time
 from contextlib import contextmanager
 from typing import TYPE_CHECKING
 
+from mysql.connector.errors import PoolError
 from mysql.connector.pooling import MySQLConnectionPool
 
 from backend.config import db_config
@@ -27,9 +29,26 @@ def _get_pool() -> MySQLConnectionPool:
     return _pool
 
 
+_POOL_WAIT_SECONDS = 5.0
+_POOL_RETRY_INTERVAL = 0.05
+
+
 def get_connection() -> PooledMySQLConnection:
-    """Checkout and return a connection from the connection pool."""
-    return _get_pool().get_connection()
+    """Checkout and return a connection from the connection pool.
+
+    mysql-connector's pool raises PoolError at once when every connection is
+    checked out; a burst of requests then failed instead of waiting a moment
+    (production, 2026-11-27). Retry for up to _POOL_WAIT_SECONDS first.
+    """
+    pool = _get_pool()
+    deadline = time.monotonic() + _POOL_WAIT_SECONDS
+    while True:
+        try:
+            return pool.get_connection()
+        except PoolError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(_POOL_RETRY_INTERVAL)
 
 
 def _get_scoped_or_new_connection():

@@ -39,7 +39,8 @@ class TestRecordUrlFetchFailure:
         record_url_fetch_failure(5, "fetch_failed")
 
         sql = " ".join(mock_exec.call_args[0][0].split())
-        recheck = "(is_active = FALSE AND deactivation_reason <=> 'response_too_large')"
+        recheck = ("(is_active = FALSE AND deactivation_reason IN "
+                   "('response_too_large', 'login_required'))")
         assert f"deactivated_at = IF({recheck}, NOW()," in sql
         assert f"deactivation_reason = IF({recheck}, deactivation_reason," in sql
         assert f"is_active = IF({recheck}, is_active," in sql
@@ -90,6 +91,18 @@ class TestRecordUrlFetchFailure:
         assert "is_active = FALSE" in sql
         assert mock_exec.call_args[0][1] == ("response_too_large", 99)
 
+    @patch(f"{_MOD}.execute_query")
+    def test_login_required_deactivates_immediately(self, mock_exec):
+        """A redirect to a sign-in page is a property of the site, not a
+        transient error: deactivate on the first one, like response_too_large."""
+        record_url_fetch_failure(99, "login_required")
+
+        assert mock_exec.call_count == 1
+        sql = mock_exec.call_args[0][0]
+        assert "is_active = FALSE" in sql
+        assert "consecutive_failures" not in sql
+        assert mock_exec.call_args[0][1] == ("login_required", 99)
+
 
 class TestRecordUrlFetchSuccess:
     """Tests for record_url_fetch_success."""
@@ -106,13 +119,14 @@ class TestRecordUrlFetchSuccess:
         assert params == (42,)
 
     @patch(f"{_MOD}.execute_query")
-    def test_reactivates_only_too_large_urls(self, mock_exec):
+    def test_reactivates_only_recheck_urls(self, mock_exec):
         """A size-deactivated URL that fetched fine again is reactivated and its
         deactivation fields cleared; other deactivation reasons are untouched."""
         record_url_fetch_success(5)
 
         sql = " ".join(mock_exec.call_args[0][0].split())
-        assert "is_active = FALSE AND deactivation_reason = 'response_too_large'" in sql
+        assert ("is_active = FALSE AND deactivation_reason IN "
+                "('response_too_large', 'login_required')") in sql
         assert "deactivated_at = IF(is_active, deactivated_at, NULL)" in sql
         assert "deactivation_reason = IF(is_active, deactivation_reason, NULL)" in sql
         assert "is_active = TRUE" in sql
@@ -143,7 +157,7 @@ class TestScrapeUrlSelection:
         sql, params = mock_fetch_all.call_args[0]
         sql = " ".join(sql.split())
         assert "is_active = TRUE" in sql
-        assert "deactivation_reason = 'response_too_large'" in sql
+        assert "deactivation_reason IN ('response_too_large', 'login_required')" in sql
         assert "deactivated_at < NOW() - INTERVAL %s DAY" in sql
         assert params == (TOO_LARGE_RECHECK_DAYS,)
 

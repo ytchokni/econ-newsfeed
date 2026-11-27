@@ -1,6 +1,6 @@
 import { useState } from "react";
 import type { AdminDashboardData } from "@/lib/api";
-import { useDeactivatedUrls, useAtRiskUrls, reactivateUrl } from "@/lib/api";
+import { useDeactivatedUrls, useAtRiskUrls, useOwnershipReviewUrls, reactivateUrl } from "@/lib/api";
 
 interface Props {
   data: AdminDashboardData["health"];
@@ -24,10 +24,14 @@ function ReasonBadge({ reason }: { reason: string }) {
   const colors: Record<string, string> = {
     consecutive_failures: "bg-red-900/50 text-red-400 border-red-800",
     response_too_large: "bg-amber-900/50 text-amber-400 border-amber-800",
+    login_required: "bg-amber-900/50 text-amber-400 border-amber-800",
+    shared_page: "bg-zinc-800 text-zinc-300 border-zinc-600",
   };
   const labels: Record<string, string> = {
     consecutive_failures: "Dead",
     response_too_large: "Too large",
+    login_required: "Login required",
+    shared_page: "Shared page",
   };
   const cls = colors[reason] || "bg-zinc-800 text-zinc-400 border-zinc-700";
   return (
@@ -58,6 +62,7 @@ function formatRelativeTime(isoDate: string): string {
 function DeactivatedUrlsSection() {
   const { data: deactivated, mutate: mutateDeactivated } = useDeactivatedUrls();
   const { data: atRisk } = useAtRiskUrls();
+  const { data: ownershipReview } = useOwnershipReviewUrls();
   const [reactivating, setReactivating] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -90,6 +95,23 @@ function DeactivatedUrlsSection() {
             {atRisk.map((u) => (
               <div key={u.id} className="flex items-center gap-2 text-xs text-zinc-400">
                 <span className="text-amber-500">{u.consecutive_failures}/3</span>
+                <span className="truncate flex-1">{u.url}</span>
+                <span className="text-zinc-500">{u.researcher_name}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {ownershipReview && ownershipReview.length > 0 && (
+        <div className="px-3 py-2 bg-zinc-800/40 border border-zinc-700 rounded">
+          <p className="text-sm text-zinc-300 font-medium mb-2">
+            {ownershipReview.length} page{ownershipReview.length !== 1 ? "s" : ""} never name their
+            owner (still crawled; owner not credited for items without a byline)
+          </p>
+          <div className="space-y-1 max-h-64 overflow-y-auto">
+            {ownershipReview.map((u) => (
+              <div key={u.id} className="flex items-center gap-2 text-xs text-zinc-400">
                 <span className="truncate flex-1">{u.url}</span>
                 <span className="text-zinc-500">{u.researcher_name}</span>
               </div>

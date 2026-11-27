@@ -10,7 +10,7 @@ from scripts import monitor
 HEALTHY = {
     "scrape_age_h": 3, "stuck_scrapes": 0, "pending": 400,
     "extracted_6h": 300, "feed_recent": 250, "enrich_age_h": 12,
-    "snapshot_guard": 1,
+    "snapshot_guard": 1, "never_extracted": 350, "oldest_changed_h": 10, "stale_changed": 0,
 }
 
 
@@ -31,6 +31,20 @@ class TestEvaluatePipeline:
         stats = {**HEALTHY, "pending": 14659, "extracted_6h": 360}
         assert _failing(monitor.evaluate_pipeline(stats)) == []
 
+    def test_a_few_permanently_failing_pages_do_not_alert(self):
+        stats = {**HEALTHY, "oldest_changed_h": 400, "stale_changed": 3}
+        assert _failing(monitor.evaluate_pipeline(stats)) == []
+
+    def test_no_changed_page_waiting_is_healthy(self):
+        stats = {**HEALTHY, "oldest_changed_h": None}
+        assert _failing(monitor.evaluate_pipeline(stats)) == []
+
+    def test_throughput_detail_reports_clear_time(self):
+        stats = {**HEALTHY, "pending": 12000, "extracted_6h": 600}
+        detail = next(r for r in monitor.evaluate_pipeline(stats)
+                      if r["name"] == "extraction_throughput")["detail"]
+        assert "350 never extracted" in detail and "clears in ~5.0 days" in detail
+
     def test_small_leftover_queue_does_not_alert(self):
         """A few hundred permanently failing pages are not an outage."""
         stats = {**HEALTHY, "pending": 280, "extracted_6h": 0}
@@ -44,6 +58,7 @@ class TestEvaluatePipeline:
         ({"enrich_age_h": 49}, "enrichment_active"),
         ({"enrich_age_h": None}, "enrichment_active"),
         ({"snapshot_guard": 0}, "snapshot_guard_trigger"),
+        ({"stale_changed": 21, "oldest_changed_h": 80}, "extraction_backlog_age"),
     ])
     def test_each_stage_alerts_on_its_own(self, override, expected):
         assert _failing(monitor.evaluate_pipeline({**HEALTHY, **override})) == [expected]
@@ -51,11 +66,12 @@ class TestEvaluatePipeline:
 
 class TestParsePipelineRow:
     def test_parses_integers_and_nulls(self):
-        row = monitor.parse_pipeline_row("3\t0\t14658\t17\t29\tNULL\t1\n")
+        row = monitor.parse_pipeline_row("3\t0\t14658\t17\t29\tNULL\t1\t11594\tNULL\t0\n")
         assert row == {
             "scrape_age_h": 3, "stuck_scrapes": 0, "pending": 14658,
             "extracted_6h": 17, "feed_recent": 29, "enrich_age_h": None,
-            "snapshot_guard": 1,
+            "snapshot_guard": 1, "never_extracted": 11594, "oldest_changed_h": None,
+            "stale_changed": 0,
         }
 
     def test_rejects_unexpected_shape(self):
@@ -104,6 +120,30 @@ class TestApiTraffic:
     def test_429_flood_fails(self):
         lines = ["rate_limited ip=203.0.113.9 tier=visitor"] * monitor.API_RATE_LIMITED_PER_DAY
         assert not monitor.evaluate_api_traffic(monitor.summarize_api_traffic(lines))["ok"]
+
+    def test_email_login_circuit_open_fails(self):
+        lines = self.LINES + [
+            "2026-11-27 10:05:00 backend.email_login ERROR email_login_circuit_open failures=104 "
+            "limit=100 window=1h: email sign-in paused (possible code guessing)",
+        ]
+        stats = monitor.summarize_api_traffic(lines)
+        assert stats["email_login_paused"] == 1
+        result = monitor.evaluate_api_traffic(stats)
+        assert not result["ok"]
+        assert "email sign-in paused 1x" in result["detail"]
+
+    def test_pool_exhaustion_is_counted_and_a_flood_fails(self):
+        lines = [
+            "2026-11-27 10:06:00 backend.email_login WARNING Email login: database connection pool exhausted",
+            "mysql.connector.errors.PoolError: Failed getting connection; pool exhausted",
+        ]
+        stats = monitor.summarize_api_traffic(self.LINES + lines)
+        assert stats["pool_exhausted"] == 2
+        result = monitor.evaluate_api_traffic(stats)
+        assert result["ok"]  # an occasional burst is tolerated
+        assert "2 requests found the DB connection pool exhausted" in result["detail"]
+        flood = lines * monitor.API_POOL_EXHAUSTED_PER_DAY
+        assert not monitor.evaluate_api_traffic(monitor.summarize_api_traffic(flood))["ok"]
 
     def test_wrong_frontend_key_fails(self):
         lines = ["internal_key_invalid ip=76.76.21.21"] * monitor.API_INVALID_KEY_WARNINGS

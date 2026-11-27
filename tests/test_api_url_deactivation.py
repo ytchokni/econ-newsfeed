@@ -63,3 +63,16 @@ async def test_reactivate_url_requires_auth():
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
         resp = await client.post("/api/admin/reactivate-url/42")
     assert resp.status_code == 401
+
+
+@pytest.mark.anyio
+async def test_ownership_review_urls(api_key_header):
+    rows = [{"id": 8, "url": "http://www.liv.ac.uk/management/", "page_type": "research",
+             "ownership_flag": "owner_not_named", "ownership_flagged_at": None,
+             "researcher_name": "Costas Milas", "researcher_id": 13000}]
+    with patch("backend.database.researchers.get_ownership_review_urls", return_value=rows):
+        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+            resp = await client.get("/api/admin/ownership-review-urls", headers=api_key_header)
+            unauth = await client.get("/api/admin/ownership-review-urls")
+    assert resp.status_code == 200 and resp.json()[0]["ownership_flag"] == "owner_not_named"
+    assert unauth.status_code == 401

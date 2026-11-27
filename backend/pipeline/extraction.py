@@ -25,7 +25,10 @@ from backend.database import (
     fetch_one, fetch_all, compute_title_hash, append_paper_snapshot,
     append_researcher_snapshot,
 )
+from backend.pipeline.change_filter import is_insignificant_change
 from backend.pipeline.feed_events import FeedEventEmitter
+from backend.database.identity import SHARED_PAGE, page_ownership_problem
+from backend.database.researchers import deactivate_unowned_url, flag_url_ownership, page_owners
 from backend.database.papers import find_papers_by_titles
 from backend.pipeline.chunking import chunk_page
 from backend.pipeline.html_fetcher import CONTENT_MAX_CHARS, HTMLFetcher
@@ -109,6 +112,22 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
         logger.info("Skipping decoded JPEG for URL ID %s", url_id)
         HTMLFetcher.mark_extracted(url_id, content_hash)
         return ExtractionOutcome("empty")
+    # Department, institute and news pages are not personal pages: their
+    # items must not be credited to whoever tracks them (issue #262).
+    # Shared pages stop being crawled. A page that never names its owner may
+    # still be theirs (Google Sites, Cyrillic profiles): it is extracted, the
+    # owner is not attached at position 0, and it is flagged for review.
+    owners = page_owners(url)
+    problem = page_ownership_problem(owners, text, raw_html, url, page_type) if owners else None
+    if problem == SHARED_PAGE:
+        deactivate_unowned_url(url, problem)
+        HTMLFetcher.mark_extracted(url_id, content_hash)
+        return ExtractionOutcome("empty")
+    try:
+        if owners:
+            flag_url_ownership(url, problem)
+    except Exception:
+        logger.warning("Could not record ownership flag for %s", url, exc_info=True)
     is_seed = payload['extracted_at'] is None
 
     ts = payload.get('timestamp')
@@ -122,11 +141,15 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
     tail_never_extracted = (was_truncated and not is_seed
                             and not payload.get('extracted_untruncated'))
 
-    if previous_text is not None and HTMLFetcher.normalize_text(previous_text) == HTMLFetcher.normalize_text(text):
+    if previous_text is not None and is_insignificant_change(
+            HTMLFetcher.normalize_text(previous_text), HTMLFetcher.normalize_text(text)):
+        # Checked before the skip below: an unchanged long page whose tail was
+        # never extracted still needs its backfill.
         if tail_never_extracted:
             return _backfill_long_page(url_id, url, text, raw_html, content_hash,
                                        scrape_log_id, fetch_date)
-        # Cleaning/hash changes alone must not create fresh publication events.
+        # Cleaning/hash changes, spacing and counters alone must not cost a
+        # call or create fresh publication events.
         HTMLFetcher.mark_extracted(url_id, content_hash)
         return ExtractionOutcome("empty")
 
@@ -299,14 +322,23 @@ def _extract_via_diff(url_id: int, url: str, new_text: str, old_text: str,
     if result.pubs is None:
         return _failed(result.retry_after, result.provider_error)
 
-    count = _process_diff_changes(result.pubs, url, url_id, fetch_date)
+    try:
+        count = _process_diff_changes(result.pubs, url, url_id, fetch_date,
+                                      old_text=old_text, new_text=new_text)
+    except Exception as e:
+        # A failed outcome (not an exception) lets the worker persist the
+        # failure (html_content.extraction_*), so the page backs off across
+        # restarts instead of paying for the same LLM answer after each one.
+        logger.exception("Saving diff changes for %s failed: %s: %s", url, type(e).__name__, e)
+        return _failed(None)
 
     HTMLFetcher.mark_extracted(url_id, content_hash)
     return ExtractionOutcome("extracted" if count > 0 else "empty", pubs_count=count)
 
 
 def _process_diff_changes(changes: list[dict], url: str, url_id: int,
-                          fetch_date=None) -> int:
+                          fetch_date=None, *, old_text: str | None = None,
+                          new_text: str | None = None) -> int:
     """Process structured change events from diff extraction.
 
     Handles new_paper, status_change, and title_change events. Returns
@@ -326,12 +358,30 @@ def _process_diff_changes(changes: list[dict], url: str, url_id: int,
         _append_snapshots(status_changes, url, event_date=fetch_date)
 
     for tc in title_changes:
-        _apply_title_change(tc, url, fetch_date)
+        _apply_title_change(tc, url, fetch_date, old_text=old_text, new_text=new_text)
 
     return len(new_pubs) + len(status_changes) + len(title_changes)
 
 
-def _apply_title_change(change: dict, source_url: str, event_date) -> None:
+def _rename_has_page_evidence(old_title: str, new_title: str,
+                              old_text: str | None, new_text: str | None) -> bool:
+    """Whether the page itself shows old_title replaced by new_title.
+
+    The LLM sometimes reports a "rename" between two papers the page lists
+    side by side. Only a page where the new title was absent before and the
+    old title is gone now may merge two existing papers under the new title.
+    """
+    from backend.database.papers import normalize_title
+    if not old_text or not new_text:
+        return False
+    old_page = f" {normalize_title(old_text)} "
+    new_page = f" {normalize_title(new_text)} "
+    return (f" {normalize_title(new_title)} " not in old_page
+            and f" {normalize_title(old_title)} " not in new_page)
+
+
+def _apply_title_change(change: dict, source_url: str, event_date, *,
+                        old_text: str | None = None, new_text: str | None = None) -> None:
     """Apply a title change detected by diff extraction."""
     old_title = change.get('old_title')
     new_title = change.get('title')
@@ -349,9 +399,15 @@ def _apply_title_change(change: dict, source_url: str, event_date) -> None:
         return
 
     paper_id = row['id']
-    PaperSaver.apply_title_rename(paper_id, old_title, new_title, change, source_url)
-    FeedEventEmitter.emit_title_change(paper_id, old_title, new_title,
-                                      event_date=event_date, source_url=source_url)
+    # A collision with another paper's title is resolved inside (merge or
+    # skip) and never raises; other errors fail the page with backoff.
+    outcome = PaperSaver.apply_title_rename(
+        paper_id, old_title, new_title, change, source_url,
+        allow_merge=_rename_has_page_evidence(old_title, new_title, old_text, new_text),
+    )
+    if outcome == PaperSaver.RENAMED:
+        FeedEventEmitter.emit_title_change(paper_id, old_title, new_title,
+                                          event_date=event_date, source_url=source_url)
 
 
 def _update_home_description(researcher_id: int, text: str, url: str,

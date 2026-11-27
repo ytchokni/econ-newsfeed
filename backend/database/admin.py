@@ -278,6 +278,10 @@ def _get_extraction_stats() -> dict:
     def _i(row, key) -> int:
         return int(row[key] or 0) if row else 0
 
+    def _opt_int(row, key) -> int | None:
+        value = row.get(key) if isinstance(row, dict) else None
+        return int(value) if value is not None else None
+
     # Same predicate as the worker's get_urls_needing_extraction(), split by reason.
     queue = fetch_one(
         """SELECT
@@ -288,6 +292,22 @@ def _get_extraction_stats() -> dict:
            JOIN researcher_urls ru ON ru.id = hc.url_id
            WHERE ru.is_active = TRUE AND hc.content_hash IS NOT NULL
              AND hc.has_stored_content = TRUE"""
+    )
+    # Wait of the oldest changed page. The pending list is answered from
+    # idx_extraction_state; reading timestamps for every stored page instead
+    # takes about a minute on production, so only these rows are looked up.
+    # content_changed_at is NULL on rows last changed before it existed.
+    waiting = fetch_one(
+        """SELECT /*+ NO_MERGE(p) */
+               TIMESTAMPDIFF(HOUR, MIN(COALESCE(h2.content_changed_at, h2.timestamp)), NOW())
+                   AS oldest_changed_hours
+           FROM (SELECT hc.url_id FROM html_content hc
+                 JOIN researcher_urls ru ON ru.id = hc.url_id
+                 WHERE ru.is_active = TRUE AND hc.content_hash IS NOT NULL
+                   AND hc.has_stored_content = TRUE
+                   AND hc.extracted_hash IS NOT NULL
+                   AND hc.extracted_hash != hc.content_hash) p
+           JOIN html_content h2 ON h2.url_id = p.url_id"""
     )
     never_extracted = _i(queue, "never_extracted")
     changed_pending = _i(queue, "changed_pending")
@@ -343,6 +363,7 @@ def _get_extraction_stats() -> dict:
             "never_extracted": never_extracted,
             "changed_pending": changed_pending,
             "total": queue_total,
+            "oldest_changed_hours": _opt_int(waiting, "oldest_changed_hours"),
         },
         "throughput": {
             "completions": {

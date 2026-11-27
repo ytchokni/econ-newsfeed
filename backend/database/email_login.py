@@ -3,17 +3,83 @@
 Codes are stored only as HMAC digests. Datetimes are naive UTC, matching the
 DATETIME columns. Policy (code length, expiry, limits) lives in
 ``backend.email_login``; this module only persists and atomically checks.
+
+Concurrency: every read-check-write for one address runs inside
+:func:`address_lock` (a MySQL named lock), so two requests for the same
+address never interleave. Writes then touch rows by primary key only, which
+takes no gap locks, so requests for different addresses cannot deadlock.
+All statements use the request's scoped connection when there is one, so a
+request holds a single pooled connection.
 """
 from __future__ import annotations
 
+import hashlib
 import hmac
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 
-from backend.database.connection import execute_query, fetch_one, get_connection
+from backend.database.connection import (
+    _get_scoped_or_new_connection,
+    execute_query,
+    fetch_one,
+)
 
-# Rows older than this are deleted whenever a new code is stored. It must
-# exceed the per-email rate-limit window, which counts recent rows.
+# The hourly scheduler purge deletes rows older than this. It must cover the
+# per-address windows (codes per hour, wrong codes per day), which count rows.
 CODE_RETENTION = timedelta(days=1)
+
+# Seconds a request waits for another request on the same address. The work
+# under the lock is a few milliseconds of SQL, so a longer wait only means a
+# pile-up; the caller answers 429 "try again in a moment".
+ADDRESS_LOCK_TIMEOUT = 2
+
+
+class AddressBusy(Exception):
+    """Another request held this address's lock for longer than the timeout."""
+
+
+def _lock_name(email: str) -> str:
+    # MySQL rejects lock names over 64 characters; this one is 60.
+    return "email_login:" + hashlib.sha256(email.encode()).hexdigest()[:48]
+
+
+@contextmanager
+def _connection():
+    """The request's scoped connection, or a fresh one closed afterwards."""
+    conn, should_close = _get_scoped_or_new_connection()
+    try:
+        yield conn
+    finally:
+        if should_close:
+            conn.close()
+
+
+@contextmanager
+def address_lock(email: str, timeout: int = ADDRESS_LOCK_TIMEOUT):
+    """Serialize all code issuance and checks for one address.
+
+    Raises AddressBusy if another request holds the lock past ``timeout``.
+    The lock lives on the request's connection; the current transaction is
+    committed first so reads inside see what the previous holder committed
+    (InnoDB keeps a read snapshot open until the transaction ends).
+    """
+    name = _lock_name(email)
+    with _connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("SELECT GET_LOCK(%s, %s)", (name, timeout))
+            got = cursor.fetchone()[0]
+        if got != 1:
+            raise AddressBusy(email)
+        try:
+            conn.commit()
+            yield
+        finally:
+            try:
+                conn.rollback()  # never leave a half-done transaction behind the lock
+            finally:
+                with conn.cursor() as cursor:
+                    cursor.execute("SELECT RELEASE_LOCK(%s)", (name,))
+                    cursor.fetchone()
 
 
 def latest_code_created_at(email: str) -> datetime | None:
@@ -43,28 +109,76 @@ def count_codes_since(since: datetime) -> int:
     return int(row["n"]) if row else 0
 
 
+def failed_attempts_for_email_since(email: str, since: datetime) -> int:
+    """Wrong guesses against this address's codes issued since ``since``."""
+    row = fetch_one(
+        "SELECT COALESCE(SUM(attempts), 0) AS n FROM email_login_codes "
+        "WHERE email = %s AND created_at >= %s",
+        (email, since),
+    )
+    return int(row["n"]) if row else 0
+
+
+def failed_attempts_since(since: datetime) -> int:
+    """Wrong guesses against anyone's codes issued since ``since`` (circuit breaker)."""
+    row = fetch_one(
+        "SELECT COALESCE(SUM(attempts), 0) AS n FROM email_login_codes WHERE created_at >= %s",
+        (since,),
+    )
+    return int(row["n"]) if row else 0
+
+
 def store_code(email: str, code_hash: str, now: datetime, expires_at: datetime) -> int:
-    """Invalidate earlier codes for this email and store a new one. Returns its id."""
-    with get_connection() as conn:
+    """Retire earlier live codes for this email and store a new one. Returns its id.
+
+    Call inside :func:`address_lock`. Earlier codes are found with a plain read
+    and retired by primary key, so no gap locks are taken.
+    """
+    with _connection() as conn:
         try:
             with conn.cursor() as cursor:
                 cursor.execute(
-                    "UPDATE email_login_codes SET consumed_at = %s "
-                    "WHERE email = %s AND consumed_at IS NULL",
-                    (now, email),
+                    "SELECT id FROM email_login_codes WHERE email = %s AND consumed_at IS NULL",
+                    (email,),
                 )
+                live = [row[0] for row in cursor.fetchall()]
+                if live:
+                    placeholders = ",".join(["%s"] * len(live))
+                    cursor.execute(
+                        f"UPDATE email_login_codes SET consumed_at = %s WHERE id IN ({placeholders})",
+                        (now, *live),
+                    )
                 cursor.execute(
                     "INSERT INTO email_login_codes (email, code_hash, created_at, expires_at) "
                     "VALUES (%s, %s, %s, %s)",
                     (email, code_hash, now, expires_at),
                 )
                 code_id = cursor.lastrowid
+            conn.commit()
+            return code_id
+        except Exception:
+            conn.rollback()
+            raise
+
+
+def purge_old_codes(now: datetime) -> int:
+    """Delete codes issued more than CODE_RETENTION ago. Returns rows deleted.
+
+    Runs hourly from the scheduler, so a code row is gone at most
+    CODE_RETENTION + 1 hour after it was issued, even with no new requests.
+    READ COMMITTED keeps the range delete from gap-locking against inserts.
+    """
+    with _connection() as conn:
+        try:
+            with conn.cursor() as cursor:
+                cursor.execute("SET TRANSACTION ISOLATION LEVEL READ COMMITTED")
                 cursor.execute(
                     "DELETE FROM email_login_codes WHERE created_at < %s",
                     (now - CODE_RETENTION,),
                 )
+                deleted = cursor.rowcount
             conn.commit()
-            return code_id
+            return deleted
         except Exception:
             conn.rollback()
             raise
@@ -102,25 +216,31 @@ def evaluate_attempt(row: dict | None, candidate_hash: str, now: datetime,
 def consume_code(email: str, candidate_hash: str, now: datetime, max_attempts: int) -> str:
     """Check a code for this email and consume it on success.
 
-    The row lock serialises concurrent guesses, so the attempt limit holds.
+    Call inside :func:`address_lock`, which serialises concurrent guesses so
+    the attempt limit holds; the row is then updated by primary key.
     See :func:`evaluate_attempt` for the results.
     """
-    with get_connection() as conn:
+    with _connection() as conn:
         try:
             with conn.cursor(dictionary=True) as cursor:
                 cursor.execute(
                     "SELECT id, code_hash, attempts, expires_at FROM email_login_codes "
                     "WHERE email = %s AND consumed_at IS NULL "
-                    "ORDER BY id DESC LIMIT 1 FOR UPDATE",
+                    "ORDER BY id DESC LIMIT 1",
                     (email,),
                 )
                 row = cursor.fetchone()
                 result, attempts, consume = evaluate_attempt(row, candidate_hash, now, max_attempts)
                 if row is not None:
+                    # Only a still-live code: never revive one retired meanwhile
+                    # (e.g. by discard_code after a failed send).
                     cursor.execute(
-                        "UPDATE email_login_codes SET attempts = %s, consumed_at = %s WHERE id = %s",
+                        "UPDATE email_login_codes SET attempts = %s, consumed_at = %s "
+                        "WHERE id = %s AND consumed_at IS NULL",
                         (attempts, now if consume else None, row["id"]),
                     )
+                    if cursor.rowcount == 0:
+                        result = "invalid"
             conn.commit()
             return result
         except Exception:

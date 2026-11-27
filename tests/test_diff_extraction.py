@@ -14,6 +14,7 @@ from unittest.mock import MagicMock, patch, call
 import pytest
 
 from backend.llm.client import StructuredResponse
+from backend.pipeline.paper_saver import PaperSaver
 from backend.pipeline.publication import (
     ExtractionLLMResult, Publication, PublicationChange,
     PublicationChangeList, validate_publication,
@@ -400,7 +401,8 @@ class TestExtractOneUrlDiffPath:
         """Title change from diff path calls apply_title_rename and emits event."""
         from backend.pipeline.extraction import extract_one_url
         patches = self._base_patches()
-        patches["apply_rename"] = patch("backend.pipeline.paper_saver.PaperSaver.apply_title_rename")
+        patches["apply_rename"] = patch("backend.pipeline.paper_saver.PaperSaver.apply_title_rename",
+                                        return_value=PaperSaver.RENAMED)
         mocks = {k: p.start() for k, p in patches.items()}
 
         tc = _title_change()
@@ -417,13 +419,55 @@ class TestExtractOneUrlDiffPath:
         assert outcome.status == "extracted"
         mocks["apply_rename"].assert_called_once_with(
             99, "Old Title for My Paper", "Improved Title for My Paper", tc,
-            "https://example.com/pubs",
+            "https://example.com/pubs", allow_merge=True,  # neither title wrongly on the page
         )
         mock_emit.assert_called_once()
         emit_args = mock_emit.call_args[0]
         assert emit_args[0] == 99
         assert emit_args[1] == "Old Title for My Paper"
         assert emit_args[2] == "Improved Title for My Paper"
+
+    def test_unexpected_save_error_is_a_failed_outcome_not_an_exception(self):
+        """The worker persists failed outcomes (backoff survives restarts); exceptions it does not."""
+        from backend.pipeline.extraction import extract_one_url
+        patches = self._base_patches()
+        patches["apply_rename"] = patch("backend.pipeline.paper_saver.PaperSaver.apply_title_rename",
+                                        side_effect=RuntimeError("db blip"))
+        mocks = {k: p.start() for k, p in patches.items()}
+        mocks["try_changes"].return_value = ExtractionLLMResult(pubs=[_title_change()])
+        mocks["fetch_one"].return_value = {"Old Title for My Paper": {"id": 99}}
+        try:
+            outcome = extract_one_url(_row())
+        finally:
+            for p in patches.values():
+                p.stop()
+        assert outcome.status == "failed" and not outcome.ok
+        assert outcome.retry_after is None and not outcome.provider_error
+        mocks["mark"].assert_not_called()
+
+    @pytest.mark.parametrize("rename", [PaperSaver.MERGED, PaperSaver.SKIPPED])
+    def test_title_change_onto_existing_title_completes_page_without_event(self, rename):
+        """A merged or skipped rename must not fail the page or emit title_change."""
+        from backend.pipeline.extraction import extract_one_url
+        patches = self._base_patches()
+        patches["apply_rename"] = patch("backend.pipeline.paper_saver.PaperSaver.apply_title_rename",
+                                        return_value=rename)
+        mocks = {k: p.start() for k, p in patches.items()}
+        mocks["try_changes"].return_value = ExtractionLLMResult(pubs=[_title_change(), _status_change()])
+        mocks["fetch_one"].return_value = {"Old Title for My Paper": {"id": 99}}
+
+        try:
+            with patch("backend.pipeline.feed_events.FeedEventEmitter.emit_title_change") as mock_emit:
+                outcome = extract_one_url(_row())
+        finally:
+            for p in patches.values():
+                p.stop()
+
+        assert outcome.status == "extracted" and outcome.pubs_count == 2
+        mocks["apply_rename"].assert_called_once()
+        mock_emit.assert_not_called()
+        mocks["snapshots"].assert_called_once()  # the page's other change is still saved
+        mocks["mark"].assert_called_once_with(1, "h1")
 
     def test_home_page_description_still_works_on_diff_path(self):
         """HOME page description update runs after diff extraction."""
@@ -483,3 +527,15 @@ class TestGetPreviousText:
             from backend.pipeline.html_fetcher import HTMLFetcher
             result = HTMLFetcher.get_previous_text(1)
         assert result is None
+
+
+@pytest.mark.parametrize("old_text, new_text, expected", [
+    ("Papers: Old Title for My Paper (2023)", "Papers: Improved Title for My Paper (2024)", True),
+    ("Papers: Old Title for My Paper; Improved Title for My Paper", "Papers: Improved Title for My Paper", False),
+    ("Papers: Old Title for My Paper", "Papers: OLD TITLE, for my paper! Improved Title for My Paper", False),
+    (None, "Improved Title for My Paper", False),
+])
+def test_rename_page_evidence(old_text, new_text, expected):
+    from backend.pipeline.extraction import _rename_has_page_evidence
+    assert _rename_has_page_evidence(
+        "Old Title for My Paper", "Improved Title for My Paper", old_text, new_text) is expected

@@ -31,6 +31,9 @@ pytest-asyncio = "^1.4.0"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = [
+    "real_page_owners: run extract_one_url with page_owners unpatched (see tests/conftest.py)",
+]
 
 [build-system]
 requires = ["poetry-core"]

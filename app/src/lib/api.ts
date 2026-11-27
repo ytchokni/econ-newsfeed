@@ -218,7 +218,12 @@ export interface AdminDashboardData {
   };
   extraction: {
     worker_enabled: boolean;
-    queue: { never_extracted: number; changed_pending: number; total: number };
+    queue: {
+      never_extracted: number;
+      changed_pending: number;
+      total: number;
+      oldest_changed_hours?: number | null;
+    };
     throughput: {
       completions: { last_hour: number; last_24h: number; last_7d: number };
       attempts: { last_hour: number; last_24h: number; last_7d: number };
@@ -314,6 +319,24 @@ export function useDeactivatedUrls() {
 export function useAtRiskUrls() {
   return useSWR<AtRiskUrl[]>(
     "/api/admin/at-risk-urls",
+    fetchJsonWithAuth,
+  );
+}
+
+/** Active pages that never name their owner (#262): owner not credited, review. */
+export interface OwnershipReviewUrl {
+  id: number;
+  url: string;
+  page_type: string;
+  ownership_flag: string;
+  ownership_flagged_at: string | null;
+  researcher_name: string;
+  researcher_id: number;
+}
+
+export function useOwnershipReviewUrls() {
+  return useSWR<OwnershipReviewUrl[]>(
+    "/api/admin/ownership-review-urls",
     fetchJsonWithAuth,
   );
 }

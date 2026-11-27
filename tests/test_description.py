@@ -58,6 +58,8 @@ class TestLooksLikeReasoning:
         "I am an assistant professor of economics at Yale. My research is on labor markets.",
         "John Smith studies credit constraints, monetary policy and the task-based approach "
         "to automation at the London School of Economics.",
+        "She was born in New Delhi need to know basis aside, and studies development economics.",
+        "He studies outlet media markets and the prompting of savings decisions.",
         None,
         "",
     ])

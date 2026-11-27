@@ -37,6 +37,15 @@ describe("ExtractionTab", () => {
     expect(screen.getByText(/6,000 never/)).toBeInTheDocument();
   });
 
+  it("shows how long the oldest pending change has waited", () => {
+    render(
+      <ExtractionTab
+        data={fixture({ queue: { never_extracted: 1, changed_pending: 2, total: 3, oldest_changed_hours: 72 } })}
+      />
+    );
+    expect(screen.getByText(/oldest change waiting 3d/)).toBeInTheDocument();
+  });
+
   it("shows enabled badge and no stall warning when recently active", () => {
     render(<ExtractionTab data={fixture()} />);
     expect(screen.getByText("Worker enabled")).toBeInTheDocument();

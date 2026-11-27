@@ -178,6 +178,8 @@ _TABLE_DEFINITIONS = {
             consecutive_failures INT NOT NULL DEFAULT 0,
             deactivated_at DATETIME DEFAULT NULL,
             deactivation_reason VARCHAR(255) DEFAULT NULL,
+            ownership_flag VARCHAR(32) DEFAULT NULL,
+            ownership_flagged_at DATETIME DEFAULT NULL,
             UNIQUE KEY uq_researcher_url (researcher_id, url(500)),
             FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
             INDEX idx_is_active (is_active)
@@ -223,6 +225,7 @@ _TABLE_DEFINITIONS = {
             extraction_failed_hash VARCHAR(64) DEFAULT NULL,
             extraction_retry_at DATETIME DEFAULT NULL,
             extracted_untruncated BOOLEAN NOT NULL DEFAULT FALSE,
+            content_changed_at DATETIME DEFAULT NULL,
             UNIQUE KEY uq_url_id (url_id),
             INDEX idx_url_id_ts (url_id, timestamp),
             FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
@@ -313,6 +316,20 @@ _TABLE_DEFINITIONS = {
             source VARCHAR(32) NOT NULL PRIMARY KEY,
             limited_at DATETIME NOT NULL,
             retry_after_seconds INT DEFAULT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    # Paced bio backfill (issue #258): last attempt per researcher, so a HOME
+    # page with no usable bio is not sent to the LLM again until it changes.
+    "researcher_bio_backfill": """
+        CREATE TABLE IF NOT EXISTS researcher_bio_backfill (
+            researcher_id INT NOT NULL PRIMARY KEY,
+            url_id INT DEFAULT NULL,
+            content_hash VARCHAR(64) DEFAULT NULL,
+            outcome VARCHAR(16) NOT NULL,
+            attempted_at DATETIME NOT NULL,
+            attempts INT NOT NULL DEFAULT 0,
+            INDEX idx_attempted_at (attempted_at),
+            FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     "paper_topics": """
@@ -655,6 +672,9 @@ def create_tables() -> None:
                         # FALSE for extractions made before chunking (first
                         # CONTENT_MAX_CHARS only); see extract_one_url.
                         ("html_content", "extracted_untruncated", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                        # When content_hash last changed (html_content.timestamp moves on
+                        # every fetch). Orders the extraction queue; NULL on older rows.
+                        ("html_content", "content_changed_at", "DATETIME DEFAULT NULL"),
                     ]
                     for table, col, definition in _migrations:
                         try:
@@ -870,6 +890,15 @@ def create_tables() -> None:
                         if "Duplicate column name" not in str(e):
                             logging.warning("Migration: researchers.openalex_author_id: %s", e)
 
+                    # Lookups by OpenAlex author ID (one record per ID, issue #259)
+                    try:
+                        cursor.execute("ALTER TABLE researchers ADD INDEX idx_openalex_author "
+                                       "(openalex_author_id), ALGORITHM=INPLACE, LOCK=NONE")
+                        conn.commit()
+                    except Exception as e:
+                        if getattr(e, 'errno', None) != 1061:
+                            logging.warning("Migration: researchers.idx_openalex_author: %s", e)
+
                     # Versioned trigger installs first; any failure aborts startup.
                     _ensure_snapshot_guard(cursor)
                     _ensure_content_metadata(cursor)
@@ -929,6 +958,10 @@ def create_tables() -> None:
                         ("researcher_urls", "consecutive_failures", "INT NOT NULL DEFAULT 0"),
                         ("researcher_urls", "deactivated_at", "DATETIME DEFAULT NULL"),
                         ("researcher_urls", "deactivation_reason", "VARCHAR(255) DEFAULT NULL"),
+                        # Page that never names its owner: kept active, owner not
+                        # credited, listed for review (issue #262)
+                        ("researcher_urls", "ownership_flag", "VARCHAR(32) DEFAULT NULL"),
+                        ("researcher_urls", "ownership_flagged_at", "DATETIME DEFAULT NULL"),
                     ]
                     for table, col, definition in _url_deactivation_columns:
                         try:

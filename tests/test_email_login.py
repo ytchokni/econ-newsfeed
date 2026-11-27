@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import re
+import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -23,9 +25,26 @@ class FakeStore:
     SQL plumbing is faked.
     """
 
+    AddressBusy = real_store.AddressBusy
+
     def __init__(self):
         self.codes: list[dict] = []
         self.users: list[dict] = []
+        self.locks: dict[str, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+        self.store_delay = 0.0  # widen the read-then-write window in race tests
+        self.lock_timeout = 5.0
+
+    @contextmanager
+    def address_lock(self, email):
+        with self._locks_guard:
+            lock = self.locks.setdefault(email, threading.Lock())
+        if not lock.acquire(timeout=self.lock_timeout):
+            raise real_store.AddressBusy(email)
+        try:
+            yield
+        finally:
+            lock.release()
 
     # -- codes --
     def latest_code_created_at(self, email):
@@ -39,6 +58,8 @@ class FakeStore:
         return sum(1 for c in self.codes if c["created_at"] >= since)
 
     def store_code(self, email, code_hash, now, expires_at):
+        if self.store_delay:
+            time.sleep(self.store_delay)
         for c in self.codes:
             if c["email"] == email and c["consumed_at"] is None:
                 c["consumed_at"] = now
@@ -52,6 +73,12 @@ class FakeStore:
         for c in self.codes:
             if c["id"] == code_id and c["consumed_at"] is None:
                 c["consumed_at"] = now
+
+    def failed_attempts_for_email_since(self, email, since):
+        return sum(c["attempts"] for c in self.codes if c["email"] == email and c["created_at"] >= since)
+
+    def failed_attempts_since(self, since):
+        return sum(c["attempts"] for c in self.codes if c["created_at"] >= since)
 
     def consume_code(self, email, candidate_hash, now, max_attempts):
         live = [c for c in self.codes if c["email"] == email and c["consumed_at"] is None]
@@ -82,6 +109,8 @@ def store(monkeypatch):
     monkeypatch.setenv("FRONTEND_URL", "http://localhost:3000")
     monkeypatch.delenv("EMAIL_LOGIN_DEV_LOG_CODES", raising=False)
     monkeypatch.delenv("EMAIL_LOGIN_HOURLY_LIMIT", raising=False)
+    monkeypatch.delenv("EMAIL_LOGIN_MAX_FAILURES_PER_HOUR", raising=False)
+    monkeypatch.setattr(email_login, "_circuit_logged_at", -1e9)
     monkeypatch.delenv("LOGIN_FROM_EMAIL", raising=False)
     monkeypatch.setenv("DIGEST_FROM_EMAIL", "Econ Newsfeed <digest@econnewsfeed.org>")
     monkeypatch.setattr(email_login.digest, "RESEND_API_KEY", "re_test")
@@ -287,6 +316,128 @@ def test_global_hourly_cap(store, outbox, monkeypatch):
 
 
 # ---------------------------------------------------------------------------
+# Guessing limits: per address per day, and the global circuit breaker
+# ---------------------------------------------------------------------------
+
+def _wrong(code: str) -> str:
+    return f"{(int(code) + 1) % 1_000_000:06d}"
+
+
+def _burn_codes(email, n_codes, start, outbox, wrong_per_code=5):
+    """Issue n codes (respecting the cooldown) and guess each wrong."""
+    t = start
+    for _ in range(n_codes):
+        email_login.request_code(email, now=t)
+        code = _code_from(outbox[-1])
+        for _ in range(wrong_per_code):
+            with pytest.raises(email_login.EmailLoginError):
+                email_login.verify_code(email, _wrong(code), now=t)
+        t += timedelta(minutes=13)
+    return t
+
+
+def test_guarded_address_owner_can_still_sign_in(store, outbox):
+    """15 wrong codes in a day must not lock the real owner out."""
+    _burn_codes("alice@example.com", 3, T0, outbox)  # 15 wrong guesses
+    assert store.failed_attempts_for_email_since("alice@example.com", T0) == 15
+
+    # At worst the owner waits for the attacker's codes to leave the hourly window.
+    t = T0 + timedelta(hours=1, minutes=30)
+    email_login.request_code("alice@example.com", now=t)
+    code = _code_from(outbox[-1])
+    user = email_login.verify_code("alice@example.com", code, now=t)
+    assert user["email"] == "alice@example.com"
+
+
+def test_guarded_address_gets_one_try_per_code(store, outbox):
+    _burn_codes("alice@example.com", 3, T0, outbox)
+    t = T0 + timedelta(hours=1, minutes=30)
+    email_login.request_code("alice@example.com", now=t)
+    code = _code_from(outbox[-1])
+
+    with pytest.raises(email_login.EmailLoginError) as exc:
+        email_login.verify_code("alice@example.com", _wrong(code), now=t)
+    assert exc.value.code == "too_many_attempts"
+    # The code is spent: not even the right one works now.
+    with pytest.raises(email_login.EmailLoginError) as exc:
+        email_login.verify_code("alice@example.com", code, now=t)
+    assert exc.value.code == "invalid_code"
+
+
+def test_live_code_drops_to_one_try_once_the_address_is_guarded(store, outbox):
+    t = _burn_codes("alice@example.com", 2, T0, outbox)  # 10 wrong guesses
+    email_login.request_code("alice@example.com", now=t)
+    code = _code_from(outbox[-1])
+    for _ in range(4):  # 14 in total, code still live
+        with pytest.raises(email_login.EmailLoginError):
+            email_login.verify_code("alice@example.com", _wrong(code), now=t)
+    store.codes[0]["attempts"] += 1  # a 15th wrong guess elsewhere
+    with pytest.raises(email_login.EmailLoginError) as exc:
+        email_login.verify_code("alice@example.com", _wrong(code), now=t)
+    assert exc.value.code == "too_many_attempts"
+
+
+def test_guarded_address_gets_two_codes_an_hour(store, outbox):
+    t = _burn_codes("alice@example.com", 3, T0, outbox)  # 3 codes issued, 15 wrong
+    # The hourly window now holds 3 codes, so a guarded address must wait.
+    with pytest.raises(email_login.EmailLoginError) as exc:
+        email_login.request_code("alice@example.com", now=t)
+    assert exc.value.code == "too_many_codes"
+    later = T0 + timedelta(hours=1, minutes=30)  # the earlier codes left the window
+    email_login.request_code("alice@example.com", now=later)
+    email_login.request_code("alice@example.com", now=later + timedelta(minutes=2))
+    with pytest.raises(email_login.EmailLoginError) as exc:
+        email_login.request_code("alice@example.com", now=later + timedelta(minutes=4))
+    assert exc.value.code == "too_many_codes"
+    # Another address keeps the normal 5 an hour.
+    for i in range(5):
+        email_login.request_code("bob@example.com", now=later + timedelta(minutes=2 * i))
+
+
+def test_guarded_address_guess_budget_is_small():
+    per_day = email_login.MAX_CODES_PER_EMAIL_GUARDED * 24 * email_login.MAX_ATTEMPTS_GUARDED
+    assert per_day <= 48
+
+
+def test_fewer_than_15_wrong_codes_still_allows_sign_in(store, outbox):
+    t = _burn_codes("alice@example.com", 2, T0, outbox)  # 10 wrong guesses
+    email_login.request_code("alice@example.com", now=t)
+    code = _code_from(outbox[-1])
+    for _ in range(4):
+        with pytest.raises(email_login.EmailLoginError):
+            email_login.verify_code("alice@example.com", _wrong(code), now=t)
+    assert email_login.verify_code("alice@example.com", code, now=t)["email"] == "alice@example.com"
+
+
+def test_circuit_breaker_pauses_email_login_and_logs_once(store, outbox, monkeypatch, caplog):
+    monkeypatch.setenv("EMAIL_LOGIN_MAX_FAILURES_PER_HOUR", "10")
+    for i in range(2):  # 2 addresses x 5 wrong guesses = 10 failures
+        _burn_codes(f"victim{i}@example.com", 1, T0, outbox)
+
+    with caplog.at_level("ERROR", logger="backend.email_login"):
+        with pytest.raises(email_login.EmailLoginError) as exc:
+            email_login.request_code("new@example.com", now=T0 + timedelta(minutes=5))
+        assert exc.value.code == "email_login_paused"
+        assert exc.value.status == 503
+        with pytest.raises(email_login.EmailLoginError) as exc:
+            email_login.verify_code("victim0@example.com", "123456", now=T0 + timedelta(minutes=5))
+        assert exc.value.code == "email_login_paused"
+
+    alerts = [r for r in caplog.records if "email_login_circuit_open" in r.getMessage()]
+    assert len(alerts) == 1  # throttled
+    assert "failures=10 limit=10" in alerts[0].getMessage()
+
+    # Once the failures age out of the hour window, sign-in resumes.
+    email_login.request_code("new@example.com", now=T0 + timedelta(hours=1, minutes=1))
+
+
+def test_circuit_breaker_default_is_100(store, monkeypatch):
+    assert email_login._max_failures_per_hour() == 100
+    monkeypatch.setenv("EMAIL_LOGIN_MAX_FAILURES_PER_HOUR", "nonsense")
+    assert email_login._max_failures_per_hour() == 100
+
+
+# ---------------------------------------------------------------------------
 # Availability
 # ---------------------------------------------------------------------------
 
@@ -413,6 +564,16 @@ def test_endpoint_flow_and_error_envelope(client, store, outbox):
     assert again.status_code == 429
     assert again.json()["error"]["code"] == "resend_too_soon"
     assert int(again.headers["Retry-After"]) > 0
+
+
+def test_paused_response_over_http(client, store, monkeypatch):
+    monkeypatch.setattr(store, "failed_attempts_since", lambda since: 500)
+    for path, body in (("request-code", {"email": "a@example.com"}),
+                       ("verify-code", {"email": "a@example.com", "code": "123456"})):
+        resp = client.post(f"/api/email-login/{path}", json=body)
+        assert resp.status_code == 503
+        assert resp.json()["error"]["code"] == "email_login_paused"
+        assert resp.headers["Retry-After"] == "3600"  # failures age out of a rolling hour
 
 
 def test_request_code_unavailable_returns_503(client, monkeypatch):
@@ -680,3 +841,234 @@ def test_google_login_without_verified_email_does_not_adopt(users_table):
     user = users.get_or_create_user("g-fay", "fay@example.com", "Fay", None, email_verified=False)
     assert user["id"] != 3
     assert table.rows[0]["google_id"] is None
+
+
+# ---------------------------------------------------------------------------
+# Hourly purge (privacy: code rows are kept about a day)
+# ---------------------------------------------------------------------------
+
+def test_purge_old_codes_deletes_rows_older_than_a_day(monkeypatch):
+    from unittest.mock import MagicMock
+    conn = MagicMock()
+    cursor = conn.cursor.return_value.__enter__.return_value
+    cursor.rowcount = 7
+    monkeypatch.setattr(real_store, "_get_scoped_or_new_connection", lambda: (conn, True))
+
+    assert real_store.purge_old_codes(T0) == 7
+    statements = [c.args for c in cursor.execute.call_args_list]
+    assert statements[0] == ("SET TRANSACTION ISOLATION LEVEL READ COMMITTED",)
+    assert statements[1] == ("DELETE FROM email_login_codes WHERE created_at < %s",
+                             (T0 - timedelta(days=1),))
+    conn.commit.assert_called_once()
+    conn.close.assert_called_once()
+
+
+def test_scheduler_purge_logs_and_survives_errors(monkeypatch, caplog):
+    from backend.pipeline import scheduler
+    calls = []
+    monkeypatch.setattr(real_store, "purge_old_codes", lambda now: calls.append(now) or 3)
+    with caplog.at_level("INFO", logger=scheduler.logger.name):
+        scheduler._purge_email_login_codes()
+    assert len(calls) == 1 and calls[0].tzinfo is None
+    assert "Purged 3 email login code rows" in caplog.text
+
+    def boom(now):
+        raise RuntimeError("db down")
+    monkeypatch.setattr(real_store, "purge_old_codes", boom)
+    with caplog.at_level("WARNING", logger=scheduler.logger.name):
+        scheduler._purge_email_login_codes()  # must not raise
+    assert "Email login code purge failed: db down" in caplog.text
+
+
+def test_scheduler_registers_hourly_purge():
+    from unittest.mock import MagicMock
+    from backend.pipeline import scheduler
+    with patch("backend.pipeline.scheduler.mysql.connector.connect") as connect, \
+         patch("backend.pipeline.scheduler._cleanup_stale_scrape_logs"), \
+         patch("backend.pipeline.scheduler.BackgroundScheduler") as bg, \
+         patch("backend.pipeline.scheduler._start_lock_keepalive"), \
+         patch("backend.pipeline.scheduler.signal.signal"), \
+         patch.object(scheduler, "ENRICHMENT_WORKER_ENABLED", False), \
+         patch.object(scheduler, "_scheduler", None), \
+         patch.object(scheduler, "_scheduler_lock_conn", None):
+        conn = MagicMock()
+        conn.cursor.return_value.fetchone.return_value = (1,)
+        connect.return_value = conn
+        scheduler.start_scheduler()
+        jobs = {c.kwargs.get("id"): c for c in bg.return_value.add_job.call_args_list}
+    scheduler._scheduler = None
+    scheduler._scheduler_lock_conn = None
+    purge = jobs["email_login_code_purge"]
+    assert purge.args[0] is scheduler._purge_email_login_codes
+    assert purge.args[1] == "interval" and purge.kwargs["hours"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: one request per address at a time
+# ---------------------------------------------------------------------------
+
+def _parallel(fn, n):
+    barrier = threading.Barrier(n)
+    results, unexpected = [], []
+    guard = threading.Lock()
+
+    def worker(i):
+        barrier.wait()
+        try:
+            out = fn(i)
+            with guard:
+                results.append(("ok", out))
+        except email_login.EmailLoginError as e:
+            with guard:
+                results.append((e.code, e.status))
+        except Exception as e:  # would be a 500
+            with guard:
+                unexpected.append(repr(e))
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    return results, unexpected
+
+
+def test_parallel_requests_for_one_address_send_one_email(store, outbox):
+    store.store_delay = 0.01  # every request would pass the checks without the lock
+    results, unexpected = _parallel(
+        lambda i: email_login.request_code("victim@example.com", now=T0), 20)
+    assert unexpected == []
+    assert [r[0] for r in results].count("ok") == 1
+    assert len(store.codes) == 1 and len(outbox) == 1
+    assert {r for r in results if r[0] != "ok"} == {("resend_too_soon", 429)}
+
+
+def test_parallel_requests_never_exceed_the_hourly_cap(store, outbox, monkeypatch):
+    store.store_delay = 0.01
+    monkeypatch.setattr(email_login, "RESEND_COOLDOWN", timedelta(0))
+    results, unexpected = _parallel(
+        lambda i: email_login.request_code("victim@example.com", now=T0), 20)
+    assert unexpected == []
+    assert len(store.codes) == email_login.MAX_CODES_PER_EMAIL
+    assert len(outbox) == email_login.MAX_CODES_PER_EMAIL
+
+
+def test_parallel_guesses_respect_the_attempt_limit(store, outbox):
+    email_login.request_code("guess@example.com", now=T0)
+    real = _code_from(outbox[0])
+    results, unexpected = _parallel(
+        lambda i: email_login.verify_code("guess@example.com", _wrong(real) if i else _wrong(_wrong(real)), now=T0), 20)
+    assert unexpected == []
+    assert store.codes[0]["attempts"] == email_login.MAX_ATTEMPTS
+
+
+def test_lock_timeout_is_a_429_not_a_500(store, outbox):
+    store.lock_timeout = 0.01
+    lock = threading.Lock()
+    store.locks["busy@example.com"] = lock
+    lock.acquire()
+    try:
+        with pytest.raises(email_login.EmailLoginError) as exc:
+            email_login.request_code("busy@example.com", now=T0)
+    finally:
+        lock.release()
+    assert (exc.value.code, exc.value.status) == ("try_again", 429)
+    assert outbox == []
+
+
+@pytest.mark.parametrize("errno", [1213, 1205])
+def test_deadlock_and_lock_wait_are_429(store, outbox, monkeypatch, errno):
+    import mysql.connector
+
+    def deadlock(*a, **k):
+        raise mysql.connector.errors.InternalError(msg="Deadlock found", errno=errno)
+
+    monkeypatch.setattr(store, "store_code", deadlock)
+    with pytest.raises(email_login.EmailLoginError) as exc:
+        email_login.request_code("alice@example.com", now=T0)
+    assert (exc.value.code, exc.value.status) == ("try_again", 429)
+
+    monkeypatch.setattr(store, "consume_code", deadlock)
+    with pytest.raises(email_login.EmailLoginError) as exc:
+        email_login.verify_code("alice@example.com", "123456", now=T0)
+    assert (exc.value.code, exc.value.status) == ("try_again", 429)
+
+
+def test_pool_exhaustion_is_a_503(store, outbox, monkeypatch):
+    import mysql.connector
+
+    def exhausted(*a, **k):
+        raise mysql.connector.errors.PoolError("Failed getting connection; pool exhausted")
+
+    monkeypatch.setattr(store, "latest_code_created_at", exhausted)
+    with pytest.raises(email_login.EmailLoginError) as exc:
+        email_login.request_code("alice@example.com", now=T0)
+    assert (exc.value.code, exc.value.status) == ("email_login_busy", 503)
+
+
+def test_other_database_errors_still_raise(store, outbox, monkeypatch):
+    import mysql.connector
+
+    def broken(*a, **k):
+        raise mysql.connector.errors.ProgrammingError(msg="bad SQL", errno=1064)
+
+    monkeypatch.setattr(store, "store_code", broken)
+    with pytest.raises(mysql.connector.errors.ProgrammingError):
+        email_login.request_code("alice@example.com", now=T0)
+
+
+def test_lock_name_fits_mysql_limit():
+    name = real_store._lock_name("a" * 300 + "@example.com")
+    assert len(name) <= 64 and name.startswith("email_login:")
+    assert real_store._lock_name("A@x.org") != real_store._lock_name("b@x.org")
+
+
+def test_endpoints_answer_503_when_the_pool_is_exhausted(client):
+    import mysql.connector
+
+    @contextmanager
+    def no_connection():
+        raise mysql.connector.errors.PoolError("Failed getting connection; pool exhausted")
+        yield  # pragma: no cover
+
+    with patch("backend.api.connection_scope", no_connection):
+        for path, body in (("request-code", {"email": "a@example.com"}),
+                           ("verify-code", {"email": "a@example.com", "code": "123456"})):
+            resp = client.post(f"/api/email-login/{path}", json=body)
+            assert resp.status_code == 503
+            assert resp.json()["error"]["code"] == "email_login_busy"
+            assert resp.headers["Retry-After"] == "5"
+
+
+def test_consume_code_never_revives_a_retired_code(monkeypatch):
+    """If the code was retired between the read and the update, nothing changes."""
+    from unittest.mock import MagicMock
+    conn = MagicMock()
+    cursor = conn.cursor.return_value.__enter__.return_value
+    live_row = {"id": 9, "code_hash": "h", "attempts": 0, "expires_at": T0 + timedelta(minutes=10)}
+    cursor.fetchone.return_value = live_row
+    cursor.rowcount = 0  # discard_code got there first
+    monkeypatch.setattr(real_store, "_get_scoped_or_new_connection", lambda: (conn, True))
+
+    for candidate in ("h", "wrong"):  # neither a correct nor a wrong guess may act on it
+        assert real_store.consume_code("a@example.com", candidate, T0, 5) == "invalid"
+    update_sql = cursor.execute.call_args_list[-1].args[0]
+    assert "WHERE id = %s AND consumed_at IS NULL" in update_sql
+
+
+def test_failed_send_retires_the_code_under_the_address_lock(store, monkeypatch):
+    held = []
+
+    def discard(code_id, now):
+        held.append(store.locks["alice@example.com"].locked())
+        store.codes[code_id - 1]["consumed_at"] = now
+
+    monkeypatch.setattr(store, "discard_code", discard)
+    monkeypatch.setattr(email_login.digest, "_send_email", lambda *a, **k: False)
+    with pytest.raises(email_login.EmailLoginError):
+        email_login.request_code("alice@example.com", now=T0)
+    assert held == [True]
+
+
+def test_address_lock_timeout_is_short():
+    assert 1 <= real_store.ADDRESS_LOCK_TIMEOUT <= 2

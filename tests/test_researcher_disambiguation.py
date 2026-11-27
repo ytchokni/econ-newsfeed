@@ -33,9 +33,9 @@ class TestOpenalexAuthorIdMatching:
     def test_falls_back_to_llm_when_no_openalex_id(self, mock_fetch_one, mock_fetch_all, mock_disambig):
         # Use full names (no initials) so Tier 1.5 doesn't apply — LLM must decide
         mock_fetch_one.return_value = None  # no exact match
-        mock_fetch_all.return_value = [{"id": 99, "first_name": "Maximilian", "last_name": "Steinhardt"}]
+        mock_fetch_all.return_value = [{"id": 99, "first_name": "Samir", "last_name": "Steinhardt"}]
 
-        result = get_researcher_id("Max", "Steinhardt")
+        result = get_researcher_id("Sam", "Steinhardt")
 
         assert result == 99
         mock_disambig.assert_called_once()

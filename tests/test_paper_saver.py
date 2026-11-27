@@ -23,6 +23,12 @@ def _mock_conn(lastrowid=1):
     return conn, cursor
 
 
+
+def _set_owner(cursor, owner, page=None):
+    """Page-owner lookup: researchers tracking the URL, then the stored page."""
+    results = iter([[owner] if owner else [], [page] if page else []])
+    cursor.fetchall.side_effect = lambda *a, **k: next(results, [])
+
 class TestSavePublicationsReturnsResults:
     """save_publications returns SaveResult objects instead of creating events."""
 
@@ -129,7 +135,7 @@ class TestPageOwnerAuthorship:
     def test_verified_complete_byline_does_not_attach_unrelated_owner(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        cursor.fetchone.return_value = (55, "Simeon", "Djankov")
+        _set_owner(cursor, (55, "Simeon", "Djankov"))
         PaperSaver.save_publications("http://example.com", [{
             "title": "Paper", "authors": [["John", "Doe"]], "_authors_complete": True,
         }])
@@ -143,7 +149,7 @@ class TestPageOwnerAuthorship:
     def test_owner_added_with_order_zero(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        cursor.fetchone.return_value = (55, "Jane", "Smith")
+        _set_owner(cursor, (55, "Jane", "Smith"))
 
         PaperSaver.save_publications("http://example.com", [{
             "title": "Paper", "authors": [["John", "Doe"]], "year": "2024",
@@ -256,33 +262,67 @@ class TestAuthorLookupCache:
 
 
 class TestApplyTitleRenameCollision:
-    """A rename collision must refuse without mutating either paper."""
+    """A rename onto another paper's title merges one work or keeps both; never raises."""
 
-    def _run(self, dup_id=None):
-        """Run apply_title_rename with a mocked connection; return executed SQL list."""
+    def _run(self, dup_id=None, merge=False, allow_merge=True):
+        """Run apply_title_rename with a mocked connection; return (outcome, SQL list, conn, merge mock)."""
         cursor = MagicMock()
         cursor.fetchone.return_value = (dup_id,) if dup_id else None
         conn = MagicMock()
         conn.cursor.return_value = cursor
         conn.__enter__ = MagicMock(return_value=conn)
         conn.__exit__ = MagicMock(return_value=False)
+        merge_kwargs = {"side_effect": merge} if isinstance(merge, Exception) else {"return_value": merge}
         with (
             patch("backend.pipeline.paper_saver.get_connection", return_value=conn),
             patch("backend.pipeline.paper_saver.append_paper_snapshot"),
             patch("backend.pipeline.paper_saver.compute_title_hash", return_value="newhash"),
+            patch("backend.enrichment.paper_merge.merge_paper_group", **merge_kwargs) as merge_mock,
         ):
-            PaperSaver.apply_title_rename(
+            outcome = PaperSaver.apply_title_rename(
                 1, "Old Title", "New Title",
-                {"status": "working_paper"}, "http://example.com",
+                {"status": "working_paper"}, "http://example.com", allow_merge=allow_merge,
             )
-        return [str(c[0][0]) for c in cursor.execute.call_args_list], conn
+        return outcome, [str(c[0][0]) for c in cursor.execute.call_args_list], conn, merge_mock
 
-    def test_collision_refused_without_deleting_history(self):
-        with pytest.raises(ValueError, match='require a validated merge'):
-            self._run(dup_id=77)
+    def test_same_work_collision_merges_under_new_title(self):
+        outcome, sqls, conn, merge = self._run(dup_id=77, merge=True)
+        assert outcome == PaperSaver.MERGED
+        merge.assert_called_once_with([1, 77], as_title="New Title")
+        assert not any("UPDATE papers SET title" in s for s in sqls)
+        conn.commit.assert_not_called()
+
+    def test_different_work_collision_skips_rename_and_warns_once(self, caplog):
+        with caplog.at_level("WARNING"):
+            outcome, sqls, conn, merge = self._run(dup_id=77, merge=False)
+        assert outcome == PaperSaver.SKIPPED
+        assert not any("UPDATE papers" in s or "DELETE" in s for s in sqls)
+        warnings = [r.getMessage() for r in caplog.records if r.levelname == "WARNING"]
+        assert len(warnings) == 1 and "paper 1" in warnings[0] and "paper 77" in warnings[0]
+
+    def test_collision_without_page_evidence_never_merges(self):
+        outcome, _, _, merge = self._run(dup_id=77, merge=True, allow_merge=False)
+        assert outcome == PaperSaver.SKIPPED
+        merge.assert_not_called()
+
+    def test_failed_merge_is_a_skip_not_an_error(self):
+        outcome, _, _, _ = self._run(dup_id=77, merge=RuntimeError("deadlock"))
+        assert outcome == PaperSaver.SKIPPED
 
     def test_no_collision_single_update_no_deletes(self):
-        sqls, conn = self._run(dup_id=None)
+        outcome, sqls, conn, merge = self._run(dup_id=None)
+        assert outcome == PaperSaver.RENAMED
         assert any("UPDATE papers SET title" in s for s in sqls)
         assert not any("DELETE FROM papers" in s for s in sqls)
+        merge.assert_not_called()
         conn.commit.assert_called_once()
+
+    def test_reconcile_reports_only_applied_renames(self):
+        existing = [{"id": 1, "title": "Cash Transfers and Role Models in Rural Kenya", "title_hash": "h"}]
+        pubs = [{"title": "Cash Transfers, Role Models and Women in Rural Kenya"}]
+        with (
+            patch("backend.pipeline.paper_saver.fetch_all", return_value=existing),
+            patch.object(PaperSaver, "apply_title_rename", return_value=PaperSaver.MERGED) as apply,
+        ):
+            assert PaperSaver.reconcile_title_renames("http://example.com", pubs) == []
+        apply.assert_called_once()

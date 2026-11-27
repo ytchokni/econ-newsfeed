@@ -29,7 +29,11 @@ from backend.database import fetch_all, fetch_one, get_connection  # noqa: E402
 from backend.database.papers import compute_title_hash, normalize_title  # noqa: E402
 from backend.database.snapshots import _STATUS_RANK  # noqa: E402
 from backend.enrichment.paper_merge import _CHILD_TABLES, find_duplicate_groups  # noqa: E402
-from backend.pipeline.description import looks_like_reasoning, reasoning_sql_condition  # noqa: E402
+from backend.pipeline.description import (  # noqa: E402
+    looks_like_reasoning,
+    reasoning_sql_condition,
+    salvage_description,
+)
 from backend.pipeline.publication import clean_title  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -135,39 +139,13 @@ def merge_paper_pair(cursor, canonical_id: int, dup_id: int) -> None:
     cursor.execute("DELETE FROM papers WHERE id = %s", (dup_id,))
 
 
-_RESEARCHER_CHILD_TABLES = [
-    ("authorship", "researcher_id"),
-    ("html_content", "researcher_id"),
-    ("researcher_fields", "researcher_id"),
-    ("researcher_jel_codes", "researcher_id"),
-    ("researcher_snapshots", "researcher_id"),
-    ("researcher_urls", "researcher_id"),
-]
-
-
 def merge_researcher_pair(cursor, canonical_id: int, dup_id: int) -> None:
-    """Merge dup researcher into canonical: coalesce profile, reassign, delete."""
-    cursor.execute(
-        "SELECT position, affiliation, description, openalex_author_id, bio "
-        "FROM researchers WHERE id = %s", (dup_id,))
-    dup = cursor.fetchone()
-    if dup is None:
-        return
-    position, affiliation, description, oa_id, bio = dup
+    """Merge dup researcher into canonical: coalesce profile, reassign, delete.
 
-    for table, col in _RESEARCHER_CHILD_TABLES:
-        cursor.execute(
-            f"UPDATE IGNORE `{table}` SET `{col}` = %s WHERE `{col}` = %s",
-            (canonical_id, dup_id))
-
-    cursor.execute("DELETE FROM researchers WHERE id = %s", (dup_id,))
-    cursor.execute(
-        """UPDATE researchers SET
-             position = COALESCE(position, %s), affiliation = COALESCE(affiliation, %s),
-             description = COALESCE(description, %s), bio = COALESCE(bio, %s),
-             openalex_author_id = COALESCE(openalex_author_id, %s)
-           WHERE id = %s""",
-        (position, affiliation, description, bio, oa_id, canonical_id))
+    Delegates to identity.merge_researcher_into, which also moves follows,
+    URL discoveries and mining candidates."""
+    from backend.database.identity import merge_researcher_into
+    merge_researcher_into(cursor, canonical_id, dup_id)
 
 
 def _researcher_weight(row: dict) -> tuple:
@@ -286,18 +264,27 @@ def fix_researcher_url_schemes():
 
 @step
 def merge_researchers_shared_openalex():
-    """Two researcher rows with the same OpenAlex author ID are one person."""
-    groups = fetch_all(
-        """SELECT openalex_author_id, GROUP_CONCAT(id ORDER BY id) ids
-           FROM researchers WHERE openalex_author_id IS NOT NULL
-           GROUP BY openalex_author_id HAVING COUNT(*) > 1""")
+    """Researcher rows with the same OpenAlex author ID and agreeing names are
+    one person. IDs shared by people with other names (stale surname-only
+    backfills) are left to scripts/repair_researcher_identity.py."""
+    from backend.database.identity import cluster_same_person
+
+    rows = fetch_all(
+        """SELECT r.id, r.first_name, r.last_name, r.openalex_author_id
+           FROM researchers r
+           JOIN (SELECT openalex_author_id FROM researchers WHERE openalex_author_id IS NOT NULL
+                 GROUP BY openalex_author_id HAVING COUNT(*) > 1) g
+             ON g.openalex_author_id = r.openalex_author_id""")
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        groups.setdefault(r["openalex_author_id"], []).append(r)
     merges = []
-    for g in groups:
-        ids = [int(x) for x in g["ids"].split(",")]
-        weights = sorted(_fetch_researcher_weights(ids), key=_researcher_weight)
-        canonical = weights[0]["id"]
-        for w in weights[1:]:
-            merges.append((canonical, w["id"]))
+    for recs in groups.values():
+        for cluster in cluster_same_person(recs, strong=True):
+            weights = sorted(_fetch_researcher_weights([r["id"] for r in cluster]), key=_researcher_weight)
+            canonical = weights[0]["id"]
+            for w in weights[1:]:
+                merges.append((canonical, w["id"]))
     log.info("  %d groups -> %d merges", len(groups), len(merges))
 
     def writes(cur):
@@ -770,15 +757,16 @@ def reset_hash_without_content():
     return row["n"]
 
 
-@step
-def restore_reasoning_descriptions():
-    """Bios that hold the LLM's <thought> reasoning instead of a description
-    (issue #258). Each affected researcher gets back the newest snapshot bio
-    that is clean, or NULL when no clean one exists. The polluted snapshots
-    are deleted: their position/affiliation were copied from the researcher
-    row, so the bio is the only thing they recorded, and history would keep
-    showing the reasoning text otherwise. Restoring makes the newest
-    remaining snapshot match the researcher row again."""
+DESCRIPTION_BACKUP_TABLE = "researchers_description_backup"
+SNAPSHOTS_REMOVED_TABLE = "researcher_snapshots_removed"
+
+
+def _plan_reasoning_restores() -> tuple[list[dict], list[int]]:
+    """Decide the new bio for every polluted researcher, and which snapshots go.
+
+    Order: salvage the answer after a closed </thought> in the stored bio,
+    else the newest clean snapshot bio, else NULL.
+    """
     cond, params = reasoning_sql_condition("description")
     researchers = [
         r for r in fetch_all(
@@ -793,38 +781,149 @@ def restore_reasoning_descriptions():
         if looks_like_reasoning(r["description"])
     ]
 
-    restores: list[tuple[int, str | None, str]] = []
+    plans = []
     for r in researchers:
-        clean = None
-        for snap in fetch_all(
-                """SELECT description FROM researcher_snapshots
-                   WHERE researcher_id = %s AND description IS NOT NULL AND description <> ''
-                   ORDER BY scraped_at DESC, id DESC""", (r["id"],)):
-            if not looks_like_reasoning(snap["description"]):
-                clean = snap["description"]
-                break
-        restores.append((r["id"], clean, r["description"]))
+        new, source = salvage_description(r["description"]), "salvaged"
+        if new is None:
+            source = "null"
+            for snap in fetch_all(
+                    """SELECT description FROM researcher_snapshots
+                       WHERE researcher_id = %s AND description IS NOT NULL AND description <> ''
+                       ORDER BY scraped_at DESC, id DESC""", (r["id"],)):
+                if not looks_like_reasoning(snap["description"]):
+                    new, source = snap["description"], "snapshot"
+                    break
+        plans.append({"id": r["id"], "old": r["description"], "new": new, "source": source})
+    return plans, bad_snapshot_ids
 
-    n_restore = sum(1 for _, clean, _ in restores if clean is not None)
-    log.info("  %d researchers with reasoning-text bios: %d restored from a clean snapshot, "
-             "%d set to NULL", len(restores), n_restore, len(restores) - n_restore)
-    log.info("  %d polluted researcher_snapshots rows -> delete", len(bad_snapshot_ids))
-    for rid, clean, bad in restores[:10]:
-        log.info("    #%d %r -> %r", rid, bad[:60], (clean or "NULL")[:60])
+
+def _create_backup_tables(cursor) -> None:
+    cursor.execute(
+        f"""CREATE TABLE IF NOT EXISTS {DESCRIPTION_BACKUP_TABLE} (
+               id INT AUTO_INCREMENT PRIMARY KEY,
+               researcher_id INT NOT NULL,
+               description TEXT,
+               new_description TEXT,
+               backed_up_at DATETIME NOT NULL,
+               INDEX idx_researcher (researcher_id)
+           ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci""")
+    # LIKE copies columns and indexes but no foreign keys, so the copies
+    # survive a researcher being deleted later.
+    cursor.execute(
+        f"CREATE TABLE IF NOT EXISTS {SNAPSHOTS_REMOVED_TABLE} LIKE researcher_snapshots")
+
+
+@step
+def restore_reasoning_descriptions():
+    """Bios that hold the LLM's <thought> reasoning instead of a description
+    (issue #258). Each affected bio becomes, in order: the answer that
+    follows a closed </thought> in the stored text (salvaged), the newest
+    clean snapshot bio, or NULL. Restored and salvaged bios get
+    description_updated_at = NOW() so the JEL job reclassifies them.
+
+    Polluted snapshots are deleted: their position/affiliation were copied
+    from the researcher row, so the bio is all they recorded, and history
+    would keep showing the reasoning text otherwise.
+
+    Before writing, the old bios go to researchers_description_backup and
+    the snapshots to researcher_snapshots_removed, in the same transaction;
+    `--undo` puts them back."""
+    plans, bad_snapshot_ids = _plan_reasoning_restores()
+    counts = {k: sum(1 for p in plans if p["source"] == k)
+              for k in ("salvaged", "snapshot", "null")}
+    log.info("  %d researchers with reasoning-text bios: %d salvaged, %d restored from a "
+             "clean snapshot, %d set to NULL", len(plans), counts["salvaged"],
+             counts["snapshot"], counts["null"])
+    log.info("  %d polluted researcher_snapshots rows -> back up and delete",
+             len(bad_snapshot_ids))
+    for p in plans[:10]:
+        log.info("    #%d [%s] %r -> %r", p["id"], p["source"], p["old"][:60],
+                 (p["new"] or "NULL")[:60])
 
     def write(cursor):
-        for rid, clean, bad in restores:
+        _create_backup_tables(cursor)
+        cursor.executemany(
+            f"""INSERT INTO {DESCRIPTION_BACKUP_TABLE}
+                   (researcher_id, description, new_description, backed_up_at)
+                VALUES (%s, %s, %s, UTC_TIMESTAMP())""",
+            [(p["id"], p["old"], p["new"]) for p in plans])
+        for p in plans:
             # Guarded on the bad value so a bio refreshed meanwhile is kept.
-            cursor.execute(
-                "UPDATE researchers SET description = %s WHERE id = %s AND description = %s",
-                (clean, rid, bad))
+            if p["new"] is None:
+                cursor.execute(
+                    "UPDATE researchers SET description = NULL WHERE id = %s AND description = %s",
+                    (p["id"], p["old"]))
+            else:
+                cursor.execute(
+                    """UPDATE researchers SET description = %s, description_updated_at = UTC_TIMESTAMP()
+                       WHERE id = %s AND description = %s""",
+                    (p["new"], p["id"], p["old"]))
         for i in range(0, len(bad_snapshot_ids), 500):
-            chunk = bad_snapshot_ids[i:i + 500]
+            chunk = tuple(bad_snapshot_ids[i:i + 500])
             ph = ",".join(["%s"] * len(chunk))
-            cursor.execute(f"DELETE FROM researcher_snapshots WHERE id IN ({ph})", tuple(chunk))
+            cursor.execute(
+                f"INSERT IGNORE INTO {SNAPSHOTS_REMOVED_TABLE} "
+                f"SELECT * FROM researcher_snapshots WHERE id IN ({ph})", chunk)
+            cursor.execute(f"DELETE FROM researcher_snapshots WHERE id IN ({ph})", chunk)
 
     _run_writes("restore_reasoning_descriptions", write)
-    return len(restores) + len(bad_snapshot_ids)
+    return len(plans) + len(bad_snapshot_ids)
+
+
+def _table_exists(name: str) -> bool:
+    row = fetch_one(
+        "SELECT COUNT(*) AS n FROM information_schema.TABLES "
+        "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = %s", (name,))
+    return bool(row and row["n"])
+
+
+def undo_restore_reasoning_descriptions() -> int:
+    """Reverse restore_reasoning_descriptions from its backup tables.
+
+    A bio goes back only while it still holds the value the cleanup wrote,
+    so a bio refreshed since then is kept. Removed snapshots are reinserted
+    (rows whose researcher no longer exists are skipped). Undone backup rows
+    are deleted, so running --undo twice is harmless."""
+    if not _table_exists(DESCRIPTION_BACKUP_TABLE):
+        log.info("  no %s table: nothing to undo", DESCRIPTION_BACKUP_TABLE)
+        return 0
+    rows = fetch_all(
+        f"SELECT id, researcher_id, description, new_description "
+        f"FROM {DESCRIPTION_BACKUP_TABLE} ORDER BY id DESC")
+    latest: dict[int, dict] = {}
+    for r in rows:
+        latest.setdefault(r["researcher_id"], r)
+    n_snaps = fetch_one(f"SELECT COUNT(*) AS n FROM {SNAPSHOTS_REMOVED_TABLE}")["n"] \
+        if _table_exists(SNAPSHOTS_REMOVED_TABLE) else 0
+    log.info("  undo: %d researcher bios from %d backup rows, %d removed snapshots",
+             len(latest), len(rows), n_snaps)
+
+    def write(cursor):
+        for r in latest.values():
+            cursor.execute(
+                "UPDATE researchers SET description = %s WHERE id = %s AND description <=> %s",
+                (r["description"], r["researcher_id"], r["new_description"]))
+        if n_snaps:
+            cursor.execute(
+                f"""INSERT IGNORE INTO researcher_snapshots
+                    SELECT s.* FROM {SNAPSHOTS_REMOVED_TABLE} s
+                    JOIN researchers r ON r.id = s.researcher_id""")
+            cursor.execute(
+                f"""DELETE s FROM {SNAPSHOTS_REMOVED_TABLE} s
+                    JOIN researcher_snapshots rs ON rs.id = s.id""")
+        if rows:
+            ids = [r["id"] for r in rows]
+            for i in range(0, len(ids), 500):
+                chunk = tuple(ids[i:i + 500])
+                cursor.execute(
+                    f"DELETE FROM {DESCRIPTION_BACKUP_TABLE} WHERE id IN "
+                    f"({','.join(['%s'] * len(chunk))})", chunk)
+
+    _run_writes("undo_restore_reasoning_descriptions", write)
+    return len(latest) + n_snaps
+
+
+UNDO_STEPS = {"restore_reasoning_descriptions": undo_restore_reasoning_descriptions}
 
 
 # ---------------------------------------------------------------- main
@@ -863,6 +962,9 @@ def main():
     parser.add_argument("--apply", action="store_true",
                         help="write changes (default: dry run)")
     parser.add_argument("--steps", help="comma-separated subset of steps to run")
+    parser.add_argument("--undo", action="store_true",
+                        help="reverse the selected steps from their backups "
+                             f"(supported: {', '.join(UNDO_STEPS)}); dry run unless --apply")
     args = parser.parse_args()
     APPLY = args.apply
 
@@ -873,6 +975,16 @@ def main():
         if unknown:
             parser.error(f"unknown steps: {unknown}; available: {STEP_ORDER}")
         selected = [s for s in STEP_ORDER if s in requested]
+
+    if args.undo:
+        if not args.steps or any(s not in UNDO_STEPS for s in selected):
+            parser.error(f"--undo needs --steps limited to: {', '.join(UNDO_STEPS)}")
+        mode = "UNDO APPLY" if APPLY else "UNDO DRY RUN"
+        log.info("=== cleanup_data_quality (%s) ===", mode)
+        for name in selected:
+            log.info("\n--- undo %s ---", name)
+            UNDO_STEPS[name]()
+        return
 
     mode = "APPLY" if APPLY else "DRY RUN"
     log.info("=== cleanup_data_quality (%s) ===", mode)

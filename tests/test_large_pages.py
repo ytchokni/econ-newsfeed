@@ -347,6 +347,30 @@ class TestMergePublications:
         assert merged[0]["status"] == "revise_and_resubmit"
         assert merged[0]["status_evidence"] == "Trade and Jobs R&R"
 
+    def test_tie_prefers_status_with_evidence(self):
+        """On equal richness the status backed by an evidence quote wins,
+        whichever chunk returned it first."""
+        bare = _pub("Trade and Jobs", year="2024", status="working_paper")
+        backed = _pub("Trade and Jobs", year="2024", status="accepted",
+                      status_evidence="Trade and Jobs. Accepted at the AER")
+        for order in ([bare, backed], [backed, bare]):
+            merged = merge_publications(order)
+            assert len(merged) == 1
+            assert merged[0]["status"] == "accepted"
+            assert merged[0]["status_evidence"] == "Trade and Jobs. Accepted at the AER"
+
+    def test_tie_without_evidence_prefers_venue(self):
+        no_venue = _pub("Trade and Jobs", year="2024", status="working_paper", abstract="A")
+        with_venue = _pub("Trade and Jobs", status="accepted", venue="AER", abstract="A")
+        for order in ([no_venue, with_venue], [with_venue, no_venue]):
+            assert merge_publications(order)[0]["status"] == "accepted"
+
+    def test_richer_record_still_wins_over_evidence(self):
+        backed = _pub("Trade and Jobs", status="accepted", status_evidence="Trade and Jobs accepted")
+        fuller = _pub("Trade and Jobs", status="working_paper", year="2024", venue="NBER WP",
+                      abstract="Long abstract")
+        assert merge_publications([backed, fuller])[0]["status"] == "working_paper"
+
     def test_key_fields_keep_change_types_apart(self):
         changes = [dict(_pub("Paper"), change_type="new_paper"),
                    dict(_pub("Paper"), change_type="status_change")]
@@ -531,6 +555,47 @@ class TestExtractOneUrlLongPages:
         assert mocks["persist"].call_args.kwargs["is_seed"] is True
         mocks["try_changes"].assert_not_called()
         mocks["mark"].assert_called_once_with(1, "h1")
+
+    def test_long_page_with_only_noise_changes_is_still_backfilled(self):
+        """The insignificant-change skip (spacing/counters) must not hide the
+        backfill of a previously truncated page: the backfill check runs first."""
+        html = self.HTML.replace("</ul>", "</ul><p>Visitors: 42</p>")
+        from backend.pipeline.extraction import extract_one_url
+        patches = _extraction_patches(_text(html), _text(self.HTML.replace("</ul>", "</ul><p>Visitors: 41</p>")), html)
+        patches["try_extract"] = patch(
+            "backend.pipeline.extraction.Publication.try_extract_publications",
+            return_value=ExtractionLLMResult(pubs=[_pub("Paper number 499 on trade")]))
+        patches["try_changes"] = patch("backend.pipeline.extraction.Publication.try_extract_changes")
+        mocks = {k: p.start() for k, p in patches.items()}
+        try:
+            outcome = extract_one_url({"id": 1, "researcher_id": 2, "url": "https://x.org",
+                                       "page_type": "PUBLICATIONS"})
+        finally:
+            for p in patches.values():
+                p.stop()
+        assert outcome.status == "extracted"
+        chunks = mocks["try_extract"].call_args.kwargs["chunks"]
+        assert any("Paper number 499" in c.text for c in chunks)
+        assert mocks["persist"].call_args.kwargs["is_seed"] is True
+        mocks["try_changes"].assert_not_called()
+
+    def test_long_page_with_only_noise_changes_and_full_extraction_is_skipped(self):
+        html = self.HTML.replace("</ul>", "</ul><p>Visitors: 42</p>")
+        from backend.pipeline.extraction import extract_one_url
+        patches = _extraction_patches(_text(html), _text(self.HTML.replace("</ul>", "</ul><p>Visitors: 41</p>")),
+                                      html, untruncated=True)
+        patches["try_extract"] = patch("backend.pipeline.extraction.Publication.try_extract_publications")
+        patches["try_changes"] = patch("backend.pipeline.extraction.Publication.try_extract_changes")
+        mocks = {k: p.start() for k, p in patches.items()}
+        try:
+            outcome = extract_one_url({"id": 1, "researcher_id": 2, "url": "https://x.org",
+                                       "page_type": "PUBLICATIONS"})
+        finally:
+            for p in patches.values():
+                p.stop()
+        assert outcome.status == "empty"
+        mocks["try_extract"].assert_not_called()
+        mocks["try_changes"].assert_not_called()
 
     def test_first_extraction_of_long_page_is_not_truncated(self):
         outcome, mocks = self._run(previous_text=None)
