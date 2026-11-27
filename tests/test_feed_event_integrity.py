@@ -9,6 +9,7 @@ Tests verify all guards independently AND in combination, with realistic data sh
 import zlib
 import pytest
 from dataclasses import dataclass
+from datetime import datetime
 from unittest.mock import patch, MagicMock
 
 from backend.pipeline.feed_events import (
@@ -34,9 +35,11 @@ def _make_conn_and_cursor(snapshot_count=3, prev_html=None, prior_event_count=0)
     Query order in emit_new_paper_events:
     1. _url_has_baseline → SELECT COUNT(*) FROM html_snapshots
     2. _get_previous_snapshot_html → SELECT raw_html_compressed FROM html_snapshots
-    Then per-result:
-    3. (if is_new) INSERT INTO feed_events
-    4. (if not is_new) SELECT COUNT(*) FROM feed_events WHERE paper_id=... → prior_event_count
+    Then per result that passes those guards:
+    3. _load_paper_facts → (is_seed, discovered_at, year, already announced)
+    4. INSERT INTO feed_events
+    Papers are non-seed, discovered just now, undated; prior_event_count > 0
+    marks them as already announced.
     """
     mock_cursor = MagicMock()
 
@@ -45,10 +48,12 @@ def _make_conn_and_cursor(snapshot_count=3, prev_html=None, prior_event_count=0)
         (snapshot_count,),
         (compressed,) if compressed else None,
     ]
-    if prior_event_count is not None:
-        fetchone_returns.append((prior_event_count,))
+    paper_facts = (0, datetime.now(), None, int(bool(prior_event_count)))
 
-    mock_cursor.fetchone.side_effect = fetchone_returns
+    def fetchone():
+        return fetchone_returns.pop(0) if fetchone_returns else paper_facts
+
+    mock_cursor.fetchone.side_effect = fetchone
     mock_cursor.execute = MagicMock()
 
     mock_conn = MagicMock()

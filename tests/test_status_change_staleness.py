@@ -9,8 +9,11 @@ os.environ.setdefault("GOOGLE_API_KEY", "test-key")
 os.environ.setdefault("SCRAPE_API_KEY", "test-key")
 os.environ.setdefault("CONTENT_MAX_CHARS", "20000")
 
+from datetime import datetime, timezone
 from unittest.mock import patch, MagicMock
 from dataclasses import dataclass
+
+THIS_YEAR = datetime.now(timezone.utc).year
 
 
 @dataclass
@@ -57,10 +60,11 @@ class TestStalenessGuard:
         mock_hash.side_effect = lambda t: f"hash_{t}"
         mock_fetch_all.return_value = {"Recent Paper": {"id": 2}}
         mock_snapshot.return_value = FakeSnapshotResult(
-            status_changed=True, old_status="working_paper", new_status="published"
+            status_changed=True, old_status="working_paper", new_status="published",
+            venue="American Economic Review",
         )
 
-        pubs = [{"title": "Recent Paper", "status": "published", "year": "2024",
+        pubs = [{"title": "Recent Paper", "status": "published", "year": str(THIS_YEAR - 1),
                  "venue": "AER", "abstract": None, "draft_url": None}]
         _append_snapshots(pubs, "http://example.com")
 
@@ -78,7 +82,8 @@ class TestStalenessGuard:
         mock_hash.side_effect = lambda t: f"hash_{t}"
         mock_fetch_all.return_value = {"No Year Paper": {"id": 3}}
         mock_snapshot.return_value = FakeSnapshotResult(
-            status_changed=True, old_status="working_paper", new_status="published"
+            status_changed=True, old_status="working_paper", new_status="published",
+            venue="Journal of Public Economics",
         )
 
         pubs = [{"title": "No Year Paper", "status": "published", "year": None,
