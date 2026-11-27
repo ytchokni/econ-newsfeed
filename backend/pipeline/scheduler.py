@@ -3,7 +3,7 @@ import os
 import signal
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import mysql.connector
 import mysql.connector.errors
@@ -203,6 +203,8 @@ try:
 except ValueError:
     _BIO_BACKFILL_INTERVAL_MINUTES = 60
 DIGEST_ENABLED = os.environ.get('RESEND_API_KEY', '') != ''
+# Weekly top-5 journal coverage for the About page (backend/coverage/top5_job.py).
+TOP5_COVERAGE_ENABLED = os.environ.get('TOP5_COVERAGE_ENABLED', 'true').lower() == 'true'
 _EXTRACTION_DELAY_SECONDS = float(os.environ.get('EXTRACTION_DELAY_SECONDS', '2'))
 _EXTRACTION_IDLE_SECONDS = 300       # queue empty → re-poll every 5 min
 _EXTRACTION_BACKOFF_SECONDS = 600    # 10 min (rides out free-tier quota exhaustion)
@@ -569,6 +571,12 @@ def run_jel_classification_job() -> dict:
     except Exception as e:
         logger.error("JEL classification job failed: %s: %s", type(e).__name__, e)
         return {"stopped": "error"}
+
+
+def run_top5_coverage_job() -> None:
+    """Weekly top-5 coverage comparison; skips itself when a recent run is stored."""
+    from backend.coverage.top5_job import run_top5_coverage_job as _run
+    _run()
 
 
 def run_bio_backfill_job() -> dict:
@@ -978,6 +986,29 @@ def start_scheduler() -> None:
             misfire_grace_time=600,
         )
         logger.info("Bio backfill scheduled every %d minutes", _BIO_BACKFILL_INTERVAL_MINUTES)
+
+    if TOP5_COVERAGE_ENABLED:
+        # Sundays at a quiet hour, after the 03:00 UTC backup. The boot-time run
+        # catches up when no result is newer than a week (fresh deploys, outages);
+        # it waits 15 minutes so it does not compete with startup work.
+        _scheduler.add_job(
+            run_top5_coverage_job,
+            'cron',
+            day_of_week='sun',
+            hour=4,
+            minute=30,
+            id='top5_coverage',
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=3600,
+        )
+        _scheduler.add_job(
+            run_top5_coverage_job,
+            'date',
+            run_date=datetime.now(timezone.utc) + timedelta(minutes=15),
+            id='top5_coverage_catchup',
+        )
+        logger.info("Top-5 coverage job scheduled for Sundays 04:30 UTC (catch-up check in 15 min)")
 
     if QUALITY_REVIEW_ENABLED:
         from backend.enrichment.review_batch import submit_review_batch, check_review_batches

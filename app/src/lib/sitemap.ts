@@ -23,7 +23,7 @@ export interface SitemapEntry {
 }
 
 /** Pages listed in every sitemap besides researchers and papers. */
-export const STATIC_PATHS = ["/", "/researchers"];
+export const STATIC_PATHS = ["/", "/researchers", "/about"];
 
 export const SITEMAP_HEADERS = {
   "Content-Type": "application/xml; charset=utf-8",

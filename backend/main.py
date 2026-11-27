@@ -233,6 +233,10 @@ def main() -> None:
     mining_parser.add_argument('--max-seconds', type=int, default=None)
     mining_parser.add_argument('--status', action='store_true', help='Read recent runs, queue counts and held candidates; no network requests')
 
+    top5_parser = subparsers.add_parser('top5-coverage', help='Compare top-5 journal articles (Crossref) with our papers; store the result for /about')
+    top5_parser.add_argument('--dry-run', action='store_true', help='Print the summary without storing it')
+    top5_parser.add_argument('--force', action='store_true', help='Run even if a result from the last week is stored')
+
     review_parser = subparsers.add_parser('review', help='LLM quality review of feed events (GPT 5.4 Mini)')
     review_parser.add_argument('--limit', type=int, default=None, help='Max events to review')
     review_parser.add_argument('--batch-size', type=int, default=100, help='Batch size (default: 100)')
@@ -285,6 +289,11 @@ def main() -> None:
                 source_limit=args.source_limit, candidate_limit=args.limit,
                 max_requests=args.max_requests, max_seconds=args.max_seconds)
         print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
+    elif args.command == 'top5-coverage':
+        create_tables()
+        from backend.coverage.top5_job import run_top5_coverage_job
+        summary = run_top5_coverage_job(force=args.force or args.dry_run, store=not args.dry_run)
+        print(json.dumps((summary or {}).get('overall'), indent=2))
     elif args.command == 'review':
         create_tables()
         from backend.enrichment.quality_review import review_events

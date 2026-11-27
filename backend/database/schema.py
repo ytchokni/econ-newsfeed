@@ -320,6 +320,22 @@ _TABLE_DEFINITIONS = {
     """,
     # Paced bio backfill (issue #258): last attempt per researcher, so a HOME
     # page with no usable bio is not sent to the LLM again until it changes.
+    # Weekly top-5 journal coverage (backend/coverage/top5_job.py), shown on /about.
+    "top5_coverage_runs": """
+        CREATE TABLE IF NOT EXISTS top5_coverage_runs (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            computed_at DATETIME NOT NULL,
+            from_year SMALLINT NOT NULL,
+            until_year SMALLINT NOT NULL,
+            articles INT NOT NULL,
+            observed INT NOT NULL,
+            tracked_articles INT NOT NULL,
+            tracked_observed INT NOT NULL,
+            summary JSON NOT NULL,
+            duration_seconds INT DEFAULT NULL,
+            INDEX idx_computed_at (computed_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
     "researcher_bio_backfill": """
         CREATE TABLE IF NOT EXISTS researcher_bio_backfill (
             researcher_id INT NOT NULL PRIMARY KEY,
