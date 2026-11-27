@@ -40,6 +40,8 @@ poetry run python -m backend.main opt-out --list                       # recorde
 poetry run python scripts/check_env.py && poetry run pytest && cd app && npx tsc --noEmit && npm run lint && npx jest  # Full suite
 poetry run pytest tests_data_quality -v             # Data-quality invariants against real DB
 DATA_QUALITY_LIVE=1 poetry run pytest tests_data_quality -v  # + pipeline-liveness checks (server only)
+poetry run python scripts/data_quality_check.py run --out dq.json  # suite + signals as JSON (read-only session)
+python3 scripts/data_quality_check.py report dq.json --offline     # preview the daily issue summary
 poetry run pytest                                   # All Python tests
 poetry run pytest tests/test_api_publications.py    # Single test file
 poetry run pytest -k test_name                      # Single test by name
@@ -49,6 +51,8 @@ cd app && npx jest --testPathPattern=ComponentName  # Single frontend test
 # One-time scripts
 poetry run python scripts/backfill_paper_links.py   # Populate paper_links from stored HTML + enrich
 poetry run python scripts/cleanup_data_quality.py   # Fix rows flagged by data-quality checks (dry-run; add --apply to write)
+poetry run python scripts/reverify_openalex_ids.py --max-requests 300 --apply  # #266: re-check pre-15-Oct OpenAlex IDs (~900 budgeted requests: pause ENRICHMENT_WORKER_ENABLED or raise OPENALEX_DAILY_BUDGET for ~3 days; DB-cached, resumable; --status, --undo, --purge-cache)
+poetry run python scripts/merge_renamed_papers.py   # #265: merge renames sharing an SSRN/NBER/arXiv/DOI link (dry-run; --apply)
 
 # Docker
 docker compose up         # Full stack (db + api + frontend)
@@ -116,6 +120,18 @@ alerts the owner straight away. Every other call uses the workflow token so the
 owner mention comes from a bot (a self-mention sends no email). The script is standard
 library only because it runs on the server's system Python. Run it by hand with
 `python3 scripts/monitor.py --external`, or `--host` on the server.
+
+`.github/workflows/data-quality.yml` runs at 07:47 UTC: `tests_data_quality`
+plus a few pipeline signals (`scripts/data_quality_check.py`) against prod
+through an SSH tunnel as the SELECT-only `dq_readonly` MySQL user
+(`DQ_DB_PASSWORD` secret), with the session forced read-only. Failures no open
+issue tracks go to Claude (Sonnet, read-only tools), which answers in JSON; the
+script then files at most 3 `bug` issues or comments on existing ones, posts one
+comment on the rolling "Daily data-quality report" issue (its body holds the
+invariant→issue state), and closes issues whose invariants passed on two
+consecutive days. A fix that is merged but still waiting on its `--apply`
+cleanup is listed as one "cleanup pending" line, not a new bug. Claude is
+skipped when nothing new fails.
 
 **Search engines:** the canonical host is `https://www.econnewsfeed.org`
 (`SITE_URL` on Vercel overrides it). `next.config.mjs` 308-redirects pages on

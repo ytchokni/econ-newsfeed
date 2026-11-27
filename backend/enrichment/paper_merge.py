@@ -10,7 +10,7 @@ import unicodedata
 from difflib import SequenceMatcher
 from backend.database import fetch_all, get_connection
 from backend.database.snapshots import STATUS_ORDER, _STATUS_RANK
-from backend.database.papers import normalize_title, has_title_identity
+from backend.database.papers import compute_title_hash, normalize_title, has_title_identity
 from backend.publication_rules import is_working_paper_series
 
 logger = logging.getLogger(__name__)
@@ -150,8 +150,39 @@ def highest_known_status(statuses) -> str | None:
     return next((status for status in reversed(STATUS_ORDER) if status in known), None)
 
 
-def merge_paper_group(paper_ids: list[int]) -> bool:
-    """Merge verified identities only; preserve coherent metadata and every source."""
+def _rename_keys(cursor, paper_ids, placeholders):
+    """Strong link identifiers per paper, minus those re-verification cleared."""
+    from backend.enrichment.rename_merge import (
+        CLEARED_EVIDENCE_SQL, identifier_key_from_doi, link_identifier_keys,
+    )
+
+    cursor.execute(
+        f"SELECT paper_id, url, doi FROM paper_links WHERE paper_id IN ({placeholders}) FOR UPDATE",
+        tuple(paper_ids),
+    )
+    keys = {pid: set() for pid in paper_ids}
+    for link in cursor.fetchall():
+        keys[link['paper_id']].update(link_identifier_keys(link['url'], link['doi']))
+    cursor.execute(
+        f"""SELECT paper_id, doi FROM openalex_identifier_checks
+            WHERE paper_id IN ({placeholders}) AND {CLEARED_EVIDENCE_SQL}""",
+        tuple(paper_ids),
+    )
+    cleared = {pid: set() for pid in paper_ids}
+    for row in cursor.fetchall():
+        if key := identifier_key_from_doi(row['doi']):
+            cleared[row['paper_id']].add(key)
+    return keys, cleared
+
+
+def merge_paper_group(paper_ids: list[int], rename: bool = False) -> bool:
+    """Merge verified identities only; preserve coherent metadata and every source.
+
+    With rename=True, pairs that are not spelling variants may still merge when
+    they share a strong link identifier (rename_merge.compatible_rename); the
+    caller has checked that no page lists both titles. The canonical row then
+    takes the most recently discovered title.
+    """
     paper_ids = sorted(set(paper_ids))
     if len(paper_ids) < 2:
         return False
@@ -176,7 +207,16 @@ def merge_paper_group(paper_ids: list[int]) -> bool:
             authors = cursor.fetchall()
             for paper in papers:
                 paper['author_ids'] = {a['researcher_id'] for a in authors if a['publication_id'] == paper['id']}
-            if any(not _compatible_identity(a, b) for i, a in enumerate(papers) for b in papers[i + 1:]):
+            compatible = _compatible_identity
+            if rename:
+                from backend.enrichment.rename_merge import compatible_rename, identifier_key_from_doi
+                keys, cleared = _rename_keys(cursor, paper_ids, placeholders)
+                for paper in papers:
+                    paper['keys'] = keys[paper['id']] - cleared[paper['id']]
+                    paper_key = identifier_key_from_doi(paper.get('doi'))
+                    paper['paper_keys'] = {paper_key} - cleared[paper['id']] if paper_key else set()
+                compatible = lambda a, b: _compatible_identity(a, b) or compatible_rename(a, b)
+            if any(not compatible(a, b) for i, a in enumerate(papers) for b in papers[i + 1:]):
                 logger.warning('Refused incompatible duplicate candidate group: %s', paper_ids)
                 conn.rollback()
                 return False
@@ -243,6 +283,13 @@ def merge_paper_group(paper_ids: list[int]) -> bool:
                 cursor.execute('DELETE FROM feed_events WHERE id = %s', (event['id'],))
             for duplicate in papers[1:]:
                 cursor.execute('DELETE FROM papers WHERE id = %s', (duplicate['id'],))
+            if rename:
+                newest = max(papers, key=lambda p: (p['discovered_at'] is not None, p['discovered_at'], p['id']))
+                if newest['id'] != canonical_id and newest['title'] != papers[0]['title']:
+                    # The duplicate rows are gone, so the unique title_hash is free.
+                    cursor.execute('UPDATE papers SET title = %s, title_hash = %s WHERE id = %s',
+                                   (newest['title'], newest['title_hash'] or compute_title_hash(newest['title']),
+                                    canonical_id))
             conn.commit()
             logger.info('Merged %d verified duplicates into paper %s', len(papers) - 1, canonical_id)
             return True

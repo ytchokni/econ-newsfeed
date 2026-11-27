@@ -499,6 +499,37 @@ _TABLE_DEFINITIONS = {
             PRIMARY KEY (provider, budget_day)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    # One row per re-verified (paper, OpenAlex ID): the audit trail of
+    # scripts/reverify_openalex_ids.py and its review list (verdict='review').
+    "openalex_identifier_checks": """
+        CREATE TABLE IF NOT EXISTS openalex_identifier_checks (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            paper_id INT NOT NULL,
+            openalex_id VARCHAR(255) NOT NULL,
+            doi VARCHAR(255) DEFAULT NULL,
+            verdict ENUM('verified', 'cleared', 'review') NOT NULL,
+            reason VARCHAR(64) NOT NULL,
+            work_title TEXT DEFAULT NULL,
+            matched_paper_id INT DEFAULT NULL,
+            cleared_abstract BOOLEAN NOT NULL DEFAULT FALSE,
+            backup JSON DEFAULT NULL,
+            restored_at DATETIME DEFAULT NULL,
+            checked_at DATETIME NOT NULL,
+            UNIQUE KEY uq_paper_work (paper_id, openalex_id),
+            INDEX idx_verdict (verdict),
+            FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    # Compact OpenAlex works fetched by scripts/reverify_openalex_ids.py, so a
+    # dry run, the --apply run and reruns after a deploy pay the budget once.
+    # work IS NULL records that OpenAlex has no such work. Purge when done.
+    "openalex_work_cache": """
+        CREATE TABLE IF NOT EXISTS openalex_work_cache (
+            openalex_id VARCHAR(64) NOT NULL PRIMARY KEY,
+            work MEDIUMTEXT DEFAULT NULL,
+            fetched_at DATETIME NOT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
     "newsletter_emails": """
         CREATE TABLE IF NOT EXISTS newsletter_emails (
             id INT AUTO_INCREMENT PRIMARY KEY,
@@ -574,6 +605,8 @@ def create_tables() -> None:
             if got_lock == 1:
                 try:
                     _migrations = [
+                        ("openalex_identifier_checks", "backup", "JSON DEFAULT NULL"),
+                        ("openalex_identifier_checks", "restored_at", "DATETIME DEFAULT NULL"),
                         ("scrape_log", "prompt_tokens_total", "INT DEFAULT 0"),
                         ("scrape_log", "completion_tokens_total", "INT DEFAULT 0"),
                         ("papers", "is_seed", "BOOLEAN NOT NULL DEFAULT FALSE"),

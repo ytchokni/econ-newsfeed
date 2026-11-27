@@ -5,13 +5,25 @@ in production: the migration failed on every startup with MySQL error 1419
 (app user lacks SUPER with binlog enabled) and only logged a warning. A test
 asserting the trigger exists would have caught months of missing protection.
 """
+import pytest
+
 from conftest import fmt_violations
+
+
+def _can_see_triggers(db) -> bool:
+    grants = " ".join(str(v) for row in db.fetch_all("SHOW GRANTS") for v in row.values())
+    return "ALL PRIVILEGES" in grants or "TRIGGER" in grants
 
 
 class TestSnapshotGuardTrigger:
     def test_feed_events_snapshot_guard_trigger_exists(self, db):
         rows = db.fetch_all("SHOW TRIGGERS LIKE 'feed_events'")
         names = {r.get("Trigger") for r in rows}
+        if "trg_feed_events_snapshot_guard" not in names and not _can_see_triggers(db):
+            # MySQL lists only triggers the user holds TRIGGER on; the daily
+            # check's SELECT-only user cannot see them, and granting TRIGGER
+            # would let it drop them. scripts/monitor.py checks it as root.
+            pytest.skip("this database user lacks the TRIGGER privilege needed to see triggers")
         assert "trg_feed_events_snapshot_guard" in names, (
             "trg_feed_events_snapshot_guard is missing — the DB-level new_paper "
             "guard does not exist (MySQL error 1419? see PR #158: the container "
