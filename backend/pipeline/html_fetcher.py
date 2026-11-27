@@ -698,16 +698,24 @@ class HTMLFetcher:
             logging.warning("Unexpected error in archive_snapshot for URL ID %s: %s", url_id, e)
 
         query = """
-            INSERT INTO html_content (url_id, content, content_hash, timestamp, researcher_id, raw_html)
-            VALUES (%s, %s, %s, %s, %s, %s) AS new_row
+            INSERT INTO html_content (url_id, content, content_hash, timestamp, researcher_id,
+                                      content_changed_at, raw_html)
+            VALUES (%s, %s, %s, %s, %s, %s, %s) AS new_row
             ON DUPLICATE KEY UPDATE
+                -- Before content_hash: MySQL applies assignments left to right.
+                -- Table-qualified: with the new_row alias, bare names are
+                -- ambiguous (ERROR 1052) and the whole upsert fails.
+                content_changed_at = IF(html_content.content_hash <=> new_row.content_hash,
+                                        html_content.content_changed_at,
+                                        new_row.content_changed_at),
                 content = new_row.content,
                 content_hash = new_row.content_hash,
                 timestamp = new_row.timestamp,
                 raw_html = new_row.raw_html
         """
         try:
-            execute_query(query, (url_id, text_content, text_hash, datetime.now(timezone.utc), researcher_id, raw_html))
+            now = datetime.now(timezone.utc)
+            execute_query(query, (url_id, text_content, text_hash, now, researcher_id, now, raw_html))
             logging.info(f"Text content saved for URL ID: {url_id} (Researcher ID: {researcher_id})")
         except Exception as e:
             logging.error("Error saving text content for URL ID %s: %s", url_id, type(e).__name__)

@@ -470,12 +470,16 @@ class TestSearchResearchers:
 class TestGetUrlsNeedingExtraction:
     def test_queries_active_urls_with_hash_mismatch(self):
         from backend.database.researchers import get_urls_needing_extraction
-        rows = [{"id": 1, "researcher_id": 10, "url": "https://a.com", "page_type": "PUBLICATIONS"}]
-        # First call: cooled-down pages (none); second: the queue itself.
-        with patch("backend.database.researchers.fetch_all", side_effect=[[], rows]) as mock_fetch:
+        rows = [{"id": 1, "researcher_id": 10, "url": "https://a.com", "page_type": "PUBLICATIONS",
+                 "never_extracted": 1}]
+        # Calls: cooled-down pages (none), the queue itself, wait times.
+        with patch("backend.database.researchers.fetch_all",
+                   side_effect=[[], rows, [{"url_id": 1, "pending_since": None}]]) as mock_fetch, \
+             patch("backend.database.extraction_queue.researcher_signals",
+                   return_value=(frozenset(), frozenset())):
             result = get_urls_needing_extraction()
         assert result == rows
-        query = mock_fetch.call_args[0][0]
+        query = next(c[0][0] for c in mock_fetch.call_args_list if "FROM researcher_urls" in c[0][0])
         assert "is_active = TRUE" in query
         assert "content_hash IS NOT NULL" in query
         assert "extracted_hash IS NULL" in query

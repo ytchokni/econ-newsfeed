@@ -223,6 +223,7 @@ _TABLE_DEFINITIONS = {
             extraction_failed_hash VARCHAR(64) DEFAULT NULL,
             extraction_retry_at DATETIME DEFAULT NULL,
             extracted_untruncated BOOLEAN NOT NULL DEFAULT FALSE,
+            content_changed_at DATETIME DEFAULT NULL,
             UNIQUE KEY uq_url_id (url_id),
             INDEX idx_url_id_ts (url_id, timestamp),
             FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
@@ -639,6 +640,9 @@ def create_tables() -> None:
                         # FALSE for extractions made before chunking (first
                         # CONTENT_MAX_CHARS only); see extract_one_url.
                         ("html_content", "extracted_untruncated", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                        # When content_hash last changed (html_content.timestamp moves on
+                        # every fetch). Orders the extraction queue; NULL on older rows.
+                        ("html_content", "content_changed_at", "DATETIME DEFAULT NULL"),
                     ]
                     for table, col, definition in _migrations:
                         try:

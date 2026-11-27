@@ -12,6 +12,10 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
+function formatHours(hours: number): string {
+  return hours < 48 ? `${hours}h` : `${Math.round(hours / 24)}d`;
+}
+
 function formatRelativeTime(isoDate: string): string {
   const diff = Date.now() - new Date(isoDate).getTime();
   const mins = Math.floor(diff / 60000);
@@ -66,6 +70,11 @@ export default function ExtractionTab({ data }: Props) {
           <p className="text-xs text-zinc-500 mt-1">
             {queue.never_extracted.toLocaleString()} never · {queue.changed_pending.toLocaleString()} changed
           </p>
+          {queue.oldest_changed_hours != null && (
+            <p className="text-xs text-zinc-500">
+              oldest change waiting {formatHours(queue.oldest_changed_hours)}
+            </p>
+          )}
         </div>
         <div className="bg-[#1a1d27] rounded-lg border border-[#2a2d3a] p-5">
           <p className="text-xs text-zinc-500 mb-1">Extracted (24h)</p>
