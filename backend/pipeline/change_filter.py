@@ -20,6 +20,9 @@ _NUMBER_TOKEN = re.compile(r"^(\W*)(\d[\d,.]*)(\W*)$")
 # Any 4-digit 1800-2199 run counts as a year, also inside dotted dates and
 # with punctuation ("2025.", "11.2025", "03.2025-04.2026").
 _YEAR = re.compile(r"(?<!\d)(1[89]|20|21)\d\d(?!\d)")
+# A number after one of these is part of a citation, not a counter.
+_CITATION_LABEL = re.compile(r"^\W*(vol|volume|no|nr|num|number|issue|iss|pp?|pages?)\.?\W*$",
+                             re.IGNORECASE)
 
 
 def _is_counter_swap(old: str, new: str) -> bool:
@@ -42,5 +45,11 @@ def is_insignificant_change(old_text: str, new_text: str) -> bool:
     old_tokens, new_tokens = old_text.split(), new_text.split()
     if len(old_tokens) != len(new_tokens):
         return False  # something was inserted or removed
-    return all(old == new or _is_counter_swap(old, new)
-               for old, new in zip(old_tokens, new_tokens))
+    for i, (old, new) in enumerate(zip(old_tokens, new_tokens)):
+        if old == new:
+            continue
+        if not _is_counter_swap(old, new):
+            return False
+        if i and _CITATION_LABEL.match(old_tokens[i - 1]):
+            return False  # "Vol. 12" -> "Vol. 13": the citation itself changed
+    return True

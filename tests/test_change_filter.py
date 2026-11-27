@@ -28,6 +28,10 @@ def test_insignificant(old, new):
     ("Paper A. Paper B.", "Paper A."),                                    # removal
     ("Affects of trade", "Effects of trade"),                             # title fix
     ("Journal of X, 2026", "Journal of X, 2026, 14(2)"),                  # volume added
+    ("Journal of X, Vol. 12, No. 3", "Journal of X, Vol. 13, No. 3"),     # volume changed
+    ("Journal of X, Vol. 12, No. 3", "Journal of X, Vol. 12, No. 4"),     # issue changed
+    ("Issue 5", "Issue 6"),
+    ("pp. 12-30", "pp. 14-30"),
 ])
 def test_significant(old, new):
     assert not is_insignificant_change(old, new)

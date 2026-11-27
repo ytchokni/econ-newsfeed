@@ -13,7 +13,10 @@ from backend.database import (
     get_researcher_id,
     normalize_title,
 )
-from backend.database.researchers import is_abbreviation_of, is_compatible_name, merge_researchers, refresh_has_top5_for
+from backend.database.researchers import (
+    disambiguation_prefetch, is_abbreviation_of, is_compatible_name, merge_researchers,
+    prefetch_disambiguation, refresh_has_top5_for,
+)
 from backend.database.snapshots import _STATUS_RANK
 from backend.database.papers import title_hash_candidates
 from backend.publication_rules import is_working_paper_series
@@ -176,6 +179,14 @@ def _merge_compatible_authors(paper_id: int) -> None:
                 return
 
 
+def _split_author(author) -> tuple[str, str]:
+    if len(author) == 1:
+        return "", author[0]
+    if len(author) == 2:
+        return author[0], author[1]
+    return " ".join(author[:-1]), author[-1]
+
+
 class PaperSaver:
     @staticmethod
     def save_publications(
@@ -183,7 +194,32 @@ class PaperSaver:
         publications: list[dict],
         is_seed: bool = False,
     ) -> list[SaveResult]:
-        """Save extracted publications. Returns SaveResult per successfully saved paper."""
+        """Save extracted publications. Returns SaveResult per successfully saved paper.
+
+        Authors that need an LLM disambiguation are asked about first, outside
+        the save transaction, so the model call holds no row locks.
+        """
+        with disambiguation_prefetch():
+            for pub in publications:
+                for author in pub.get('authors') or ():
+                    if not author:
+                        continue
+                    first_name, last_name = _split_author(author)
+                    if (first_name, last_name) in _author_id_cache:
+                        continue
+                    try:
+                        prefetch_disambiguation(first_name, last_name)
+                    except Exception as e:  # the in-transaction path still works
+                        logging.warning("Disambiguation prefetch failed for %s %s: %s",
+                                        first_name, last_name, e)
+            return PaperSaver._save_publications(url, publications, is_seed)
+
+    @staticmethod
+    def _save_publications(
+        url: str,
+        publications: list[dict],
+        is_seed: bool = False,
+    ) -> list[SaveResult]:
         results = []
         with get_connection() as conn:
             for pub in publications:
@@ -285,13 +321,7 @@ class PaperSaver:
                     for author_order, author in enumerate(pub['authors'], start=1):
                         if not author:
                             continue
-                        if len(author) == 1:
-                            first_name, last_name = "", author[0]
-                        elif len(author) == 2:
-                            first_name, last_name = author
-                        else:
-                            first_name = " ".join(author[:-1])
-                            last_name = author[-1]
+                        first_name, last_name = _split_author(author)
 
                         # Layer 1: check if a compatible-name author is already
                         # resolved for this paper (same last name, compatible first)

@@ -214,7 +214,8 @@ _EXTRACTION_CONCURRENCY = max(1, int(os.environ.get('EXTRACTION_CONCURRENCY', '2
 # Share of the per-minute LLM budget extraction may use; the rest stays free
 # for lower-priority jobs on the same key (JEL classification, discovery).
 _EXTRACTION_BUDGET_SHARE = 0.8
-_JEL_BUDGET_SHARE = 0.2
+# JEL classification and the bio backfill share this lane.
+_BACKGROUND_BUDGET_SHARE = 0.2
 _EXTRACTION_CLAIMED_WAIT_SECONDS = 30
 
 _extraction_thread = None
@@ -561,8 +562,9 @@ def run_jel_classification_job() -> dict:
     """Scheduled, budgeted JEL classification batch (see backend.enrichment.jel_job)."""
     from backend.enrichment.jel_job import run_jel_classification_batch
     try:
-        # Its own fifth of the per-minute LLM budget; extraction keeps 80%.
-        with throttle.budget_share(_JEL_BUDGET_SHARE, "jel"):
+        # The background lane (with the bio backfill): 20% of each minute's
+        # LLM budget; extraction keeps 80%.
+        with throttle.budget_share(_BACKGROUND_BUDGET_SHARE, "background"):
             return run_jel_classification_batch()
     except Exception as e:
         logger.error("JEL classification job failed: %s: %s", type(e).__name__, e)
@@ -573,7 +575,10 @@ def run_bio_backfill_job() -> dict:
     """Scheduled, budgeted bio backfill batch (see backend.pipeline.bio_backfill)."""
     from backend.pipeline.bio_backfill import run_bio_backfill_batch
     try:
-        return run_bio_backfill_batch()
+        # Shares the background lane with JEL: together at most 20% of each
+        # minute's LLM budget, so extraction keeps its 80%.
+        with throttle.budget_share(_BACKGROUND_BUDGET_SHARE, "background"):
+            return run_bio_backfill_batch()
     except Exception as e:
         logger.error("Bio backfill job failed: %s: %s", type(e).__name__, e)
         return {"stopped": "error"}

@@ -6,7 +6,9 @@ import json
 import logging
 import os
 import re
+import threading
 import unicodedata
+from contextlib import contextmanager
 
 import mysql.connector
 
@@ -301,7 +303,71 @@ def _longer_first_name(a: str, b: str) -> str:
     return a if len(a.rstrip('.')) > len(b.rstrip('.')) else b
 
 
+_prefetch_local = threading.local()
+
+
+def _disambiguation_key(first_name: str, last_name: str, candidates: list[dict]) -> tuple:
+    return (first_name, last_name, tuple(sorted(c['id'] for c in candidates)))
+
+
+@contextmanager
+def disambiguation_prefetch():
+    """Collect LLM disambiguation answers made before a save transaction.
+
+    Inside, prefetch_disambiguation() asks the model and remembers the answer;
+    get_researcher_id() inside the transaction then reuses it instead of
+    calling the model while holding row locks (and the extraction gate). A
+    candidate list that changed in between misses the cache and is asked again.
+    """
+    previous = getattr(_prefetch_local, "answers", None)
+    _prefetch_local.answers = {}
+    try:
+        yield
+    finally:
+        _prefetch_local.answers = previous
+
+
+def prefetch_disambiguation(first_name: str, last_name: str) -> None:
+    """Run get_researcher_id's read-only steps and, where it would ask the
+    model (tier 3), ask now and cache the answer. Writes nothing."""
+    answers = getattr(_prefetch_local, "answers", None)
+    if answers is None or is_bad_researcher_name(first_name, last_name):
+        return
+    first_name, _ = fix_encoding(first_name)
+    last_name, _ = fix_encoding(last_name)
+    first_name = normalize_name_case(first_name)
+    last_name = normalize_name_case(last_name)
+    if fetch_one("SELECT id FROM researchers WHERE first_name = %s AND last_name = %s",
+                 (first_name, last_name)):
+        return
+    candidates = fetch_all("SELECT id, first_name, last_name FROM researchers WHERE last_name = %s",
+                           (last_name,))
+    if not candidates:
+        return
+    initial_matches = [c for c in candidates
+                       if is_compatible_name(first_name, c['first_name'])
+                       and first_name.lower() != c['first_name'].lower()]
+    if len(initial_matches) == 1:
+        return
+    key = _disambiguation_key(first_name, last_name, candidates)
+    if key not in answers:
+        answers[key] = _ask_disambiguation(first_name, last_name, candidates)
+
+
 def _disambiguate_researcher(first_name: str, last_name: str, candidates: list[dict]) -> int | None:
+    """Return the matching researcher id among same-last-name candidates, or None.
+
+    Uses an answer prefetched before the save transaction when there is one.
+    """
+    answers = getattr(_prefetch_local, "answers", None)
+    if answers:
+        key = _disambiguation_key(first_name, last_name, candidates)
+        if key in answers:
+            return answers[key]
+    return _ask_disambiguation(first_name, last_name, candidates)
+
+
+def _ask_disambiguation(first_name: str, last_name: str, candidates: list[dict]) -> int | None:
     """Use LLM to check if any same-last-name candidate is the same person.
     Returns the matching researcher id (int) or None if no match.
     candidates: list of dicts with keys id, first_name, last_name."""
@@ -322,10 +388,10 @@ def _disambiguate_researcher(first_name: str, last_name: str, candidates: list[d
         from backend.llm.client import get_client, get_model
         client = get_client()
         model = get_model()
-        # An extraction worker holds the save gate here; the call may wait for
-        # the per-minute token budget, so let the other workers save meanwhile.
-        # (This runs inside the caller's save transaction: another worker that
-        # needs one of its row locks waits until InnoDB's lock timeout at worst.)
+        # An extraction worker holds the save gate; the call may wait for the
+        # per-minute token budget, so let the other workers save meanwhile.
+        # PaperSaver prefetches answers before its transaction, so this
+        # normally holds no row locks (a cache miss still can).
         with throttle.extraction_gate.released():
             response = client.chat.completions.create(
                 messages=[{"role": "user", "content": prompt}],

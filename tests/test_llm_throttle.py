@@ -73,7 +73,7 @@ def test_request_cap():
 def test_lanes_keep_their_share_whatever_the_other_does():
     limiter, clock = _limiter(tokens=1000)
     limiter.acquire(800, share=0.8, lane="extraction")
-    limiter.acquire(200, share=0.2, lane="jel")  # extraction's 80% does not crowd out JEL
+    limiter.acquire(200, share=0.2, lane="background")  # extraction's 80% does not crowd out JEL
     assert clock.slept == []
     limiter.acquire(10, share=0.8, lane="extraction")  # over extraction's 800 (and the total)
     assert clock.slept
@@ -101,8 +101,17 @@ def test_jel_job_runs_in_its_own_lane():
     with patch("backend.enrichment.jel_job.run_jel_classification_batch",
                side_effect=lambda: seen.append(throttle.current_share()) or {}):
         scheduler.run_jel_classification_job()
-    assert seen == [(0.2, "jel")]
+    assert seen == [(0.2, "background")]
     assert throttle.current_share() == (1.0, "default")
+
+
+def test_bio_backfill_shares_the_background_lane():
+    from backend.pipeline import scheduler
+    seen = []
+    with patch("backend.pipeline.bio_backfill.run_bio_backfill_batch",
+               side_effect=lambda: seen.append(throttle.current_share()) or {}):
+        scheduler.run_bio_backfill_job()
+    assert seen == [(0.2, "background")]
 
 
 def test_disambiguation_call_releases_the_gate(monkeypatch):
@@ -218,3 +227,30 @@ def test_extract_json_releases_gate_during_the_call(monkeypatch):
         assert gate.held()
     assert result.parsed.ok is True
     assert seen == [False]
+
+
+def test_oversized_prompt_is_not_starved_by_another_busy_lane():
+    """A prompt over its lane's limit must not wait for an empty window while
+    another lane keeps reserving: after MAX_WAIT_SECONDS it goes out anyway."""
+    clock = FakeClock()
+    calls = []
+
+    def busy_sleep(seconds):
+        # Another lane's thread keeps getting calls in while this one waits.
+        clock.sleep(seconds)
+        limiter._window.append(throttle._Reservation(clock.now, 4000, "background"))
+        calls.append(clock.now)
+
+    limiter = TokenRateLimiter(10_000, 0, clock=clock, sleep=busy_sleep)
+    limiter.acquire(4000, share=1.0, lane="background")
+    start = clock.now
+    limiter.acquire(12_000, share=0.8, lane="extraction")  # over its 8k lane and the 10k total
+    assert len(calls) >= 2, "the other lane kept calling meanwhile"
+    assert throttle.MAX_WAIT_SECONDS <= clock.now - start <= throttle.MAX_WAIT_SECONDS + 61
+
+
+def test_oversized_prompt_goes_out_once_usage_is_low():
+    limiter, clock = _limiter(tokens=10_000)
+    limiter.acquire(2000, lane="background")
+    limiter.acquire(12_000, share=0.8, lane="extraction")  # 2000 <= 25% of 10k: no wait
+    assert clock.slept == []

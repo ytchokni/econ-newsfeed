@@ -8,7 +8,8 @@ process (description, disambiguation, JEL), under the minute caps instead
 of discovering them through 429s.
 
 Callers marked with ``budget_share`` get a lane: the extraction workers may
-use 80% of each minute and the JEL job 20%, whatever the other is doing, and
+use 80% of each minute and the background jobs (JEL, bio backfill) 20%,
+whatever the other is doing, and
 all calls together stay under the budget.
 
 The limiter is per process. The API process runs the scheduler and every
@@ -34,6 +35,12 @@ from collections import deque
 logger = logging.getLogger(__name__)
 
 WINDOW_SECONDS = 60.0
+# A prompt larger than its limit could otherwise wait for an empty window
+# forever while other callers keep reserving: it goes out once usage is down
+# to a quarter of the limit, and after MAX_WAIT_SECONDS regardless (a 429
+# then pauses everyone briefly).
+_OVERSIZED_ADMIT_FRACTION = 0.25
+MAX_WAIT_SECONDS = 120.0
 # Prompt tokens per UTF-8 byte, rounded up (English ~0.25, CJK ~0.33);
 # reservations are corrected to the reported usage after each call.
 _TOKENS_PER_BYTE = 0.3
@@ -99,6 +106,7 @@ class TokenRateLimiter:
     def _wait_for(reservations: list[_Reservation], used: float, need: float,
                   limit: float, now: float) -> float:
         """Seconds until `need` more fits under `limit`, given what is in the window."""
+        need = min(need, limit * (1 - _OVERSIZED_ADMIT_FRACTION))
         if used + need <= limit:
             return 0.0
         excess = used + need - limit
@@ -140,6 +148,10 @@ class TokenRateLimiter:
             while True:
                 now = self._clock()
                 delay = self._wait_seconds(tokens, share, lane, now)
+                if delay > 0 and waited >= MAX_WAIT_SECONDS and now >= self._paused_until:
+                    logger.warning("LLM throttle: %s sending %d input tokens after waiting %.0fs",
+                                   lane, tokens, waited)
+                    delay = 0
                 if delay <= 0:
                     reservation = _Reservation(now, tokens, lane)
                     self._window.append(reservation)
