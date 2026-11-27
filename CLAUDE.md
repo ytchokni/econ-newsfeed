@@ -44,6 +44,7 @@ cd app && npx jest --testPathPattern=ComponentName  # Single frontend test
 # One-time scripts
 poetry run python scripts/backfill_paper_links.py   # Populate paper_links from stored HTML + enrich
 poetry run python scripts/cleanup_data_quality.py   # Fix rows flagged by data-quality checks (dry-run; add --apply to write)
+poetry run python scripts/repair_researcher_identity.py  # Merge split researchers, route page papers to owners, deactivate unowned pages (dry-run; --apply)
 
 # Docker
 docker compose up         # Full stack (db + api + frontend)
@@ -84,6 +85,8 @@ CLI runs the same batches under the same advisory lock and daily budget.
 **Paper merge:** `merge_duplicate_papers()` dedupes papers post-run.
 
 **Zombie scrape_log cleanup:** On scheduler start and hourly thereafter, `scrape_log` entries stuck in `'running'` are marked `'failed'` based on the scrape advisory lock: if no connection holds the lock, all running rows older than 5 minutes are zombies; if the lock is held, all but the newest running row are. Deploys that restart the container mid-scrape are swept on the next boot.
+
+**Researcher identity:** `backend/database/identity.py` decides when two names are one person (`same_person`: initials, nicknames, accents, hyphen/space; `strong=True` adds typos and compound surnames and is only used with a shared OpenAlex ID or page ownership). An OpenAlex author ID stays on one record: `assign_openalex_author_id` merges a compatible holder or refuses. `merge_researcher_into` moves authorship, URLs, follows, JEL codes and the rest; feed events belong to papers and are never touched. When papers are saved from a page, a byline name that matches the page owner resolves to the owner. The owner is attached (author_order 0) only when the page names them and no unrelated researcher tracks it; otherwise extraction deactivates the URL with reason `shared_page` or `owner_not_named` (pages under 1000 characters and profile registries such as ORCID are not judged). Reactivating such a URL re-runs the check on the next content change.
 
 Feed event integrity is protected by `_title_in_previous_snapshot()` and the `_url_has_baseline()` check in `backend.pipeline.extraction.extract_one_url()`.
 

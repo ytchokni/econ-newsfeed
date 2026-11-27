@@ -11,6 +11,7 @@ import unicodedata
 import mysql.connector
 
 from backend.database.connection import execute_query, fetch_one, fetch_all
+from backend.database.identity import merge_researcher_into, same_person
 from backend.database.llm import log_llm_usage
 from backend.config import fix_encoding
 
@@ -367,9 +368,8 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
             "SELECT id, first_name, last_name FROM researchers WHERE openalex_author_id = %s",
             (openalex_author_id,),
         )
-        compatible = [c for c in id_candidates if matches_author_name(
-            first_name, last_name, f"{c['first_name']} {c['last_name']}"
-        )]
+        compatible = [c for c in id_candidates if same_person(
+            first_name, last_name, c['first_name'], c['last_name'], strong=True)]
         if len(compatible) == 1:
             logging.info(
                 "OpenAlex ID and name matched '%s %s' to researcher id=%s",
@@ -387,17 +387,18 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
         (last_name,),
     )
 
-    # 2.5. Compatible name match — initials, prefixes, multi-initials
+    # 2.5. Compatible name match — initials, prefixes, multi-initials,
+    # nicknames ("Andy" for an existing "Andrew"), accent variants
     if candidates:
         initial_matches = [
             c for c in candidates
-            if is_compatible_name(first_name, c['first_name'])
+            if same_person(first_name, last_name, c['first_name'], c['last_name'])
             and first_name.lower() != c['first_name'].lower()
         ]
         if len(initial_matches) == 1:
             match = initial_matches[0]
             longer_name = _longer_first_name(first_name, match['first_name'])
-            if longer_name != match['first_name']:
+            if longer_name != match['first_name'] and is_compatible_name(first_name, match['first_name']):
                 _execute(
                     "UPDATE researchers SET first_name = %s WHERE id = %s",
                     (longer_name, match['id']),
@@ -432,95 +433,21 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
 
 
 def merge_researchers(canonical_id: int, duplicate_id: int, conn) -> None:
-    """Merge duplicate researcher into canonical: transfer authorship, JEL codes, metadata, then delete.
+    """Merge duplicate researcher into canonical and commit.
 
-    Commits after all operations complete. The caller is responsible for rollback on exception.
+    Moves authorship, URLs, follows, JEL codes and the rest (see
+    identity.merge_researcher_into), then deletes the duplicate. The caller
+    is responsible for rollback on exception.
     """
     if canonical_id == duplicate_id:
         raise ValueError(f"Cannot merge researcher into itself (same id={canonical_id})")
-
-    c = conn.cursor(dictionary=True)
-
-    # Fetch both researchers (need metadata columns for backfill)
-    c.execute(
-        "SELECT first_name, last_name, affiliation, description, position, openalex_author_id "
-        "FROM researchers WHERE id = %s", (canonical_id,),
-    )
-    canonical = c.fetchone()
-    c.execute(
-        "SELECT first_name, last_name, affiliation, description, position, openalex_author_id "
-        "FROM researchers WHERE id = %s", (duplicate_id,),
-    )
-    duplicate = c.fetchone()
-
-    if not canonical or not duplicate:
-        c.close()
-        raise ValueError(f"Researcher not found: canonical={canonical_id} duplicate={duplicate_id}")
-
-    # 1. Transfer authorship (two-step to avoid unique constraint violations)
-    c.execute(
-        "DELETE FROM authorship WHERE researcher_id = %s "
-        "AND publication_id IN (SELECT publication_id FROM "
-        "(SELECT publication_id FROM authorship WHERE researcher_id = %s) AS tmp)",
-        (duplicate_id, canonical_id),
-    )
-    c.execute(
-        "UPDATE authorship SET researcher_id = %s WHERE researcher_id = %s",
-        (canonical_id, duplicate_id),
-    )
-
-    # 2. Transfer JEL codes (IGNORE skips duplicates)
-    c.execute(
-        "UPDATE IGNORE researcher_jel_codes SET researcher_id = %s WHERE researcher_id = %s",
-        (canonical_id, duplicate_id),
-    )
-    # The merged researcher has more papers: let the JEL job classify it again.
+    c = conn.cursor(dictionary=True, buffered=True)
     try:
-        c.execute(
-            "DELETE FROM researcher_jel_state WHERE researcher_id = %s",
-            (canonical_id,),
-        )
-    except mysql.connector.Error as e:
-        if getattr(e, "errno", None) != 1146:  # table not created yet
-            raise
-
-    # 3. Transfer user follows (IGNORE skips duplicates; CASCADE cleans up leftovers)
-    c.execute(
-        "UPDATE IGNORE user_follows SET researcher_id = %s WHERE researcher_id = %s",
-        (canonical_id, duplicate_id),
-    )
-
-    # 4. Upgrade first_name to the longer variant
-    longer_name = _longer_first_name(canonical['first_name'], duplicate['first_name'])
-    if longer_name != canonical['first_name']:
-        c.execute(
-            "UPDATE researchers SET first_name = %s WHERE id = %s",
-            (longer_name, canonical_id),
-        )
-
-    # 5. Backfill metadata where canonical has NULL
-    c.execute(
-        "UPDATE researchers SET "
-        "affiliation = COALESCE(affiliation, %s), "
-        "description = COALESCE(description, %s), "
-        "position = COALESCE(position, %s), "
-        "openalex_author_id = COALESCE(openalex_author_id, %s) "
-        "WHERE id = %s",
-        (duplicate.get('affiliation'), duplicate.get('description'),
-         duplicate.get('position'), duplicate.get('openalex_author_id'),
-         canonical_id),
-    )
-
-    # 6. Delete duplicate (cascade handles researcher_urls, html_content, researcher_fields, etc.)
-    c.execute("DELETE FROM researchers WHERE id = %s", (duplicate_id,))
-
-    c.close()
+        if not merge_researcher_into(c, canonical_id, duplicate_id):
+            raise ValueError(f"Researcher not found: canonical={canonical_id} duplicate={duplicate_id}")
+    finally:
+        c.close()
     conn.commit()
-
-    logging.info(
-        f"Merged researcher #{duplicate_id} ({duplicate['first_name']} {duplicate['last_name']}) "
-        f"into #{canonical_id} ({canonical['first_name']} {canonical['last_name']})"
-    )
 
 
 def update_researcher_bio(researcher_id: int, bio: str) -> None:
@@ -533,11 +460,55 @@ def update_researcher_bio(researcher_id: int, bio: str) -> None:
 
 
 def add_researcher_url(researcher_id: int, page_type: str, url: str) -> None:
-    """Insert a new URL for a researcher into the researcher_urls table."""
+    """Insert a new URL for a researcher into the researcher_urls table.
+
+    A URL already tracked for someone with a different name is a shared
+    (department, institute or news) page, not a personal page: refused.
+    """
+    if url_tracked_for_someone_else(researcher_id, url):
+        logging.warning("Not adding %s for researcher %s: tracked for another researcher",
+                        url, researcher_id)
+        return
     execute_query(
         "INSERT IGNORE INTO researcher_urls (researcher_id, page_type, url) VALUES (%s, %s, %s)",
         (researcher_id, page_type, url),
     )
+
+
+def url_tracked_for_someone_else(researcher_id: int, url: str) -> bool:
+    """True if another researcher whose name differs tracks this URL."""
+    rows = fetch_all(
+        """SELECT r.id, r.first_name, r.last_name FROM researcher_urls ru
+           JOIN researchers r ON r.id = ru.researcher_id
+           WHERE ru.url = %s AND ru.researcher_id != %s""",
+        (url, researcher_id),
+    )
+    me = fetch_one("SELECT first_name, last_name FROM researchers WHERE id = %s", (researcher_id,))
+    if not me:
+        return False
+    return any(not same_person(me['first_name'], me['last_name'], r['first_name'], r['last_name'], strong=True)
+               for r in rows)
+
+
+def page_owners(url: str) -> list[dict]:
+    """Researchers tracking a URL, lowest ID first."""
+    return fetch_all(
+        """SELECT DISTINCT r.id, r.first_name, r.last_name FROM researchers r
+           JOIN researcher_urls ru ON ru.researcher_id = r.id
+           WHERE ru.url = %s ORDER BY r.id""",
+        (url,),
+    )
+
+
+def deactivate_unowned_url(url: str, reason: str) -> None:
+    """Stop crawling a page that is not its owners' personal page (every row of it)."""
+    execute_query(
+        """UPDATE researcher_urls
+           SET is_active = FALSE, deactivated_at = NOW(), deactivation_reason = %s
+           WHERE url = %s AND is_active = TRUE""",
+        (reason, url),
+    )
+    logging.warning("Deactivated %s: %s", url, reason)
 
 
 _URL_DEACTIVATION_THRESHOLD = 3

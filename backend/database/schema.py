@@ -754,6 +754,15 @@ def create_tables() -> None:
                         if "Duplicate column name" not in str(e):
                             logging.warning("Migration: researchers.openalex_author_id: %s", e)
 
+                    # Lookups by OpenAlex author ID (one record per ID, issue #259)
+                    try:
+                        cursor.execute("ALTER TABLE researchers ADD INDEX idx_openalex_author "
+                                       "(openalex_author_id), ALGORITHM=INPLACE, LOCK=NONE")
+                        conn.commit()
+                    except Exception as e:
+                        if getattr(e, 'errno', None) != 1061:
+                            logging.warning("Migration: researchers.idx_openalex_author: %s", e)
+
                     # Versioned trigger installs first; any failure aborts startup.
                     _ensure_snapshot_guard(cursor)
                     _ensure_content_metadata(cursor)

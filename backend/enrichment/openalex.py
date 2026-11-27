@@ -5,7 +5,10 @@ import time
 
 import requests
 
-from backend.database import execute_query, fetch_all, get_unenriched_papers, save_paper_topics, update_openalex_data
+from backend.database import (
+    execute_query, fetch_all, get_connection, get_unenriched_papers, save_paper_topics, update_openalex_data,
+)
+from backend.database.identity import assign_openalex_author_id
 from backend.database.enrichment_budget import has_budget_remaining, reserve_request
 from backend.database.papers import has_title_identity, normalize_title
 from backend.database.researchers import matches_author_name
@@ -298,10 +301,13 @@ def _backfill_researcher_openalex_ids(paper_id, coauthors):
                    if ca.get("openalex_author_id") and matches_author_name(
                        r['first_name'], r['last_name'], ca['display_name'])}
         if len(matches) == 1:
-            execute_query(
-                "UPDATE researchers SET openalex_author_id = %s WHERE id = %s AND openalex_author_id IS NULL",
-                (matches.pop(), r['id']),
-            )
+            # Never give an ID a second holder: a holder with a compatible
+            # name is merged with this record, any other holder blocks it.
+            try:
+                with get_connection() as conn:
+                    assign_openalex_author_id(conn, r['id'], matches.pop())
+            except Exception:
+                logger.exception("Could not assign OpenAlex author ID to researcher %s", r['id'])
 
 
 def enrich_new_publications(limit=50):

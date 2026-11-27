@@ -25,6 +25,12 @@ def clear_author_cache():
     _author_id_cache.clear()
 
 
+
+def _set_owner(cursor, owner, page=None):
+    """Page-owner lookup: researchers tracking the URL, then the stored page."""
+    results = iter([[owner] if owner else [], [page] if page else []])
+    cursor.fetchall.side_effect = lambda *a, **k: next(results, [])
+
 class TestAuthorNormalization:
     """Author lists with != 2 elements should not crash save_publications."""
 
@@ -74,7 +80,7 @@ class TestAuthorNormalization:
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
         # (owner_id, first, last) for page owner lookup
-        cursor.fetchone.return_value = (42, "Jane", "Doe")
+        _set_owner(cursor, (42, "Jane", "Doe"))
 
         PaperSaver.save_publications("http://example.com", [{
             "title": "Test Paper",
@@ -280,7 +286,7 @@ class TestPageOwnerAuthorship:
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
         # (owner_id, first, last) for page owner lookup
-        cursor.fetchone.return_value = (55, "Stefanie", "Stantcheva")
+        _set_owner(cursor, (55, "Stefanie", "Stantcheva"))
 
         PaperSaver.save_publications("https://www.stantcheva.com/research/", [{
             "title": "Understanding of Trade",
@@ -308,7 +314,7 @@ class TestPageOwnerAuthorship:
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
         # (owner_id, first, last) for page owner lookup
-        cursor.fetchone.return_value = (55, "Jane", "Smith")
+        _set_owner(cursor, (55, "Jane", "Smith"))
 
         PaperSaver.save_publications("https://example.com", [{
             "title": "Test Paper",
@@ -360,7 +366,7 @@ class TestPageOwnerAuthorship:
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
         # (owner_id=7, first, last) for page owner lookup
-        cursor.fetchone.return_value = (7, "Magne", "Mogstad")
+        _set_owner(cursor, (7, "Magne", "Mogstad"))
 
         PaperSaver.save_publications("http://mogstad.com/research", [{
             "title": "Inequality in Current and Lifetime Income",

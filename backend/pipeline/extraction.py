@@ -20,6 +20,8 @@ from backend.database import (
     append_researcher_snapshot,
 )
 from backend.pipeline.feed_events import FeedEventEmitter
+from backend.database.identity import page_ownership_problem
+from backend.database.researchers import deactivate_unowned_url, page_owners
 from backend.database.papers import find_papers_by_titles
 from backend.pipeline.html_fetcher import CONTENT_MAX_CHARS, HTMLFetcher
 from backend.enrichment.link_extractor import match_and_save_paper_links
@@ -93,6 +95,13 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
     header = text[:64]
     if 'JFIF\x00' in header or 'Exif\x00\x00' in header:
         logger.info("Skipping decoded JPEG for URL ID %s", url_id)
+        HTMLFetcher.mark_extracted(url_id, content_hash)
+        return ExtractionOutcome("empty")
+    # Department, institute and news pages are not personal pages: their
+    # items must not be credited to whoever tracks them (issue #262).
+    problem = page_ownership_problem(page_owners(url), text, raw_html, url)
+    if problem:
+        deactivate_unowned_url(url, problem)
         HTMLFetcher.mark_extracted(url_id, content_hash)
         return ExtractionOutcome("empty")
     is_seed = payload['extracted_at'] is None

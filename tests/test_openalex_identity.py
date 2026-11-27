@@ -107,20 +107,20 @@ def test_backfill_does_not_spread_christoph_id_to_other_hubers():
             for i, first in enumerate(["Johannes", "Christoph", "Stefanie Jeanette", "Jürgen"], 1)]
     with (
         patch.object(openalex, "fetch_all", return_value=rows),
-        patch.object(openalex, "execute_query") as update,
+        patch.object(openalex, "get_connection"),
+        patch.object(openalex, "assign_openalex_author_id") as assign,
     ):
         openalex._backfill_researcher_openalex_ids(1, [
             {"display_name": "Christoph Huber", "openalex_author_id": "A5049313917"},
         ])
-    update.assert_called_once()
-    assert update.call_args.args[1] == ("A5049313917", 2)
-    assert "AND openalex_author_id IS NULL" in update.call_args.args[0]
+    assign.assert_called_once()
+    assert assign.call_args.args[1:] == (2, "A5049313917")
 
 
 def test_ambiguous_initial_backfill_is_skipped():
     with (
         patch.object(openalex, "fetch_all", return_value=[{"id": 1, "first_name": "C", "last_name": "Huber"}]),
-        patch.object(openalex, "execute_query") as update,
+        patch.object(openalex, "assign_openalex_author_id") as update,
     ):
         openalex._backfill_researcher_openalex_ids(1, [
             {"display_name": "Christoph Huber", "openalex_author_id": "A1"},

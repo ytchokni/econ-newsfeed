@@ -330,3 +330,110 @@ class TestDescriptionQuality:
                 LIMIT 50"""
         )
         assert not rows, "mojibake researcher descriptions:\n" + fmt_violations(rows)
+
+
+class TestResearcherIdentity:
+    """One person, one record; a page's papers belong to its owner; only
+    personal pages credit their owner. Fix with
+    scripts/repair_researcher_identity.py (dry run first, then --apply)."""
+
+    def test_no_paper_lists_one_openalex_author_twice(self, db):
+        """Issue #259: "Andrew Garin, Andy Garin" on paper 74682."""
+        rows = db.fetch_all(
+            """SELECT a1.publication_id AS paper_id, r1.openalex_author_id,
+                      a1.researcher_id AS id1, a2.researcher_id AS id2
+               FROM authorship a1
+               JOIN researchers r1 ON r1.id = a1.researcher_id
+               JOIN authorship a2 ON a2.publication_id = a1.publication_id
+                                 AND a2.researcher_id > a1.researcher_id
+               JOIN researchers r2 ON r2.id = a2.researcher_id
+               WHERE r1.openalex_author_id IS NOT NULL
+                 AND r2.openalex_author_id = r1.openalex_author_id
+               LIMIT 50"""
+        )
+        assert not rows, "papers listing one OpenAlex author twice:\n" + fmt_violations(rows)
+
+    def test_no_same_person_records_share_openalex_id(self, db):
+        """Issue #259: records with one OpenAlex ID and agreeing names are one person."""
+        from backend.database.identity import cluster_same_person
+
+        rows = db.fetch_all(
+            """SELECT r.id, r.first_name, r.last_name, r.openalex_author_id
+               FROM researchers r
+               JOIN (SELECT openalex_author_id FROM researchers WHERE openalex_author_id IS NOT NULL
+                     GROUP BY openalex_author_id HAVING COUNT(*) > 1) g
+                 ON g.openalex_author_id = r.openalex_author_id"""
+        )
+        groups: dict[str, list[dict]] = {}
+        for r in rows:
+            groups.setdefault(r["openalex_author_id"], []).append(r)
+        violations = [
+            {"openalex_author_id": oa, "records": [(r["id"], f"{r['first_name']} {r['last_name']}") for r in c]}
+            for oa, recs in groups.items() for c in cluster_same_person(recs, strong=True)
+        ]
+        assert not violations, "split researcher records:\n" + fmt_violations(violations)
+
+    def test_page_owner_not_split_from_own_papers(self, db):
+        """Issue #260: papers on an owner's active page credited to a stub with
+        the owner's name ("Dora Costa" 67804 instead of Dora L. Costa 16478)."""
+        from backend.database.identity import same_person
+
+        rows = db.fetch_all(
+            """SELECT ru.researcher_id AS owner_id, o.first_name AS ofn, o.last_name AS oln,
+                      pu.paper_id, a.researcher_id AS stub_id, r.first_name, r.last_name
+               FROM paper_urls pu
+               JOIN researcher_urls ru ON ru.url = pu.url AND ru.is_active = TRUE
+               JOIN researchers o ON o.id = ru.researcher_id
+               JOIN authorship a ON a.publication_id = pu.paper_id AND a.author_order > 0
+                                AND a.researcher_id != ru.researcher_id
+               JOIN researchers r ON r.id = a.researcher_id
+                                 AND LOWER(r.last_name) = LOWER(o.last_name)
+               LEFT JOIN authorship ao ON ao.publication_id = pu.paper_id
+                                      AND ao.researcher_id = ru.researcher_id
+               WHERE (ao.id IS NULL OR COALESCE(ao.author_order, 0) = 0)
+                 AND NOT EXISTS (SELECT 1 FROM researcher_urls u WHERE u.researcher_id = r.id)
+                 AND (r.openalex_author_id IS NULL OR o.openalex_author_id IS NULL
+                      OR r.openalex_author_id = o.openalex_author_id)"""
+        )
+        violations = [r for r in rows if same_person(r["ofn"], r["oln"], r["first_name"], r["last_name"])]
+        assert not violations, "owner's papers credited to a name-variant stub:\n" + fmt_violations(
+            violations, total=len(violations))
+
+    def test_no_active_page_shared_by_unrelated_researchers(self, db):
+        """Issue #262: stanford.edu/research tracked for Abramitzky, Bloom and Bagwell."""
+        from backend.database.identity import SHARED_PAGE, page_ownership_problem
+
+        rows = db.fetch_all(
+            """SELECT DISTINCT ru.url, r.id, r.first_name, r.last_name
+               FROM researcher_urls ru JOIN researchers r ON r.id = ru.researcher_id
+               JOIN (SELECT url FROM researcher_urls GROUP BY url
+                     HAVING COUNT(DISTINCT researcher_id) > 1 AND SUM(is_active) > 0) s
+                 ON s.url = ru.url"""
+        )
+        by_url: dict[str, list[dict]] = {}
+        for r in rows:
+            by_url.setdefault(r["url"], []).append(r)
+        violations = [{"url": url, "researchers": [r["id"] for r in owners]}
+                      for url, owners in by_url.items()
+                      if page_ownership_problem(owners, None) == SHARED_PAGE]
+        assert not violations, "active pages tracked for unrelated researchers:\n" + fmt_violations(violations)
+
+    def test_no_owner_credit_from_unowned_pages(self, db):
+        """Issue #262: owner attachments (author_order 0) whose only source is a
+        page deactivated as not the owner's ("Rubin Observatory..." for Abramitzky)."""
+        rows = db.fetch_all(
+            """SELECT a.researcher_id, a.publication_id
+               FROM authorship a
+               JOIN paper_urls pu ON pu.paper_id = a.publication_id
+               JOIN researcher_urls ru ON ru.url = pu.url AND ru.researcher_id = a.researcher_id
+               WHERE COALESCE(a.author_order, 0) = 0
+                 AND ru.deactivation_reason IN ('owner_not_named', 'shared_page')
+                 AND NOT EXISTS (
+                     SELECT 1 FROM paper_urls pu2
+                     JOIN researcher_urls ru2 ON ru2.url = pu2.url
+                     WHERE pu2.paper_id = a.publication_id AND ru2.researcher_id = a.researcher_id
+                       AND (ru2.deactivation_reason IS NULL
+                            OR ru2.deactivation_reason NOT IN ('owner_not_named', 'shared_page')))
+               LIMIT 50"""
+        )
+        assert not rows, "owners credited with items from pages that are not theirs:\n" + fmt_violations(rows)

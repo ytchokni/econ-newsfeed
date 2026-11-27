@@ -32,6 +32,18 @@ def _noop_connection_scope():
 
 
 @pytest.fixture(autouse=True)
+def _no_page_owner_lookup(request):
+    """extract_one_url checks page ownership against researcher_urls; tests
+    that mock the fetcher have no researchers, so the page has no owners.
+    Tests of the check itself patch page_owners explicitly."""
+    if request.node.get_closest_marker("real_page_owners"):
+        yield
+        return
+    with patch("backend.pipeline.extraction.page_owners", return_value=[]):
+        yield
+
+
+@pytest.fixture(autouse=True)
 def _clear_api_caches():
     """Reset TTL caches between tests to prevent cross-test pollution."""
     import backend.api

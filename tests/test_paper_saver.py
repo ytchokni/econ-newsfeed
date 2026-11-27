@@ -23,6 +23,12 @@ def _mock_conn(lastrowid=1):
     return conn, cursor
 
 
+
+def _set_owner(cursor, owner, page=None):
+    """Page-owner lookup: researchers tracking the URL, then the stored page."""
+    results = iter([[owner] if owner else [], [page] if page else []])
+    cursor.fetchall.side_effect = lambda *a, **k: next(results, [])
+
 class TestSavePublicationsReturnsResults:
     """save_publications returns SaveResult objects instead of creating events."""
 
@@ -129,7 +135,7 @@ class TestPageOwnerAuthorship:
     def test_verified_complete_byline_does_not_attach_unrelated_owner(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        cursor.fetchone.return_value = (55, "Simeon", "Djankov")
+        _set_owner(cursor, (55, "Simeon", "Djankov"))
         PaperSaver.save_publications("http://example.com", [{
             "title": "Paper", "authors": [["John", "Doe"]], "_authors_complete": True,
         }])
@@ -143,7 +149,7 @@ class TestPageOwnerAuthorship:
     def test_owner_added_with_order_zero(self, mock_hash, mock_get_conn, mock_rid):
         conn, cursor = _mock_conn()
         mock_get_conn.return_value = conn
-        cursor.fetchone.return_value = (55, "Jane", "Smith")
+        _set_owner(cursor, (55, "Jane", "Smith"))
 
         PaperSaver.save_publications("http://example.com", [{
             "title": "Paper", "authors": [["John", "Doe"]], "year": "2024",
