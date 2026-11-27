@@ -7,6 +7,9 @@ jest.mock("../app/researchers/[id]/ResearcherDetailContent", () => ({
 jest.mock("../app/papers/[id]/PaperDetailContent", () => ({
   __esModule: true, default: () => null,
 }));
+jest.mock("next/headers", () => ({
+  headers: jest.fn(async () => new Headers({ "x-real-ip": "198.51.100.77" })),
+}));
 jest.mock("next/navigation", () => ({
   notFound: () => {
     throw new Error("NEXT_NOT_FOUND");
@@ -87,14 +90,16 @@ describe("researcher page", () => {
     await expect(mod.default(params("7"))).rejects.toThrow("Backend returned 429");
   });
 
-  it("sends the internal API key on server-side fetches when configured", async () => {
+  it("sends the internal API key and the visitor IP on server-side fetches when configured", async () => {
     process.env.INTERNAL_API_KEY = "k".repeat(20);
     respond(200, researcher);
     const mod = await import("../app/researchers/[id]/page");
     await mod.default(params("7"));
     expect(global.fetch).toHaveBeenCalledWith(
       "http://localhost:8000/api/researchers/7",
-      expect.objectContaining({ headers: { "X-Internal-Api-Key": "k".repeat(20) } }),
+      expect.objectContaining({
+        headers: { "X-Internal-Api-Key": "k".repeat(20), "X-Visitor-IP": "198.51.100.77", "X-Visitor-Source": "ssr" },
+      }),
     );
   });
 });

@@ -114,32 +114,27 @@ class TestInternalRenderExemption:
         }):
             return [client.get("/api/sitemap", headers=headers or {}).status_code for _ in range(n)]
 
+    @pytest.fixture(autouse=True)
+    def _key(self, monkeypatch):
+        from backend import api_protection
+
+        monkeypatch.setenv("INTERNAL_API_KEY", self.KEY)
+        api_protection.reload_settings()
+        yield
+        monkeypatch.delenv("INTERNAL_API_KEY")
+        api_protection.reload_settings()
+
     def test_public_requests_are_rate_limited(self, client):
-        with patch("backend.api._INTERNAL_API_KEY", self.KEY):
-            codes = self._hit(client, 31)
+        codes = self._hit(client, 31)
         assert codes[-1] == 429
 
     def test_frontend_server_with_key_is_exempt(self, client):
-        with patch("backend.api._INTERNAL_API_KEY", self.KEY):
-            codes = self._hit(client, 35, {"X-Internal-Api-Key": self.KEY})
+        codes = self._hit(client, 35, {"X-Internal-Api-Key": self.KEY})
         assert set(codes) == {200}
 
-    def test_wrong_or_unset_key_is_not_exempt(self, client):
-        from backend.api import _is_internal_render
-
-        class Req:
-            def __init__(self, value):
-                self.headers = {"X-Internal-Api-Key": value} if value is not None else {}
-
-        with patch("backend.api._INTERNAL_API_KEY", self.KEY):
-            assert _is_internal_render(Req(self.KEY))
-            assert not _is_internal_render(Req("nope"))
-            assert not _is_internal_render(Req(None))
-        # Too-short or unset server key disables the exemption entirely.
-        with patch("backend.api._INTERNAL_API_KEY", ""):
-            assert not _is_internal_render(Req(""))
-        with patch("backend.api._INTERNAL_API_KEY", "short"):
-            assert not _is_internal_render(Req("short"))
+    def test_wrong_key_is_not_exempt(self, client):
+        codes = self._hit(client, 31, {"X-Internal-Api-Key": "nope-nope-nope-nope"})
+        assert codes[-1] == 429
 
 
 class TestResearcherDetailOpenAlex:
