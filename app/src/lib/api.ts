@@ -138,7 +138,8 @@ export function usePublication(id: number, fallbackData?: PublicationDetail) {
 }
 
 function buildResearchersUrl(filters?: ResearcherFilters, page?: number) {
-  const params = new URLSearchParams({ per_page: "100" });
+  // The API caps anonymous pages at 50 (API_MAX_PER_PAGE); ask for no more.
+  const params = new URLSearchParams({ per_page: "50" });
   if (page !== undefined) params.set("page", String(page));
   if (filters?.institution) params.set("institution", filters.institution);
   if (filters?.field) params.set("field", filters.field);
