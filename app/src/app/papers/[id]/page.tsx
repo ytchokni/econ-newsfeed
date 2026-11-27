@@ -1,21 +1,19 @@
+import { cache } from "react";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import PaperDetailContent from "./PaperDetailContent";
+import JsonLd from "@/components/JsonLd";
 import type { PublicationDetail } from "@/lib/types";
+import { fetchBackend } from "@/lib/server-api";
+import { paperJsonLd, paperMetadata } from "@/lib/seo";
 
-const API_BASE = process.env.API_INTERNAL_URL || "http://localhost:8000";
+// 404 from the backend -> null (a real 404 page); other failures throw.
+const fetchPaper = cache((id: number) =>
+  fetchBackend<PublicationDetail>(`/api/publications/${id}?include_history=true`, 60),
+);
 
-async function fetchPaper(id: number): Promise<PublicationDetail | null> {
-  try {
-    const res = await fetch(
-      `${API_BASE}/api/publications/${id}?include_history=true`,
-      { next: { revalidate: 60 } }
-    );
-    if (!res.ok) return null;
-    return res.json();
-  } catch {
-    return null;
-  }
+function parseId(id: string): number | null {
+  return /^[1-9]\d{0,9}$/.test(id) ? Number(id) : null;
 }
 
 export async function generateMetadata({
@@ -23,24 +21,11 @@ export async function generateMetadata({
 }: {
   params: Promise<{ id: string }>;
 }): Promise<Metadata> {
-  const { id } = await params;
-  const numId = Number(id);
-  if (Number.isNaN(numId) || numId <= 0) return {};
-
+  const numId = parseId((await params).id);
+  if (numId === null) return {};
   const paper = await fetchPaper(numId);
   if (!paper) return {};
-
-  const authorNames = paper.authors
-    .map((a) => `${a.first_name} ${a.last_name}`)
-    .join(", ");
-  const description = paper.abstract
-    ? paper.abstract.slice(0, 160)
-    : `${paper.title} by ${authorNames}`;
-
-  return {
-    title: paper.title,
-    description,
-  };
+  return paperMetadata(paper);
 }
 
 export default async function PaperDetailPage({
@@ -48,9 +33,8 @@ export default async function PaperDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const { id } = await params;
-  const numId = Number(id);
-  if (Number.isNaN(numId) || numId <= 0) {
+  const numId = parseId((await params).id);
+  if (numId === null) {
     notFound();
   }
 
@@ -59,5 +43,10 @@ export default async function PaperDetailPage({
     notFound();
   }
 
-  return <PaperDetailContent id={numId} initialData={paper} />;
+  return (
+    <>
+      <JsonLd data={paperJsonLd(paper)} />
+      <PaperDetailContent id={numId} initialData={paper} />
+    </>
+  );
 }
