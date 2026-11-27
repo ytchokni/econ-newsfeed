@@ -43,7 +43,7 @@ cd app && npx jest --testPathPattern=ComponentName  # Single frontend test
 # One-time scripts
 poetry run python scripts/backfill_paper_links.py   # Populate paper_links from stored HTML + enrich
 poetry run python scripts/cleanup_data_quality.py   # Fix rows flagged by data-quality checks (dry-run; add --apply to write)
-poetry run python scripts/cleanup_spurious_feed_events.py  # Delete stale new_paper / bogus "published" events (dry-run; --apply)
+poetry run python scripts/cleanup_spurious_feed_events.py  # Delete stale new_paper / bogus "published" events (dry-run; --apply backs up first; --undo RUN)
 
 # Docker
 docker compose up         # Full stack (db + api + frontend)

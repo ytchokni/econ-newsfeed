@@ -287,3 +287,18 @@ class TestCleanupScript:
 
     def test_ignores_title_changes(self):
         assert self._reason({"event_type": "title_change", "created_at": datetime(2026, 11, 26)}) is None
+
+    def test_backup_copies_every_source_column(self):
+        from scripts.cleanup_spurious_feed_events import copied_columns
+        cols = ["id", "paper_id", "created_at", "recorded_at"]
+        assert copied_columns(cols, cols + ["cleanup_run", "cleanup_reason", "backed_up_at"]) == cols
+
+    def test_backup_refuses_schema_drift(self):
+        from scripts.cleanup_spurious_feed_events import copied_columns
+        with pytest.raises(RuntimeError, match="new_col"):
+            copied_columns(["id", "new_col"], ["id", "cleanup_run"])
+
+    def test_backup_tables_cover_cascaded_children(self):
+        from scripts.cleanup_spurious_feed_events import BACKED_UP_TABLES, _RESTORE_GUARDS
+        assert [t for t, _ in BACKED_UP_TABLES] == ["feed_events", "digest_deliveries", "feed_event_reviews"]
+        assert set(_RESTORE_GUARDS) == {t for t, _ in BACKED_UP_TABLES}
