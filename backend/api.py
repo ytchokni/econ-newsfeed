@@ -1464,6 +1464,11 @@ def sitemap_page(request: Request, response: Response, kind: str, page: int = Qu
     """One chunk of ids with last-modified times, ordered by id."""
     if kind not in _SITEMAP_KINDS:
         raise HTTPException(status_code=404, detail="Unknown sitemap")
+    # Pages past the end 404 from the (cached) counts without running the
+    # chunk query, so arbitrary page numbers can't be used to load the DB.
+    index = _sitemap_cache.get_or_set("index", _build_sitemap_index)
+    if page >= index[kind]["pages"]:
+        raise HTTPException(status_code=404, detail="Sitemap page out of range")
     result = _sitemap_cache.get_or_set(f"{kind}:{page}", lambda: _build_sitemap_page(kind, page))
     response.headers["Cache-Control"] = "public, max-age=3600"
     return result

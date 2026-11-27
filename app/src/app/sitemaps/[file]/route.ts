@@ -1,4 +1,4 @@
-import { fetchBackend } from "@/lib/server-api";
+import { BackendError, fetchBackend } from "@/lib/server-api";
 import { absoluteUrl, getCanonicalOrigin } from "@/lib/seo";
 import {
   SITEMAP_HEADERS,
@@ -22,7 +22,11 @@ export async function GET(_req: Request, { params }: { params: Promise<{ file: s
   let chunk: SitemapChunk | null;
   try {
     chunk = await fetchBackend<SitemapChunk>(`/api/sitemap/${parsed.kind}?page=${parsed.page}`, 3600);
-  } catch {
+  } catch (err) {
+    // A rejected page number is a missing file, not an outage.
+    if (err instanceof BackendError && err.isClientError) {
+      return new Response("Not found", { status: 404 });
+    }
     return new Response("Sitemap temporarily unavailable", {
       status: 503,
       headers: { "Retry-After": "3600", "Cache-Control": "no-store" },

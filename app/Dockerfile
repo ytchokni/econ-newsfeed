@@ -17,6 +17,7 @@ RUN groupadd --system appgroup && useradd --system --gid appgroup appuser
 
 COPY --from=builder /app/.next/standalone ./
 COPY --from=builder /app/.next/static ./.next/static
+COPY --from=builder /app/public ./public
 
 RUN chown -R appuser:appgroup /app
 

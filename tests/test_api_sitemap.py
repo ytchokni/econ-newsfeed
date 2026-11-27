@@ -73,7 +73,10 @@ class TestSitemapPage:
             calls.append((offset, limit))
             return rows
 
-        with patch.dict("backend.api._SITEMAP_KINDS", {"researchers": (None, fake_fetch)}):
+        with patch.dict("backend.api._SITEMAP_KINDS", {
+            "researchers": (lambda: 25_000, fake_fetch),
+            "papers": (lambda: 0, None),
+        }):
             response = client.get("/api/sitemap/researchers?page=2")
 
         assert response.status_code == 200
@@ -84,6 +87,18 @@ class TestSitemapPage:
         ]}
         import backend.api as api_mod
         assert calls == [(2 * api_mod.SITEMAP_PAGE_SIZE, api_mod.SITEMAP_PAGE_SIZE)]
+
+    def test_page_past_the_end_is_404_without_querying(self, client):
+        def fail(offset, limit):
+            raise AssertionError("chunk query must not run")
+
+        with patch.dict("backend.api._SITEMAP_KINDS", {
+            "researchers": (lambda: 10_000, fail),
+            "papers": (lambda: 0, fail),
+        }):
+            assert client.get("/api/sitemap/researchers?page=1").status_code == 404
+            assert client.get("/api/sitemap/papers?page=0").status_code == 404
+            assert client.get("/api/sitemap/papers?page=1000").status_code == 404
 
     def test_unknown_kind_is_404(self, client):
         assert client.get("/api/sitemap/users").status_code == 404

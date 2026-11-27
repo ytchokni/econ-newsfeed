@@ -13,6 +13,7 @@ import type {
   ResearcherFilters,
   UserFollowing,
 } from "./types";
+import { buildPublicationsUrl } from "./feed-params";
 
 export const API_BASE_URL =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
@@ -25,27 +26,6 @@ async function fetchJson<T>(url: string): Promise<T> {
   return res.json();
 }
 
-function buildPublicationsUrl(
-  page: number,
-  perPage: number,
-  filters?: FeedFilters
-): string {
-  const params = new URLSearchParams({
-    page: String(page),
-    per_page: String(perPage),
-  });
-  if (filters?.status) params.set("status", filters.status);
-  if (filters?.institution) params.set("institution", filters.institution);
-  if (filters?.preset) params.set("preset", filters.preset);
-  if (filters?.year) params.set("year", filters.year);
-  if (filters?.search) params.set("search", filters.search);
-  if (filters?.event_type) params.set("event_type", filters.event_type);
-  if (filters?.jel_code) params.set("jel_code", filters.jel_code);
-  if (filters?.since) params.set("since", filters.since);
-  if (filters?.until) params.set("until", filters.until);
-  if (filters?.researcher_id) params.set("researcher_id", filters.researcher_id);
-  return `/api/publications?${params.toString()}`;
-}
 
 export async function getPublications(
   page = 1,
