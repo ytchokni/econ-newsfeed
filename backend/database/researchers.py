@@ -8,6 +8,8 @@ import os
 import re
 import unicodedata
 
+import mysql.connector
+
 from backend.database.connection import execute_query, fetch_one, fetch_all
 from backend.database.llm import log_llm_usage
 from backend.config import fix_encoding
@@ -472,6 +474,15 @@ def merge_researchers(canonical_id: int, duplicate_id: int, conn) -> None:
         "UPDATE IGNORE researcher_jel_codes SET researcher_id = %s WHERE researcher_id = %s",
         (canonical_id, duplicate_id),
     )
+    # The merged researcher has more papers: let the JEL job classify it again.
+    try:
+        c.execute(
+            "DELETE FROM researcher_jel_state WHERE researcher_id = %s",
+            (canonical_id,),
+        )
+    except mysql.connector.Error as e:
+        if getattr(e, "errno", None) != 1146:  # table not created yet
+            raise
 
     # 3. Transfer user follows (IGNORE skips duplicates; CASCADE cleans up leftovers)
     c.execute(
@@ -755,12 +766,12 @@ def get_fields_for_researchers(researcher_ids: list[int]) -> dict[int, list[dict
 def get_researcher_detail(researcher_id: int) -> dict | None:
     """Fetch a single researcher by ID.
 
-    Returns dict with columns: id, first_name, last_name, position, affiliation, description.
-    Returns None if not found.
+    Returns dict with columns: id, first_name, last_name, position, affiliation,
+    description, openalex_author_id. Returns None if not found.
     """
     return fetch_one(
-        "SELECT id, first_name, last_name, position, affiliation, description "
-        "FROM researchers WHERE id = %s",
+        "SELECT id, first_name, last_name, position, affiliation, description, "
+        "openalex_author_id FROM researchers WHERE id = %s",
         (researcher_id,),
     )
 

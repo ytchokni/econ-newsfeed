@@ -12,16 +12,16 @@ import time
 from collections import OrderedDict
 import xml.etree.ElementTree as ET
 from contextlib import asynccontextmanager
+from urllib.parse import urlencode
 from datetime import datetime, timedelta, timezone
 
 from fastapi import FastAPI, HTTPException, Query, Request, Response, Depends
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from pydantic import BaseModel
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
-from slowapi.util import get_remote_address
 
 from backend.database import (
     connection_scope,
@@ -65,8 +65,24 @@ from backend.database import (
     get_recent_discoveries as db_get_recent_discoveries,
 )
 from backend.auth import get_current_user, get_optional_user
+from backend import api_protection
+from backend.api_protection import (
+    cap_pages,
+    data_limit,
+    enforce_paging,
+    is_internal,
+    options_limit,
+    rate_limit_key,
+)
 from backend.database.snapshots import STATUS_ORDER
 from backend.database.researchers import search_researcher_options
+from backend.database.users import set_digest_enabled_by_token
+from backend.database.sitemap import (
+    count_sitemap_papers,
+    count_sitemap_researchers,
+    get_sitemap_papers,
+    get_sitemap_researchers,
+)
 from backend.pipeline.publication import VALID_STATUSES
 
 FILTER_VALID_STATUSES = frozenset(STATUS_ORDER)
@@ -79,7 +95,9 @@ from backend.pipeline.scheduler import (
 
 FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
 
-limiter = Limiter(key_func=get_remote_address)
+# Keys on the resolved client (real visitor IP, signed-in user, or the
+# frontend itself); see backend/api_protection.py.
+limiter = Limiter(key_func=rate_limit_key)
 
 # ---------------------------------------------------------------------------
 # Server-side TTL cache for /api/filter-options
@@ -338,9 +356,20 @@ app.state.limiter = limiter
 
 
 async def _rate_limit_handler(request: Request, exc: RateLimitExceeded) -> JSONResponse:
+    retry_after = api_protection.retry_after_seconds(request)
+    try:
+        info = api_protection.resolve_client(request)
+        tier, ip = info.tier, info.ip
+    except Exception:
+        tier, ip = "unknown", "unknown"
+    logging.getLogger("backend.api").warning(
+        "rate_limited ip=%s tier=%s path=%s limit=%s retry_after=%s",
+        ip, tier, request.url.path, exc.detail, retry_after,
+    )
     return JSONResponse(
         status_code=429,
         content={"error": {"code": "rate_limit_exceeded", "message": str(exc.detail)}},
+        headers={"Retry-After": str(retry_after)},
     )
 
 
@@ -356,6 +385,18 @@ app.add_middleware(
 
 
 # ---------------------------------------------------------------------------
+# Anti-scraping gate (User-Agent blocklist, direct-access policy)
+# ---------------------------------------------------------------------------
+
+@app.middleware("http")
+async def gate_data_endpoints(request: Request, call_next):
+    blocked = api_protection.gate_request(request)
+    if blocked is not None:
+        return blocked
+    return await call_next(request)
+
+
+# ---------------------------------------------------------------------------
 # Security headers middleware
 # ---------------------------------------------------------------------------
 
@@ -368,6 +409,10 @@ async def add_security_headers(request: Request, call_next):
     response.headers["Strict-Transport-Security"] = "max-age=63072000; includeSubDomains"
     response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
+    # API responses (JSON, the Atom feed) are not pages: keep them out of
+    # search results on every host that serves them (www via the Vercel
+    # rewrite, vercel.app, and the API's own domain).
+    response.headers["X-Robots-Tag"] = "noindex"
     return response
 
 
@@ -512,6 +557,12 @@ def _format_feed_event(row: dict, authors: list[dict], coauthors: list[dict] | N
 def health_check():
     """Health check endpoint for load balancers and monitoring."""
     return {"status": "ok"}
+
+
+@app.get("/robots.txt", include_in_schema=False)
+def robots_txt():
+    """The API host is not for crawlers; the site itself has its own robots.txt."""
+    return Response("User-agent: *\nDisallow: /\n", media_type="text/plain")
 
 
 @app.get("/api/ready")
@@ -774,16 +825,65 @@ async def update_notifications(
     return {"digest_enabled": body.digest_enabled}
 
 
-@app.get("/api/users/unsubscribe")
-async def unsubscribe(token: str = Query(...)):
-    """One-click email unsubscribe via HMAC-signed token."""
-    secret = os.environ.get("NEXTAUTH_SECRET", "")
-    user_id = Database.verify_unsubscribe_token(token, secret)
+def _digest_token_user(token: str) -> int:
+    """Resolve an unsubscribe token to its user, or raise 400.
+
+    The token authorizes only the weekly-digest setting of that one user.
+    """
+    user_id = Database.verify_unsubscribe_token(token, os.environ.get("NEXTAUTH_SECRET", ""))
     if user_id is None:
-        raise HTTPException(status_code=400, detail="Invalid or expired unsubscribe link")
+        raise HTTPException(status_code=400, detail="This unsubscribe link is invalid.")
+    return user_id
+
+
+def _set_digest_by_token(user_id: int, enabled: bool) -> None:
     with connection_scope():
-        Database.update_notification_prefs(user_id, digest_enabled=False)
-    return {"message": "You have been unsubscribed from the weekly digest."}
+        set_digest_enabled_by_token(user_id, enabled)
+
+
+@app.get("/api/users/unsubscribe")
+async def unsubscribe_landing(token: str = Query("", max_length=200)):
+    """Email-link landing: redirect to the confirmation page without changing anything.
+
+    Link scanners and prefetchers issue GET requests, so GET must never
+    unsubscribe. Old digests link here too, so they keep working.
+    """
+    return RedirectResponse(
+        f"{FRONTEND_URL}/unsubscribe?{urlencode({'token': token})}",
+        status_code=303,
+        headers={"Cache-Control": "no-store", "Referrer-Policy": "no-referrer"},
+    )
+
+
+@app.post("/api/users/unsubscribe")
+@limiter.limit("30/minute")
+async def unsubscribe(request: Request, token: str = Query(..., max_length=200)):
+    """RFC 8058 one-click unsubscribe; also used by the confirmation page.
+
+    Mail clients POST ``List-Unsubscribe=One-Click`` as a form body to the
+    List-Unsubscribe URL; the body carries nothing we need, so it is ignored.
+    No login is required: the signed token is the authorization.
+    """
+    user_id = _digest_token_user(token)
+    _set_digest_by_token(user_id, False)
+    return JSONResponse(
+        {"digest_enabled": False, "message": "You have been unsubscribed from the weekly digest."},
+        headers={"Cache-Control": "no-store"},
+    )
+
+
+@app.post("/api/users/resubscribe")
+@limiter.limit("30/minute")
+async def resubscribe(request: Request, token: str = Query(..., max_length=200)):
+    """Undo an unsubscribe from the confirmation page, using the same token."""
+    user_id = _digest_token_user(token)
+    if not scheduler.DIGEST_ENABLED:
+        raise HTTPException(status_code=503, detail="Weekly email delivery is temporarily unavailable")
+    _set_digest_by_token(user_id, True)
+    return JSONResponse(
+        {"digest_enabled": True, "message": "You are subscribed to the weekly digest again."},
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -791,7 +891,7 @@ async def unsubscribe(token: str = Query(...)):
 # ---------------------------------------------------------------------------
 
 @app.get("/api/publications", response_model=PaginatedPublications)
-@limiter.limit("60/minute")
+@limiter.shared_limit(data_limit, scope="data", exempt_when=is_internal)
 async def list_publications(
     request: Request,
     response: Response,
@@ -814,6 +914,8 @@ async def list_publications(
     non-published papers with known status generate events, so no
     include_seed parameter is needed.
     """
+    paging = enforce_paging(request, page, per_page)
+    per_page = paging.per_page
     researcher_ids = None
     if researcher_id:
         try:
@@ -840,7 +942,7 @@ async def list_publications(
         event_type=event_type, since=since, until=until,
     )
 
-    offset = (page - 1) * per_page
+    offset = paging.offset
     with connection_scope():
         rows, total, researcher_count = search_feed_events(
             year=year, researcher_ids=researcher_ids,
@@ -851,7 +953,7 @@ async def list_publications(
             jel_code=jel_code, offset=offset, limit=per_page,
             followed_ids=followed_ids,
         )
-        pages = math.ceil(total / per_page) if total else 0
+        pages = cap_pages(math.ceil(total / per_page) if total else 0, paging)
 
         pub_ids = [row['paper_id'] for row in rows]
         authors_by_pub = get_authors_for_papers(pub_ids)
@@ -871,6 +973,8 @@ async def list_publications(
     researcher_count = len(researcher_ids_set)
 
     response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=600"
+    # Signed-in callers are not capped, so shared caches must not mix them up.
+    response.headers["Vary"] = "Authorization"
     return {
         "items": items,
         "total": total,
@@ -940,7 +1044,7 @@ def _build_publication_detail(publication_id: int, include_history: bool) -> dic
 
 
 @app.get("/api/publications/{publication_id}")
-@limiter.limit("60/minute")
+@limiter.shared_limit(data_limit, scope="data", exempt_when=is_internal)
 def get_publication(
     request: Request,
     publication_id: int,
@@ -1013,7 +1117,7 @@ def _build_atom_feed(items: list[dict], self_url: str) -> str:
 
 
 @app.get("/api/feed.xml")
-@limiter.limit("30/minute")
+@limiter.limit("30/minute;300/hour")
 def atom_feed(
     request: Request,
     response: Response,
@@ -1076,7 +1180,7 @@ def _get_website_url(urls: list[dict]) -> str | None:
 # ---------------------------------------------------------------------------
 
 @app.get("/api/fields")
-@limiter.limit("60/minute")
+@limiter.limit("60/minute", exempt_when=is_internal)
 def list_fields(request: Request, response: Response):
     def _fetch():
         rows = fetch_all("SELECT id, name, slug FROM research_fields ORDER BY name")
@@ -1087,7 +1191,7 @@ def list_fields(request: Request, response: Response):
 
 
 @app.get("/api/jel-codes")
-@limiter.limit("60/minute")
+@limiter.limit("60/minute", exempt_when=is_internal)
 def list_jel_codes(request: Request, response: Response):
     def _fetch():
         return {"items": get_all_jel_codes()}
@@ -1097,7 +1201,7 @@ def list_jel_codes(request: Request, response: Response):
 
 
 @app.get("/api/filter-options")
-@limiter.limit("30/minute")
+@limiter.limit("30/minute", exempt_when=is_internal)
 def get_filter_options(request: Request, response: Response):
     def _fetch():
         institutions = fetch_all(
@@ -1125,7 +1229,7 @@ def get_filter_options(request: Request, response: Response):
 
 
 @app.get("/api/researcher-options")
-@limiter.limit("60/minute")
+@limiter.limit(options_limit, exempt_when=is_internal)
 def get_researcher_options(
     request: Request,
     response: Response,
@@ -1152,7 +1256,7 @@ def get_researcher_options(
 
 
 @app.get("/api/researchers", response_model=PaginatedResearchers)
-@limiter.limit("60/minute")
+@limiter.shared_limit(data_limit, scope="data", exempt_when=is_internal)
 def list_researchers(
     request: Request,
     response: Response,
@@ -1168,14 +1272,16 @@ def list_researchers(
     if preset and preset not in valid_presets:
         raise HTTPException(status_code=400, detail=f"Invalid preset value. Must be one of: {', '.join(sorted(valid_presets))}")
 
-    offset = (page - 1) * per_page
+    paging = enforce_paging(request, page, per_page)
+    per_page = paging.per_page
+    offset = paging.offset
     with connection_scope():
         rows, total = search_researchers(
             search=search, institution=institution, field_slug=field,
             position=position, preset=preset,
             offset=offset, limit=per_page,
         )
-        pages = math.ceil(total / per_page) if total else 0
+        pages = cap_pages(math.ceil(total / per_page) if total else 0, paging)
 
         researcher_ids = [r['id'] for r in rows]
         urls_by_researcher = get_urls_for_researchers(researcher_ids)
@@ -1199,6 +1305,8 @@ def list_researchers(
         for r in rows
     ]
     response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=600"
+    # Signed-in callers are not capped, so shared caches must not mix them up.
+    response.headers["Vary"] = "Authorization"
     return {
         "items": items,
         "total": total,
@@ -1247,6 +1355,7 @@ def _build_researcher_detail(researcher_id: int, include_history: bool) -> dict 
         "position": row['position'],
         "affiliation": row['affiliation'],
         "description": row['description'],
+        "openalex_author_id": row.get('openalex_author_id'),
         "urls": urls,
         "website_url": _get_website_url(urls),
         "publication_count": pub_count,
@@ -1271,7 +1380,7 @@ def _build_researcher_detail(researcher_id: int, include_history: bool) -> dict 
 
 
 @app.get("/api/researchers/{researcher_id}")
-@limiter.limit("60/minute")
+@limiter.shared_limit(data_limit, scope="data", exempt_when=is_internal)
 def get_researcher(
     request: Request,
     researcher_id: int,
@@ -1284,6 +1393,79 @@ def get_researcher(
     )
     if result is None:
         raise HTTPException(status_code=404, detail="Researcher not found")
+    return result
+
+
+# ---------------------------------------------------------------------------
+# Sitemap data (ids + last-modified times for the frontend's sitemap.xml)
+# ---------------------------------------------------------------------------
+
+# A sitemap file may hold 50,000 URLs; smaller chunks keep each query and
+# response light.
+SITEMAP_PAGE_SIZE = 10_000
+_SITEMAP_KINDS = {
+    "researchers": (count_sitemap_researchers, get_sitemap_researchers),
+    "papers": (count_sitemap_papers, get_sitemap_papers),
+}
+_sitemap_cache = _KeyedTTLCache(3600, max_keys=64)  # 1 hour
+
+
+def _build_sitemap_index() -> dict:
+    with connection_scope():
+        counts = {kind: count() for kind, (count, _) in _SITEMAP_KINDS.items()}
+    return {
+        "page_size": SITEMAP_PAGE_SIZE,
+        **{
+            kind: {"count": n, "pages": math.ceil(n / SITEMAP_PAGE_SIZE)}
+            for kind, n in counts.items()
+        },
+    }
+
+
+def _sitemap_lastmod(value: datetime | str | None) -> str | None:
+    """W3C datetime (UTC) for <lastmod>. GREATEST() over mixed operands can
+    come back from MySQL as a 'YYYY-MM-DD HH:MM:SS' string."""
+    if not value:
+        return None
+    if isinstance(value, str):
+        try:
+            value = datetime.fromisoformat(value.strip().rstrip("Z"))
+        except ValueError:
+            return None
+    if value.tzinfo is not None:
+        value = value.astimezone(timezone.utc).replace(tzinfo=None)
+    return value.replace(microsecond=0).isoformat() + "Z"
+
+
+def _build_sitemap_page(kind: str, page: int) -> dict:
+    _, fetch = _SITEMAP_KINDS[kind]
+    with connection_scope():
+        rows = fetch(page * SITEMAP_PAGE_SIZE, SITEMAP_PAGE_SIZE)
+    return {
+        "items": [
+            {"id": r["id"], "lastmod": _sitemap_lastmod(r["lastmod"])}
+            for r in rows
+        ]
+    }
+
+
+@app.get("/api/sitemap")
+@limiter.limit("30/minute", exempt_when=is_internal)
+def sitemap_index(request: Request, response: Response):
+    """How many sitemap chunks of each kind exist (for /sitemap.xml)."""
+    result = _sitemap_cache.get_or_set("index", _build_sitemap_index)
+    response.headers["Cache-Control"] = "public, max-age=3600"
+    return result
+
+
+@app.get("/api/sitemap/{kind}")
+@limiter.limit("30/minute", exempt_when=is_internal)
+def sitemap_page(request: Request, response: Response, kind: str, page: int = Query(0, ge=0, le=1000)):
+    """One chunk of ids with last-modified times, ordered by id."""
+    if kind not in _SITEMAP_KINDS:
+        raise HTTPException(status_code=404, detail="Unknown sitemap")
+    result = _sitemap_cache.get_or_set(f"{kind}:{page}", lambda: _build_sitemap_page(kind, page))
+    response.headers["Cache-Control"] = "public, max-age=3600"
     return result
 
 

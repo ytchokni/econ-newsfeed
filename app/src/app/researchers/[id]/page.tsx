@@ -1,20 +1,19 @@
+import { cache } from "react";
 import { notFound } from "next/navigation";
 import type { Metadata } from "next";
 import ResearcherDetailContent from "./ResearcherDetailContent";
+import JsonLd from "@/components/JsonLd";
 import type { ResearcherDetail } from "@/lib/types";
+import { fetchBackend } from "@/lib/server-api";
+import { researcherJsonLd, researcherMetadata } from "@/lib/seo";
 
-const API_BASE = process.env.API_INTERNAL_URL || "http://localhost:8000";
+// 404 from the backend -> null (a real 404 page); other failures throw.
+const fetchResearcher = cache((id: number) =>
+  fetchBackend<ResearcherDetail>(`/api/researchers/${id}`, 60, { forVisitor: true }),
+);
 
-async function fetchResearcher(id: number): Promise<ResearcherDetail | null> {
-  try {
-    const res = await fetch(`${API_BASE}/api/researchers/${id}`, {
-      next: { revalidate: 60 },
-    });
-    if (!res.ok) return null;
-    return res.json();
-  } catch {
-    return null;
-  }
+function parseId(id: string): number | null {
+  return /^[1-9]\d{0,9}$/.test(id) ? Number(id) : null;
 }
 
 export async function generateMetadata({
@@ -22,22 +21,11 @@ export async function generateMetadata({
 }: {
   params: Promise<{ id: string }>;
 }): Promise<Metadata> {
-  const { id } = await params;
-  const numId = Number(id);
-  if (Number.isNaN(numId) || numId <= 0) return {};
-
+  const numId = parseId((await params).id);
+  if (numId === null) return {};
   const researcher = await fetchResearcher(numId);
   if (!researcher) return {};
-
-  const name = `${researcher.first_name} ${researcher.last_name}`;
-  const parts = [name];
-  if (researcher.position) parts.push(researcher.position);
-  if (researcher.affiliation) parts.push(researcher.affiliation);
-
-  return {
-    title: name,
-    description: parts.join(" - "),
-  };
+  return researcherMetadata(researcher);
 }
 
 export default async function ResearcherDetailPage({
@@ -45,9 +33,8 @@ export default async function ResearcherDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
-  const { id } = await params;
-  const numId = Number(id);
-  if (Number.isNaN(numId) || numId <= 0) {
+  const numId = parseId((await params).id);
+  if (numId === null) {
     notFound();
   }
 
@@ -56,5 +43,10 @@ export default async function ResearcherDetailPage({
     notFound();
   }
 
-  return <ResearcherDetailContent id={numId} initialData={researcher} />;
+  return (
+    <>
+      <JsonLd data={researcherJsonLd(researcher)} />
+      <ResearcherDetailContent id={numId} initialData={researcher} />
+    </>
+  );
 }

@@ -202,6 +202,18 @@ def test_digest_labels_come_from_the_event_not_the_paper():
     assert "(Accepted)" not in html and "(Published)" not in html
 
 
+def test_digest_text_part_uses_the_same_event_labels():
+    from backend.digest import _render_digest_text
+    text = _render_digest_text(
+        _snapshot_events(), None, "https://example.invalid/unsub",
+        datetime(2026, 11, 6, tzinfo=timezone.utc), datetime(2026, 11, 13, tzinfo=timezone.utc),
+    )
+    assert "- Names and Assimilation (Revise & Resubmit → Accepted at Econometrica)" in text
+    assert "- Assimilation Across Destinations (New working paper)" in text
+    assert text.count("Efficient Deployment of Police Resources") == 1
+    assert "(New paper · Revise & Resubmit at AER)" in text
+
+
 @pytest.mark.parametrize("events, expected", [
     ([{"event_type": "new_paper", "new_status": "working_paper", "venue": "NBER"}],
      "New working paper"),
