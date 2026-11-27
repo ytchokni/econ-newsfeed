@@ -9,7 +9,7 @@ import { researcherJsonLd, researcherMetadata } from "@/lib/seo";
 
 // 404 from the backend -> null (a real 404 page); other failures throw.
 const fetchResearcher = cache((id: number) =>
-  fetchBackend<ResearcherDetail>(`/api/researchers/${id}`, 60),
+  fetchBackend<ResearcherDetail>(`/api/researchers/${id}`, 60, { forVisitor: true }),
 );
 
 function parseId(id: string): number | null {

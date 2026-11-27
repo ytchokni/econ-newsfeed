@@ -77,6 +77,39 @@ class TestLlmAccountErrors:
         assert monitor.count_account_errors(log) == 3
 
 
+class TestApiTraffic:
+    LINES = [
+        "2026-11-27 10:00:00 backend.api WARNING rate_limited ip=203.0.113.9 tier=visitor path=/api/researchers/1 limit=60 per 1 minute retry_after=12",
+        "2026-11-27 10:00:01 backend.api WARNING rate_limited ip=203.0.113.9 tier=visitor path=/api/researchers/2 limit=60 per 1 minute retry_after=11",
+        "2026-11-27 10:00:02 backend.api WARNING rate_limited ip=198.51.100.4 tier=direct path=/api/publications limit=20 per 1 minute retry_after=30",
+        "2026-11-27 10:00:03 backend.api_protection INFO api_blocked reason=user_agent ip=198.51.100.4 path=/api/publications ua='curl/8'",
+        "2026-11-27 10:00:04 backend.api_protection WARNING internal_key_invalid ip=76.76.21.21 path=/api/publications: request carried a wrong X-Internal-Api-Key",
+        'INFO:     172.18.0.1:5000 - "GET /api/publications?page=1 HTTP/1.1" 200 OK',
+        'INFO:     172.18.0.1:5001 - "GET /api/health HTTP/1.1" 200 OK',
+    ]
+
+    def test_summarize(self):
+        stats = monitor.summarize_api_traffic(self.LINES)
+        assert stats["rate_limited"] == 3
+        assert stats["by_ip"] == {"203.0.113.9": 2, "198.51.100.4": 1}
+        assert stats["blocked"] == 1
+        assert stats["invalid_key"] == 1
+        assert stats["requests"] == 2
+
+    def test_quiet_day_passes_and_names_top_ip(self):
+        result = monitor.evaluate_api_traffic(monitor.summarize_api_traffic(self.LINES))
+        assert result["ok"]
+        assert "203.0.113.9 x2" in result["detail"]
+
+    def test_429_flood_fails(self):
+        lines = ["rate_limited ip=203.0.113.9 tier=visitor"] * monitor.API_RATE_LIMITED_PER_DAY
+        assert not monitor.evaluate_api_traffic(monitor.summarize_api_traffic(lines))["ok"]
+
+    def test_wrong_frontend_key_fails(self):
+        lines = ["internal_key_invalid ip=76.76.21.21"] * monitor.API_INVALID_KEY_WARNINGS
+        assert not monitor.evaluate_api_traffic(monitor.summarize_api_traffic(lines))["ok"]
+
+
 class TestBackupCheck:
     NOW = 1_800_000_000.0
 

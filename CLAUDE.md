@@ -137,14 +137,39 @@ come from `app/src/lib/seo.ts`. `/sitemap.xml` is an index over
 indexed only if tracked (have a URL) and have papers; keep
 `isIndexableResearcher` and `backend/database/sitemap.py` in sync. Detail
 pages 404 only on a backend 404 and error (5xx) on other failures, so crawlers
-retry. Set the same `INTERNAL_API_KEY` on Vercel and the API so server-side
-rendering skips the per-IP rate limit during crawls.
+retry. The sitemap fetches send `INTERNAL_API_KEY` without a visitor, so they
+are exempt from rate limits and paging caps (see API scrape protection below).
 
 Researcher filter choices are fetched on demand from `/api/researcher-options`
 (at most 50 results), rather than included in `/api/filter-options`. Weekly
 digest controls follow `/api/capabilities`; an unavailable delivery provider
 cannot be enabled through settings. Digest events use ingestion timestamps and
 a per-user delivery ledger so delayed extraction is not skipped.
+Each digest carries `List-Unsubscribe` + `List-Unsubscribe-Post` (RFC 8058)
+headers and a footer button. `GET /api/users/unsubscribe` only redirects to the
+`/unsubscribe` confirmation page (link scanners prefetch GETs); `POST` unsubscribes
+with no login. Tokens are HMAC-signed with `NEXTAUTH_SECRET`, never expire, and
+only toggle that user's digest, so rotating the secret breaks old links.
+
+**API scrape protection** (`backend/api_protection.py`): the Next.js
+`app/src/proxy.ts` (Next 16's name for middleware) adds `X-Internal-Api-Key`
+(`INTERNAL_API_KEY`, same value on Vercel and the API) and the visitor's IP to
+proxied `/api/*` calls; the SSR detail pages do the same via
+`fetchBackend(path, revalidate, { forVisitor: true })` in `app/src/lib/server-api.ts`. The API trusts `X-Visitor-IP` only with a valid
+key, otherwise it uses the rightmost `X-Forwarded-For` entry that Caddy writes.
+Rate limits key on that IP (or the signed-in user) per tier; publication and
+researcher lists/details share one "data" budget. Anonymous callers get
+`per_page` clamped to 50 and at most 2000 results deep (400 beyond). Known
+scraper/HTTP-library User-Agents and empty UAs get 403 on data endpoints.
+`API_DIRECT_ACCESS` (open/limited/deny) sets the policy for calls straight to
+the duckdns host. 429s carry `Retry-After` and log `rate_limited ip=... path=...`;
+the monitor's `api_traffic` check counts them. Without `INTERNAL_API_KEY`, and
+for keyless calls while `API_DIRECT_ACCESS=open`, the API fails open to
+per-edge-IP per-minute limits. Roll the key out on Vercel (redeploy) before the
+API, and switch `API_DIRECT_ACCESS` away from `open` only once the frontend
+sends it: otherwise all site traffic shares a few Vercel IPs and gets 429s. New server-side calls from
+the frontend to the backend should go through `fetchBackend` or send
+`internalApiHeaders()` from `app/src/lib/internal-api.ts`.
 
 ## Architecture
 
@@ -294,4 +319,5 @@ Required env vars: `DB_HOST`, `DB_USER`, `DB_PASSWORD`, `DB_NAME`, `GOOGLE_API_K
 - **docker-compose env vars are whitelisted too**: The `environment:` blocks in `docker-compose.yml` / `docker-compose.prod.yml` enumerate which `.env` vars reach the api container. A new env var read by the backend must be added there, or it will silently be unset in production (the `.env` file alone is not enough).
 - **DB container has 512MB memory limit**: Large MySQL imports (e.g., restoring a full dump) will OOM. Temporarily increase with `docker update --memory 1500m econ-newsfeed-db-1`, import, then restore.
 - **Vercel env var `API_INTERNAL_URL`** is baked in at build time (used by Next.js rewrites). Changing it requires a Vercel redeploy, not just a restart.
+- **Rate limits are per gunicorn worker**: slowapi counts in process memory, so the effective ceiling is the configured limit times `WEB_CONCURRENCY`, and counters reset on restart.
 - **DuckDNS** points `econ-newsfeed.duckdns.org` to the Hetzner IP. Update via: `curl "https://www.duckdns.org/update?domains=econ-newsfeed&token=<DUCKDNS_TOKEN>&ip=<NEW_IP>"`
