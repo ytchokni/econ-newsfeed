@@ -69,14 +69,13 @@ def search_rows(monkeypatch):
     ('***', set()),
 ])
 def test_returns_only_matching_papers(search_rows, query, expected):
-    rows, total, researcher_count = search_rows(search=query)
+    rows, total = search_rows(search=query)
     assert {row['paper_id'] for row in rows} == expected
     assert total == len(expected)
-    assert researcher_count == int(bool(expected))
 
 
 def test_pagination_keeps_filtered_total(search_rows):
-    rows, total, _ = search_rows(search='Healthcare satisfaction', limit=1, offset=1)
+    rows, total = search_rows(search='Healthcare satisfaction', limit=1, offset=1)
     assert len(rows) == 1
     assert rows[0]['paper_id'] in {1, 5}
     assert total == 2
