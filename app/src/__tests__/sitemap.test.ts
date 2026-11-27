@@ -29,8 +29,9 @@ describe("sitemap helpers", () => {
   it("parses only known file names", () => {
     expect(parseSitemapFile("pages.xml")).toEqual({ kind: "pages" });
     expect(parseSitemapFile("papers-12.xml")).toEqual({ kind: "papers", page: 12 });
+    expect(parseSitemapFile("papers-999.xml")).toEqual({ kind: "papers", page: 999 });
     expect(parseSitemapFile("researchers-0.xml")).toEqual({ kind: "researchers", page: 0 });
-    for (const bad of ["papers-01.xml", "papers--1.xml", "users-0.xml", "papers-0.txt", "papers-99999.xml"]) {
+    for (const bad of ["papers-01.xml", "papers--1.xml", "users-0.xml", "papers-0.txt", "papers-1000.xml", "papers-99999.xml"]) {
       expect(parseSitemapFile(bad)).toBeNull();
     }
   });
@@ -120,6 +121,18 @@ describe("sitemap routes", () => {
     expect(xml).toContain(`<loc>${ORIGIN}/</loc>`);
     expect(xml).toContain(`<loc>${ORIGIN}/researchers</loc>`);
     expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it("404s when the backend rejects or does not have the page", async () => {
+    mockFetch({
+      "/api/sitemap/papers?page=5": { status: 404 },
+      "/api/sitemap/papers?page=6": { status: 422 },
+      "/api/sitemap/papers?page=7": { status: 429 },
+    });
+    expect((await getFile("papers-5.xml")).status).toBe(404);
+    expect((await getFile("papers-6.xml")).status).toBe(404);
+    // Rate limiting is temporary: crawlers should retry.
+    expect((await getFile("papers-7.xml")).status).toBe(503);
   });
 
   it("404s for unknown files and empty chunks, 503s on backend errors", async () => {
