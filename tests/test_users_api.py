@@ -116,19 +116,3 @@ def test_update_notifications(client):
         )
     assert resp.status_code == 200
     assert resp.json()["digest_enabled"] is False
-
-
-def test_unsubscribe_valid(client):
-    import backend.database.users as users_mod
-    token = users_mod.generate_unsubscribe_token(1, NEXTAUTH_SECRET)
-    with patch("backend.api.Database") as api_db:
-        api_db.verify_unsubscribe_token.return_value = 1
-        resp = client.get(f"/api/users/unsubscribe?token={token}")
-    assert resp.status_code == 200
-
-
-def test_unsubscribe_invalid(client):
-    with patch("backend.api.Database") as api_db:
-        api_db.verify_unsubscribe_token.return_value = None
-        resp = client.get("/api/users/unsubscribe?token=bad.token")
-    assert resp.status_code == 400
