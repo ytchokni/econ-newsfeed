@@ -32,6 +32,9 @@ class TestCleanBio:
         "<think>The user wants a description of the researcher, so I will",
         "* Input: Text from a homepage.\n* Task: Extract a professional description.",
         "- Goal: write a bio\n- Constraints: max 200 words",
+        # Only caught by the shared description.looks_like_reasoning() check.
+        "Draft: Jane Doe is an economist at MIT who studies trade policy.",
+        "Let me summarise. Jane Doe is an economist at MIT who studies trade.",
     ])
     def test_rejects_reasoning_text(self, text):
         assert clean_bio(text) is None

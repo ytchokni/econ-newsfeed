@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from backend.database import log_llm_usage
 from backend.llm.client import extract_json, get_model
+from backend.pipeline.description import looks_like_reasoning
 from pydantic import BaseModel, field_validator
 
 # Standard top-level JEL categories for prompt context
@@ -92,7 +93,7 @@ def clean_bio(description: str | None) -> str | None:
     if not description:
         return None
     text = _REASONING_BLOCK.sub(" ", description)
-    if _REASONING_MARKERS.search(text):
+    if _REASONING_MARKERS.search(text) or looks_like_reasoning(text):
         return None
     text = re.sub(r"\s+", " ", text).strip()
     if len(text) < _MIN_BIO_CHARS:
