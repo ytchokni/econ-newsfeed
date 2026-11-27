@@ -9,7 +9,7 @@ import { paperJsonLd, paperMetadata } from "@/lib/seo";
 
 // 404 from the backend -> null (a real 404 page); other failures throw.
 const fetchPaper = cache((id: number) =>
-  fetchBackend<PublicationDetail>(`/api/publications/${id}?include_history=true`, 60),
+  fetchBackend<PublicationDetail>(`/api/publications/${id}?include_history=true`, 60, { forVisitor: true }),
 );
 
 function parseId(id: string): number | null {

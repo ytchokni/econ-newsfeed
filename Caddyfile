@@ -4,8 +4,37 @@
 #
 # Install: sudo apt install caddy
 # Start:   sudo systemctl enable --now caddy
+# Apply:   sudo cp Caddyfile /etc/caddy/Caddyfile && sudo caddy validate --config /etc/caddy/Caddyfile && sudo systemctl reload caddy
 # Logs:    journalctl -u caddy
+#
+# Client IPs: with no trusted_proxies configured, Caddy discards any
+# X-Forwarded-For the client sent and passes the connecting IP. The API reads
+# only the rightmost X-Forwarded-For entry, and trusts the visitor IP the
+# Vercel frontend forwards only with INTERNAL_API_KEY
+# (backend/api_protection.py). Do not add trusted_proxies here.
+# /robots.txt (Disallow: /) is served by the API itself.
+
+{
+	servers {
+		timeouts {
+			# Slow-client protection; responses themselves are not time-limited here.
+			read_header 10s
+			read_body 30s
+			idle 2m
+		}
+	}
+}
 
 econ-newsfeed.duckdns.org {
-	reverse_proxy localhost:8000
+	# The API only takes small JSON bodies.
+	request_body {
+		max_size 1MB
+	}
+
+	reverse_proxy localhost:8000 {
+		transport http {
+			dial_timeout 5s
+			response_header_timeout 120s
+		}
+	}
 }
