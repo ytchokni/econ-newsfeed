@@ -111,7 +111,9 @@ export default function PaperDetailContent({ id, initialData }: { id: number; in
     [publication]
   );
 
-  if (isLoading) {
+  // Server-rendered pages pass initialData; SWR still reports isLoading while
+  // it revalidates, so only show the skeleton when there is nothing to show.
+  if (isLoading && !publication) {
     return (
       <div className="space-y-4 animate-pulse">
         <div className="h-4 w-24 bg-[var(--border-light)] rounded" />
@@ -122,7 +124,7 @@ export default function PaperDetailContent({ id, initialData }: { id: number; in
     );
   }
 
-  if (error || !publication) {
+  if (!publication) {
     return (
       <div className="space-y-4">
         <ErrorMessage message={error?.message || "Paper not found."} />
