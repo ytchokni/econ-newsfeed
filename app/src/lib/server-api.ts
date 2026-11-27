@@ -26,6 +26,18 @@ export async function visitorBackendHeaders(): Promise<Record<string, string>> {
   return internalApiHeaders({ ip: visitorIp(await headers()), source: "ssr" });
 }
 
+export class BackendError extends Error {
+  constructor(readonly status: number, path: string) {
+    super(`Backend returned ${status} for ${path}`);
+    this.name = "BackendError";
+  }
+
+  /** The request itself was bad (not rate limiting or a server fault). */
+  get isClientError(): boolean {
+    return this.status >= 400 && this.status < 500 && this.status !== 429;
+  }
+}
+
 /**
  * GET a backend JSON resource. Returns null only on 404, so missing records
  * become real 404 pages; any other failure (including a 429) throws (a 5xx
@@ -45,6 +57,6 @@ export async function fetchBackend<T>(
     : { headers: backendHeaders(), next: { revalidate } };
   const res = await fetch(`${apiBase()}${path}`, init);
   if (res.status === 404) return null;
-  if (!res.ok) throw new Error(`Backend returned ${res.status} for ${path}`);
+  if (!res.ok) throw new BackendError(res.status, path);
   return res.json() as Promise<T>;
 }
