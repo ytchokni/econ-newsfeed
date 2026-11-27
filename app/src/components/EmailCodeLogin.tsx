@@ -10,6 +10,8 @@ const VERIFY_ERRORS: Record<string, string> = {
   invalid_code: "That code is incorrect or no longer valid.",
   code_expired: "This code has expired. Request a new one.",
   too_many_attempts: "Too many incorrect attempts. Request a new code.",
+  too_many_failures: "Too many incorrect codes for this address today. Try again tomorrow or continue with Google.",
+  email_login_paused: "Email sign-in is paused for a while. Try again later or continue with Google.",
   invalid_email: "Enter a valid email address.",
   rate_limit_exceeded: "Too many attempts. Wait a minute and try again.",
   email_login_unavailable: "Email sign-in is not available right now.",

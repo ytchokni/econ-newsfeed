@@ -266,7 +266,8 @@ RATE_LIMITED_RE = re.compile(r"rate_limited ip=(\S+)")
 
 def summarize_api_traffic(lines) -> dict:
     """Count 429s (per IP), blocked requests, bad internal keys and API requests."""
-    stats = {"rate_limited": 0, "blocked": 0, "invalid_key": 0, "requests": 0, "by_ip": {}}
+    stats = {"rate_limited": 0, "blocked": 0, "invalid_key": 0, "requests": 0, "by_ip": {},
+             "email_login_paused": 0}
     for line in lines:
         match = RATE_LIMITED_RE.search(line)
         if match:
@@ -277,6 +278,9 @@ def summarize_api_traffic(lines) -> dict:
             stats["blocked"] += 1
         elif "internal_key_invalid" in line:
             stats["invalid_key"] += 1
+        elif "email_login_circuit_open" in line:
+            # Too many wrong sign-in codes in an hour paused email login.
+            stats["email_login_paused"] += 1
         elif '"GET /api/' in line:
             stats["requests"] += 1
     return stats
@@ -289,8 +293,13 @@ def evaluate_api_traffic(stats: dict) -> dict:
         f"{stats['rate_limited']} rate-limited (top: {top_text}), {stats['blocked']} blocked, "
         f"{stats['invalid_key']} wrong-internal-key warnings, {stats['requests']} API GETs in 24h"
     )
+    paused = stats.get("email_login_paused", 0)
+    if paused:
+        detail += (f"; email sign-in paused {paused}x after too many wrong codes "
+                   "(email_login_circuit_open: possible code guessing)")
     ok = (stats["rate_limited"] < API_RATE_LIMITED_PER_DAY
-          and stats["invalid_key"] < API_INVALID_KEY_WARNINGS)
+          and stats["invalid_key"] < API_INVALID_KEY_WARNINGS
+          and not paused)
     return check("api_traffic", ok, detail)
 
 

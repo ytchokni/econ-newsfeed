@@ -81,6 +81,8 @@ it("shows a clear error for a wrong code and stays on the code step", async () =
 it.each([
   ["too_many_attempts", "Too many incorrect attempts. Request a new code."],
   ["code_expired", "This code has expired. Request a new one."],
+  ["too_many_failures", "Too many incorrect codes for this address today. Try again tomorrow or continue with Google."],
+  ["email_login_paused", "Email sign-in is paused for a while. Try again later or continue with Google."],
   ["something_else", "We couldn't sign you in. Try again in a moment."],
 ])("maps verify error %s", async (error, message) => {
   const { user } = setup();
