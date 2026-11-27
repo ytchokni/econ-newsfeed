@@ -14,8 +14,11 @@ would stay empty. Each run:
    ``researcher_bio_backfill``, so CLI and scheduled runs share it);
 3. stops at the first quota/account refusal, so the extraction worker, which
    uses the same free-tier key, gets the quota back at once;
-4. does nothing while more than ``BIO_BACKFILL_MAX_BACKLOG`` pages wait for
-   extraction, so it only uses quota once the extraction backlog is cleared.
+4. yields to extraction like the JEL job (#286): no run (and no further
+   call) within ``BIO_BACKFILL_YIELD_AFTER_QUOTA_MINUTES`` of an extraction
+   quota refusal recorded in ``llm_quota_signals``, and no run while more
+   than ``BIO_BACKFILL_MAX_BACKLOG`` pages wait for extraction, so it only
+   uses quota once the extraction backlog is cleared.
 
 Bios are only written while the researcher still has none, so a bio that
 normal extraction saved in the meantime is never replaced. The job is off by
@@ -34,6 +37,7 @@ import mysql.connector
 
 from backend.config import db_config
 from backend.database import execute_query, fetch_all, fetch_one
+from backend.database.llm import count_extraction_backlog, get_last_llm_quota_limit
 from backend.database.snapshots import append_researcher_snapshot
 
 logger = logging.getLogger(__name__)
@@ -59,6 +63,7 @@ BATCH_CALLS = _env_int("BIO_BACKFILL_BATCH_CALLS", 10)
 DAILY_LIMIT = _env_int("BIO_BACKFILL_DAILY_LIMIT", 150)
 DELAY_SECONDS = _env_float("BIO_BACKFILL_DELAY_SECONDS", 30.0)
 MAX_BACKLOG = _env_int("BIO_BACKFILL_MAX_BACKLOG", 50)
+YIELD_AFTER_QUOTA_MINUTES = _env_int("BIO_BACKFILL_YIELD_AFTER_QUOTA_MINUTES", 15)
 RETRY_FAILED_AFTER_HOURS = 24
 _MAX_CONSECUTIVE_FAILURES = 3
 
@@ -126,18 +131,12 @@ def count_backfill_calls_since(since: datetime) -> int:
     return int(row["n"]) if row else 0
 
 
-def count_extraction_backlog() -> int:
-    """Pages waiting for extraction (same filter as the extraction worker's queue)."""
-    row = fetch_one(
-        """SELECT COUNT(*) AS n
-           FROM researcher_urls ru
-           JOIN html_content hc ON hc.url_id = ru.id
-           WHERE ru.is_active = TRUE
-             AND hc.content_hash IS NOT NULL
-             AND hc.has_stored_content = TRUE
-             AND (hc.extracted_hash IS NULL OR hc.extracted_hash != hc.content_hash)"""
-    )
-    return int(row["n"]) if row else 0
+def _extraction_refused_recently() -> bool:
+    """True when extraction hit a provider refusal within the yield window."""
+    if YIELD_AFTER_QUOTA_MINUTES <= 0:
+        return False
+    last = get_last_llm_quota_limit("extraction")
+    return last is not None and last > _utcnow() - timedelta(minutes=YIELD_AFTER_QUOTA_MINUTES)
 
 
 def get_backfill_candidates(limit: int, now: datetime) -> list[dict]:
@@ -195,7 +194,8 @@ def run_bio_backfill_batch(
 ) -> dict:
     """Run one bounded backfill batch. Returns run statistics.
 
-    ``max_backlog`` < 0 disables the extraction-backlog check (CLI use).
+    ``max_backlog`` < 0 disables both yield checks (extraction backlog and
+    recent extraction quota refusals) for manual CLI runs.
     """
     max_backlog = MAX_BACKLOG if max_backlog is None else max_backlog
     max_calls = BATCH_CALLS if max_calls is None else max_calls
@@ -230,7 +230,12 @@ def _run(stats: BioBackfillStats, max_calls: int, daily_limit: int, delay_second
     if budget <= 0:
         stats.stopped = "daily_limit"
         return
-    if max_backlog >= 0:
+    yield_to_extraction = max_backlog >= 0
+    if yield_to_extraction:
+        if _extraction_refused_recently():
+            stats.stopped = "extraction_quota"
+            logger.info("Bio backfill: extraction was refused by the provider recently; yielding")
+            return
         stats.extraction_backlog = count_extraction_backlog()
         if stats.extraction_backlog > max_backlog:
             stats.stopped = "extraction_backlog"
@@ -247,6 +252,9 @@ def _run(stats: BioBackfillStats, max_calls: int, daily_limit: int, delay_second
     for idx, cand in enumerate(candidates):
         if _stop_event.is_set():
             stats.stopped = "stop_requested"
+            break
+        if yield_to_extraction and idx and _extraction_refused_recently():
+            stats.stopped = "extraction_quota"
             break
         rid, url_id, url = cand["researcher_id"], cand["url_id"], cand["url"]
         stats.considered += 1

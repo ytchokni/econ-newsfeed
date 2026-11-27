@@ -297,6 +297,15 @@ _TABLE_DEFINITIONS = {
             FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    # Latest provider quota/account refusal per caller (e.g. 'extraction'),
+    # so lower-priority LLM jobs (JEL classification) can yield to extraction.
+    "llm_quota_signals": """
+        CREATE TABLE IF NOT EXISTS llm_quota_signals (
+            source VARCHAR(32) NOT NULL PRIMARY KEY,
+            limited_at DATETIME NOT NULL,
+            retry_after_seconds INT DEFAULT NULL
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
     # Paced bio backfill (issue #258): last attempt per researcher, so a HOME
     # page with no usable bio is not sent to the LLM again until it changes.
     "researcher_bio_backfill": """
@@ -467,7 +476,7 @@ _TABLE_DEFINITIONS = {
     "users": """
         CREATE TABLE IF NOT EXISTS users (
             id INT AUTO_INCREMENT PRIMARY KEY,
-            google_id VARCHAR(255) NOT NULL,
+            google_id VARCHAR(255) NULL,
             email VARCHAR(255) NOT NULL,
             name VARCHAR(255),
             picture_url TEXT,
@@ -505,12 +514,56 @@ _TABLE_DEFINITIONS = {
             FOREIGN KEY (event_id) REFERENCES feed_events(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    "email_login_codes": """
+        CREATE TABLE IF NOT EXISTS email_login_codes (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            email VARCHAR(255) NOT NULL,
+            code_hash CHAR(64) NOT NULL,
+            created_at DATETIME(6) NOT NULL,
+            expires_at DATETIME(6) NOT NULL,
+            attempts TINYINT UNSIGNED NOT NULL DEFAULT 0,
+            consumed_at DATETIME(6) NULL DEFAULT NULL,
+            INDEX idx_email_created (email, created_at),
+            INDEX idx_created (created_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
     "enrichment_daily_budget": """
         CREATE TABLE IF NOT EXISTS enrichment_daily_budget (
             provider VARCHAR(32) NOT NULL,
             budget_day DATE NOT NULL,
             request_count INT UNSIGNED NOT NULL DEFAULT 0,
             PRIMARY KEY (provider, budget_day)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    # One row per re-verified (paper, OpenAlex ID): the audit trail of
+    # scripts/reverify_openalex_ids.py and its review list (verdict='review').
+    "openalex_identifier_checks": """
+        CREATE TABLE IF NOT EXISTS openalex_identifier_checks (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            paper_id INT NOT NULL,
+            openalex_id VARCHAR(255) NOT NULL,
+            doi VARCHAR(255) DEFAULT NULL,
+            verdict ENUM('verified', 'cleared', 'review') NOT NULL,
+            reason VARCHAR(64) NOT NULL,
+            work_title TEXT DEFAULT NULL,
+            matched_paper_id INT DEFAULT NULL,
+            cleared_abstract BOOLEAN NOT NULL DEFAULT FALSE,
+            backup JSON DEFAULT NULL,
+            restored_at DATETIME DEFAULT NULL,
+            checked_at DATETIME NOT NULL,
+            UNIQUE KEY uq_paper_work (paper_id, openalex_id),
+            INDEX idx_verdict (verdict),
+            FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    # Compact OpenAlex works fetched by scripts/reverify_openalex_ids.py, so a
+    # dry run, the --apply run and reruns after a deploy pay the budget once.
+    # work IS NULL records that OpenAlex has no such work. Purge when done.
+    "openalex_work_cache": """
+        CREATE TABLE IF NOT EXISTS openalex_work_cache (
+            openalex_id VARCHAR(64) NOT NULL PRIMARY KEY,
+            work MEDIUMTEXT DEFAULT NULL,
+            fetched_at DATETIME NOT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
     "newsletter_emails": """
@@ -558,6 +611,8 @@ def create_tables() -> None:
             if got_lock == 1:
                 try:
                     _migrations = [
+                        ("openalex_identifier_checks", "backup", "JSON DEFAULT NULL"),
+                        ("openalex_identifier_checks", "restored_at", "DATETIME DEFAULT NULL"),
                         ("scrape_log", "prompt_tokens_total", "INT DEFAULT 0"),
                         ("scrape_log", "completion_tokens_total", "INT DEFAULT 0"),
                         ("papers", "is_seed", "BOOLEAN NOT NULL DEFAULT FALSE"),
@@ -576,6 +631,21 @@ def create_tables() -> None:
                         except Exception as e:
                             if getattr(e, 'errno', None) != 1060:
                                 logging.warning("Migration warning for %s.%s: %s", table, col, e)
+
+                    # Email-code accounts have no Google identity. A UNIQUE index
+                    # admits any number of NULLs, so Google users keep their key.
+                    try:
+                        cursor.execute(
+                            "SELECT IS_NULLABLE FROM information_schema.COLUMNS "
+                            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'users' "
+                            "AND COLUMN_NAME = 'google_id'"
+                        )
+                        row = cursor.fetchone()
+                        if row is not None and row[0] != 'YES':
+                            cursor.execute("ALTER TABLE users MODIFY COLUMN google_id VARCHAR(255) NULL")
+                            conn.commit()
+                    except Exception as e:
+                        logging.warning("Migration: users.google_id nullable: %s", e)
 
                     # Historical rows have no known ingestion time. Preserve NULL,
                     # while future inserts record ingestion independently of source date.
@@ -972,8 +1042,8 @@ def create_tables() -> None:
 
                     # Backfill has_top5_pub from existing data
                     try:
-                        from backend.database.search_helpers import top5_venue_clause
-                        venue_clause, params = top5_venue_clause("p.venue")
+                        from backend.database.top_presets import top5_publication_clause
+                        venue_clause, params = top5_publication_clause("p.venue", "p.status")
                         cursor.execute(
                             f"""UPDATE researchers r
                                 JOIN (

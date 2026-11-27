@@ -69,7 +69,8 @@ export type ParsedSitemapFile = { kind: "pages" } | { kind: SitemapKind; page: n
 
 export function parseSitemapFile(file: string): ParsedSitemapFile | null {
   if (file === "pages.xml") return { kind: "pages" };
-  const m = /^(researchers|papers)-(0|[1-9]\d{0,3})\.xml$/.exec(file);
+  // The backend serves at most 1000 chunks (10M URLs).
+  const m = /^(researchers|papers)-(0|[1-9]\d{0,2})\.xml$/.exec(file);
   return m ? { kind: m[1] as SitemapKind, page: Number(m[2]) } : null;
 }
 

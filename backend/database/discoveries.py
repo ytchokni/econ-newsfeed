@@ -6,7 +6,7 @@ import logging
 
 from backend.database.connection import execute_query, fetch_all, fetch_one
 from backend.database.researchers import add_researcher_url
-from backend.database.search_helpers import top5_venue_clause
+from backend.database.top_presets import top5_publication_clause
 
 logger = logging.getLogger(__name__)
 
@@ -17,7 +17,7 @@ def get_discovery_candidates(limit: int = 100) -> list[dict]:
     Eligible: coauthor (via authorship) of someone with 2+ top-5 publications,
     has no active researcher_urls, and not already in url_discoveries.
     """
-    venue_clause, venue_params = top5_venue_clause("p.venue")
+    venue_clause, venue_params = top5_publication_clause("p.venue", "p.status")
 
     query = f"""
         SELECT DISTINCT r.id, r.first_name, r.last_name, r.affiliation
@@ -161,7 +161,7 @@ def get_discovery_stats() -> dict:
     stats = dict(row)
 
     # Count remaining pool (expensive query — cache in admin dashboard)
-    venue_clause, venue_params = top5_venue_clause("p.venue")
+    venue_clause, venue_params = top5_publication_clause("p.venue", "p.status")
     pool_row = fetch_one(f"""
         SELECT COUNT(DISTINCT r.id) AS cnt
         FROM researchers r

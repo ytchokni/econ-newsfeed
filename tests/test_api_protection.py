@@ -44,7 +44,7 @@ def client():
         patch("backend.api.start_scheduler"),
         patch("backend.api.shutdown_scheduler"),
         patch("backend.api.connection_scope", _noop_connection_scope),
-        patch("backend.api.search_feed_events", return_value=([], 0, 0)) as feed,
+        patch("backend.api.search_feed_events", return_value=([], 0)) as feed,
         patch("backend.api.get_authors_for_papers", return_value={}),
         patch("backend.api.get_coauthors_for_papers", return_value={}),
         patch("backend.api.get_links_for_papers", return_value={}),
@@ -249,7 +249,7 @@ class TestRateLimits:
 class TestPaging:
     def test_per_page_is_clamped_for_anonymous(self, client, protection_env):
         protection_env(API_MAX_PER_PAGE="50")
-        client.feed_mock.return_value = ([], 500, 0)
+        client.feed_mock.return_value = ([], 500)
         resp = client.get("/api/publications?per_page=100")
         assert resp.status_code == 200
         body = resp.json()
@@ -259,7 +259,7 @@ class TestPaging:
 
     def test_pages_capped_at_depth(self, client, protection_env):
         protection_env(API_MAX_RESULT_DEPTH="100")
-        client.feed_mock.return_value = ([], 9000, 0)
+        client.feed_mock.return_value = ([], 9000)
         body = client.get("/api/publications?per_page=20").json()
         assert body["pages"] == 5
 
@@ -272,7 +272,7 @@ class TestPaging:
 
     def test_signed_in_user_is_uncapped(self, client, protection_env):
         protection_env(API_MAX_PER_PAGE="50", API_MAX_RESULT_DEPTH="100")
-        client.feed_mock.return_value = ([], 9000, 0)
+        client.feed_mock.return_value = ([], 9000)
         auth = {"Authorization": f"Bearer {_user_token()}"}
         resp = client.get("/api/publications?per_page=100&page=20", headers=auth)
         assert resp.status_code == 200

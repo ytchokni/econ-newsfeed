@@ -86,3 +86,16 @@ export function formatDate(iso: string): string {
     month: "long",
   });
 }
+
+/**
+ * Calendar-day label fixed to UTC with no "Today"/"Yesterday", so server HTML
+ * and the first client render agree (see useHydrated in NewsfeedContent).
+ */
+export function formatDayUTC(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-GB", {
+    weekday: "long",
+    day: "numeric",
+    month: "long",
+    timeZone: "UTC",
+  });
+}

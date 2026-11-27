@@ -61,7 +61,7 @@ def test_late_inserted_event_is_delivered_once_despite_old_source_date():
         INSERT INTO feed_events VALUES(1,1,'status_change','working_paper','accepted',
           '2026-10-01','2026-10-07',1,'Journal');
         INSERT INTO digest_deliveries VALUES(7,1);
-        INSERT INTO feed_events VALUES(2,1,'status_change','accepted','published',
+        INSERT INTO feed_events VALUES(2,1,'status_change','revise_and_resubmit','accepted',
           '2026-10-02','2026-10-15',1,'Journal');
         INSERT INTO feed_events VALUES(3,1,'status_change','working_paper','accepted',
           '2026-09-20',NULL,1,'Journal');
@@ -84,7 +84,7 @@ def test_unavailable_digest_cannot_be_enabled(client):
     app.dependency_overrides[get_current_user] = lambda: {"id": 1}
     try:
         with patch('backend.api.scheduler.DIGEST_ENABLED', False), patch('backend.api.Database.update_notification_prefs') as update:
-            assert client.get('/api/capabilities').json() == {"weekly_digest_available": False}
+            assert client.get('/api/capabilities').json()["weekly_digest_available"] is False
             assert client.patch('/api/users/notifications', json={"digest_enabled": True}).status_code == 503
             update.assert_not_called()
     finally:

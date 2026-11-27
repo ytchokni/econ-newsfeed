@@ -38,6 +38,9 @@ def _connect():
     conn.create_function(
         "REGEXP", 2, lambda pattern, value: value is not None and re.search(pattern, value) is not None
     )
+    conn.create_function(
+        "REGEXP_LIKE", 3, lambda value, pattern, flags: value is not None and re.search(pattern, value) is not None
+    )
     conn.executescript("""
         CREATE TABLE researchers (
             id INTEGER PRIMARY KEY, first_name TEXT, last_name TEXT, position TEXT,
@@ -140,9 +143,10 @@ def test_directory_without_search_keeps_alphabetical_order(directory):
     assert total == len(PEOPLE)
 
 
-def test_directory_search_treats_wildcards_literally(directory):
-    rows, total = researchers.search_researchers(search="Rie%")
-    assert rows == [] and total == 0
+def test_directory_search_ignores_punctuation_rather_than_using_it_as_wildcards(directory):
+    # "%" and "_" are separators like other punctuation, never LIKE wildcards.
+    assert researchers.search_researchers(search="Rie%") == researchers.search_researchers(search="Rie")
+    assert researchers.search_researchers(search="%_") == researchers.search_researchers()
 
 
 # ---------------------------------------------------------------------------
@@ -166,28 +170,27 @@ def test_options_exact_name_first(directory, query):
 
 @pytest.mark.parametrize("query", ["Thomas Rieger", "thomas rieger", "Rieger Thomas"])
 def test_feed_full_name_lists_that_authors_papers_first(feed, query):
-    rows, total, researcher_count = papers.search_feed_events(search=query)
+    rows, total = papers.search_feed_events(search=query)
     ids = [r["paper_id"] for r in rows]
     assert ids[0] == 4           # authored by Thomas Rieger
     assert set(ids) == {4, 3}    # Riegert still matches every word, ranked after
     assert total == 2
-    assert researcher_count == 3  # Rieger, Smith (coauthor of 4), Riegert
 
 
 def test_feed_last_name_boosts_whole_word_author_then_keeps_chronology(feed):
-    rows, total, _ = papers.search_feed_events(search="Rieger")
+    rows, total = papers.search_feed_events(search="Rieger")
     # Rieger (whole word) > Riegert (prefix) > newest-first for Krieger/title matches
     assert [r["paper_id"] for r in rows] == [4, 3, 1, 2]
     assert total == 4
 
 
 def test_feed_topic_search_stays_chronological(feed):
-    rows, _, _ = papers.search_feed_events(search="and")
+    rows, _ = papers.search_feed_events(search="and")
     assert [r["paper_id"] for r in rows] == [1, 3, 4, 5]
 
 
 def test_feed_without_search_is_chronological(feed):
-    rows, total, _ = papers.search_feed_events()
+    rows, total = papers.search_feed_events()
     assert [r["paper_id"] for r in rows] == [1, 2, 3, 4, 5]
     assert total == 5
 

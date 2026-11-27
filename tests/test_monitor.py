@@ -10,6 +10,7 @@ from scripts import monitor
 HEALTHY = {
     "scrape_age_h": 3, "stuck_scrapes": 0, "pending": 400,
     "extracted_6h": 300, "feed_recent": 250, "enrich_age_h": 12,
+    "snapshot_guard": 1,
 }
 
 
@@ -42,6 +43,7 @@ class TestEvaluatePipeline:
         ({"feed_recent": 0}, "feed_fresh"),
         ({"enrich_age_h": 49}, "enrichment_active"),
         ({"enrich_age_h": None}, "enrichment_active"),
+        ({"snapshot_guard": 0}, "snapshot_guard_trigger"),
     ])
     def test_each_stage_alerts_on_its_own(self, override, expected):
         assert _failing(monitor.evaluate_pipeline({**HEALTHY, **override})) == [expected]
@@ -49,10 +51,11 @@ class TestEvaluatePipeline:
 
 class TestParsePipelineRow:
     def test_parses_integers_and_nulls(self):
-        row = monitor.parse_pipeline_row("3\t0\t14658\t17\t29\tNULL\n")
+        row = monitor.parse_pipeline_row("3\t0\t14658\t17\t29\tNULL\t1\n")
         assert row == {
             "scrape_age_h": 3, "stuck_scrapes": 0, "pending": 14658,
             "extracted_6h": 17, "feed_recent": 29, "enrich_age_h": None,
+            "snapshot_guard": 1,
         }
 
     def test_rejects_unexpected_shape(self):

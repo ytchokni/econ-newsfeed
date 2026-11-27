@@ -30,6 +30,7 @@ def env():
     results = []
     with patch.object(bio_backfill, "count_backfill_calls_since", return_value=0) as count, \
          patch.object(bio_backfill, "count_extraction_backlog", return_value=0) as backlog, \
+         patch.object(bio_backfill, "get_last_llm_quota_limit", return_value=None) as quota, \
          patch.object(bio_backfill, "get_backfill_candidates") as cands, \
          patch.object(bio_backfill, "fetch_one") as fetch_one, \
          patch.object(bio_backfill, "_record_attempt") as record, \
@@ -42,7 +43,7 @@ def env():
                 return {"content": "Home page text about Jane Doe", "content_hash": f"h{params[0]}"}
             return {"position": "Professor", "affiliation": "MIT", "description": None}
         fetch_one.side_effect = fake_fetch_one
-        yield {"backlog": backlog, "count": count, "cands": cands, "record": record, "snap": snap,
+        yield {"quota": quota, "backlog": backlog, "count": count, "cands": cands, "record": record, "snap": snap,
                "req": req, "wait": wait, "results": results, "fetch_one": fetch_one}
 
 
@@ -151,3 +152,21 @@ def test_runs_when_backlog_is_small_or_check_disabled(env):
     stats = _run(max_calls=10, daily_limit=150, delay_seconds=0, max_backlog=-1)
     assert stats["saved"] == 1
     env["backlog"].assert_not_called()
+
+
+def test_yields_after_recent_extraction_quota_refusal(env):
+    env["quota"].return_value = bio_backfill._utcnow()
+    stats = _run(max_calls=10, daily_limit=150, delay_seconds=0, max_backlog=50)
+    assert stats["stopped"] == "extraction_quota"
+    env["req"].assert_not_called()
+
+
+def test_stops_mid_run_when_extraction_is_refused(env):
+    from datetime import timedelta
+    env["cands"].return_value = [_cand(1), _cand(2)]
+    env["results"].append(DescriptionResult(description=BIO))
+    old = bio_backfill._utcnow() - timedelta(hours=2)
+    env["quota"].side_effect = [old, bio_backfill._utcnow()]  # pre-run, then before call 2
+    stats = _run(max_calls=10, daily_limit=150, delay_seconds=0, max_backlog=50)
+    assert stats["stopped"] == "extraction_quota"
+    assert env["req"].call_count == 1

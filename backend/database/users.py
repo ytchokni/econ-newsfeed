@@ -6,11 +6,16 @@ import hmac
 from datetime import datetime, timezone
 
 from backend.database.connection import execute_query, fetch_all, fetch_one, get_connection
+from backend.database.papers import feed_visible_event_sql
 
 
 def get_or_create_user(google_id: str, email: str, name: str | None = None,
-                       picture_url: str | None = None) -> dict:
-    """Find user by google_id or create one. Returns the user row as a dict."""
+                       picture_url: str | None = None, email_verified: bool = False) -> dict:
+    """Find user by google_id or create one. Returns the user row as a dict.
+
+    With ``email_verified``, a first Google login adopts an existing
+    email-code account for the same address instead of creating a duplicate.
+    """
     row = fetch_one("SELECT * FROM users WHERE google_id = %s", (google_id,))
     if row:
         execute_query(
@@ -22,6 +27,24 @@ def get_or_create_user(google_id: str, email: str, name: str | None = None,
         row['name'] = name
         row['picture_url'] = picture_url
         return row
+
+    if email_verified and email:
+        # An account created by email code becomes this Google account's,
+        # but only when Google has verified that the person owns the address.
+        email_row = fetch_one(
+            "SELECT * FROM users WHERE email = %s AND google_id IS NULL ORDER BY id LIMIT 1",
+            (email,),
+        )
+        if email_row:
+            execute_query(
+                "UPDATE users SET google_id = %s, name = COALESCE(name, %s), "
+                "picture_url = COALESCE(picture_url, %s), updated_at = %s "
+                "WHERE id = %s AND google_id IS NULL",
+                (google_id, name, picture_url, datetime.now(timezone.utc), email_row['id']),
+            )
+            linked = fetch_one("SELECT * FROM users WHERE google_id = %s", (google_id,))
+            if linked:
+                return linked
 
     user_id = execute_query(
         "INSERT INTO users (google_id, email, name, picture_url, created_at) "
@@ -113,13 +136,15 @@ def get_feed_events_for_researchers(
     Source/fetch dates can precede insertion by days. A per-event ledger avoids
     advancing a global timestamp past results committed after an earlier send.
     Historical rows without ingestion metadata fall back to their source date.
+    Only events the newsfeed shows are returned (``feed_visible_event_sql``).
     """
     if not researcher_ids:
         return []
     placeholders = ",".join(["%s"] * len(researcher_ids))
+    visible_sql, visible_params = feed_visible_event_sql("fe")
     delivery_filter = ""
     legacy_filter = ""
-    params = (*researcher_ids, since)
+    params = (*researcher_ids, since, *visible_params)
     if legacy_since is not None:
         # Pre-migration events have no ledger entries. Retain their old send
         # boundary without suppressing newly ingested, backdated events.
@@ -141,6 +166,7 @@ def get_feed_events_for_researchers(
             JOIN researchers r ON r.id = a.researcher_id
             WHERE a.researcher_id IN ({placeholders})
               AND COALESCE(fe.recorded_at, fe.created_at) >= %s
+              AND ({visible_sql})
               {legacy_filter}
               {delivery_filter}
             ORDER BY r.last_name, r.first_name, fe.created_at DESC""",

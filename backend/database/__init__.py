@@ -11,6 +11,7 @@ Submodules:
   llm.py         — LLM usage logging and cost estimation
   jel.py         — JEL code classification and paper topics
   users.py       — user accounts, follows, notification preferences
+  email_login.py — one-time email login codes, email-based account lookup
 """
 
 from backend.database.connection import (
@@ -113,6 +114,7 @@ from backend.database.users import (
     generate_unsubscribe_token,
     verify_unsubscribe_token,
 )
+from backend.database.email_login import get_user_by_id
 
 
 # ---------------------------------------------------------------------------
@@ -228,3 +230,4 @@ class Database:
     researcher_exists = staticmethod(researcher_exists)
     generate_unsubscribe_token = staticmethod(generate_unsubscribe_token)
     verify_unsubscribe_token = staticmethod(verify_unsubscribe_token)
+    get_user_by_id = staticmethod(get_user_by_id)
