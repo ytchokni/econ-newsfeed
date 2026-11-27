@@ -67,6 +67,7 @@ CLAUDE_REQUEST = (
 
 PIPELINE_COLUMNS = (
     "scrape_age_h", "stuck_scrapes", "pending", "extracted_6h", "feed_recent", "enrich_age_h",
+    "snapshot_guard",
 )
 PIPELINE_SQL = f"""
 SELECT
@@ -78,7 +79,9 @@ SELECT
        AND (hc.extracted_hash IS NULL OR hc.extracted_hash != hc.content_hash)),
   (SELECT COUNT(*) FROM html_content WHERE extracted_at >= NOW() - INTERVAL 6 HOUR),
   (SELECT COUNT(*) FROM feed_events WHERE recorded_at >= NOW() - INTERVAL {FEED_WINDOW_HOURS} HOUR),
-  TIMESTAMPDIFF(HOUR, (SELECT MAX(enrichment_attempted_at) FROM papers), NOW());
+  TIMESTAMPDIFF(HOUR, (SELECT MAX(enrichment_attempted_at) FROM papers), NOW()),
+  (SELECT COUNT(*) FROM information_schema.TRIGGERS
+     WHERE TRIGGER_SCHEMA = DATABASE() AND TRIGGER_NAME = 'trg_feed_events_snapshot_guard');
 """
 
 
@@ -220,6 +223,11 @@ def evaluate_pipeline(stats: dict) -> list[dict]:
         check("enrichment_active", enrich_age is not None and enrich_age <= ENRICHMENT_MAX_AGE_HOURS,
               f"last enrichment attempt {enrich_age}h ago" if enrich_age is not None
               else "no enrichment attempt recorded"),
+        # The daily data-quality check uses a SELECT-only user, which MySQL
+        # does not show triggers to, so the trigger is checked here as root.
+        check("snapshot_guard_trigger", stats["snapshot_guard"] == 1,
+              "feed_events snapshot-guard trigger "
+              + ("exists" if stats["snapshot_guard"] == 1 else "is missing (see PR #158)")),
     ]
 
 

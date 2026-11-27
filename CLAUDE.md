@@ -34,6 +34,8 @@ poetry run python -m backend.main discover-domains  # Scan HTML for untrusted do
 poetry run python scripts/check_env.py && poetry run pytest && cd app && npx tsc --noEmit && npm run lint && npx jest  # Full suite
 poetry run pytest tests_data_quality -v             # Data-quality invariants against real DB
 DATA_QUALITY_LIVE=1 poetry run pytest tests_data_quality -v  # + pipeline-liveness checks (server only)
+poetry run python scripts/data_quality_check.py run --out dq.json  # suite + signals as JSON (read-only session)
+python3 scripts/data_quality_check.py report dq.json --offline     # preview the daily issue summary
 poetry run pytest                                   # All Python tests
 poetry run pytest tests/test_api_publications.py    # Single test file
 poetry run pytest -k test_name                      # Single test by name
@@ -96,6 +98,16 @@ alerts the owner straight away. Every other call uses the workflow token so the
 owner mention comes from a bot (a self-mention sends no email). The script is standard
 library only because it runs on the server's system Python. Run it by hand with
 `python3 scripts/monitor.py --external`, or `--host` on the server.
+
+`.github/workflows/data-quality.yml` runs at 07:47 UTC: `tests_data_quality`
+plus a few pipeline signals (`scripts/data_quality_check.py`) against prod
+through an SSH tunnel as the SELECT-only `dq_readonly` MySQL user
+(`DQ_DB_PASSWORD` secret), with the session forced read-only. Failures no open
+issue tracks go to Claude (Sonnet, read-only tools), which answers in JSON; the
+script then files at most 3 `bug` issues or comments on existing ones, posts one
+comment on the rolling "Daily data-quality report" issue (its body holds the
+invariant→issue state), and closes issues whose invariants passed on two
+consecutive days. Claude is skipped when nothing new fails.
 
 Researcher filter choices are fetched on demand from `/api/researcher-options`
 (at most 50 results), rather than included in `/api/filter-options`. Weekly
