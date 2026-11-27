@@ -2,7 +2,10 @@
 import pytest
 from datetime import datetime
 from unittest.mock import patch, MagicMock, call
-from backend.enrichment.paper_merge import find_duplicate_groups, find_fuzzy_duplicate_groups, merge_paper_group, _title_similarity
+from backend.enrichment.paper_merge import (
+    _compatible_identity, find_duplicate_groups, find_fuzzy_duplicate_groups,
+    merge_paper_group, same_paper_title, _title_similarity,
+)
 
 
 class TestFindDuplicateGroups:
@@ -261,3 +264,89 @@ class TestFindFuzzyDuplicateGroups:
         mock_fetch.return_value = []  # SQL HAVING COUNT >= 2 filters these out
         groups = find_fuzzy_duplicate_groups()
         assert groups == []
+
+
+class TestSamePaperTitle:
+    """Merge-time title identity: spelling variants and revised sample periods only."""
+
+    @pytest.mark.parametrize("t1, t2", [
+        # Thomas Rieger & Charlotte Bartels: own site vs coauthor's site.
+        ("Spatial Income Inequality in Germany, 1957-2020",
+         "Spatial income inequality in Germany, 1957-2021"),
+        ("Law-Abiding Immigrants: The Incarceration Gap Between Immigrants and the US-born, 1850-2020",
+         "Law-Abiding Immigrants: The Incarceration Gap Between Immigrants and the US-born, 1870–2020"),
+        ("Housing Wealth in Norway, 1993-2015", "Housing Wealth in Norway, 1993 - 2015"),
+        ("Banking, liquidity and bank runs in an infinite-horizon economy",
+         "Banking, Liquidity and Bank Runs in an Infinite Horizon Economy"),
+        ("Contracting with Diversely Naïve Agents", "Contracting with Diversely Naive Agents"),
+        ("Intrahousehold Resource Allocation in Côte d’Ivoire",
+         "Intrahousehold Resource Allocation in Cote d'Ivoire"),
+        ("COVID-19 and Economic Preferences", "C OVID-19 and economic preferences"),
+    ])
+    def test_same_paper(self, t1, t2):
+        assert same_paper_title(t1, t2)
+        assert same_paper_title(t2, t1)
+
+    @pytest.mark.parametrize("t1, t2", [
+        # Consecutive editions move both endpoints.
+        ("Louisiana Economic Outlook. 2020-2021", "Louisiana Economic Outlook. 2021-2022"),
+        ("OECD-FAO Agricultural Outlook 2025-2034", "OECD-FAO Agricultural Outlook 2026–2035"),
+        # Two-digit ends are fiscal-year labels, not sample periods.
+        ("Australian CGT Handbook 2018-19", "Australian CGT Handbook 2019-20"),
+        # Short spans are labels too.
+        ("Budget Review 2020-2021", "Budget Review 2020-2022"),
+        ("Guest Editor's Introduction to Part 1", "Guest Editor's Introduction to Part 2"),
+        ("World Inequality Report 2018", "World Inequality Report 2022"),
+        ("Measuring the Impact of Teachers I", "Measuring the Impact of Teachers II"),
+        ("Hurwicz Expected Utility and Multiple Source", "Hurwicz Expected Utility and Multiple Sources"),
+        ("Histoire du corps professoral de 1877 à 1942", "Histoire du corps professoral de 1945 à 1958"),
+        # More than one revised range is a different study design.
+        ("Trade 1950-2000 and Growth 1960-2000", "Trade 1950-2010 and Growth 1960-2010"),
+        ("1957-2020", "1957-2021"),
+    ])
+    def test_different_paper(self, t1, t2):
+        assert not same_paper_title(t1, t2)
+
+    def test_keeps_marks_outside_latin_script(self):
+        # Devanagari vowel signs are combining marks that distinguish words.
+        assert not same_paper_title("कमल का अध्ययन", "कमल की अध्ययन")
+        assert same_paper_title("कमल का अध्ययन", "कमल का  अध्ययन")
+
+    def test_compatible_identity_still_requires_matching_authors(self):
+        a = {"title": "Spatial Income Inequality in Germany, 1957-2020", "author_ids": [3, 143]}
+        b = {"title": "Spatial income inequality in Germany, 1957-2021", "author_ids": [3, 143]}
+        assert _compatible_identity(a, b)
+        assert not _compatible_identity(a, {**b, "author_ids": [3, 999]})
+        assert not _compatible_identity({**a, "author_ids": [3]}, {**b, "author_ids": [3]})
+        assert not _compatible_identity({**a, "doi": "10.1/a"}, {**b, "doi": "10.1/b"})
+
+    def test_shared_doi_with_revised_period_is_compatible(self):
+        a = {"title": "Economic Growth and Wage Stagnation in Peru: 1998-2002",
+             "doi": "10.1111/rode.12145", "author_ids": [1, 2]}
+        b = {**a, "title": "Economic Growth and Wage Stagnation in Peru: 1998-2012"}
+        assert _compatible_identity(a, b)
+
+
+class TestFindFuzzyTitleVariants:
+
+    @patch("backend.enrichment.paper_merge.fetch_all")
+    def test_groups_rieger_sample_period_revision(self, mock_fetch):
+        mock_fetch.return_value = [
+            {"id": 125, "title": "Spatial Income Inequality in Germany, 1957-2020",
+             "author_ids": "3,143", "doi": None, "openalex_id": None},
+            {"id": 260025, "title": "Spatial income inequality in Germany, 1957-2021",
+             "author_ids": "3,143", "doi": None, "openalex_id": None},
+            {"id": 124, "title": "Economic Conditions and Far-Right Support: Places or People?",
+             "author_ids": "3,143", "doi": None, "openalex_id": None},
+        ]
+        assert find_fuzzy_duplicate_groups() == [[125, 260025]]
+
+    @patch("backend.enrichment.paper_merge.fetch_all")
+    def test_does_not_group_report_editions(self, mock_fetch):
+        mock_fetch.return_value = [
+            {"id": 1, "title": "Louisiana Economic Outlook. 2020-2021", "author_ids": "8741,75401",
+             "doi": None, "openalex_id": None},
+            {"id": 2, "title": "Louisiana Economic Outlook. 2021-2022", "author_ids": "8741,75401",
+             "doi": None, "openalex_id": None},
+        ]
+        assert find_fuzzy_duplicate_groups() == []

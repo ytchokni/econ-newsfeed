@@ -59,6 +59,18 @@ class TestIdentifierMergeDebt:
         )
         assert not rows, "papers sharing an OpenAlex ID (unmerged duplicates):\n" + fmt_violations(rows)
 
+    def test_no_unmerged_title_variants(self, db):
+        """Same author set + same_paper_title (hyphen/accent/spacing variants or a
+        revised sample period, e.g. Rieger & Bartels' "Spatial Income Inequality
+        in Germany, 1957-2020" vs "..., 1957-2021") must be merged."""
+        from backend.enrichment.paper_merge import find_fuzzy_duplicate_groups
+
+        groups = find_fuzzy_duplicate_groups()
+        rows = [{"paper_ids": ",".join(map(str, g))} for g in groups[:50]]
+        assert not groups, (
+            f"unmerged title-variant duplicates ({len(groups)} groups):\n" + fmt_violations(rows)
+        )
+
     def test_no_path_suffix_junk_in_link_dois(self, db):
         """DOIs extracted from publisher URLs sometimes keep trailing path
         segments ('/html', '/abstract', article ids) — those are not DOIs.
