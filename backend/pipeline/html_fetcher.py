@@ -117,21 +117,76 @@ def _is_fast_domain(hostname: str) -> bool:
 
 
 # Heavy markup that carries no page text for extract_text_content(), removed
-# only from pages over CONTENT_MAX_BYTES (see compact_html). Regexes rather
-# than a parser: they run on up to FETCH_MAX_BYTES before anything is parsed.
-# Browsers end <script>/<style> at the first closing tag, as these do.
-_RE_STYLE_BLOCK = re.compile(r'<style\b[^>]*>.*?</style\s*>', re.S | re.I)
-_RE_SVG_BLOCK = re.compile(r'<svg\b[^>]*>.*?</svg\s*>', re.S | re.I)
-_RE_COMMENT = re.compile(r'<!--.*?-->', re.S)
-_RE_DATA_URI = re.compile(r'data:[\w.+-]+/[\w.+-]+(?:;[\w=.+-]+)*;base64,[A-Za-z0-9+/=]+', re.I)
-_RE_STYLE_ATTR = re.compile(r'\sstyle\s*=\s*(?:"[^"]*"|\'[^\']*\')', re.I)
-# Attribute values over 1 KB are builder state (Squarespace data-current-styles
-# was 85% of one 1 MB page), not text. href is kept for link extraction.
-_RE_HUGE_ATTR = re.compile(r'\s(?!href\b)[\w:.-]+\s*=\s*(?:"[^"]{1000,}"|\'[^\']{1000,}\')', re.I)
+# only from pages over CONTENT_MAX_BYTES (see compact_html). Blocks are cut
+# with a linear find() scan, not lazy regexes: an unterminated <!-- or <style
+# made each regex attempt rescan to the end of the page (32k of them in a
+# 1 MB page took 96 s). Like browsers, an unterminated block runs to the end
+# of the page, and <script>/<style> end at their first closing tag.
+_STYLE_BLOCKS = (('<style', '</style'), ('<svg', '</svg'))
+_COMMENT_BLOCK = ('<!--', '-->')
 # Scripts are dropped only if the steps above are not enough: new Google Sites
 # embed page content as JSON in scripts, which the feed-event guard
 # (_title_in_previous_snapshot) can match against archived snapshots.
-_RE_SCRIPT_BLOCK = re.compile(r'<(script|noscript)\b[^>]*>.*?</\1\s*>', re.S | re.I)
+_SCRIPT_BLOCKS = (('<script', '</script'), ('<noscript', '</noscript'))
+_RE_DATA_URI = re.compile(r'data:[\w.+-]+/[\w.+-]+(?:;[\w=.+-]+)*;base64,[A-Za-z0-9+/=]+', re.I)
+# Attribute values stop at a quote or a tag bracket, so a stray unterminated
+# quote costs a scan to the next tag, not to the end of the page.
+_RE_STYLE_ATTR = re.compile(r'\sstyle\s*=\s*(?:"[^"<>]*"|\'[^\'<>]*\')', re.I)
+# Attribute values over 1 KB are builder state (Squarespace data-current-styles
+# was 85% of one 1 MB page), not text. href is kept for link extraction.
+_RE_HUGE_ATTR = re.compile(r'\s(?!href\b)[\w:.-]+\s*=\s*(?:"[^"<>]{1000,}"|\'[^\'<>]{1000,}\')', re.I)
+_TAG_NAME_END = frozenset(' \t\r\n\f/>')
+
+
+def _strip_blocks(html: str, blocks: tuple[tuple[str, str], ...]) -> str:
+    """Remove <tag ...>...</tag> blocks (case-insensitive) in one linear pass.
+
+    An opener counts only when followed by whitespace, '/' or '>' (so <svg
+    does not match <svgfoo); '<!--' needs no such check. A block without a
+    closer is cut to the end of the page.
+    """
+    lower = html.lower()
+    out: list[str] = []
+    pos = 0
+    # Next opener position per block type, recomputed only once passed, so
+    # the whole scan stays linear however the openers interleave.
+    upcoming: dict[str, int] = {}
+
+    def next_opener(opener: str) -> int:
+        start = upcoming.get(opener, pos)
+        if start != -1 and start < pos:
+            start = pos
+        if start == -1:
+            return -1
+        start = lower.find(opener, start)
+        while start != -1 and opener[1] != '!' and (
+                start + len(opener) < len(lower)
+                and lower[start + len(opener)] not in _TAG_NAME_END):
+            start = lower.find(opener, start + 1)
+        upcoming[opener] = start
+        return start
+
+    while True:
+        best = None  # (start, opener, closer)
+        for opener, closer in blocks:
+            cached = upcoming.get(opener)
+            start = cached if cached is not None and (cached == -1 or cached >= pos) else next_opener(opener)
+            if start != -1 and (best is None or start < best[0]):
+                best = (start, opener, closer)
+        if best is None:
+            out.append(html[pos:])
+            break
+        start, opener, closer = best
+        out.append(html[pos:start])
+        close = lower.find(closer, start + len(opener))
+        if close == -1:
+            break
+        end = close + len(closer)
+        if closer.startswith('</'):
+            gt = lower.find('>', end)
+            end = len(lower) if gt == -1 else gt + 1
+        pos = end
+    return ''.join(out)
 
 
 def _utf8_len(text: str) -> int:
@@ -151,14 +206,13 @@ def compact_html(html: str, max_bytes: int | None = None) -> str:
     limit = CONTENT_MAX_BYTES if max_bytes is None else max_bytes
     if _utf8_len(html) <= limit:
         return html
-    for rx in (_RE_STYLE_BLOCK, _RE_SVG_BLOCK, _RE_COMMENT):
-        html = rx.sub('', html)
+    html = _strip_blocks(html, _STYLE_BLOCKS + (_COMMENT_BLOCK,))
     html = _RE_DATA_URI.sub('data:,', html)
     html = _RE_STYLE_ATTR.sub('', html)
     html = _RE_HUGE_ATTR.sub('', html)
     if _utf8_len(html) <= limit:
         return html
-    return _RE_SCRIPT_BLOCK.sub('', html)
+    return _strip_blocks(html, _SCRIPT_BLOCKS)
 
 
 # Boilerplate substrings to strip before hashing (case-insensitive).
@@ -856,7 +910,7 @@ class HTMLFetcher:
     def get_extraction_payload(url_id: int) -> dict | None:
         """Read raw HTML and its queue hash atomically, including legacy text."""
         return fetch_one(
-            "SELECT content, raw_html, content_hash, timestamp, extracted_at"
+            "SELECT content, raw_html, content_hash, timestamp, extracted_at, extracted_untruncated"
             " FROM html_content WHERE url_id = %s",
             (url_id,),
         )
@@ -903,8 +957,10 @@ class HTMLFetcher:
         now = datetime.now(timezone.utc)
         # A successful extraction also clears the persisted failure state
         # (record_extraction_failure).
+        # extracted_untruncated: this extraction saw the whole page (chunked),
+        # unlike those before chunking, which saw CONTENT_MAX_CHARS at most.
         reset = ("extraction_failures = 0, extraction_failed_hash = NULL, "
-                 "extraction_retry_at = NULL")
+                 "extraction_retry_at = NULL, extracted_untruncated = TRUE")
         if extracted_hash is None:
             execute_query(
                 f"UPDATE html_content SET extracted_at = %s, extracted_hash = content_hash, {reset} WHERE url_id = %s",

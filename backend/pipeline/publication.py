@@ -43,6 +43,7 @@ class ExtractionLLMResult:
     retry_after: float | None = None
     needs_full_extraction: bool = False
     truncated: bool = False
+    provider_error: bool = False
 
 
 VALID_STATUSES = frozenset({
@@ -400,9 +401,14 @@ def merge_publications(pubs: list[dict], key_fields: tuple[str, ...] = ()) -> li
     entry's evidence. key_fields (e.g. 'change_type') keep records apart.
     """
     merged: dict[tuple, dict] = {}
-    for pub in pubs:
+    for index, pub in enumerate(pubs):
         title = clean_title(pub.get('title') or '')
-        key = tuple(pub.get(f) for f in key_fields) + (compute_title_hash(title),)
+        try:
+            title_key = compute_title_hash(title)
+        except ValueError:
+            # No letters left after cleaning: keep the record, unmerged.
+            title_key = ('unmerged', index)
+        key = tuple(pub.get(f) for f in key_fields) + (title_key,)
         seen = merged.get(key)
         if seen is None:
             merged[key] = pub
@@ -666,7 +672,8 @@ If no changes were detected, return an empty changes list."""
                 return ExtractionLLMResult(pubs=None, needs_full_extraction=True)
             if result.parsed is None:
                 logging.warning("Diff extraction returned no parsed result for %s", url)
-                return ExtractionLLMResult(pubs=None, retry_after=result.retry_after)
+                return ExtractionLLMResult(pubs=None, retry_after=result.retry_after,
+                                           provider_error=result.provider_error)
             changes.extend(result.parsed.changes)
 
         validated = []
@@ -850,7 +857,8 @@ If no changes were detected, return an empty changes list."""
         if result.parsed is None:
             logging.warning(f"Publication extraction returned no parsed result for {url}")
             return ExtractionLLMResult(pubs=None, retry_after=result.retry_after,
-                                       truncated=result.truncated)
+                                       truncated=result.truncated,
+                                       provider_error=result.provider_error)
 
         validated = []
         norm_html = _normalize_for_token_match(text_content)

@@ -6,7 +6,9 @@ long publication lists never reached the extractor. Here they are split into
 chunks of at most that length instead:
 
 - Boundaries fall between HTML block elements (paragraphs, list items, table
-  rows, headings, divs), never inside one, so an entry is not cut in half.
+  rows, headings, divs), never inside one. An entry made of several blocks
+  (title and venue in separate <p>s) can still straddle a seam, so the last
+  two blocks (up to 1,000 chars) are repeated at the start of the next chunk.
   A chunk closes early, once half full, before a publication-section title.
 - A single block longer than the budget (e.g. a whole list in one <p> with
   <br> separators) is split between its lines, repeating the last lines of
@@ -178,6 +180,15 @@ def _split_block(block: Block, budget: int) -> list[str]:
     return pieces
 
 
+def _seam_carry(previous: list[str], next_piece: str, budget: int) -> list[str]:
+    """The last blocks of a chunk to repeat at the start of the next one."""
+    carry = previous[-_SEAM_OVERLAP_LINES:]
+    while carry and (len(' '.join(carry)) > _SEAM_OVERLAP_MAX_CHARS
+                     or len(' '.join(carry + [next_piece])) > budget):
+        carry = carry[1:]
+    return list(carry)
+
+
 def pack_blocks(blocks: list[Block], budget: int) -> list[Chunk]:
     """Pack blocks into chunks of at most budget characters, in page order."""
     chunks: list[Chunk] = []
@@ -197,11 +208,21 @@ def pack_blocks(blocks: list[Block], budget: int) -> list[Chunk]:
             # Close early only before a publication-section title: other
             # headings are often paper titles, and splitting at each would
             # add calls without adding context.
-            if current and (current_len + 1 + len(piece) > budget
-                            or (opens_section and is_section_title(block.text)
-                                and current_len >= budget * _SPLIT_AT_HEADING_FILL)):
+            full = bool(current) and current_len + 1 + len(piece) > budget
+            at_section = (bool(current) and opens_section and is_section_title(block.text)
+                          and current_len >= budget * _SPLIT_AT_HEADING_FILL)
+            if full or at_section:
                 chunks.append(Chunk(' '.join(current), current_section))
-                current, current_len = [], 0
+                # A seam forced by the budget can fall inside an entry (title
+                # and venue are often separate blocks: <li><p>..</p><p>..</p>).
+                # Repeat the last blocks so that entry is seen whole once;
+                # merge_publications drops the duplicate. A section seam
+                # ends the previous section's entries, so nothing is carried.
+                carry = _seam_carry(current, piece, budget) if full else []
+                current = carry
+                current_len = len(' '.join(carry))
+                if carry:
+                    current_section = section_at(None)
             if not current:
                 current_section = section_at(block.heading_level if opens_section else None)
             current.append(piece)

@@ -15,7 +15,7 @@ import threading
 from dataclasses import dataclass
 from typing import Generic, TypeVar
 
-from openai import APITimeoutError, OpenAI, OpenAIError, RateLimitError
+from openai import APIConnectionError, APITimeoutError, OpenAI, OpenAIError, RateLimitError
 from pydantic import BaseModel, ValidationError
 
 _client: OpenAI | None = None
@@ -79,6 +79,9 @@ class StructuredResponse(Generic[T]):
     usage: object | None
     retry_after: float | None = None
     truncated: bool = False
+    # A server-side (5xx) or connection failure: not this prompt's fault, so
+    # it must not count toward the persisted per-page backoff.
+    provider_error: bool = False
 
 
 _SCHEMA_METADATA_KEYS = {"$defs", "title", "description", "default"}
@@ -215,7 +218,10 @@ def extract_json(
                     parsed=None, usage=None, retry_after=ACCOUNT_ERROR_RETRY_SECONDS,
                 )
             logging.error("LLM API call failed: %s: %s", type(e).__name__, e)
-            return StructuredResponse(parsed=None, usage=None)
+            status = getattr(e, "status_code", None)
+            provider_error = isinstance(e, APIConnectionError) or (
+                isinstance(status, int) and status >= 500)
+            return StructuredResponse(parsed=None, usage=None, provider_error=provider_error)
 
         last_usage = completion.usage
         choice = completion.choices[0]

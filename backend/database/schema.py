@@ -72,7 +72,8 @@ REQUIRED_SCHEMA_QUERY = """SELECT (
          WHERE TABLE_SCHEMA = DATABASE() AND
            ((TABLE_NAME = 'feed_events' AND COLUMN_NAME = 'recorded_at') OR
             (TABLE_NAME = 'html_content' AND COLUMN_NAME = 'has_stored_content') OR
-            (TABLE_NAME = 'html_content' AND COLUMN_NAME = 'extraction_retry_at'))) = 3
+            (TABLE_NAME = 'html_content' AND COLUMN_NAME = 'extraction_retry_at') OR
+            (TABLE_NAME = 'html_content' AND COLUMN_NAME = 'extracted_untruncated'))) = 4
     AND (SELECT COUNT(DISTINCT INDEX_NAME) FROM information_schema.STATISTICS
          WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'html_content'
            AND INDEX_NAME IN ('idx_extraction_state', 'idx_extracted_at')) = 2
@@ -221,6 +222,7 @@ _TABLE_DEFINITIONS = {
             extraction_failures INT NOT NULL DEFAULT 0,
             extraction_failed_hash VARCHAR(64) DEFAULT NULL,
             extraction_retry_at DATETIME DEFAULT NULL,
+            extracted_untruncated BOOLEAN NOT NULL DEFAULT FALSE,
             UNIQUE KEY uq_url_id (url_id),
             INDEX idx_url_id_ts (url_id, timestamp),
             FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
@@ -598,6 +600,9 @@ def create_tables() -> None:
                         ("html_content", "extraction_failures", "INT NOT NULL DEFAULT 0"),
                         ("html_content", "extraction_failed_hash", "VARCHAR(64) DEFAULT NULL"),
                         ("html_content", "extraction_retry_at", "DATETIME DEFAULT NULL"),
+                        # FALSE for extractions made before chunking (first
+                        # CONTENT_MAX_CHARS only); see extract_one_url.
+                        ("html_content", "extracted_untruncated", "BOOLEAN NOT NULL DEFAULT FALSE"),
                     ]
                     for table, col, definition in _migrations:
                         try:

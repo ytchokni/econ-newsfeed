@@ -85,6 +85,36 @@ class TestCompactHtml:
         assert "<script" not in compacted and "<noscript" not in compacted
         assert _text(compacted) == _text(html)
 
+    @pytest.mark.parametrize("opener", ["<!--", "<style>", "<svg>", "<script>"])
+    def test_unterminated_blocks_compact_in_linear_time(self, opener):
+        """S3: lazy regexes rescanned to the end per unterminated opener
+        (32k '<!--' in a 1 MB page took 96 s)."""
+        import time
+        filler = "<p>Paper text.</p>" * 60_000
+        html = _page(filler + (opener + " x ") * 10_000)
+        assert len(html) > CONTENT_MAX_BYTES
+        start = time.perf_counter()
+        compacted = compact_html(html)
+        assert time.perf_counter() - start < 1.0
+        assert "Paper text." in compacted
+
+    def test_many_comments_with_late_svg_stay_linear(self):
+        import time
+        html = _page("<!-- c -->a" * 100_000 + "<svg><path d='M0'/></svg>" + "<style>" + "x" * 1_000_000 + "</style>")
+        start = time.perf_counter()
+        compacted = compact_html(html)
+        assert time.perf_counter() - start < 1.0
+        assert "<!--" not in compacted and "<svg" not in compacted and "a" * 3 in compacted
+
+    def test_block_strip_respects_tag_names_and_case(self):
+        from backend.pipeline.html_fetcher import _strip_blocks, _STYLE_BLOCKS
+        html = "<svgfoo>keep</svgfoo><SVG viewBox='0'>drop</SVG >after<style>x</style>"
+        assert _strip_blocks(html, _STYLE_BLOCKS) == "<svgfoo>keep</svgfoo>after"
+
+    def test_unterminated_block_runs_to_end_of_page(self):
+        from backend.pipeline.html_fetcher import _strip_blocks, _COMMENT_BLOCK
+        assert _strip_blocks("before<!-- never closed <p>x</p>", (_COMMENT_BLOCK,)) == "before"
+
     def test_data_uri_strip_does_not_eat_following_text(self):
         html = _page("<p>data:image/png;base64,AAAA and the title</p>" + "<style>" + "x" * 1_100_000 + "</style>")
         assert "and the title" in _text(compact_html(html))
@@ -186,11 +216,15 @@ class TestChunkPage:
 
         assert len(chunks) > 1
         assert all(len(c.text) <= BUDGET for c in chunks)
-        joined = " ".join(c.text for c in chunks)
+        positions = []
         for i in range(500):
             entry = HTMLFetcher.normalize_text(re.sub(r"<[^>]+>", "", _entry(i)))
-            assert sum(entry in c.text for c in chunks) == 1, i
-        assert joined == text  # nothing lost, nothing reordered
+            holders = [n for n, c in enumerate(chunks) if entry in c.text]
+            assert 1 <= len(holders) <= 2, i  # whole somewhere; repeated at most at a seam
+            positions.append(holders[0])
+        assert positions == sorted(positions)  # page order kept
+        overlap = sum(len(c.text) for c in chunks) - len(text)
+        assert 0 <= overlap <= (len(chunks) - 1) * 1001
 
     def test_chunks_carry_section_heading(self):
         html = _page(
@@ -229,6 +263,32 @@ class TestChunkPage:
         tail = chunks[0].text[-200:].split(". ")[-1]
         assert tail in chunks[1].text
 
+    @pytest.mark.parametrize("layout", ["li", "div"])
+    def test_entry_split_into_blocks_is_whole_in_some_chunk(self, layout):
+        """S2: title and venue in separate blocks must not be separated by a
+        seam in every chunk that contains them."""
+        def entry(i):
+            title = f"Paper title {i} on wages and trade {'x' * 40}"
+            venue = f"Accepted at Journal {i}, 2026"
+            if layout == "li":
+                return f"<li><p>{title}</p><p>{venue}</p></li>"
+            return f"<div><div>{title}</div><div>{venue}</div></div>"
+        wrap = ("<ul>{}</ul>" if layout == "li" else "{}")
+        html = _page(wrap.format("".join(entry(i) for i in range(400))))
+        chunks = chunk_page(_text(html), html, 5000)
+        assert len(chunks) > 5
+        for i in range(400):
+            whole = f"Paper title {i} on wages and trade {'x' * 40} Accepted at Journal {i}, 2026"
+            assert any(whole in c.text for c in chunks), i
+
+    def test_no_carry_across_section_seam(self):
+        html = _page("<h2>Working Papers</h2><ul>" + "".join(_entry(i) for i in range(170)) + "</ul>"
+                     "<h2>Work in Progress</h2><ul>" + "".join(_entry(i) for i in range(170, 230)) + "</ul>")
+        chunks = chunk_page(_text(html), html, BUDGET)
+        assert len(chunks) == 2
+        wip = [c for c in chunks if "Work in Progress" in c.text][0]
+        assert wip.text.startswith("Work in Progress")
+
     def test_single_huge_line_is_hard_split(self):
         line = " ".join(f"w{i}" for i in range(20000))
         chunks = chunk_page(line, None, BUDGET)
@@ -240,7 +300,8 @@ class TestChunkPage:
         text = " ".join(f"Sentence number {i} is here." for i in range(2000))
         chunks = chunk_page(text, None, BUDGET)
         assert len(chunks) > 1 and all(len(c.text) <= BUDGET for c in chunks)
-        assert " ".join(c.text for c in chunks) == text
+        for i in range(2000):
+            assert any(f"Sentence number {i} is here." in c.text for c in chunks), i
 
     def test_chunk_limit_drops_and_logs_the_rest(self, caplog):
         html = _page("<ul>" + "".join(_entry(i, pad=50) for i in range(400)) + "</ul>")
@@ -296,7 +357,7 @@ def _llm_result(titles):
     pubs = [PublicationExtraction(title=t, authors=[["Jane", "Doe"]], year="2020",
                                   venue=None, status="working_paper", draft_url=None, abstract=None)
             for t in titles]
-    return SimpleNamespace(parsed=PublicationExtractionList(publications=pubs), usage=None, retry_after=None, truncated=False)
+    return SimpleNamespace(parsed=PublicationExtractionList(publications=pubs), usage=None, retry_after=None, truncated=False, provider_error=False)
 
 
 class TestChunkedExtraction:
@@ -330,7 +391,7 @@ class TestChunkedExtraction:
         assert [p["title"] for p in result.pubs] == ["Alpha Paper on Trade"]
 
     def test_failed_chunk_fails_page(self):
-        failed = SimpleNamespace(parsed=None, usage=None, retry_after=None, truncated=False)
+        failed = SimpleNamespace(parsed=None, usage=None, retry_after=None, truncated=False, provider_error=False)
         with patch("backend.pipeline.publication.extract_json",
                    side_effect=[_llm_result(["Alpha Paper on Trade"]), failed]), \
              patch("backend.pipeline.publication.time.sleep"), \
@@ -339,7 +400,7 @@ class TestChunkedExtraction:
         assert result.pubs is None
 
     def test_rate_limited_chunk_is_retried_once_in_page(self):
-        limited = SimpleNamespace(parsed=None, usage=None, retry_after=11.0, truncated=False)
+        limited = SimpleNamespace(parsed=None, usage=None, retry_after=11.0, truncated=False, provider_error=False)
         results = [_llm_result(["Alpha Paper on Trade"]), limited, _llm_result(["Gamma Paper on Growth"])]
         with patch("backend.pipeline.publication.extract_json", side_effect=results) as ej, \
              patch("backend.pipeline.publication.time.sleep") as sleep, \
@@ -350,7 +411,7 @@ class TestChunkedExtraction:
         assert [p["title"] for p in result.pubs] == ["Alpha Paper on Trade", "Gamma Paper on Growth"]
 
     def test_long_rate_limit_fails_page_for_worker_backoff(self):
-        limited = SimpleNamespace(parsed=None, usage=None, retry_after=600.0, truncated=False)
+        limited = SimpleNamespace(parsed=None, usage=None, retry_after=600.0, truncated=False, provider_error=False)
         with patch("backend.pipeline.publication.extract_json",
                    side_effect=[_llm_result(["Alpha Paper on Trade"]), limited]) as ej, \
              patch("backend.pipeline.publication.time.sleep"), \
@@ -417,7 +478,7 @@ class TestDiffOnLongPages:
         change = PublicationChange(change_type="new_paper", title="Brand new paper about growth",
                                    authors=[["New", "Coauthor"]], year=None, venue=None,
                                    status="working_paper", draft_url=None, abstract=None)
-        reply = SimpleNamespace(parsed=PublicationChangeList(changes=[change]), usage=None, retry_after=None, truncated=False)
+        reply = SimpleNamespace(parsed=PublicationChangeList(changes=[change]), usage=None, retry_after=None, truncated=False, provider_error=False)
         with patch.object(Publication, "_diff_prompts", return_value=["p1", "p2"]), \
              patch("backend.pipeline.publication.extract_json", side_effect=[reply, reply]) as ej, \
              patch("backend.pipeline.publication.time.sleep"):
@@ -427,9 +488,10 @@ class TestDiffOnLongPages:
         assert len(result.pubs) == 1
 
 
-def _extraction_patches(text, previous_text, raw_html):
+def _extraction_patches(text, previous_text, raw_html, untruncated=False):
     payload = {"content": None, "raw_html": raw_html, "content_hash": "h1",
-               "timestamp": None, "extracted_at": "2026-01-01"}
+               "timestamp": None, "extracted_at": "2026-01-01",
+               "extracted_untruncated": untruncated}
     return {
         "payload": patch("backend.pipeline.extraction.HTMLFetcher.get_extraction_payload", return_value=payload),
         "prev": patch("backend.pipeline.extraction.HTMLFetcher.get_previous_text", return_value=previous_text),
@@ -441,9 +503,9 @@ def _extraction_patches(text, previous_text, raw_html):
 class TestExtractOneUrlLongPages:
     HTML = _page("<h2>Working Papers</h2><ul>" + "".join(_entry(i) for i in range(500)) + "</ul>")
 
-    def _run(self, previous_text, try_extract=None, try_changes=None):
+    def _run(self, previous_text, try_extract=None, try_changes=None, untruncated=False):
         from backend.pipeline.extraction import extract_one_url
-        patches = _extraction_patches(_text(self.HTML), previous_text, self.HTML)
+        patches = _extraction_patches(_text(self.HTML), previous_text, self.HTML, untruncated)
         patches["try_extract"] = patch(
             "backend.pipeline.extraction.Publication.try_extract_publications",
             return_value=try_extract or ExtractionLLMResult(pubs=[_pub("Paper number 499 on trade")]))
@@ -476,9 +538,31 @@ class TestExtractOneUrlLongPages:
         assert "Paper number 499" in text_arg
         assert mocks["persist"].call_args.kwargs["is_seed"] is False
 
+    def test_unchanged_long_page_backfills_only_once(self):
+        outcome, mocks = self._run(previous_text=_text(self.HTML), untruncated=True)
+        assert outcome.status == "empty"
+        mocks["try_extract"].assert_not_called()
+
+    def test_changed_long_page_with_unextracted_tail_is_extracted_in_full(self):
+        """S1: a diff would send only the changed hunks, and the never-extracted
+        tail would stay missing for good."""
+        previous = _text(self.HTML).replace("Paper number 3 on", "Paper number 3 about")
+        outcome, mocks = self._run(previous_text=previous)
+        assert outcome.status == "extracted"
+        mocks["try_changes"].assert_not_called()
+        chunks = mocks["try_extract"].call_args.kwargs["chunks"]
+        assert any("Paper number 499" in c.text for c in chunks)
+        assert mocks["persist"].call_args.kwargs["is_seed"] is False
+
+    def test_changed_long_page_already_untruncated_uses_diff(self):
+        previous = _text(self.HTML).replace("Paper number 3 on", "Paper number 3 about")
+        outcome, mocks = self._run(previous_text=previous, untruncated=True)
+        mocks["try_changes"].assert_called_once()
+        mocks["try_extract"].assert_not_called()
+
     def test_long_rewrite_falls_back_to_non_seed_chunked_extraction(self):
         outcome, mocks = self._run(
-            previous_text="An entirely different old page.",
+            previous_text="An entirely different old page.", untruncated=True,
             try_changes=ExtractionLLMResult(pubs=None, needs_full_extraction=True))
         assert outcome.status == "extracted"
         assert len(mocks["try_extract"].call_args.kwargs["chunks"]) > 1
@@ -508,7 +592,7 @@ def test_chunk_limit_default_covers_sampled_pages():
 # Output cut off at max_tokens (audit: pages retried 50-60 times)
 # ---------------------------------------------------------------------------
 
-_CUT_OFF = SimpleNamespace(parsed=None, usage=None, retry_after=None, truncated=True)
+_CUT_OFF = SimpleNamespace(parsed=None, usage=None, retry_after=None, truncated=True, provider_error=False)
 
 
 class TestTruncatedOutput:
@@ -610,7 +694,8 @@ class TestPersistedExtractionFailures:
         with patch("backend.pipeline.html_fetcher.execute_query") as ex:
             HTMLFetcher.mark_extracted(1, extracted_hash)
         sql = ex.call_args.args[0]
-        for clause in ("extraction_failures = 0", "extraction_failed_hash = NULL", "extraction_retry_at = NULL"):
+        for clause in ("extraction_failures = 0", "extraction_failed_hash = NULL", "extraction_retry_at = NULL",
+                       "extracted_untruncated = TRUE"):
             assert clause in sql
 
     def test_worker_persists_page_failures_not_rate_limits(self):
@@ -636,6 +721,37 @@ class TestPersistedExtractionFailures:
         finally:
             scheduler._extraction_stop_event.clear()
         rec.assert_called_once_with(1, "h1")
+
+    @pytest.mark.parametrize("outcome", ["provider_error", "exception"])
+    def test_worker_does_not_persist_outages_or_crashes(self, outcome):
+        """S4: a Gemma outage or DB blip must not park pages across restarts."""
+        from backend.pipeline import scheduler
+        from backend.pipeline.extraction import ExtractionOutcome
+        scheduler._extraction_stop_event.clear()
+
+        def extract(row):
+            scheduler._extraction_stop_event.set()
+            if outcome == "exception":
+                raise RuntimeError("db blip")
+            return ExtractionOutcome("failed", provider_error=True)
+
+        try:
+            with patch.object(scheduler, "get_urls_needing_extraction",
+                              return_value=[{"id": 1, "url": "u", "content_hash": "h"}]), \
+                 patch("backend.pipeline.extraction.extract_one_url", side_effect=extract), \
+                 patch.object(scheduler, "record_extraction_failure") as rec, \
+                 patch.object(scheduler._extraction_stop_event, "wait"):
+                scheduler._extraction_worker_loop()
+        finally:
+            scheduler._extraction_stop_event.clear()
+        rec.assert_not_called()
+
+    def test_provider_error_flows_from_client_to_outcome(self):
+        from backend.pipeline.extraction import _extract_full
+        failed = ExtractionLLMResult(pubs=None, provider_error=True)
+        with patch("backend.pipeline.extraction.Publication.try_extract_publications", return_value=failed):
+            outcome = _extract_full(1, "u", "short text", False, "h", None)
+        assert outcome.status == "failed" and outcome.provider_error
 
     def test_worker_survives_failure_persistence_errors(self):
         from backend.pipeline import scheduler

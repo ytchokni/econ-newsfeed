@@ -49,6 +49,8 @@ class ExtractionOutcome:
     status: str
     pubs_count: int = 0
     retry_after: float | None = None
+    # Failed on the provider's side (5xx/connection), not because of the page.
+    provider_error: bool = False
 
     @property
     def ok(self) -> bool:
@@ -114,16 +116,29 @@ def extract_one_url(url_row: dict, scrape_log_id: int | None = None) -> Extracti
     fetch_date = ts
 
     previous_text = None if is_seed else HTMLFetcher.get_previous_text(url_id)
+    # The last extraction ran before chunking and saw only the first
+    # CONTENT_MAX_CHARS characters: the rest of the page was never extracted.
+    tail_never_extracted = (was_truncated and not is_seed
+                            and not payload.get('extracted_untruncated'))
 
     if previous_text is not None and HTMLFetcher.normalize_text(previous_text) == HTMLFetcher.normalize_text(text):
-        if was_truncated:
+        if tail_never_extracted:
             return _backfill_long_page(url_id, url, text, raw_html, content_hash,
                                        scrape_log_id, fetch_date)
         # Cleaning/hash changes alone must not create fresh publication events.
         HTMLFetcher.mark_extracted(url_id, content_hash)
         return ExtractionOutcome("empty")
 
-    if previous_text is not None:
+    if previous_text is not None and tail_never_extracted:
+        # A diff would send only the changed hunks and the old tail would
+        # stay unextracted for good. Extract the whole page in chunks once,
+        # as a non-seed extraction: new_paper events for tail papers are
+        # suppressed because their titles are in the previous snapshot
+        # (_title_in_previous_snapshot), and baseline-less URLs get none.
+        logger.info("Long page %s changed before its tail was extracted; extracting in full", url)
+        outcome = _extract_full(url_id, url, text, False, content_hash,
+                                scrape_log_id, fetch_date, raw_html=raw_html)
+    elif previous_text is not None:
         outcome = _extract_via_diff(url_id, url, text, previous_text, content_hash,
                                     scrape_log_id, fetch_date, raw_html=raw_html)
     else:
@@ -227,9 +242,8 @@ def _backfill_long_page(url_id: int, url: str, text: str, raw_html: str | None,
     Hashing the full text re-queues every longer page once, with
     text identical to its last snapshot, and papers past that point have
     never been extracted. They have been on the page all along, so they are
-    saved as seed papers: no new_paper or status_change events. This also
-    runs when an unchanged long page is re-queued later (rare: it takes a
-    change in text cleaning), which costs calls but creates no events.
+    saved as seed papers: no new_paper or status_change events. It runs
+    once per page: mark_extracted sets html_content.extracted_untruncated.
     """
     logger.info("Backfilling long unchanged page %s (%d chars) as seed", url, len(text))
     return _extract_full(url_id, url, text, True, content_hash, scrape_log_id,
@@ -247,7 +261,8 @@ def _extract_full(url_id: int, url: str, text: str, is_seed: bool,
     else:
         result = Publication.try_extract_publications(text, url, scrape_log_id=scrape_log_id)
     if result.pubs is None:
-        return ExtractionOutcome("failed", retry_after=result.retry_after)
+        return ExtractionOutcome("failed", retry_after=result.retry_after,
+                                 provider_error=result.provider_error)
 
     if result.pubs:
         persist_extraction(url, url_id, result.pubs, is_seed=is_seed, event_date=fetch_date)
@@ -272,7 +287,8 @@ def _extract_via_diff(url_id: int, url: str, new_text: str, old_text: str,
         return _extract_full(url_id, url, new_text, False, content_hash, scrape_log_id,
                              fetch_date, raw_html=raw_html)
     if result.pubs is None:
-        return ExtractionOutcome("failed", retry_after=result.retry_after)
+        return ExtractionOutcome("failed", retry_after=result.retry_after,
+                                 provider_error=result.provider_error)
 
     count = _process_diff_changes(result.pubs, url, url_id, fetch_date)
 
