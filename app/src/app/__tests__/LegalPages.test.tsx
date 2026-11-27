@@ -86,7 +86,7 @@ describe("privacy page", () => {
       "OpenAlex",
       "Crossref",
       "Email sign-in",
-      "keyed hash (HMAC)",
+      "one-way hash",
       "How long we keep data",
       "TO BE COMPLETED BY SITE OWNER",
     ]) {

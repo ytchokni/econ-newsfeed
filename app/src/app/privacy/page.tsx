@@ -71,9 +71,9 @@ export default function PrivacyPage() {
         </p>
         <p>
           <strong>Email sign-in:</strong> we send a 6-digit code to your address through Resend.
-          The code is stored only as a keyed hash (HMAC) together with your email address; it
-          expires after 10 minutes and works once. Code records are deleted once they are a day
-          old (the cleanup runs whenever a new code is requested).
+          Sign-in codes are stored only as a one-way hash, are valid for 10 minutes and work
+          once. Each code record, including the email address it was sent to, is deleted within
+          about a day.
         </p>
         <p>
           <strong>Legal basis:</strong> providing the service you signed up for (Art. 6(1)(b) GDPR).
