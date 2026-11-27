@@ -10,7 +10,7 @@ from scripts import monitor
 HEALTHY = {
     "scrape_age_h": 3, "stuck_scrapes": 0, "pending": 400,
     "extracted_6h": 300, "feed_recent": 250, "enrich_age_h": 12,
-    "never_extracted": 350, "oldest_changed_h": 10,
+    "snapshot_guard": 1, "never_extracted": 350, "oldest_changed_h": 10,
 }
 
 
@@ -53,6 +53,7 @@ class TestEvaluatePipeline:
         ({"feed_recent": 0}, "feed_fresh"),
         ({"enrich_age_h": 49}, "enrichment_active"),
         ({"enrich_age_h": None}, "enrichment_active"),
+        ({"snapshot_guard": 0}, "snapshot_guard_trigger"),
         ({"oldest_changed_h": 73}, "extraction_backlog_age"),
     ])
     def test_each_stage_alerts_on_its_own(self, override, expected):
@@ -61,11 +62,11 @@ class TestEvaluatePipeline:
 
 class TestParsePipelineRow:
     def test_parses_integers_and_nulls(self):
-        row = monitor.parse_pipeline_row("3\t0\t14658\t17\t29\tNULL\t11594\tNULL\n")
+        row = monitor.parse_pipeline_row("3\t0\t14658\t17\t29\tNULL\t1\t11594\tNULL\n")
         assert row == {
             "scrape_age_h": 3, "stuck_scrapes": 0, "pending": 14658,
             "extracted_6h": 17, "feed_recent": 29, "enrich_age_h": None,
-            "never_extracted": 11594, "oldest_changed_h": None,
+            "snapshot_guard": 1, "never_extracted": 11594, "oldest_changed_h": None,
         }
 
     def test_rejects_unexpected_shape(self):
@@ -85,6 +86,39 @@ class TestLlmAccountErrors:
             base + '503 Service Unavailable"',
         ])
         assert monitor.count_account_errors(log) == 3
+
+
+class TestApiTraffic:
+    LINES = [
+        "2026-11-27 10:00:00 backend.api WARNING rate_limited ip=203.0.113.9 tier=visitor path=/api/researchers/1 limit=60 per 1 minute retry_after=12",
+        "2026-11-27 10:00:01 backend.api WARNING rate_limited ip=203.0.113.9 tier=visitor path=/api/researchers/2 limit=60 per 1 minute retry_after=11",
+        "2026-11-27 10:00:02 backend.api WARNING rate_limited ip=198.51.100.4 tier=direct path=/api/publications limit=20 per 1 minute retry_after=30",
+        "2026-11-27 10:00:03 backend.api_protection INFO api_blocked reason=user_agent ip=198.51.100.4 path=/api/publications ua='curl/8'",
+        "2026-11-27 10:00:04 backend.api_protection WARNING internal_key_invalid ip=76.76.21.21 path=/api/publications: request carried a wrong X-Internal-Api-Key",
+        'INFO:     172.18.0.1:5000 - "GET /api/publications?page=1 HTTP/1.1" 200 OK',
+        'INFO:     172.18.0.1:5001 - "GET /api/health HTTP/1.1" 200 OK',
+    ]
+
+    def test_summarize(self):
+        stats = monitor.summarize_api_traffic(self.LINES)
+        assert stats["rate_limited"] == 3
+        assert stats["by_ip"] == {"203.0.113.9": 2, "198.51.100.4": 1}
+        assert stats["blocked"] == 1
+        assert stats["invalid_key"] == 1
+        assert stats["requests"] == 2
+
+    def test_quiet_day_passes_and_names_top_ip(self):
+        result = monitor.evaluate_api_traffic(monitor.summarize_api_traffic(self.LINES))
+        assert result["ok"]
+        assert "203.0.113.9 x2" in result["detail"]
+
+    def test_429_flood_fails(self):
+        lines = ["rate_limited ip=203.0.113.9 tier=visitor"] * monitor.API_RATE_LIMITED_PER_DAY
+        assert not monitor.evaluate_api_traffic(monitor.summarize_api_traffic(lines))["ok"]
+
+    def test_wrong_frontend_key_fails(self):
+        lines = ["internal_key_invalid ip=76.76.21.21"] * monitor.API_INVALID_KEY_WARNINGS
+        assert not monitor.evaluate_api_traffic(monitor.summarize_api_traffic(lines))["ok"]
 
 
 class TestBackupCheck:

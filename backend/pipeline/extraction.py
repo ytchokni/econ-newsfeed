@@ -206,13 +206,21 @@ def _append_snapshots(pubs: list[dict], source_url: str, event_date=None, *, emi
             )
 
 
+def _failed(retry_after: float | None) -> ExtractionOutcome:
+    """Failed outcome; a provider refusal is recorded so JEL classification yields."""
+    if retry_after is not None:
+        from backend.database.llm import record_llm_quota_limit
+        record_llm_quota_limit("extraction", retry_after)
+    return ExtractionOutcome("failed", retry_after=retry_after)
+
+
 def _extract_full(url_id: int, url: str, text: str, is_seed: bool,
                   content_hash: str, scrape_log_id: int | None,
                   fetch_date=None) -> ExtractionOutcome:
     """Original full-page extraction path."""
     result = Publication.try_extract_publications(text, url, scrape_log_id=scrape_log_id)
     if result.pubs is None:
-        return ExtractionOutcome("failed", retry_after=result.retry_after)
+        return _failed(result.retry_after)
 
     if result.pubs:
         persist_extraction(url, url_id, result.pubs, is_seed=is_seed, event_date=fetch_date)
@@ -227,7 +235,7 @@ def _extract_via_diff(url_id: int, url: str, new_text: str, old_text: str,
     """Diff-based extraction: compare old and new page, extract only changes."""
     result = Publication.try_extract_changes(old_text, new_text, url, scrape_log_id=scrape_log_id)
     if result.pubs is None:
-        return ExtractionOutcome("failed", retry_after=result.retry_after)
+        return _failed(result.retry_after)
 
     count = _process_diff_changes(result.pubs, url, url_id, fetch_date)
 

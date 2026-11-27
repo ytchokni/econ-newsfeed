@@ -43,6 +43,8 @@ docs/
 .full-review*/*
 
 *.png
+# Committed site assets (the Open Graph card referenced by app/src/lib/seo.ts).
+!app/public/og-image.png
 *.pem
 client_secret*.json
 
@@ -55,3 +57,6 @@ docs/session-log-archive.md
 eval/test_cases/*.json
 eval/output/
 .vercel
+
+# Local caches (e.g. scripts/validate_top5_coverage.py)
+.cache/

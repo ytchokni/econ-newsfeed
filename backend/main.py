@@ -6,10 +6,8 @@ from backend.database import (
     create_tables,
     fetch_all,
     fetch_one,
-    get_researchers_needing_classification,
     get_urls_needing_extraction,
     import_data_from_file,
-    save_researcher_jel_codes,
 )
 from backend.researcher import Researcher
 
@@ -54,31 +52,44 @@ def download_htmls() -> None:
         _release_db_lock(lock_conn)
 
 
-def classify_jel() -> None:
-    """Classify all researchers with descriptions into JEL codes."""
-    from backend.enrichment.jel_classifier import classify_researcher
+def classify_jel(
+    max_calls: int | None = None,
+    daily_limit: int | None = None,
+    delay: float | None = None,
+    researcher_ids: list[int] | None = None,
+    force: bool = False,
+    until_done: bool = False,
+    yield_to_extraction: bool = True,
+) -> None:
+    """Classify tracked researchers into JEL codes (bio + papers + OpenAlex topics).
 
-    researchers = get_researchers_needing_classification()
-    total = len(researchers)
-    logging.info("JEL classification: %d researchers to classify", total)
+    Uses the same incremental selection and budget as the scheduled job.
+    ``until_done`` repeats batches until nothing is due or a limit is hit.
+    """
+    from backend.database import get_jel_coverage_stats
+    from backend.enrichment.jel_job import run_jel_classification_batch
 
-    classified = 0
-    for row in researchers:
-        rid = row["id"]
-        description = row["description"]
-        first_name = row["first_name"]
-        last_name = row["last_name"]
-
-        codes = classify_researcher(rid, first_name, last_name, description)
-        if codes:
-            save_researcher_jel_codes(rid, codes)
-            classified += 1
-            logging.info(
-                "Saved JEL codes for %s %s (id=%d): %s",
-                first_name, last_name, rid, ", ".join(codes),
-            )
-
-    logging.info("JEL classification done: %d/%d classified", classified, total)
+    create_tables()
+    totals: dict[str, int] = {}
+    while True:
+        stats = run_jel_classification_batch(
+            max_calls=max_calls, daily_limit=daily_limit, delay_seconds=delay,
+            researcher_ids=researcher_ids, force=force,
+            yield_to_extraction=yield_to_extraction,
+        )
+        for key, value in stats.items():
+            if isinstance(value, int):
+                totals[key] = totals.get(key, 0) + value
+        # Every considered researcher leaves the due set (classified, marked
+        # checked, or queued behind the call budget), so repeating converges.
+        # Daily limit, quota refusals, failures and an empty queue end the run.
+        if (not until_done or force or researcher_ids or stats["considered"] == 0
+                or stats["stopped"] not in ("done", "call_budget")):
+            break
+    totals.pop("calls_today_before", None)
+    totals.pop("extraction_backlog", None)
+    logging.info("JEL classification finished (%s): %s", stats["stopped"], totals)
+    logging.info("JEL coverage now: %s", get_jel_coverage_stats())
 
 
 def extract_only(limit: int | None = None) -> None:
@@ -191,7 +202,14 @@ def main() -> None:
     import_parser.add_argument('file_path', help='Path to the CSV file to import')
 
     subparsers.add_parser('download', help='Download HTML content for all researcher URLs')
-    subparsers.add_parser('classify-jel', help='Classify researchers into JEL codes from bios')
+    jel_parser = subparsers.add_parser('classify-jel', help='Classify tracked researchers into JEL codes (bio, papers, OpenAlex topics)')
+    jel_parser.add_argument('--max-calls', type=int, default=None, help='Max LLM calls per batch (default: JEL_CLASSIFICATION_BATCH_CALLS)')
+    jel_parser.add_argument('--daily-limit', type=int, default=None, help='Max JEL LLM calls per UTC day (default: JEL_CLASSIFICATION_DAILY_LIMIT)')
+    jel_parser.add_argument('--delay', type=float, default=None, help='Seconds between LLM calls (default: JEL_CLASSIFICATION_DELAY_SECONDS)')
+    jel_parser.add_argument('--researcher-id', type=int, action='append', default=None, help='Only these researchers (repeatable)')
+    jel_parser.add_argument('--force', action='store_true', help='Ignore the due checks: reclassify every selected researcher')
+    jel_parser.add_argument('--no-yield', action='store_true', help='Run even if extraction was quota-limited recently or its backlog is large')
+    jel_parser.add_argument('--until-done', action='store_true', help='Repeat batches until nothing is due or the daily limit is reached')
     subparsers.add_parser('enrich', help='Enrich publications with OpenAlex metadata')
     subparsers.add_parser('enrich-jel', help='Enrich researcher JEL codes from paper topics via OpenAlex')
     subparsers.add_parser('discover-domains', help='Scan stored HTML for untrusted domains with paper-title links')
@@ -222,7 +240,10 @@ def main() -> None:
     elif args.command == 'download':
         download_htmls()
     elif args.command == 'classify-jel':
-        classify_jel()
+        classify_jel(max_calls=args.max_calls, daily_limit=args.daily_limit,
+                     delay=args.delay, researcher_ids=args.researcher_id,
+                     force=args.force, until_done=args.until_done,
+                     yield_to_extraction=not args.no_yield)
     elif args.command == 'enrich':
         create_tables()
         from backend.enrichment.openalex import enrich_new_publications

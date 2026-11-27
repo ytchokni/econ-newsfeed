@@ -81,3 +81,53 @@ class TestDistinctMarkers:
               / "tests_data_quality" / "test_paper_quality.py").read_text()
         assert "comment|reply|rejoinder|appendix|corrigendum|erratum" in dq
         assert cleanup._DISTINCT_MARKERS.pattern.count("corrigendum") == 1
+
+
+class TestRestoreReasoningDescriptions:
+    """Issue #258: bios holding <thought> reasoning are restored or NULLed."""
+
+    BAD = "<thought>* Source: Text from a researcher's homepage. * Task: Extract a bio"
+    CLEAN = "Thomas Rieger is a researcher in behavioral finance."
+
+    def _run(self, monkeypatch, researchers, snapshots_by_researcher, bad_snapshots, apply):
+        def fake_fetch_all(sql, params=()):
+            if sql.startswith("SELECT id, description FROM researchers "):
+                return researchers
+            if sql.startswith("SELECT id, description FROM researcher_snapshots"):
+                return bad_snapshots
+            return snapshots_by_researcher.get(params[0], [])
+
+        cursor = __import__("unittest.mock", fromlist=["MagicMock"]).MagicMock()
+        monkeypatch.setattr(cleanup, "fetch_all", fake_fetch_all)
+        monkeypatch.setattr(cleanup, "APPLY", apply)
+        monkeypatch.setattr(cleanup, "_run_writes", lambda label, fn: fn(cursor) if apply else None)
+        n = cleanup.restore_reasoning_descriptions()
+        return n, cursor
+
+    def test_restores_newest_clean_snapshot_or_nulls(self, monkeypatch):
+        researchers = [
+            {"id": 3, "description": self.BAD},
+            {"id": 4, "description": self.BAD},
+            {"id": 5, "description": "A genuine bio about an economist at MIT."},  # SQL over-select
+        ]
+        snaps = {
+            3: [{"description": self.BAD}, {"description": self.CLEAN}],
+            4: [{"description": self.BAD}],
+        }
+        bad_snaps = [{"id": 11, "description": self.BAD}, {"id": 12, "description": "fine bio"}]
+        n, cursor = self._run(monkeypatch, researchers, snaps, bad_snaps, apply=True)
+        assert n == 3  # two researchers + one snapshot
+        updates = [c.args[1] for c in cursor.execute.call_args_list
+                   if c.args[0].startswith("UPDATE researchers")]
+        assert updates == [(self.CLEAN, 3, self.BAD), (None, 4, self.BAD)]
+        deletes = [c.args[1] for c in cursor.execute.call_args_list
+                   if c.args[0].startswith("DELETE FROM researcher_snapshots")]
+        assert deletes == [(11,)]
+
+    def test_dry_run_writes_nothing(self, monkeypatch):
+        n, cursor = self._run(monkeypatch, [{"id": 3, "description": self.BAD}], {}, [], apply=False)
+        assert n == 1
+        cursor.execute.assert_not_called()
+
+    def test_step_is_registered(self):
+        assert "restore_reasoning_descriptions" in cleanup.STEP_ORDER

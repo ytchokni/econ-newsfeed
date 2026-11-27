@@ -11,6 +11,7 @@ Submodules:
   llm.py         — LLM usage logging and cost estimation
   jel.py         — JEL code classification and paper topics
   users.py       — user accounts, follows, notification preferences
+  email_login.py — one-time email login codes, email-based account lookup
 """
 
 from backend.database.connection import (
@@ -80,6 +81,12 @@ from backend.database.jel import (
     get_all_researcher_topics,
     add_researcher_jel_codes,
     sync_researcher_fields_from_jel,
+    get_jel_classification_candidates,
+    get_jel_inputs_for_researchers,
+    save_jel_state,
+    touch_jel_state,
+    count_jel_llm_calls_since,
+    get_jel_coverage_stats,
 )
 from backend.database.admin import get_admin_dashboard_stats
 from backend.database.discoveries import (
@@ -107,6 +114,7 @@ from backend.database.users import (
     generate_unsubscribe_token,
     verify_unsubscribe_token,
 )
+from backend.database.email_login import get_user_by_id
 
 
 # ---------------------------------------------------------------------------
@@ -188,6 +196,12 @@ class Database:
     get_all_researcher_topics = staticmethod(get_all_researcher_topics)
     add_researcher_jel_codes = staticmethod(add_researcher_jel_codes)
     sync_researcher_fields_from_jel = staticmethod(sync_researcher_fields_from_jel)
+    get_jel_classification_candidates = staticmethod(get_jel_classification_candidates)
+    get_jel_inputs_for_researchers = staticmethod(get_jel_inputs_for_researchers)
+    save_jel_state = staticmethod(save_jel_state)
+    touch_jel_state = staticmethod(touch_jel_state)
+    count_jel_llm_calls_since = staticmethod(count_jel_llm_calls_since)
+    get_jel_coverage_stats = staticmethod(get_jel_coverage_stats)
 
     # Admin
     get_admin_dashboard_stats = staticmethod(get_admin_dashboard_stats)
@@ -216,3 +230,4 @@ class Database:
     researcher_exists = staticmethod(researcher_exists)
     generate_unsubscribe_token = staticmethod(generate_unsubscribe_token)
     verify_unsubscribe_token = staticmethod(verify_unsubscribe_token)
+    get_user_by_id = staticmethod(get_user_by_id)
