@@ -12,10 +12,15 @@ Dry run by default: prints the URLs that would be queued, by host. --apply write
     poetry run python scripts/recheck_too_large_urls.py
     poetry run python scripts/recheck_too_large_urls.py --apply
 
-In production:
+In production (from /opt/econ-newsfeed), only while the extraction backlog
+is small, since pages that now fit are queued for extraction:
 
-    docker compose exec -T api python scripts/recheck_too_large_urls.py
-    docker compose exec -T api python scripts/recheck_too_large_urls.py --apply
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T api python scripts/recheck_too_large_urls.py
+    docker compose -f docker-compose.yml -f docker-compose.prod.yml exec -T api python scripts/recheck_too_large_urls.py --apply
+
+Use this rather than a hand-written UPDATE of researcher_urls (as in #283's
+notes): it touches only response_too_large rows not yet due, and the recheck
+goes through the fetcher, which records sign-in redirects as login_required.
 
 --before limits it to URLs deactivated before a timestamp (default: now).
 Idempotent: queued rows are already due and are not selected again.
