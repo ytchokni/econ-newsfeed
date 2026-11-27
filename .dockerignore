@@ -8,6 +8,7 @@
 !scripts/audit_zero_pub_researchers.py
 !scripts/backfill_page_owner_authorship.py
 !scripts/cleanup_data_quality.py
+!scripts/repair_researcher_identity.py
 !scripts/merge_fuzzy_duplicates.py
 !scripts/fix_researcher_names.py
 !pyproject.toml
