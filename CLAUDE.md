@@ -358,7 +358,7 @@ console (ignored unless `FRONTEND_URL` is localhost).
 
 - Python tests use `httpx.AsyncClient` with FastAPI's `TestClient` — no real database needed for API contract tests
 - `conftest.py` sets env vars *before* importing app modules to avoid `backend/config.py`'s `sys.exit()`
-- Frontend tests mock `next/font/google` via `__mocks__/next-font-google.ts`
+- Fonts are self-hosted with `next/font/local` (`app/src/app/fonts.ts`, woff2 files in `app/src/app/fonts/`), so builds never fetch Google Fonts; tests mock it via `__mocks__/next-font-local.ts`
 
 ## Gotchas
 
