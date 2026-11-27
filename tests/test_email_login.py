@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import re
+import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta
 from unittest.mock import patch
@@ -23,9 +25,26 @@ class FakeStore:
     SQL plumbing is faked.
     """
 
+    AddressBusy = real_store.AddressBusy
+
     def __init__(self):
         self.codes: list[dict] = []
         self.users: list[dict] = []
+        self.locks: dict[str, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+        self.store_delay = 0.0  # widen the read-then-write window in race tests
+        self.lock_timeout = 5.0
+
+    @contextmanager
+    def address_lock(self, email):
+        with self._locks_guard:
+            lock = self.locks.setdefault(email, threading.Lock())
+        if not lock.acquire(timeout=self.lock_timeout):
+            raise real_store.AddressBusy(email)
+        try:
+            yield
+        finally:
+            lock.release()
 
     # -- codes --
     def latest_code_created_at(self, email):
@@ -39,6 +58,8 @@ class FakeStore:
         return sum(1 for c in self.codes if c["created_at"] >= since)
 
     def store_code(self, email, code_hash, now, expires_at):
+        if self.store_delay:
+            time.sleep(self.store_delay)
         for c in self.codes:
             if c["email"] == email and c["consumed_at"] is None:
                 c["consumed_at"] = now
@@ -831,14 +852,15 @@ def test_purge_old_codes_deletes_rows_older_than_a_day(monkeypatch):
     conn = MagicMock()
     cursor = conn.cursor.return_value.__enter__.return_value
     cursor.rowcount = 7
-    monkeypatch.setattr(real_store, "get_connection", lambda: conn)
-    conn.__enter__.return_value = conn
+    monkeypatch.setattr(real_store, "_get_scoped_or_new_connection", lambda: (conn, True))
 
     assert real_store.purge_old_codes(T0) == 7
-    sql, params = cursor.execute.call_args.args
-    assert sql == "DELETE FROM email_login_codes WHERE created_at < %s"
-    assert params == (T0 - timedelta(days=1),)
+    statements = [c.args for c in cursor.execute.call_args_list]
+    assert statements[0] == ("SET TRANSACTION ISOLATION LEVEL READ COMMITTED",)
+    assert statements[1] == ("DELETE FROM email_login_codes WHERE created_at < %s",
+                             (T0 - timedelta(days=1),))
     conn.commit.assert_called_once()
+    conn.close.assert_called_once()
 
 
 def test_scheduler_purge_logs_and_survives_errors(monkeypatch, caplog):
@@ -879,3 +901,174 @@ def test_scheduler_registers_hourly_purge():
     purge = jobs["email_login_code_purge"]
     assert purge.args[0] is scheduler._purge_email_login_codes
     assert purge.args[1] == "interval" and purge.kwargs["hours"] == 1
+
+
+# ---------------------------------------------------------------------------
+# Concurrency: one request per address at a time
+# ---------------------------------------------------------------------------
+
+def _parallel(fn, n):
+    barrier = threading.Barrier(n)
+    results, unexpected = [], []
+    guard = threading.Lock()
+
+    def worker(i):
+        barrier.wait()
+        try:
+            out = fn(i)
+            with guard:
+                results.append(("ok", out))
+        except email_login.EmailLoginError as e:
+            with guard:
+                results.append((e.code, e.status))
+        except Exception as e:  # would be a 500
+            with guard:
+                unexpected.append(repr(e))
+
+    threads = [threading.Thread(target=worker, args=(i,)) for i in range(n)]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join(30)
+    return results, unexpected
+
+
+def test_parallel_requests_for_one_address_send_one_email(store, outbox):
+    store.store_delay = 0.01  # every request would pass the checks without the lock
+    results, unexpected = _parallel(
+        lambda i: email_login.request_code("victim@example.com", now=T0), 20)
+    assert unexpected == []
+    assert [r[0] for r in results].count("ok") == 1
+    assert len(store.codes) == 1 and len(outbox) == 1
+    assert {r for r in results if r[0] != "ok"} == {("resend_too_soon", 429)}
+
+
+def test_parallel_requests_never_exceed_the_hourly_cap(store, outbox, monkeypatch):
+    store.store_delay = 0.01
+    monkeypatch.setattr(email_login, "RESEND_COOLDOWN", timedelta(0))
+    results, unexpected = _parallel(
+        lambda i: email_login.request_code("victim@example.com", now=T0), 20)
+    assert unexpected == []
+    assert len(store.codes) == email_login.MAX_CODES_PER_EMAIL
+    assert len(outbox) == email_login.MAX_CODES_PER_EMAIL
+
+
+def test_parallel_guesses_respect_the_attempt_limit(store, outbox):
+    email_login.request_code("guess@example.com", now=T0)
+    real = _code_from(outbox[0])
+    results, unexpected = _parallel(
+        lambda i: email_login.verify_code("guess@example.com", _wrong(real) if i else _wrong(_wrong(real)), now=T0), 20)
+    assert unexpected == []
+    assert store.codes[0]["attempts"] == email_login.MAX_ATTEMPTS
+
+
+def test_lock_timeout_is_a_429_not_a_500(store, outbox):
+    store.lock_timeout = 0.01
+    lock = threading.Lock()
+    store.locks["busy@example.com"] = lock
+    lock.acquire()
+    try:
+        with pytest.raises(email_login.EmailLoginError) as exc:
+            email_login.request_code("busy@example.com", now=T0)
+    finally:
+        lock.release()
+    assert (exc.value.code, exc.value.status) == ("try_again", 429)
+    assert outbox == []
+
+
+@pytest.mark.parametrize("errno", [1213, 1205])
+def test_deadlock_and_lock_wait_are_429(store, outbox, monkeypatch, errno):
+    import mysql.connector
+
+    def deadlock(*a, **k):
+        raise mysql.connector.errors.InternalError(msg="Deadlock found", errno=errno)
+
+    monkeypatch.setattr(store, "store_code", deadlock)
+    with pytest.raises(email_login.EmailLoginError) as exc:
+        email_login.request_code("alice@example.com", now=T0)
+    assert (exc.value.code, exc.value.status) == ("try_again", 429)
+
+    monkeypatch.setattr(store, "consume_code", deadlock)
+    with pytest.raises(email_login.EmailLoginError) as exc:
+        email_login.verify_code("alice@example.com", "123456", now=T0)
+    assert (exc.value.code, exc.value.status) == ("try_again", 429)
+
+
+def test_pool_exhaustion_is_a_503(store, outbox, monkeypatch):
+    import mysql.connector
+
+    def exhausted(*a, **k):
+        raise mysql.connector.errors.PoolError("Failed getting connection; pool exhausted")
+
+    monkeypatch.setattr(store, "latest_code_created_at", exhausted)
+    with pytest.raises(email_login.EmailLoginError) as exc:
+        email_login.request_code("alice@example.com", now=T0)
+    assert (exc.value.code, exc.value.status) == ("email_login_busy", 503)
+
+
+def test_other_database_errors_still_raise(store, outbox, monkeypatch):
+    import mysql.connector
+
+    def broken(*a, **k):
+        raise mysql.connector.errors.ProgrammingError(msg="bad SQL", errno=1064)
+
+    monkeypatch.setattr(store, "store_code", broken)
+    with pytest.raises(mysql.connector.errors.ProgrammingError):
+        email_login.request_code("alice@example.com", now=T0)
+
+
+def test_lock_name_fits_mysql_limit():
+    name = real_store._lock_name("a" * 300 + "@example.com")
+    assert len(name) <= 64 and name.startswith("email_login:")
+    assert real_store._lock_name("A@x.org") != real_store._lock_name("b@x.org")
+
+
+def test_endpoints_answer_503_when_the_pool_is_exhausted(client):
+    import mysql.connector
+
+    @contextmanager
+    def no_connection():
+        raise mysql.connector.errors.PoolError("Failed getting connection; pool exhausted")
+        yield  # pragma: no cover
+
+    with patch("backend.api.connection_scope", no_connection):
+        for path, body in (("request-code", {"email": "a@example.com"}),
+                           ("verify-code", {"email": "a@example.com", "code": "123456"})):
+            resp = client.post(f"/api/email-login/{path}", json=body)
+            assert resp.status_code == 503
+            assert resp.json()["error"]["code"] == "email_login_busy"
+            assert resp.headers["Retry-After"] == "5"
+
+
+def test_consume_code_never_revives_a_retired_code(monkeypatch):
+    """If the code was retired between the read and the update, nothing changes."""
+    from unittest.mock import MagicMock
+    conn = MagicMock()
+    cursor = conn.cursor.return_value.__enter__.return_value
+    live_row = {"id": 9, "code_hash": "h", "attempts": 0, "expires_at": T0 + timedelta(minutes=10)}
+    cursor.fetchone.return_value = live_row
+    cursor.rowcount = 0  # discard_code got there first
+    monkeypatch.setattr(real_store, "_get_scoped_or_new_connection", lambda: (conn, True))
+
+    for candidate in ("h", "wrong"):  # neither a correct nor a wrong guess may act on it
+        assert real_store.consume_code("a@example.com", candidate, T0, 5) == "invalid"
+    update_sql = cursor.execute.call_args_list[-1].args[0]
+    assert "WHERE id = %s AND consumed_at IS NULL" in update_sql
+
+
+def test_failed_send_retires_the_code_under_the_address_lock(store, monkeypatch):
+    held = []
+
+    def discard(code_id, now):
+        held.append(store.locks["alice@example.com"].locked())
+        store.codes[code_id - 1]["consumed_at"] = now
+
+    monkeypatch.setattr(store, "discard_code", discard)
+    monkeypatch.setattr(email_login.digest, "_send_email", lambda *a, **k: False)
+    with pytest.raises(email_login.EmailLoginError):
+        email_login.request_code("alice@example.com", now=T0)
+    assert held == [True]
+
+
+def test_address_lock_timeout_is_short():
+    assert 1 <= real_store.ADDRESS_LOCK_TIMEOUT <= 2

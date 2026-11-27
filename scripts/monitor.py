@@ -63,6 +63,7 @@ LLM_ACCOUNT_ERRORS_PER_HOUR = 3
 # API scrape protection (backend/api_protection.py), over the last 24 hours.
 API_RATE_LIMITED_PER_DAY = 2000   # 429s; a burst from one scraper is expected, a flood is not
 API_INVALID_KEY_WARNINGS = 12     # logged at most every 5 min per worker: the frontend key is wrong
+API_POOL_EXHAUSTED_PER_DAY = 20   # requests that found no free DB connection (503s, or 500s elsewhere)
 
 # Claude gets until the next daily run; a same-day manual rerun must not
 # escalate before a fix could have been merged and deployed.
@@ -301,7 +302,7 @@ RATE_LIMITED_RE = re.compile(r"rate_limited ip=(\S+)")
 def summarize_api_traffic(lines) -> dict:
     """Count 429s (per IP), blocked requests, bad internal keys and API requests."""
     stats = {"rate_limited": 0, "blocked": 0, "invalid_key": 0, "requests": 0, "by_ip": {},
-             "email_login_paused": 0}
+             "email_login_paused": 0, "pool_exhausted": 0}
     for line in lines:
         match = RATE_LIMITED_RE.search(line)
         if match:
@@ -315,6 +316,10 @@ def summarize_api_traffic(lines) -> dict:
         elif "email_login_circuit_open" in line:
             # Too many wrong sign-in codes in an hour paused email login.
             stats["email_login_paused"] += 1
+        elif "pool exhausted" in line:
+            # mysql-connector's "Failed getting connection; pool exhausted"
+            # (a 500 on most endpoints) or email login's 503 warning.
+            stats["pool_exhausted"] += 1
         elif '"GET /api/' in line:
             stats["requests"] += 1
     return stats
@@ -331,9 +336,13 @@ def evaluate_api_traffic(stats: dict) -> dict:
     if paused:
         detail += (f"; email sign-in paused {paused}x after too many wrong codes "
                    "(email_login_circuit_open: possible code guessing)")
+    exhausted = stats.get("pool_exhausted", 0)
+    if exhausted:
+        detail += f"; {exhausted} requests found the DB connection pool exhausted"
     ok = (stats["rate_limited"] < API_RATE_LIMITED_PER_DAY
           and stats["invalid_key"] < API_INVALID_KEY_WARNINGS
-          and not paused)
+          and not paused
+          and exhausted < API_POOL_EXHAUSTED_PER_DAY)
     return check("api_traffic", ok, detail)
 
 

@@ -352,7 +352,10 @@ cooldown, 5 per address per hour plus a deployment-wide hourly cap
 hour across all addresses (`EMAIL_LOGIN_MAX_FAILURES_PER_HOUR`) pause email
 sign-in until they age out of that rolling hour (up to an hour) and log `email_login_circuit_open`, which the daily monitor's
 `api_traffic` check reports. An hourly scheduler job deletes code rows older
-than a day. Per-IP limits use `api_protection`'s client key (strict per
+than a day. All checks and writes for one address run under a MySQL named lock
+(`address_lock`); writes touch rows by primary key, so parallel requests neither
+send extra codes nor deadlock. Concurrency tests against a real MySQL run in CI
+via `TEST_MYSQL_*` (`tests/test_email_login_mysql.py`). Per-IP limits use `api_protection`'s client key (strict per
 visitor; coarse in the keyless fail-open tier, where visitors share Vercel IPs);
 the credentials provider forwards the visitor with `internalApiHeaders`. Email
 login is offered only with a Resend key and an explicit `LOGIN_FROM_EMAIL` or
