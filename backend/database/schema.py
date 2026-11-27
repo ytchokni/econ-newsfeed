@@ -483,6 +483,25 @@ _TABLE_DEFINITIONS = {
             PRIMARY KEY (provider, budget_day)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    # One row per re-verified (paper, OpenAlex ID): the audit trail of
+    # scripts/reverify_openalex_ids.py and its review list (verdict='review').
+    "openalex_identifier_checks": """
+        CREATE TABLE IF NOT EXISTS openalex_identifier_checks (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            paper_id INT NOT NULL,
+            openalex_id VARCHAR(255) NOT NULL,
+            doi VARCHAR(255) DEFAULT NULL,
+            verdict ENUM('verified', 'cleared', 'review') NOT NULL,
+            reason VARCHAR(64) NOT NULL,
+            work_title TEXT DEFAULT NULL,
+            matched_paper_id INT DEFAULT NULL,
+            cleared_abstract BOOLEAN NOT NULL DEFAULT FALSE,
+            checked_at DATETIME NOT NULL,
+            UNIQUE KEY uq_paper_work (paper_id, openalex_id),
+            INDEX idx_verdict (verdict),
+            FOREIGN KEY (paper_id) REFERENCES papers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
     "newsletter_emails": """
         CREATE TABLE IF NOT EXISTS newsletter_emails (
             id INT AUTO_INCREMENT PRIMARY KEY,
