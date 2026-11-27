@@ -169,10 +169,15 @@ class TestGetResearcherIdRoutesVariants:
         llm.assert_not_called()
 
 
+def _not_opted_out(row):
+    """fetch_one stub: no opt-out tombstone, otherwise the researcher's name row."""
+    return lambda sql, params=None: None if "researcher_optout" in sql else row
+
+
 class TestAddResearcherUrlRefusesSharedPages:
     @patch("backend.database.researchers.execute_query")
     @patch("backend.database.researchers.fetch_one",
-           return_value={"first_name": "Ran", "last_name": "Abramitzky"})
+           side_effect=_not_opted_out({"first_name": "Ran", "last_name": "Abramitzky"}))
     @patch("backend.database.researchers.fetch_all",
            return_value=[{"id": 18349, "first_name": "Nicholas", "last_name": "Bloom"}])
     def test_refuses_url_of_unrelated_researcher(self, fetch_all, one, execute):
@@ -182,7 +187,7 @@ class TestAddResearcherUrlRefusesSharedPages:
 
     @patch("backend.database.researchers.execute_query")
     @patch("backend.database.researchers.fetch_one",
-           return_value={"first_name": "Gordon B.", "last_name": "Dahl"})
+           side_effect=_not_opted_out({"first_name": "Gordon B.", "last_name": "Dahl"}))
     @patch("backend.database.researchers.fetch_all", return_value=[])
     def test_adds_unshared_url(self, fetch_all, one, execute):
         from backend.database.researchers import add_researcher_url

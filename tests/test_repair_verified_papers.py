@@ -31,6 +31,8 @@ class Cursor:
             self.selected = self.tables.get('webb_candidates', [])
         elif sql.startswith('SELECT * FROM researcher_urls'):
             self.selected = self.tables.get('webb_urls', [])
+        elif 'FROM researcher_optouts' in sql:
+            self.selected = self.tables.get('optouts', [])
         elif sql.startswith('SELECT * FROM '):
             self.selected = self.tables.get(sql.split()[3], [])
 
@@ -226,3 +228,17 @@ def test_webb_new_identity_does_not_create_urls(tmp_path):
     assert cursor.writes[0][0].startswith('INSERT INTO researchers')
     assert cursor.writes[1][1] == (cursor.lastrowid, 0, 1136315)
     assert not any('INSERT INTO researcher_urls' in sql for sql, _ in cursor.writes)
+
+
+def test_webb_new_identity_refused_after_opt_out(tmp_path):
+    manifest, evidence, tables, cursor, conn = fixture(372003)
+    manifest['candidates'][0]['operations'] = [{
+        'operation': 'create_researcher_if_absent_then_reassign_authorship',
+        'researcher': repair.WEBB, 'verified_identity_url': repair.WEBB_URL,
+        'authorship_where': {'id': 1136315, 'publication_id': 372003, 'researcher_id': 20928},
+        'set_author_order': 0,
+    }]
+    tables['optouts'] = [{'hit': 1}]
+    with pytest.raises(Exception, match='opted out'):
+        repair.run_repair(conn, manifest, evidence, apply=True, backup=tmp_path / 'backup.json')
+    assert not any(sql.startswith('INSERT INTO researchers') for sql, _ in cursor.writes)

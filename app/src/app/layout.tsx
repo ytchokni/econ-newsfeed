@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { fontVariables } from "./font-variables";
 import Header from "@/components/Header";
+import SiteFooter from "@/components/SiteFooter";
 import { AuthProvider } from "@/lib/auth";
 import {
   SITE_DESCRIPTION,
@@ -50,6 +51,7 @@ export default function RootLayout({
         <AuthProvider>
           <Header />
           <main>{children}</main>
+          <SiteFooter />
         </AuthProvider>
       </body>
     </html>

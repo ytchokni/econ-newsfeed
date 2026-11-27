@@ -272,6 +272,7 @@ def parse_import_csv(path: str) -> list[dict]:
 def import_matches(csv_path: str) -> None:
     """Import approved matches from reviewed CSV into the database."""
     from backend.database.connection import execute_query
+    from backend.database.researchers import add_researcher_url
     rows = parse_import_csv(csv_path)
     urls_added = 0
     affil_updated = 0
@@ -280,10 +281,8 @@ def import_matches(csv_path: str) -> None:
         rid = row["researcher_id"]
         homepage = row["repec_homepage"]
         workplace = row["repec_workplace"]
-        execute_query(
-            "INSERT IGNORE INTO researcher_urls (researcher_id, page_type, url) VALUES (%s, %s, %s)",
-            (rid, "HOME", homepage),
-        )
+        # add_researcher_url refuses URLs of researchers who opted out.
+        add_researcher_url(rid, "HOME", homepage)
         urls_added += 1
         if rid not in seen_ids and workplace:
             execute_query(

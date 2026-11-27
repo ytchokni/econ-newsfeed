@@ -13,6 +13,7 @@ import unicodedata
 from datetime import datetime, timedelta, timezone
 from urllib.parse import urlsplit
 from backend.database.connection import get_connection
+from backend.database.optouts import full_name_hash
 from backend.discovery.mining_policy import same_owner, scope_for, url_key
 
 
@@ -49,6 +50,12 @@ _DDL = (
         stats JSON, INDEX idx_mining_run_started (started)
     ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci""",
 )
+def ensure_mining_tables(cursor) -> None:
+    """Create the miner tables (idempotent DDL; MySQL commits implicitly)."""
+    for ddl in _DDL:
+        cursor.execute(ddl)
+
+
 _TERMINAL = {"approved", "rejected", "review"}
 _STATUSES = _TERMINAL | {"pending", "retry"}
 _PAGE_TYPES = {"HOME", "RESEARCH", "PUBLICATIONS", "WORKING_PAPERS"}
@@ -62,6 +69,10 @@ def _utcnow():
 def source_key(kind: str, url: str) -> str:
     """Key exact source URLs; unlike candidate URLs their fetched bytes differ."""
     return hashlib.sha256(f"{kind}\n{url}".encode()).hexdigest()
+
+
+def _sha(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
 def _name_key(name: str) -> str:
@@ -105,6 +116,7 @@ class MiningStore:
         self._candidates: dict[str, dict] = {}
         self._dry_url_rows: list[dict] = []
         self._cached_seen: set[tuple[int, str]] = set()
+        self._optout_cache: tuple[set[str], set[str]] | None = None
 
     def __enter__(self):
         self.conn = get_connection()
@@ -265,9 +277,32 @@ class MiningStore:
             (key, kind, url, content_hash, now, next_check, error),
         )
 
+    def opted_out(self) -> tuple[set[str], set[str]]:
+        """(full-name hashes, URL-key hashes) of researchers who asked to be removed."""
+        if self._optout_cache is None:
+            try:
+                names = {r["name_hash"] for r in self._all("SELECT name_hash FROM researcher_optouts")}
+                urls = {r["url_key_hash"] for r in self._all(
+                    "SELECT url_key_hash FROM researcher_optout_urls WHERE url_key_hash IS NOT NULL"
+                )}
+            except Exception as e:  # tables not created yet: nobody has opted out
+                if getattr(e, "errno", None) != 1146:
+                    raise
+                names, urls = set(), set()
+            self._optout_cache = (names, urls)
+        return self._optout_cache
+
+    def is_opted_out(self, candidate: dict) -> bool:
+        names, urls = self.opted_out()
+        key = url_key(candidate.get("url") or "")
+        return (full_name_hash(candidate.get("name") or "") in names
+                or bool(key) and _sha(key) in urls)
+
     def enqueue(self, candidate: dict) -> bool:
         self._require_lock()
         row = dict(candidate)
+        if self.is_opted_out(row):
+            return False
         key = candidate_key(row)
         if key in self._candidates:
             return False
@@ -502,6 +537,8 @@ class MiningStore:
         rejected = self._rejected_urls()
         if keys & rejected:
             return "URL was previously rejected", [], []
+        if {_sha(k) for k in keys} & self.opted_out()[1]:
+            return "URL belongs to a researcher who opted out", [], []
         if "site_mining_candidates" in self._tables:
             holds = self._all(
                 """SELECT researcher_id,url FROM site_mining_candidates

@@ -18,10 +18,11 @@ import requests
 from bs4 import BeautifulSoup, Tag
 from urllib3.util import Timeout
 
+from backend.crawler_identity import contact_url
 from backend.pipeline.html_fetcher import HTMLFetcher, _pin_dns
 
 
-USER_AGENT = "EconNewsfeedDiscovery/1.0 (+https://econ-newsfeed.vercel.app)"
+USER_AGENT = f"EconNewsfeedDiscovery/1.0 (+{contact_url()})"
 MAX_BYTES = 2_000_000
 _REDIRECTS = {301, 302, 303, 307, 308}
 _HOST_LOCKS: dict[str, threading.Lock] = {}

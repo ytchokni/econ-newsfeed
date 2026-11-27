@@ -589,6 +589,36 @@ _TABLE_DEFINITIONS = {
             INDEX idx_processed_at (processed_at)
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    # Researchers who asked to be removed. Only hashes are kept: enough to
+    # refuse re-adding the person or their URLs, nothing to display.
+    "researcher_optouts": """
+        CREATE TABLE IF NOT EXISTS researcher_optouts (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            name_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            former_researcher_id INT DEFAULT NULL,
+            created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            INDEX idx_optout_name (name_hash)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    "researcher_optout_urls": """
+        CREATE TABLE IF NOT EXISTS researcher_optout_urls (
+            url_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,
+            url_key_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin DEFAULT NULL,
+            optout_id INT NOT NULL,
+            INDEX idx_optout_url_key (url_key_hash),
+            FOREIGN KEY (optout_id) REFERENCES researcher_optouts(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
+    # Hashed name variants ("A. Name", "Ada M. Name"); see optouts.name_variant_hashes.
+    "researcher_optout_names": """
+        CREATE TABLE IF NOT EXISTS researcher_optout_names (
+            kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            name_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            optout_id INT NOT NULL,
+            PRIMARY KEY (kind, name_hash, optout_id),
+            FOREIGN KEY (optout_id) REFERENCES researcher_optouts(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
     "url_discoveries": """
         CREATE TABLE IF NOT EXISTS url_discoveries (
             id INT AUTO_INCREMENT PRIMARY KEY,

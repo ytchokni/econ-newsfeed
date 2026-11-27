@@ -126,6 +126,8 @@ services:
       SITE_MINING_CANDIDATE_LIMIT: ${SITE_MINING_CANDIDATE_LIMIT:-30}
       SITE_MINING_MAX_REQUESTS: ${SITE_MINING_MAX_REQUESTS:-200}
       SITE_MINING_MAX_SECONDS: ${SITE_MINING_MAX_SECONDS:-600}
+      # Only used to link the contact page from the crawler's User-Agent.
+      FRONTEND_URL: ${FRONTEND_URL:-}
     depends_on:
       db:
         condition: service_healthy
@@ -140,6 +142,7 @@ services:
     environment:
       NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8000}
       API_INTERNAL_URL: http://api:8000
+      CONTACT_EMAIL: ${CONTACT_EMAIL:-}
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
     ports:
       - "127.0.0.1:3000:3000"

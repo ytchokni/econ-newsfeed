@@ -16,6 +16,7 @@ from contextlib import contextmanager, nullcontext
 from datetime import datetime, timezone
 from urllib.parse import urljoin, urlparse
 from urllib.robotparser import RobotFileParser
+from backend.crawler_identity import BOT_NAME, with_bot_token
 from backend.database import execute_query, fetch_all, fetch_one
 from backend.database.researchers import record_url_fetch_failure, record_url_fetch_success
 from bs4 import BeautifulSoup
@@ -110,10 +111,14 @@ CONTENT_MAX_BYTES = 1_000_000
 FETCH_MAX_BYTES = int(os.environ.get('FETCH_MAX_BYTES', '10000000'))
 _STREAM_CHUNK_BYTES = 64 * 1024
 _CURL_FILESIZE_EXCEEDED = 63  # curl exit code for --max-filesize
-SCRAPER_USER_AGENT = os.environ.get(
+# Browser-compatible base so sites keep serving normal HTML, followed by a bot
+# token that names us and links the contact/removal page.
+SCRAPER_USER_AGENT = with_bot_token(os.environ.get(
     'SCRAPER_USER_AGENT',
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
-)
+))
+# robots.txt groups that apply to us: our bot name, plus the legacy token.
+ROBOTS_AGENTS = (BOT_NAME, 'HTMLFetcher/1.0')
 _ROBOTS_CACHE_MAX = 500
 
 
@@ -328,7 +333,7 @@ class HTMLFetcher:
         rp = HTMLFetcher._get_robots_parser(url)
         if rp is None:
             return True
-        allowed = rp.can_fetch('HTMLFetcher/1.0', url)
+        allowed = all(rp.can_fetch(agent, url) for agent in ROBOTS_AGENTS)
         if not allowed:
             logging.info(f"URL disallowed by robots.txt: {url}")
         return allowed
@@ -547,7 +552,8 @@ class HTMLFetcher:
             return None
         try:
             cmd = ["curl", "-sS", "--max-time", str(timeout),
-                   "--max-filesize", str(FETCH_MAX_BYTES)]
+                   "--max-filesize", str(FETCH_MAX_BYTES),
+                   "--user-agent", SCRAPER_USER_AGENT]
             # Pin DNS in curl to prevent rebinding between validation and fetch
             if resolved_ip:
                 parsed = urlparse(url)

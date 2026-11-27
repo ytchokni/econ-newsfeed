@@ -13,6 +13,7 @@ from contextlib import contextmanager
 from backend.database.connection import execute_query, fetch_one, fetch_all, get_connection
 from backend.database.identity import merge_researcher_into, same_person, strip_repeated_surname
 from backend.database.llm import log_llm_usage
+from backend.database.optouts import name_optout_query, url_not_opted_out_sql, url_optout_query
 from backend.database.extraction_queue import prioritise
 from backend.config import fix_encoding
 
@@ -548,7 +549,11 @@ def get_researcher_id(first_name: str, last_name: str, position: str | None = No
                 )
             return match_id
 
-    # 4. No match found — insert new researcher
+    # 4. No match found — insert new researcher, unless this person opted out.
+    # Co-author extraction would otherwise re-create a removed researcher.
+    if _fetch_one(*name_optout_query(first_name, last_name)):
+        logging.info("Not re-creating opted-out researcher (name matches a removal request)")
+        return None
     new_id = _execute(
         "INSERT INTO researchers (first_name, last_name, position, affiliation, openalex_author_id) VALUES (%s, %s, %s, %s, %s)",
         (first_name, last_name, position, affiliation, openalex_author_id),
@@ -586,9 +591,13 @@ def update_researcher_bio(researcher_id: int, bio: str) -> None:
 def add_researcher_url(researcher_id: int, page_type: str, url: str) -> None:
     """Insert a new URL for a researcher into the researcher_urls table.
 
+    URLs of researchers who opted out are refused (Searlo approvals, imports).
     A URL already tracked for someone with a different name is a shared
     (department, institute or news) page, not a personal page: refused.
     """
+    if researcher_id is None or fetch_one(*url_optout_query(url)):
+        logging.info("Skipping URL that belongs to an opted-out researcher or no researcher")
+        return
     if url_tracked_for_someone_else(researcher_id, url):
         logging.warning("Not adding %s for researcher %s: tracked for another researcher",
                         url, researcher_id)
@@ -803,6 +812,7 @@ def get_urls_needing_extraction(exclude_url_ids: tuple[int, ...] = (),
           AND hc.content_hash IS NOT NULL
           AND hc.has_stored_content = TRUE
           AND (hc.extracted_hash IS NULL OR hc.extracted_hash != hc.content_hash)
+          AND """ + url_not_opted_out_sql("ru.url") + """
     """
     # Pages cooling down after repeated failures (record_extraction_failure)
     # are found separately and excluded by id: any other html_content column
