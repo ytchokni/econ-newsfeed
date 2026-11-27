@@ -21,7 +21,11 @@ State lives in a hidden comment in the body of one rolling issue titled
 which days each tracked invariant passed. Claude never writes to GitHub
 itself; it proposes issue comments and new issues in a JSON file and this
 script applies them: at most MAX_NEW_ISSUES new issues per run, only the
-`bug` and `high-priority` labels, and every @mention defused.
+`bug` and `high-priority` labels, and every @mention defused. A failure
+whose fix is merged but whose one-off cleanup has not run yet is recorded as
+"cleanup pending" (after checking the pull request is merged): one line with
+the cleanup step in the daily report, no new issue and no reopening, and no
+further triage until the invariant passes.
 """
 from __future__ import annotations
 
@@ -288,6 +292,9 @@ def read_state(body: str) -> dict:
         state = {}
     state.setdefault("issue_map", {})
     state.setdefault("pass_days", {})
+    # invariant -> {issue, fix_pr, cleanup, since}: the fix is merged and the
+    # invariant fails only until a one-off cleanup (or the next scrape) runs.
+    state.setdefault("cleanup_pending", {})
     return state
 
 
@@ -330,6 +337,13 @@ class GitHub:
                 return issue
         return None
 
+    def pr_merged(self, number: int) -> bool:
+        try:
+            out = self.read("pr", "view", str(number), "--json", "state")
+            return bool(out) and json.loads(out).get("state") == "MERGED"
+        except (RuntimeError, ValueError):
+            return False
+
     def issue(self, number: int) -> dict | None:
         if number not in self._issue_cache:
             try:
@@ -341,9 +355,13 @@ class GitHub:
 
 
 def untracked_failures(fails: list[dict], state: dict, gh: GitHub) -> list[dict]:
-    """Failures with no open issue tracking them; each notes any closed issue it had."""
+    """Failures with no open issue tracking them and no cleanup pending; each
+    notes any closed issue it had."""
+    state.setdefault("cleanup_pending", {})
     out = []
     for f in fails:
+        if f["id"] in state["cleanup_pending"]:
+            continue
         number = state["issue_map"].get(f["id"])
         issue = gh.issue(int(number)) if number else None
         if issue and issue.get("state") == "OPEN":
@@ -446,6 +464,23 @@ def apply_triage(triage: dict, fails: list[dict], state: dict, gh: GitHub,
                 created += 1
                 number = int(url.strip().rsplit("/", 1)[-1])
                 log.append(f"filed #{number}: {title}")
+            elif action == "cleanup_pending" and isinstance(number, int) and isinstance(fix_pr, int):
+                # Fix merged, existing rows not yet cleaned up: one line in the
+                # daily report instead of a new bug or a reopened issue.
+                cleanup = clean_text(str(group.get("cleanup") or "").replace("`", "'"), 300)
+                if not cleanup:
+                    log.append(f"skipped cleanup note for #{number}: no cleanup step given")
+                    continue
+                if gh.issue(number) is None:
+                    log.append(f"skipped: issue #{number} not found")
+                    continue
+                if not gh.pr_merged(fix_pr):
+                    log.append(f"skipped cleanup note for #{number}: fix #{fix_pr} is not merged")
+                    continue
+                for iid in ids:
+                    state["cleanup_pending"][iid] = {"issue": number, "fix_pr": fix_pr,
+                                                     "cleanup": cleanup, "since": day}
+                log.append(f"cleanup pending for #{number} (fix #{fix_pr} merged)")
             elif action in ("comment", "none") and isinstance(number, int):
                 issue = gh.issue(number)
                 if issue is None:
@@ -480,6 +515,7 @@ def apply_triage(triage: dict, fails: list[dict], state: dict, gh: GitHub,
 
 def update_streaks(state: dict, results: dict, day: str) -> None:
     """Days on which each tracked invariant passed in an unbroken run of checks."""
+    state.setdefault("cleanup_pending", {})
     failing = {f["id"] for f in failures(results)}
     passed = passed_ids(results)
     for iid in list(state["issue_map"]):
@@ -489,10 +525,16 @@ def update_streaks(state: dict, results: dict, day: str) -> None:
         elif iid in passed and day not in days:
             days = (days + [day])[-PASS_DAYS_TO_CLOSE:]
         state["pass_days"][iid] = days
+    # A pending cleanup is done once the invariant passes; if it fails again
+    # later, that is a new problem for triage rather than the same cleanup.
+    for iid in list(state["cleanup_pending"]):
+        if iid in passed:
+            state["cleanup_pending"].pop(iid)
 
 
 def close_recovered(state: dict, gh: GitHub, run_url: str) -> list[str]:
     """Close issues whose tracked invariants all passed on two consecutive days."""
+    state.setdefault("cleanup_pending", {})
     log: list[str] = []
     by_issue: dict[int, list[str]] = {}
     for iid, number in state["issue_map"].items():
@@ -518,6 +560,7 @@ def close_recovered(state: dict, gh: GitHub, run_url: str) -> list[str]:
         for iid in ids:
             state["issue_map"].pop(iid, None)
             state["pass_days"].pop(iid, None)
+            state["cleanup_pending"].pop(iid, None)
     return log
 
 
@@ -526,6 +569,7 @@ def fmt_count(value) -> str:
 
 
 def summary_comment(results: dict, state: dict, triage: dict, log: list[str], run_url: str) -> str:
+    state.setdefault("cleanup_pending", {})
     day = today(results)
     link = f" [Run]({run_url})" if run_url else ""
     if not results.get("complete"):
@@ -540,10 +584,19 @@ def summary_comment(results: dict, state: dict, triage: dict, log: list[str], ru
         for f in fails:
             number = state["issue_map"].get(f["id"])
             detail = ", ".join(f["examples"][:3]) or f["message"].split("\n")[0][:120] or "–"
+            where = f"#{number}" if number is not None else "untracked"
+            if f["id"] in state["cleanup_pending"]:
+                where = f"#{state['cleanup_pending'][f['id']]['issue']} (cleanup pending)"
             lines.append(f"| `{short_id(f['id'])}` | {fmt_count(f['count'])} | "
-                         f"{detail.replace('|', '/')} | "
-                         f"{f'#{number}' if number is not None else 'untracked'} |")
+                         f"{detail.replace('|', '/')} | {where} |")
         lines.append("")
+        failing_ids = {f["id"] for f in fails}
+        for iid, c in sorted(state["cleanup_pending"].items()):
+            if iid in failing_ids:
+                lines.append(f"- Cleanup pending since {c['since']}: `{short_id(iid)}` (#{c['issue']}, "
+                             f"fix #{c['fix_pr']} merged). Run `{c['cleanup']}`.")
+        if any(iid in failing_ids for iid in state["cleanup_pending"]):
+            lines.append("")
     else:
         lines += ["Every invariant passes.", ""]
     signals = [s for s in results.get("signals", []) if s.get("ok") is not False]

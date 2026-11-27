@@ -21,8 +21,9 @@ def results(day="2026-11-27", failed=(), passed=(), complete=True, signals=()):
 class FakeGitHub(dq.GitHub):
     """Records writes; answers reads from an in-memory issue list."""
 
-    def __init__(self, issues=None, report=None):
+    def __init__(self, issues=None, report=None, merged=()):
         super().__init__()
+        self.merged = set(merged)
         self.issues = {n: {"number": n, "state": s, "title": f"#{n}"} for n, s in (issues or {}).items()}
         self.report = report
         self.next_number = 500
@@ -32,6 +33,9 @@ class FakeGitHub(dq.GitHub):
 
     def issue(self, number):
         return self.issues.get(number)
+
+    def pr_merged(self, number):
+        return number in self.merged
 
     def write(self, *args):
         self.writes.append(list(args))
@@ -117,6 +121,43 @@ class TestApplyTriage:
         assert "#281" in body and "Fixes #" in body and "dq-invariants" in body
 
 
+class TestCleanupPending:
+    CLEANUP = {"invariants": [TITLE], "action": "cleanup_pending", "issue": 260, "fix_pr": 280,
+               "cleanup": "poetry run python scripts/cleanup_false_feed_events.py --apply", "body": "x"}
+
+    def test_merged_fix_becomes_a_report_line_not_an_issue_change(self):
+        fails = dq.failures(results(failed=[TITLE]))
+        gh = FakeGitHub(issues={260: "CLOSED"}, merged={280})
+        state = dq.read_state("")
+        log = dq.apply_triage({"groups": [self.CLEANUP]}, fails, state, gh, "2026-11-27", "")
+        assert gh.writes == []
+        assert log == ["cleanup pending for #260 (fix #280 merged)"]
+        assert state["cleanup_pending"][TITLE]["cleanup"].endswith("--apply")
+        # Tomorrow it is still failing but needs no triage, and the report says what to run.
+        assert dq.untracked_failures(fails, state, gh) == []
+        text = dq.summary_comment(results(failed=[TITLE]), state, {}, [], "")
+        assert "#260 (cleanup pending)" in text
+        assert "Run `poetry run python scripts/cleanup_false_feed_events.py --apply`" in text
+
+    def test_unmerged_fix_is_refused(self):
+        fails = dq.failures(results(failed=[TITLE]))
+        gh = FakeGitHub(issues={260: "OPEN"}, merged=())
+        state = dq.read_state("")
+        log = dq.apply_triage({"groups": [self.CLEANUP]}, fails, state, gh, "2026-11-27", "")
+        assert "not merged" in log[0]
+        assert state["cleanup_pending"] == {} and state["issue_map"] == {}
+
+    def test_cleanup_ends_when_the_invariant_passes(self):
+        state = {"issue_map": {TITLE: 260}, "pass_days": {},
+                 "cleanup_pending": {TITLE: {"issue": 260, "fix_pr": 280, "cleanup": "x", "since": "d"}}}
+        gh = FakeGitHub(issues={260: "CLOSED"})
+        dq.update_streaks(state, results("2026-11-28", passed=[TITLE]), "2026-11-28")
+        assert state["cleanup_pending"] == {}
+        # A later failure is a new problem for triage again.
+        fails = dq.failures(results(failed=[TITLE]))
+        assert [f["id"] for f in dq.untracked_failures(fails, state, gh)] == [TITLE]
+
+
 class TestClosing:
     def test_closes_after_two_passing_days_not_two_runs(self):
         state = {"issue_map": {TITLE: 260, YEAR: 260}, "pass_days": {}}
@@ -181,7 +222,7 @@ class TestPlanAndReport:
         gh = FakeGitHub(issues={260: "OPEN"}, report=report_with_state(state))
         assert dq.report(str(path), None, gh) == 1
         edit = next(w for w in gh.writes if w[:2] == ["issue", "edit"])
-        assert dq.read_state(edit[-1]) == state
+        assert dq.read_state(edit[-1]) == {**state, "cleanup_pending": {}}
         comment = next(w for w in gh.writes if w[:2] == ["issue", "comment"])
         assert "could not run" in comment[-1]
 

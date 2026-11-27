@@ -107,7 +107,9 @@ issue tracks go to Claude (Sonnet, read-only tools), which answers in JSON; the
 script then files at most 3 `bug` issues or comments on existing ones, posts one
 comment on the rolling "Daily data-quality report" issue (its body holds the
 invariant→issue state), and closes issues whose invariants passed on two
-consecutive days. Claude is skipped when nothing new fails.
+consecutive days. A fix that is merged but still waiting on its `--apply`
+cleanup is listed as one "cleanup pending" line, not a new bug. Claude is
+skipped when nothing new fails.
 
 Researcher filter choices are fetched on demand from `/api/researcher-options`
 (at most 50 results), rather than included in `/api/filter-options`. Weekly

@@ -7,7 +7,9 @@ name: Data quality
 # read-only). Only when a failure is not yet tracked by an open issue does
 # Claude triage it: Claude has read-only GitHub tools and returns JSON; the
 # report job applies that within fixed limits (at most 3 new issues per run,
-# only the bug and high-priority labels, @mentions defused), posts one
+# only the bug and high-priority labels, @mentions defused; an invariant whose
+# fix is merged but whose cleanup has not run yet becomes one "cleanup pending"
+# line instead of an issue), posts one
 # comment on the rolling "Daily data-quality report" issue, and closes issues
 # whose invariants passed on two consecutive days.
 #
@@ -143,7 +145,7 @@ jobs:
             --max-budget-usd 3
             --allowedTools "Read,Glob,Grep,Bash(gh issue list:*),Bash(gh issue view:*),Bash(gh search issues:*),Bash(gh search prs:*),Bash(gh pr list:*),Bash(gh pr view:*)"
             --disallowedTools "Edit,Write,MultiEdit,NotebookEdit,WebFetch,WebSearch"
-            --json-schema '{"type":"object","required":["summary","groups"],"properties":{"summary":{"type":"string"},"groups":{"type":"array","items":{"type":"object","required":["invariants","action","body"],"properties":{"invariants":{"type":"array","items":{"type":"string"}},"root_cause":{"type":"string"},"action":{"type":"string","enum":["create","comment","none"]},"issue":{"type":"integer"},"reopen":{"type":"boolean"},"title":{"type":"string"},"body":{"type":"string"},"high_priority":{"type":"boolean"},"fix_pr":{"type":"integer"}}}}}}'
+            --json-schema '{"type":"object","required":["summary","groups"],"properties":{"summary":{"type":"string"},"groups":{"type":"array","items":{"type":"object","required":["invariants","action","body"],"properties":{"invariants":{"type":"array","items":{"type":"string"}},"root_cause":{"type":"string"},"action":{"type":"string","enum":["create","comment","none","cleanup_pending"]},"issue":{"type":"integer"},"reopen":{"type":"boolean"},"title":{"type":"string"},"body":{"type":"string"},"high_priority":{"type":"boolean"},"fix_pr":{"type":"integer"},"cleanup":{"type":"string"}}}}}}'
           prompt: |
             You triage the daily data-quality check of the Econ Newsfeed production
             database (see CLAUDE.md). Read dq/triage_input.json: `untracked_failures`
@@ -160,6 +162,14 @@ jobs:
                for an open pull request that already fixes it (`gh pr list --search`).
                A failure whose previous_issue is closed means the problem came back
                or the fix did not clean up existing rows.
+
+               Fix merged, cleanup pending: many fix PRs add an invariant that keeps
+               failing on production until a one-off cleanup runs with `--apply`
+               (or until the next scrape reprocesses the backlog). When the issue is
+               closed or has a linked pull request, that pull request is merged
+               (`gh pr view <n> --json state,mergedAt,body`), and its description or
+               changed files name the cleanup step, this is NOT a new bug and NOT a
+               reason to reopen: use action "cleanup_pending".
             3. Answer with one group per root cause:
                - action "comment" with `issue` when an existing issue covers it; the
                  body is a short comment (what fails now, row counts, example ids,
@@ -173,7 +183,14 @@ jobs:
                  `max_new_issues` creates; put the most important first. Set
                  `high_priority` only for a large problem: thousands of rows or a
                  clear share of the papers or feed events.
-               - `fix_pr`: the number of an open pull request that already fixes it.
+               - action "cleanup_pending" with `issue`, `fix_pr` (the merged pull
+                 request) and `cleanup`: the exact command from that pull request
+                 (for example `poetry run python scripts/cleanup_data_quality.py --apply`)
+                 or what must happen ("next scrape merges the backlog"). The body
+                 can be one sentence; it is not posted. The workflow checks that the
+                 pull request is merged and lists it as one line in the daily report.
+               - `fix_pr`: for the other actions, the number of an open pull request
+                 that already fixes it.
                Every untracked failure id must appear in exactly one group.
             4. `summary`: two or three sentences for the daily report.
 
@@ -199,6 +216,7 @@ jobs:
     permissions:
       contents: read
       issues: write
+      pull-requests: read  # to confirm a cleanup-pending fix PR is merged
     steps:
       - uses: actions/checkout@v7
 
