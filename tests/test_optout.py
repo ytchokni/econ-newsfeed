@@ -113,6 +113,44 @@ def test_searlo_approval_goes_through_the_guard():
     insert.assert_not_called()
 
 
+def _blocked_by(stored_first, stored_last, first, last):
+    """Evaluate name_optout_query against a tombstone for stored_first/stored_last."""
+    full = {name_hash(stored_first, stored_last)}
+    variants = set(optouts.name_variant_hashes(stored_first, stored_last))
+    sql, params = optouts.name_optout_query(first, last)
+    if params[0] in full:
+        return True
+    pairs = list(zip(params[1::2], params[2::2]))
+    assert sql.count("(kind = %s AND name_hash = %s)") == len(pairs)
+    return any(pair in variants for pair in pairs)
+
+
+@pytest.mark.parametrize("first,last,blocked", [
+    ("Ada Maria", "Optout", True),     # exact
+    ("Ada M.", "Optout", True),        # same first given name, middle initial
+    ("Ada", "Optout", True),           # middle name dropped
+    ("A.", "Optout", True),            # initial only
+    ("A. M.", "Optout", True),         # initials only
+    ("Ádá", "OPTOUT", True),           # accents and case
+    ("Anna", "Optout", False),         # different person, same initial
+    ("B.", "Optout", False),           # different initial
+    ("Ada", "Other", False),           # different last name
+])
+def test_name_variants_of_opted_out_researcher_are_refused(first, last, blocked):
+    assert _blocked_by("Ada Maria", "Optout", first, last) is blocked
+
+
+def test_initials_only_opt_out_refuses_any_first_name_with_that_initial():
+    assert _blocked_by("A.", "Optout", "Anna", "Optout")
+    assert not _blocked_by("A.", "Optout", "Bob", "Optout")
+
+
+def test_variant_tombstone_is_hash_only():
+    rows = optouts.name_variant_hashes("Ada Maria", "Optout")
+    assert {k for k, _ in rows} == {"initial", "given"}
+    assert all(len(h) == 64 and "optout" not in h for _, h in rows)
+
+
 # ---------------------------------------------------------------------------
 # opt_out_researcher
 # ---------------------------------------------------------------------------
@@ -208,6 +246,8 @@ def test_apply_tombstones_deletes_and_holds_in_one_commit():
     url_rows = next(p for q, p in db.calls if q.startswith("INSERT IGNORE INTO researcher_optout_urls"))
     assert url_rows == [(url_hash(u), url_key_hash(u), 77)
                         for u in ("https://janedoe.example/", "https://janedoe.example/papers")]
+    name_rows = next(p for q, p in db.calls if q.startswith("INSERT IGNORE INTO researcher_optout_names"))
+    assert name_rows == [(k, h, 77) for k, h in optouts.name_variant_hashes("Jane", "Doe")]
     assert ("DELETE FROM papers WHERE id IN (%s,%s)", [10, 12]) in db.calls
     assert any(q.startswith("UPDATE papers SET source_url = NULL") for q in sql)
     assert any(q.startswith("UPDATE feed_events SET event_source_url = NULL") for q in sql)

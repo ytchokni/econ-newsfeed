@@ -530,6 +530,16 @@ _TABLE_DEFINITIONS = {
             FOREIGN KEY (optout_id) REFERENCES researcher_optouts(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    # Hashed name variants ("A. Name", "Ada M. Name"); see optouts.name_variant_hashes.
+    "researcher_optout_names": """
+        CREATE TABLE IF NOT EXISTS researcher_optout_names (
+            kind VARCHAR(16) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            name_hash CHAR(64) CHARACTER SET ascii COLLATE ascii_bin NOT NULL,
+            optout_id INT NOT NULL,
+            PRIMARY KEY (kind, name_hash, optout_id),
+            FOREIGN KEY (optout_id) REFERENCES researcher_optouts(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
     "url_discoveries": """
         CREATE TABLE IF NOT EXISTS url_discoveries (
             id INT AUTO_INCREMENT PRIMARY KEY,

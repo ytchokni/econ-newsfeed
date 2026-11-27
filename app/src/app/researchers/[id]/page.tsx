@@ -5,8 +5,8 @@ import ResearcherDetailContent from "./ResearcherDetailContent";
 import JsonLd from "@/components/JsonLd";
 import type { ResearcherDetail } from "@/lib/types";
 import { fetchBackend } from "@/lib/server-api";
-import { researcherJsonLd, researcherMetadata } from "@/lib/seo";
-import { getContactEmail, getSiteUrl } from "@/lib/site-info";
+import { getCanonicalOrigin, researcherJsonLd, researcherMetadata } from "@/lib/seo";
+import { getContactEmail } from "@/lib/site-info";
 
 // 404 from the backend -> null (a real 404 page); other failures throw.
 const fetchResearcher = cache((id: number) =>
@@ -51,7 +51,7 @@ export default async function ResearcherDetailPage({
         id={numId}
         initialData={researcher}
         contactEmail={getContactEmail()}
-        siteUrl={getSiteUrl()}
+        siteUrl={getCanonicalOrigin()}
       />
     </>
   );

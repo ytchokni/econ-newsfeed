@@ -3,7 +3,7 @@ import ContactPage from "../contact/page";
 import PrivacyPage from "../privacy/page";
 import SiteFooter from "@/components/SiteFooter";
 import { genericRemovalMailto, researcherRemovalMailto } from "@/lib/removal";
-import { getContactEmail, getSiteUrl } from "@/lib/site-info";
+import { getContactEmail } from "@/lib/site-info";
 
 const ORIGINAL_ENV = process.env;
 
@@ -11,9 +11,6 @@ beforeEach(() => {
   process.env = { ...ORIGINAL_ENV };
   delete process.env.CONTACT_EMAIL;
   delete process.env.SITE_URL;
-  delete process.env.NEXTAUTH_URL;
-  delete process.env.AUTH_URL;
-  delete process.env.VERCEL_PROJECT_PRODUCTION_URL;
 });
 
 afterAll(() => {
@@ -27,14 +24,6 @@ describe("site info", () => {
     expect(getContactEmail()).toBe("owner@example.test");
     process.env.CONTACT_EMAIL = "not an email";
     expect(getContactEmail()).toBeNull();
-  });
-
-  it("derives the public site URL", () => {
-    expect(getSiteUrl()).toBe("http://localhost:3000");
-    process.env.VERCEL_PROJECT_PRODUCTION_URL = "www.econnewsfeed.org";
-    expect(getSiteUrl()).toBe("https://www.econnewsfeed.org");
-    process.env.SITE_URL = "https://site.example/";
-    expect(getSiteUrl()).toBe("https://site.example");
   });
 });
 

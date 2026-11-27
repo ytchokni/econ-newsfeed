@@ -150,8 +150,12 @@ then keeps a hash-only tombstone (`researcher_optouts`, `researcher_optout_urls`
 and a rejected identity-hold row in `site_mining_candidates`. The tombstone is
 checked in `get_researcher_id()` (co-author extraction), `add_researcher_url()`
 (Searlo approvals, imports), `get_all_researcher_urls()`, the extraction queue,
-and the miner's enqueue/preflight. One-off scripts that `INSERT` URLs directly
-bypass `add_researcher_url()`, but crawl and extraction still skip those URLs.
+and the miner's enqueue/preflight. `get_researcher_id()` also refuses hashed name
+variants (`researcher_optout_names`: same first given name, or initials only, plus
+last name), so "A. M. Name" is not re-created as a co-author. Scripts that insert
+researchers or URLs must check `name_optout_query()` / use `add_researcher_url()`
+(the RePEc import scripts and `repair_verified_papers.py` do); crawl and extraction
+skip opted-out URLs regardless.
 
 **Legal pages:** `/contact` (Impressum, § 5 DDG; `/impressum` redirects there)
 and `/privacy` read `CONTACT_EMAIL` on the Next.js server; owner name and address

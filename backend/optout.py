@@ -18,7 +18,7 @@ import json
 import logging
 
 from backend.database.connection import get_connection
-from backend.database.optouts import name_hash, url_hash, url_key_hash
+from backend.database.optouts import name_hash, name_variant_hashes, url_hash, url_key_hash
 
 logger = logging.getLogger(__name__)
 
@@ -114,6 +114,13 @@ def opt_out_researcher(researcher_id: int, *, apply: bool = False) -> dict:
             (name_hash(person["first_name"], person["last_name"]), researcher_id),
         )
         optout_id = cursor.lastrowid
+        variants = name_variant_hashes(person["first_name"], person["last_name"])
+        if variants:
+            cursor.executemany(
+                "INSERT IGNORE INTO researcher_optout_names (kind, name_hash, optout_id)"
+                " VALUES (%s, %s, %s)",
+                [(kind, h, optout_id) for kind, h in variants],
+            )
         if urls:
             cursor.executemany(
                 "INSERT IGNORE INTO researcher_optout_urls (url_hash, url_key_hash, optout_id)"

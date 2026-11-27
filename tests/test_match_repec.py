@@ -225,3 +225,22 @@ def test_parse_import_csv(tmp_path):
     assert rows[0]["researcher_id"] == 1
     assert rows[0]["repec_homepage"] == "https://example.com"
     assert rows[0]["repec_workplace"] == "Universitetet i Bergen"
+
+
+def test_import_matches_adds_urls_through_tombstone_guard(tmp_path, monkeypatch):
+    """URLs go through add_researcher_url, which refuses opted-out researchers' URLs."""
+    from scripts.match_repec import import_matches
+    import backend.database.connection as connection
+    import backend.database.researchers as researchers
+
+    path = tmp_path / "approved.csv"
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=["researcher_id", "repec_homepage", "repec_workplace"])
+        writer.writeheader()
+        writer.writerow({"researcher_id": "7", "repec_homepage": "https://a.example/", "repec_workplace": ""})
+    added, raw_sql = [], []
+    monkeypatch.setattr(researchers, "add_researcher_url", lambda *a: added.append(a))
+    monkeypatch.setattr(connection, "execute_query", lambda sql, params=(): raw_sql.append(sql))
+    import_matches(str(path))
+    assert added == [(7, "HOME", "https://a.example/")]
+    assert not any("researcher_urls" in sql for sql in raw_sql)

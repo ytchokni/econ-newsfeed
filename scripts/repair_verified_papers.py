@@ -275,7 +275,7 @@ def mutate(cursor, plans):
             if researcher_id is None:
                 from backend.database.optouts import name_optout_query
                 cursor.execute(*name_optout_query(WEBB['first_name'], WEBB['last_name']))
-                require(cursor.fetchone() is None, 'Researcher opted out; refusing to re-create them.')
+                require(not cursor.fetchall(), 'David Webb opted out; refusing to re-create the researcher.')
                 cursor.execute('INSERT INTO researchers (first_name, last_name, affiliation) VALUES (%s, %s, %s)',
                                tuple(WEBB.values()))
                 researcher_id = cursor.lastrowid
