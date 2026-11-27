@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import logging
 import re
+from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
@@ -154,13 +155,23 @@ def _build_prompt(text_content: str, url: str) -> str:
     )
 
 
-def extract_description(text_content: str, url: str, scrape_log_id=None) -> str | None:
-    """Ask the LLM for a researcher bio; return it only if it is clean.
+@dataclass
+class DescriptionResult:
+    """Outcome of one bio call.
 
-    Returns None when the call fails, the model finds no bio, or the answer
-    is rejected by `clean_description()`. Callers must treat None as "keep
-    what is stored", never as "clear the bio".
+    `description` is a clean bio or None. `retry_after` is set when the
+    provider refused the call for quota or account reasons, so a background
+    job can stop and leave the shared key to extraction. `rejected` is True
+    when the model answered but the answer was not a bio.
     """
+    description: str | None = None
+    retry_after: float | None = None
+    rejected: bool = False
+    failed: bool = False
+
+
+def request_description(text_content: str, url: str, scrape_log_id=None) -> DescriptionResult:
+    """Ask the LLM for a researcher bio and validate the answer."""
     from backend.llm.client import extract_json, get_model
 
     try:
@@ -169,7 +180,7 @@ def extract_description(text_content: str, url: str, scrape_log_id=None) -> str 
         )
     except Exception as e:  # best-effort: never break extraction over a bio
         logger.error("Error extracting description from %s: %s: %s", url, type(e).__name__, e)
-        return None
+        return DescriptionResult(failed=True)
 
     if result.usage is not None:
         try:
@@ -181,12 +192,23 @@ def extract_description(text_content: str, url: str, scrape_log_id=None) -> str 
             logger.warning("Could not log description LLM usage for %s: %s", url, e)
 
     if result.parsed is None:
-        return None
+        return DescriptionResult(retry_after=result.retry_after, failed=True)
     raw = result.parsed.description
     desc = clean_description(raw)
     if raw and desc is None:
         logger.warning("Rejected description for %s (not a bio): %.120r", url, raw)
-    return desc
+        return DescriptionResult(rejected=True)
+    return DescriptionResult(description=desc)
+
+
+def extract_description(text_content: str, url: str, scrape_log_id=None) -> str | None:
+    """Ask the LLM for a researcher bio; return it only if it is clean.
+
+    Returns None when the call fails, the model finds no bio, or the answer
+    is rejected by `clean_description()`. Callers must treat None as "keep
+    what is stored", never as "clear the bio".
+    """
+    return request_description(text_content, url, scrape_log_id=scrape_log_id).description
 
 
 # MySQL REGEXP twin of _BULLET_LABEL_RE (ICU syntax, MySQL 8).

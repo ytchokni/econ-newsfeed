@@ -297,6 +297,20 @@ _TABLE_DEFINITIONS = {
             FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    # Paced bio backfill (issue #258): last attempt per researcher, so a HOME
+    # page with no usable bio is not sent to the LLM again until it changes.
+    "researcher_bio_backfill": """
+        CREATE TABLE IF NOT EXISTS researcher_bio_backfill (
+            researcher_id INT NOT NULL PRIMARY KEY,
+            url_id INT DEFAULT NULL,
+            content_hash VARCHAR(64) DEFAULT NULL,
+            outcome VARCHAR(16) NOT NULL,
+            attempted_at DATETIME NOT NULL,
+            attempts INT NOT NULL DEFAULT 0,
+            INDEX idx_attempted_at (attempted_at),
+            FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
     "paper_topics": """
         CREATE TABLE IF NOT EXISTS paper_topics (
             id INT AUTO_INCREMENT PRIMARY KEY,

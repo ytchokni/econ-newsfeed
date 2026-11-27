@@ -195,6 +195,11 @@ try:
     _JEL_INTERVAL_MINUTES = max(5, int(os.environ.get('JEL_CLASSIFICATION_INTERVAL_MINUTES', '60')))
 except ValueError:
     _JEL_INTERVAL_MINUTES = 60
+BIO_BACKFILL_ENABLED = os.environ.get('BIO_BACKFILL_ENABLED', 'false').lower() == 'true'
+try:
+    _BIO_BACKFILL_INTERVAL_MINUTES = max(5, int(os.environ.get('BIO_BACKFILL_INTERVAL_MINUTES', '60')))
+except ValueError:
+    _BIO_BACKFILL_INTERVAL_MINUTES = 60
 DIGEST_ENABLED = os.environ.get('RESEND_API_KEY', '') != ''
 _EXTRACTION_DELAY_SECONDS = float(os.environ.get('EXTRACTION_DELAY_SECONDS', '2'))
 _EXTRACTION_IDLE_SECONDS = 300       # queue empty → re-poll every 5 min
@@ -489,6 +494,16 @@ def run_jel_classification_job() -> dict:
         return run_jel_classification_batch()
     except Exception as e:
         logger.error("JEL classification job failed: %s: %s", type(e).__name__, e)
+        return {"stopped": "error"}
+
+
+def run_bio_backfill_job() -> dict:
+    """Scheduled, budgeted bio backfill batch (see backend.pipeline.bio_backfill)."""
+    from backend.pipeline.bio_backfill import run_bio_backfill_batch
+    try:
+        return run_bio_backfill_batch()
+    except Exception as e:
+        logger.error("Bio backfill job failed: %s: %s", type(e).__name__, e)
         return {"stopped": "error"}
 
 
@@ -819,6 +834,18 @@ def start_scheduler() -> None:
         )
         logger.info("JEL classification scheduled every %d minutes", _JEL_INTERVAL_MINUTES)
 
+    if BIO_BACKFILL_ENABLED:
+        _scheduler.add_job(
+            run_bio_backfill_job,
+            'interval',
+            minutes=_BIO_BACKFILL_INTERVAL_MINUTES,
+            id='bio_backfill',
+            max_instances=1,
+            coalesce=True,
+            misfire_grace_time=600,
+        )
+        logger.info("Bio backfill scheduled every %d minutes", _BIO_BACKFILL_INTERVAL_MINUTES)
+
     if QUALITY_REVIEW_ENABLED:
         from backend.enrichment.review_batch import submit_review_batch, check_review_batches
         _scheduler.add_job(
@@ -847,6 +874,8 @@ def shutdown_scheduler() -> None:
     if _scheduler is not None:
         from backend.enrichment.jel_job import request_stop as _stop_jel
         _stop_jel()
+        from backend.pipeline.bio_backfill import request_stop as _stop_bio_backfill
+        _stop_bio_backfill()
         _scheduler.shutdown(wait=True)
         _scheduler = None
         logger.info("Scheduler shut down")
