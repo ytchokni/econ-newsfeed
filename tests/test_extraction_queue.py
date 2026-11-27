@@ -106,6 +106,8 @@ def test_get_urls_needing_extraction_orders_all_pending_rows():
     waited = (NOW - timedelta(hours=eq.CHANGED_PAGE_GRACE_HOURS + 1)).replace(tzinfo=None)
 
     def fake_fetch(sql, params=None):
+        if "extraction_retry_at" in sql:
+            return []  # pages cooling down after failures (none here)
         if "IN (" in sql:
             assert params == (1,)  # wait times are looked up for changed pages only
             return [{"url_id": 1, "pending_since": waited}]
