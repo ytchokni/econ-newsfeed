@@ -12,6 +12,18 @@ logger = logging.getLogger(__name__)
 NEXTAUTH_SECRET = os.environ.get("NEXTAUTH_SECRET", "")
 ALGORITHM = "HS256"
 
+# Email-code sessions carry the account id instead of a Google subject
+# (Google subjects are numeric, so the two never collide).
+USER_ID_SUB_PREFIX = "user:"
+
+
+def _user_id_from_sub(sub: str) -> int | None:
+    """Return the account id from an email-code session subject, else None."""
+    if not sub.startswith(USER_ID_SUB_PREFIX):
+        return None
+    raw = sub[len(USER_ID_SUB_PREFIX):]
+    return int(raw) if raw.isdigit() else None
+
 
 def _extract_token(request: Request) -> str | None:
     """Extract Bearer token from Authorization header."""
@@ -50,9 +62,20 @@ async def get_current_user(request: Request) -> dict:
     if not google_id:
         raise HTTPException(status_code=401, detail="Invalid token payload")
 
+    if google_id.startswith(USER_ID_SUB_PREFIX):
+        user_id = _user_id_from_sub(google_id)
+        if user_id is None:
+            raise HTTPException(status_code=401, detail="Invalid token payload")
+        with connection_scope():
+            user = Database.get_user_by_id(user_id)
+        if not user:
+            raise HTTPException(status_code=401, detail="Account no longer exists")
+        return user
+
     with connection_scope():
         user = Database.get_or_create_user(
             google_id=google_id, email=email, name=name, picture_url=picture,
+            email_verified=payload.get("email_verified") is True,
         )
     return user
 
@@ -75,6 +98,13 @@ async def get_optional_user(request: Request) -> dict | None:
     google_id = payload.get("sub")
     if not google_id:
         return None
+
+    if google_id.startswith(USER_ID_SUB_PREFIX):
+        user_id = _user_id_from_sub(google_id)
+        if user_id is None:
+            return None
+        with connection_scope():
+            return Database.get_user_by_id(user_id)
 
     with connection_scope():
         user = Database.get_user_by_google_id(google_id)

@@ -96,7 +96,10 @@ export function useResearcherOptions(search = "", ids?: string) {
 }
 
 export function useCapabilities() {
-  return useSWR<{ weekly_digest_available: boolean }>("/api/capabilities", fetchJson);
+  return useSWR<{ weekly_digest_available: boolean; email_login_available?: boolean }>(
+    "/api/capabilities",
+    fetchJson,
+  );
 }
 
 export function useJelCodes() {
@@ -428,4 +431,47 @@ export async function updateNotificationPrefs(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(prefs),
   });
+}
+
+// --- Email-code login ---
+
+export class EmailLoginRequestError extends Error {
+  constructor(
+    message: string,
+    public code: string,
+    public retryAfter: number | null,
+  ) {
+    super(message);
+  }
+}
+
+/** Ask the backend to email a one-time sign-in code to this address. */
+export async function requestEmailLoginCode(
+  email: string,
+): Promise<{ expires_in: number; resend_after: number }> {
+  let res: Response;
+  try {
+    res = await fetch("/api/email-login/request-code", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+  } catch {
+    throw new EmailLoginRequestError("Couldn't reach the server. Check your connection.", "network", null);
+  }
+  if (res.ok) return res.json();
+  let code = "request_failed";
+  let message = "Something went wrong. Try again in a moment.";
+  try {
+    const body = await res.json();
+    if (typeof body?.error?.code === "string") code = body.error.code;
+    if (typeof body?.error?.message === "string" && code !== "rate_limit_exceeded") {
+      message = body.error.message;
+    }
+  } catch {
+    // Non-JSON error body: keep the generic message.
+  }
+  if (code === "rate_limit_exceeded") message = "Too many requests. Wait a minute and try again.";
+  const retryAfter = Number(res.headers.get("Retry-After")) || null;
+  throw new EmailLoginRequestError(message, code, retryAfter);
 }

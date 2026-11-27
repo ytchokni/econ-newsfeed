@@ -10,8 +10,12 @@ from backend.database.papers import feed_visible_event_sql
 
 
 def get_or_create_user(google_id: str, email: str, name: str | None = None,
-                       picture_url: str | None = None) -> dict:
-    """Find user by google_id or create one. Returns the user row as a dict."""
+                       picture_url: str | None = None, email_verified: bool = False) -> dict:
+    """Find user by google_id or create one. Returns the user row as a dict.
+
+    With ``email_verified``, a first Google login adopts an existing
+    email-code account for the same address instead of creating a duplicate.
+    """
     row = fetch_one("SELECT * FROM users WHERE google_id = %s", (google_id,))
     if row:
         execute_query(
@@ -23,6 +27,24 @@ def get_or_create_user(google_id: str, email: str, name: str | None = None,
         row['name'] = name
         row['picture_url'] = picture_url
         return row
+
+    if email_verified and email:
+        # An account created by email code becomes this Google account's,
+        # but only when Google has verified that the person owns the address.
+        email_row = fetch_one(
+            "SELECT * FROM users WHERE email = %s AND google_id IS NULL ORDER BY id LIMIT 1",
+            (email,),
+        )
+        if email_row:
+            execute_query(
+                "UPDATE users SET google_id = %s, name = COALESCE(name, %s), "
+                "picture_url = COALESCE(picture_url, %s), updated_at = %s "
+                "WHERE id = %s AND google_id IS NULL",
+                (google_id, name, picture_url, datetime.now(timezone.utc), email_row['id']),
+            )
+            linked = fetch_one("SELECT * FROM users WHERE google_id = %s", (google_id,))
+            if linked:
+                return linked
 
     user_id = execute_query(
         "INSERT INTO users (google_id, email, name, picture_url, created_at) "
