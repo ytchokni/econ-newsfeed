@@ -32,6 +32,7 @@ class PaperSnapshotResult:
     new_status: str | None = None
     venue: str | None = None
     source_url: str | None = None
+    year: str | None = None
 
     @property
     def status_changed(self) -> bool:
@@ -185,7 +186,8 @@ def append_paper_snapshot(paper_id: int, status: str | None, venue: str | None,
                 conn.commit()
     logging.info(f"Paper snapshot appended for id={paper_id}")
     return PaperSnapshotResult(changed=True, old_status=old_status, new_status=effective_status,
-                               venue=merged['venue'], source_url=source_url)
+                               venue=merged['venue'], source_url=source_url,
+                               year=merged['year'])
 
 
 def get_paper_snapshots(paper_id: int, limit: int = 20) -> list[dict]:

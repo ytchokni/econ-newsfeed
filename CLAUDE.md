@@ -49,6 +49,7 @@ poetry run python scripts/cleanup_data_quality.py   # Fix rows flagged by data-q
 poetry run python scripts/recompute_has_top5.py     # Recompute researchers.has_top5_pub (dry-run; add --apply to write)
 poetry run python scripts/reverify_openalex_ids.py --max-requests 300 --apply  # #266: re-check pre-15-Oct OpenAlex IDs (~900 budgeted requests: pause ENRICHMENT_WORKER_ENABLED or raise OPENALEX_DAILY_BUDGET for ~3 days; DB-cached, resumable; --status, --undo, --purge-cache)
 poetry run python scripts/merge_renamed_papers.py   # #265: merge renames sharing an SSRN/NBER/arXiv/DOI link (dry-run; --apply)
+poetry run python scripts/cleanup_spurious_feed_events.py  # Delete stale new_paper / bogus "published" events (dry-run; --apply backs up first; --undo RUN)
 
 # Docker
 docker compose up         # Full stack (db + api + frontend)
@@ -98,7 +99,7 @@ once the extraction backlog has cleared:
 
 **Zombie scrape_log cleanup:** On scheduler start and hourly thereafter, `scrape_log` entries stuck in `'running'` are marked `'failed'` based on the scrape advisory lock: if no connection holds the lock, all running rows older than 5 minutes are zombies; if the lock is held, all but the newest running row are. Deploys that restart the container mid-scrape are swept on the next boot.
 
-Feed event integrity is protected by `_title_in_previous_snapshot()` and the `_url_has_baseline()` check in `backend.pipeline.extraction.extract_one_url()`.
+Feed event integrity is protected by `_title_in_previous_snapshot()` and the `_url_has_baseline()` check in `backend.pipeline.extraction.extract_one_url()`. The plausibility rules in `backend/publication_rules.py` also apply: `new_paper` only for papers new to the database (not seeds, not known for over a week, not dated more than 2 years before the event), and `accepted`/`published` only with a journal venue (a `published` item at most a year old). `scripts/cleanup_spurious_feed_events.py` applies the same rules to stored events.
 
 Deployment waits for `/api/ready`, which checks the database, versioned snapshot
 guard, and required schema. `/api/health` is process liveness only. Losing the

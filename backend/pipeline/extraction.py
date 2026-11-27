@@ -25,6 +25,7 @@ from backend.pipeline.html_fetcher import CONTENT_MAX_CHARS, HTMLFetcher
 from backend.enrichment.link_extractor import match_and_save_paper_links
 from backend.pipeline.paper_saver import PaperSaver, validate_title_change
 from backend.pipeline.publication import Publication
+from backend.publication_rules import status_change_suppression_reason
 
 logger = logging.getLogger(__name__)
 
@@ -145,8 +146,6 @@ def persist_extraction(url: str, url_id: int, pubs: list[dict],
     _append_snapshots(pubs, url, event_date, emit_events=not is_seed)
 
 
-_STALENESS_YEARS = 10
-
 _INTERESTING_TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
     ("working_paper", "revise_and_resubmit"),
     ("working_paper", "accepted"),
@@ -169,7 +168,7 @@ def _append_snapshots(pubs: list[dict], source_url: str, event_date=None, *, emi
     if not title_to_pub:
         return
 
-    current_year = datetime.now(timezone.utc).year
+    reference_year = (event_date or datetime.now(timezone.utc)).year
 
     for title, row in find_papers_by_titles(list(title_to_pub)).items():
         pub = title_to_pub[title]
@@ -184,17 +183,21 @@ def _append_snapshots(pubs: list[dict], source_url: str, event_date=None, *, emi
             title=pub.get('title'),
         )
         if result.status_changed and emit_events:
-            pub_year = pub.get('year')
-            if pub_year and pub_year.isdigit() and (current_year - int(pub_year)) > _STALENESS_YEARS:
-                logger.info(
-                    "Suppressed status_change for old paper (year=%s): %s",
-                    pub_year, pub.get('title', '')[:60],
-                )
-                continue
             if (result.old_status, result.new_status) not in _INTERESTING_TRANSITIONS:
                 logger.debug(
                     "Suppressed uninteresting transition %s→%s: %s",
                     result.old_status, result.new_status, pub.get('title', '')[:60],
+                )
+                continue
+            # Blog posts, policy briefs and long-published items are not news (#264).
+            reason = status_change_suppression_reason(
+                result.new_status, result.venue,
+                pub.get('year') or getattr(result, 'year', None), reference_year,
+            )
+            if reason:
+                logger.info(
+                    "Suppressed status_change %s→%s (%s): %s",
+                    result.old_status, result.new_status, reason, pub.get('title', '')[:60],
                 )
                 continue
             FeedEventEmitter.emit_status_change(
