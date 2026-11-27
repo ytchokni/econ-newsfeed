@@ -944,7 +944,7 @@ async def list_publications(
 
     offset = paging.offset
     with connection_scope():
-        rows, total, researcher_count = search_feed_events(
+        rows, total = search_feed_events(
             year=year, researcher_ids=researcher_ids,
             status_list=status_list or None,
             since=since_dt, until=until_dt,
@@ -1138,7 +1138,7 @@ def atom_feed(
     )
 
     with connection_scope():
-        rows, _, _ = search_feed_events(
+        rows, _ = search_feed_events(
             year=year, status_list=status_list or None,
             since=since_dt, until=until_dt,
             institution_list=institution_list or None,

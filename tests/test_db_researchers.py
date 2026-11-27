@@ -326,9 +326,11 @@ class TestSearchResearchers:
     def test_preset_top20_adds_dept_keywords(self):
         (_, _), mock_fetch = self._call(preset="top20")
         sql, params = mock_fetch.call_args[0]
-        # All keywords are in affiliation LIKE conditions
-        assert "r.affiliation LIKE %s" in sql
-        assert any("MIT" in str(p) for p in params)
+        # Whole-word department matching, not substring LIKEs
+        assert "r.affiliation LIKE %s" not in sql
+        assert "REGEXP_LIKE" in sql
+        from backend.database.top_presets import TOP20_DEPARTMENT_PATTERN
+        assert TOP20_DEPARTMENT_PATTERN in params and "(mit|" in TOP20_DEPARTMENT_PATTERN
 
     def test_field_slug_single_uses_equals(self):
         (_, _), mock_fetch = self._call(field_slug="labor")

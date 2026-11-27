@@ -104,8 +104,7 @@ def test_curated_feed_filters_the_venue_displayed_on_each_event(monkeypatch):
         monkeypatch.setattr(papers, "fetch_one", lambda sql, params: dict(execute(sql, params).fetchone()))
         monkeypatch.setattr(papers, "fetch_all", lambda sql, params: [dict(row) for row in execute(sql, params)])
 
-        rows, total, researcher_count = papers.search_feed_events(preset="top5_and_field")
+        rows, total = papers.search_feed_events(preset="top5_and_field")
 
         assert {row["paper_id"] for row in rows} == {2, 3, 5}
         assert total == 3
-        assert researcher_count == 1

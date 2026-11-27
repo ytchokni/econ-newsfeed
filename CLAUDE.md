@@ -46,6 +46,7 @@ cd app && npx jest --testPathPattern=ComponentName  # Single frontend test
 # One-time scripts
 poetry run python scripts/backfill_paper_links.py   # Populate paper_links from stored HTML + enrich
 poetry run python scripts/cleanup_data_quality.py   # Fix rows flagged by data-quality checks (dry-run; add --apply to write)
+poetry run python scripts/recompute_has_top5.py     # Recompute researchers.has_top5_pub (dry-run; add --apply to write)
 poetry run python scripts/reverify_openalex_ids.py --max-requests 300 --apply  # #266: re-check pre-15-Oct OpenAlex IDs (~900 budgeted requests: pause ENRICHMENT_WORKER_ENABLED or raise OPENALEX_DAILY_BUDGET for ~3 days; DB-cached, resumable; --status, --undo, --purge-cache)
 poetry run python scripts/merge_renamed_papers.py   # #265: merge renames sharing an SSRN/NBER/arXiv/DOI link (dry-run; --apply)
 
@@ -125,6 +126,13 @@ alerts the owner straight away. Every other call uses the workflow token so the
 owner mention comes from a bot (a self-mention sends no email). The script is standard
 library only because it runs on the server's system Python. Run it by hand with
 `python3 scripts/monitor.py --external`, or `--host` on the server.
+
+"Has Top-5" means a published or accepted paper in exactly AER, Econometrica,
+JPE, QJE or REStud (sister journals, look-alikes and R&Rs do not count); the
+"Top-20" preset matches department names as whole words. Both are regexes in
+`backend/database/top_presets.py` that MySQL and Python apply identically.
+Both feed and directory presets read `researchers.has_top5_pub`, refreshed for a
+page's authors on save and in full after each scrape job's paper merge.
 
 `.github/workflows/data-quality.yml` runs at 07:47 UTC: `tests_data_quality`
 plus a few pipeline signals (`scripts/data_quality_check.py`) against prod

@@ -472,6 +472,15 @@ def run_scrape_job() -> None:
         logger.error("Paper merge failed: %s: %s", type(e).__name__, e)
     merge_s = time.time() - t0
     logger.info(f"Paper merge: {merge_s:.1f}s")
+    try:
+        # Merges, venue/status repairs and coauthor links all move the flag
+        # behind the "Has Top-5" presets; a full recompute takes well under 1 s.
+        from backend.database.researchers import refresh_all_has_top5
+        changed = refresh_all_has_top5()
+        if changed:
+            logger.info("has_top5_pub refreshed for %d researchers", changed)
+    except Exception as e:
+        logger.error("has_top5_pub refresh failed: %s: %s", type(e).__name__, e)
     if os.environ.get("SITE_MINING_ENABLED", "false").lower() == "true" and _scheduler:
         _scheduler.add_job(run_site_mining_job, 'date', id='site_mining_after_scrape',
                            replace_existing=True, max_instances=1)
