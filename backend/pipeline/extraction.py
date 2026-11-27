@@ -304,7 +304,14 @@ def _extract_via_diff(url_id: int, url: str, new_text: str, old_text: str,
     if result.pubs is None:
         return _failed(result.retry_after, result.provider_error)
 
-    count = _process_diff_changes(result.pubs, url, url_id, fetch_date)
+    try:
+        count = _process_diff_changes(result.pubs, url, url_id, fetch_date)
+    except Exception as e:
+        # A failed outcome (not an exception) lets the worker persist the
+        # failure (html_content.extraction_*), so the page backs off across
+        # restarts instead of paying for the same LLM answer after each one.
+        logger.exception("Saving diff changes for %s failed: %s: %s", url, type(e).__name__, e)
+        return _failed(None)
 
     HTMLFetcher.mark_extracted(url_id, content_hash)
     return ExtractionOutcome("extracted" if count > 0 else "empty", pubs_count=count)
@@ -354,13 +361,9 @@ def _apply_title_change(change: dict, source_url: str, event_date) -> None:
         return
 
     paper_id = row['id']
-    try:
-        outcome = PaperSaver.apply_title_rename(paper_id, old_title, new_title, change, source_url)
-    except Exception:
-        # The LLM answer is already paid for: keep the page's other changes
-        # and mark it extracted rather than retrying it into the same error.
-        logger.exception("Title change for paper %d on %s not applied", paper_id, source_url)
-        return
+    # A collision with another paper's title is resolved inside (merge or
+    # skip) and never raises; other errors fail the page with backoff.
+    outcome = PaperSaver.apply_title_rename(paper_id, old_title, new_title, change, source_url)
     if outcome == PaperSaver.RENAMED:
         FeedEventEmitter.emit_title_change(paper_id, old_title, new_title,
                                           event_date=event_date, source_url=source_url)

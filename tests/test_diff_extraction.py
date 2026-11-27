@@ -427,13 +427,31 @@ class TestExtractOneUrlDiffPath:
         assert emit_args[1] == "Old Title for My Paper"
         assert emit_args[2] == "Improved Title for My Paper"
 
-    @pytest.mark.parametrize("rename", [PaperSaver.MERGED, PaperSaver.SKIPPED, RuntimeError("db blip")])
-    def test_title_change_onto_existing_title_completes_page_without_event(self, rename):
-        """A merged, skipped or failed rename must not fail the page or emit title_change."""
+    def test_unexpected_save_error_is_a_failed_outcome_not_an_exception(self):
+        """The worker persists failed outcomes (backoff survives restarts); exceptions it does not."""
         from backend.pipeline.extraction import extract_one_url
         patches = self._base_patches()
-        kwargs = {"side_effect": rename} if isinstance(rename, Exception) else {"return_value": rename}
-        patches["apply_rename"] = patch("backend.pipeline.paper_saver.PaperSaver.apply_title_rename", **kwargs)
+        patches["apply_rename"] = patch("backend.pipeline.paper_saver.PaperSaver.apply_title_rename",
+                                        side_effect=RuntimeError("db blip"))
+        mocks = {k: p.start() for k, p in patches.items()}
+        mocks["try_changes"].return_value = ExtractionLLMResult(pubs=[_title_change()])
+        mocks["fetch_one"].return_value = {"Old Title for My Paper": {"id": 99}}
+        try:
+            outcome = extract_one_url(_row())
+        finally:
+            for p in patches.values():
+                p.stop()
+        assert outcome.status == "failed" and not outcome.ok
+        assert outcome.retry_after is None and not outcome.provider_error
+        mocks["mark"].assert_not_called()
+
+    @pytest.mark.parametrize("rename", [PaperSaver.MERGED, PaperSaver.SKIPPED])
+    def test_title_change_onto_existing_title_completes_page_without_event(self, rename):
+        """A merged or skipped rename must not fail the page or emit title_change."""
+        from backend.pipeline.extraction import extract_one_url
+        patches = self._base_patches()
+        patches["apply_rename"] = patch("backend.pipeline.paper_saver.PaperSaver.apply_title_rename",
+                                        return_value=rename)
         mocks = {k: p.start() for k, p in patches.items()}
         mocks["try_changes"].return_value = ExtractionLLMResult(pubs=[_title_change(), _status_change()])
         mocks["fetch_one"].return_value = {"Old Title for My Paper": {"id": 99}}
