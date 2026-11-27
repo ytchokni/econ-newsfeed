@@ -56,21 +56,19 @@ class TestCoauthorGuard:
 class TestInitialOnlyNameGuard:
     """Initial-only names (e.g., "A.", "B. C.") must be hidden."""
 
-    def test_first_name_char_length_guard(self):
-        sql, _ = _get_sql()
-        assert "CHAR_LENGTH(r.first_name) > 2" in sql
+    def test_initials_patterns_are_case_sensitive_regexps(self):
+        """Pattern, not length: "A. Y." is hidden, "Li"/"Wu" are not (#263)."""
+        from backend.database.researcher_index import CAPITAL_INITIALS, INITIALS_ONLY
+        sql, params = _get_sql()
+        assert "CHAR_LENGTH" not in sql
+        assert "NOT REGEXP_LIKE(TRIM(r.first_name), %s, 'c')" in sql
+        assert "NOT REGEXP_LIKE(TRIM(r.last_name), %s, 'c')" in sql
+        assert list(params[:4]) == [INITIALS_ONLY, INITIALS_ONLY, CAPITAL_INITIALS, "[a-z]"]
 
-    def test_last_name_char_length_guard(self):
+    def test_empty_names_guarded(self):
         sql, _ = _get_sql()
-        assert "CHAR_LENGTH(r.last_name) > 2" in sql
-
-    def test_first_name_regexp_guard(self):
-        sql, _ = _get_sql()
-        assert "r.first_name NOT REGEXP" in sql
-
-    def test_last_name_regexp_guard(self):
-        sql, _ = _get_sql()
-        assert "r.last_name NOT REGEXP" in sql
+        assert "TRIM(r.first_name) <> ''" in sql
+        assert "TRIM(r.last_name) <> ''" in sql
 
     def test_null_names_guarded(self):
         sql, _ = _get_sql()
@@ -101,7 +99,7 @@ class TestGuardsNotRemovableByPagination:
     def test_guards_with_offset_and_limit(self):
         sql, _ = _get_sql(offset=100, limit=50)
         assert "EXISTS (SELECT 1 FROM authorship" in sql
-        assert "CHAR_LENGTH(r.first_name) > 2" in sql
+        assert "REGEXP_LIKE(TRIM(r.first_name)" in sql
         assert "openalex_author_id IS NOT NULL" in sql
 
 
@@ -115,6 +113,6 @@ class TestGuardsCombinedWithUserFilters:
             field_slug="labor",
         )
         assert "EXISTS (SELECT 1 FROM authorship" in sql
-        assert "CHAR_LENGTH(r.first_name) > 2" in sql
+        assert "REGEXP_LIKE(TRIM(r.first_name)" in sql
         assert "openalex_author_id IS NOT NULL" in sql
         assert "r.affiliation LIKE %s" in sql

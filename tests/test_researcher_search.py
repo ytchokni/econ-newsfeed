@@ -41,6 +41,13 @@ PEOPLE = [
     (18, "Thomas", "Addoah", None, 1, True),
     (19, "Hans", "Rieger", None, 3, False),   # coauthor only: chooser, not directory
     (20, "Mia", "Rieger", None, 0, True),     # no papers: hidden from the directory
+    (21, "Shengwu", "Li", None, 9, True),     # two-letter names are real names (#263)
+    (22, "Nick", "Wu", None, 2, True),
+    (23, "Bo", "Xu", None, 4, True),
+    (24, "HTT", "Tran", None, 3, True),       # initials stub in capitals
+    (25, "HAN", "QIU", None, 2, True),        # a name written in capitals is not a stub
+    (26, "S. A. C.", "Kittelsen", None, 5, True),
+    (27, "J.-P.", "Benoit", None, 1, True),
 ]
 
 
@@ -51,6 +58,9 @@ def _connect():
     conn.create_function("CHAR_LENGTH", 1, lambda s: len(s) if s is not None else None)
     conn.create_function(
         "REGEXP", 2, lambda pattern, value: value is not None and re.search(pattern, value) is not None
+    )
+    conn.create_function(
+        "REGEXP_LIKE", 3, lambda value, pattern, flags: value is not None and re.search(pattern, value) is not None
     )
     conn.executescript("""
         CREATE TABLE researchers (
@@ -148,14 +158,19 @@ def test_initials(db, query):
     assert ids(query) == [12]
 
 
+def chooser(query):
+    return [r["id"] for r in researchers.search_researcher_options(search=query)]
+
+
 @pytest.mark.parametrize("query", ["A.Y. Chang", "A. Y. Chang", "AY Chang", "a y chang"])
 def test_dotted_initials_match_exactly(db, query):
-    assert ids(query)[0] == 8
+    # "A. Y." is an initials stub, so only the chooser lists it.
+    assert chooser(query)[0] == 8
 
 
 @pytest.mark.parametrize("query", ["jp morgan", "J.P. Morgan", "JP Morgan"])
 def test_run_together_initials(db, query):
-    assert ids(query) == [17]
+    assert chooser(query) == [17]
 
 
 def test_affiliation_acronym_lists_institution_before_name_prefixes(db):
@@ -173,8 +188,9 @@ def test_name_and_institution_combined(db):
 
 
 def test_surname_matches_rank_above_first_name_matches(db):
-    # Changs by publications (15, 2, 1 papers), then Chang Suk Bae.
-    assert ids("Chang") == [6, 8, 5, 7]
+    # Changs by publications (15, 1 papers), then Chang Suk Bae. A. Y. Chang
+    # is an initials stub and stays out of the directory.
+    assert ids("Chang") == [6, 5, 7]
 
 
 @pytest.mark.parametrize("query", ["muller", "Müller", "MULLER", "Muller"])
@@ -215,7 +231,7 @@ def test_pagination_follows_the_ranking(db):
 def test_punctuation_is_never_a_wildcard(db):
     assert ids("Rie%") == ids("Rie")
     rows, total = researchers.search_researchers(search="%")
-    assert total == 18  # no words left: the plain alphabetical directory
+    assert total == 20  # no words left: the plain alphabetical directory
 
 
 # ---------------------------------------------------------------------------
@@ -294,3 +310,48 @@ def test_short_words_only_match_word_starts():
         {"id": 2, "first_name": "Ian", "last_name": "Dean", "pubs": 1, "validated": 1},
     ])
     assert index.search("an", listed_only=True).ids == [1]
+
+
+# ---------------------------------------------------------------------------
+# Initials stubs vs short names (#263)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("query, expected", [("Li", 21), ("Wu", 22), ("Xu", 23), ("Bo Xu", 23), ("HAN QIU", 25)])
+def test_two_letter_and_capitalised_names_are_listed(db, query, expected):
+    assert expected in ids(query)
+
+
+@pytest.mark.parametrize("query, stub", [
+    ("Chang", 8), ("Morgan", 17), ("Tran", 24), ("Kittelsen", 26), ("Benoit", 27),
+])
+def test_initials_only_stubs_are_hidden_from_directory(db, query, stub):
+    assert stub not in ids(query)
+    assert stub in chooser(query)
+
+
+def test_listing_without_search_uses_the_same_rule(db):
+    rows, _ = researchers.search_researchers(limit=100)
+    listed = {r["id"] for r in rows}
+    assert {21, 22, 23, 25} <= listed
+    assert not listed & {8, 17, 24, 26, 27}
+
+
+@pytest.mark.parametrize("first, last, stub", [
+    ("A.", "Smith", True),
+    ("A. Y.", "Chang", True),
+    ("A.Y.", "Chang", True),
+    ("J.-P.", "Benoit", True),
+    ("B C", "O'Neill", True),
+    ("HTT", "Tran", True),
+    ("Emily", "O.", True),
+    ("É.", "Durand", True),
+    ("", "Smith", True),
+    (None, "Smith", True),
+    ("Shengwu", "Li", False),
+    ("Bo", "Xu", False),
+    ("Li", "Zhang", False),
+    ("HAN", "QIU", False),
+    ("Andrew C.", "Chang", False),
+])
+def test_is_initials_stub(first, last, stub):
+    assert researcher_index.is_initials_stub(first, last) is stub

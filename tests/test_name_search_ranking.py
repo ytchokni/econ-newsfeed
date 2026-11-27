@@ -38,6 +38,9 @@ def _connect():
     conn.create_function(
         "REGEXP", 2, lambda pattern, value: value is not None and re.search(pattern, value) is not None
     )
+    conn.create_function(
+        "REGEXP_LIKE", 3, lambda value, pattern, flags: value is not None and re.search(pattern, value) is not None
+    )
     conn.executescript("""
         CREATE TABLE researchers (
             id INTEGER PRIMARY KEY, first_name TEXT, last_name TEXT, position TEXT,

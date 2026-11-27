@@ -147,6 +147,29 @@ def _affiliation_search_text(normalized: str) -> str:
     return " ".join([normalized, *extra]) if extra else normalized
 
 
+# Initials-only stub records ("A.", "A. Y.", "J.-P.", "HTT Tran") are kept for
+# authorship but hidden from the directory. Short real names (Li, Wu, Bo) are
+# not stubs. The directory's SQL guard uses the same patterns (case-sensitive
+# REGEXP_LIKE), so both must stay in step.
+_LETTER = "A-Za-zÀ-ÖØ-öø-ÿ"
+INITIALS_ONLY = rf"^[{_LETTER}]([ .-]+[{_LETTER}])*[ .]*$"
+CAPITAL_INITIALS = r"^[A-Z]{2,3}$"   # first name "HTT" / "ET" ...
+HAS_LOWERCASE = r"[a-z]"             # ... unless the surname is in capitals too ("HAN QIU")
+_INITIALS_ONLY = re.compile(INITIALS_ONLY)
+_CAPITAL_INITIALS = re.compile(CAPITAL_INITIALS)
+_HAS_LOWERCASE = re.compile(HAS_LOWERCASE)
+
+
+def is_initials_stub(first_name: str | None, last_name: str | None) -> bool:
+    """True for names the directory hides: missing parts or initials only."""
+    first, last = (first_name or "").strip(), (last_name or "").strip()
+    if not first or not last:
+        return True
+    if _INITIALS_ONLY.match(first) or _INITIALS_ONLY.match(last):
+        return True
+    return bool(_CAPITAL_INITIALS.match(first) and _HAS_LOWERCASE.search(last))
+
+
 # ---------------------------------------------------------------------------
 # Matching primitives
 # ---------------------------------------------------------------------------
@@ -294,10 +317,10 @@ class ResearcherIndex:
             index.ids.append(int(row["id"]))
             index.first_counts.append(min(len(first.split()), 255))
             index.pubs.append(pubs)
-            # The directory's guards: validated, published, no initial-only names.
+            # The directory's guards: validated, published, not an initials stub.
             index.listed.append(bool(
                 row.get("validated") and pubs > 0
-                and len(first_raw) > 2 and len(last_raw) > 2
+                and not is_initials_stub(first_raw, last_raw)
             ))
             raw = row.get("affiliation") or ""
             aff_id = raw_affiliation_ids.get(raw)

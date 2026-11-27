@@ -803,7 +803,7 @@ def search_researchers(
 
     Base conditions (always applied):
     - Only validated researchers: have openalex_author_id OR researcher_urls entry
-    - Hide initial-only names (CHAR_LENGTH > 2, not matching '^[A-Z]\\.$')
+    - Hide initials-only stubs ("A.", "A. Y.", "HTT Tran"); short names like Li stay
 
     Filters:
     - institution: r.affiliation LIKE %value%
@@ -865,13 +865,20 @@ def _directory_conditions(
         "EXISTS (SELECT 1 FROM authorship a WHERE a.researcher_id = r.id)"
     )
 
-    # Hide abbreviated/initial-only names
+    # Hide initials-only stubs ("A.", "A. Y.", "HTT Tran") but not short real
+    # names (Li, Wu, Xu); same rule as researcher_index.is_initials_stub.
     conditions.append(
-        "r.first_name IS NOT NULL AND CHAR_LENGTH(r.first_name) > 2 "
-        "AND r.first_name NOT REGEXP '^[A-Z]\\\\.$' "
-        "AND r.last_name IS NOT NULL AND CHAR_LENGTH(r.last_name) > 2 "
-        "AND r.last_name NOT REGEXP '^[A-Z]\\\\.$'"
+        "r.first_name IS NOT NULL AND TRIM(r.first_name) <> '' "
+        "AND r.last_name IS NOT NULL AND TRIM(r.last_name) <> '' "
+        "AND NOT REGEXP_LIKE(TRIM(r.first_name), %s, 'c') "
+        "AND NOT REGEXP_LIKE(TRIM(r.last_name), %s, 'c') "
+        "AND NOT (REGEXP_LIKE(TRIM(r.first_name), %s, 'c') "
+        "AND REGEXP_LIKE(TRIM(r.last_name), %s, 'c'))"
     )
+    params.extend([
+        _researcher_index.INITIALS_ONLY, _researcher_index.INITIALS_ONLY,
+        _researcher_index.CAPITAL_INITIALS, _researcher_index.HAS_LOWERCASE,
+    ])
 
     if institution:
         conditions.append("r.affiliation LIKE %s")

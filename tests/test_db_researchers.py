@@ -299,12 +299,11 @@ class TestSearchResearchers:
         sql, _ = mock_fetch.call_args[0]
         assert "authorship" in sql
 
-    def test_base_condition_char_length_always_present(self):
+    def test_base_condition_initials_guard_always_present(self):
         (_, _), mock_fetch = self._call()
         sql, _ = mock_fetch.call_args[0]
-        assert "CHAR_LENGTH" in sql
-        assert "first_name" in sql
-        assert "last_name" in sql
+        assert "REGEXP_LIKE(TRIM(r.first_name)" in sql
+        assert "REGEXP_LIKE(TRIM(r.last_name)" in sql
 
     def test_base_condition_regexp_filter_always_present(self):
         (_, _), mock_fetch = self._call()
@@ -377,7 +376,7 @@ class TestSearchResearchers:
         assert [(r["id"], r["match"]) for r in rows] == [(9, "name"), (4, "affiliation")]
         sql, params = mock_fetch.call_args[0]
         assert "EXISTS (SELECT 1 FROM authorship" in sql
-        assert "LIMIT" not in sql and "LIKE" not in sql
+        assert "LIMIT" not in sql and " LIKE " not in sql  # no name LIKE scan
         assert list(params[-2:]) == [9, 4]
         assert sql.count("%s") == len(params)
 
