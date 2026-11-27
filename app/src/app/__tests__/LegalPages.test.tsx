@@ -85,6 +85,8 @@ describe("privacy page", () => {
       "Google AI Studio",
       "OpenAlex",
       "Crossref",
+      "Email sign-in",
+      "keyed hash (HMAC)",
       "How long we keep data",
       "TO BE COMPLETED BY SITE OWNER",
     ]) {

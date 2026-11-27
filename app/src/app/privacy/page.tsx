@@ -63,10 +63,17 @@ export default function PrivacyPage() {
 
       <LegalSection title="3. Accounts, follows and the weekly digest">
         <p>
-          You can sign in with Google to follow researchers and receive a weekly email digest. We
-          process your email address, name, Google account ID and profile picture link (from
+          You can sign in with Google, or with a one-time code sent to your email address, to
+          follow researchers and receive a weekly email digest. We process your email address,
+          for Google sign-in also your name, Google account ID and profile picture link (from
           Google), the researchers you follow, your digest setting, and which feed items were
           already sent to you.
+        </p>
+        <p>
+          <strong>Email sign-in:</strong> we send a 6-digit code to your address through Resend.
+          The code is stored only as a keyed hash (HMAC) together with your email address; it
+          expires after 10 minutes and works once. Code records are deleted once they are a day
+          old (the cleanup runs whenever a new code is requested).
         </p>
         <p>
           <strong>Legal basis:</strong> providing the service you signed up for (Art. 6(1)(b) GDPR).
@@ -93,7 +100,7 @@ export default function PrivacyPage() {
         <ul className={list}>
           <li><strong>Vercel Inc.</strong> (USA): hosts the website.</li>
           <li><strong>Hetzner Online GmbH</strong> (Germany): hosts the backend, database and backups.</li>
-          <li><strong>Resend</strong> (USA): delivers the weekly digest emails.</li>
+          <li><strong>Resend</strong> (USA): delivers the weekly digest emails and sign-in codes.</li>
           <li><strong>Google</strong> (USA/EU): Google sign-in; Google AI Studio (Gemini) reads the text of researchers&rsquo; pages to extract publication lists; Gmail receives working-paper newsletters.</li>
           <li><strong>OpenAlex</strong> (OurResearch, USA) and <strong>Crossref</strong>: lookups of paper titles, DOIs and author identifiers. No data about site users is sent.</li>
           <li><strong>Searlo</strong>: web search for researchers&rsquo; websites (researcher name and affiliation).</li>
@@ -109,6 +116,7 @@ export default function PrivacyPage() {
       <LegalSection title="6. How long we keep data">
         <ul className={list}>
           <li>Accounts, follows and digest settings: until you ask us to delete your account.</li>
+          <li>Email sign-in codes: about a day (stored as hashes only).</li>
           <li>Researcher profiles and papers: while the researcher is listed; deleted on objection as described above.</li>
           <li>Cached website copies: the latest copy and its change history, deleted with the profile.</li>
           <li>Backups: daily database backups; only the newest three are kept, so deleted data disappears from backups within a few days.</li>
