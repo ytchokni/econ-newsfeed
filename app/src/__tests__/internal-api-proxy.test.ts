@@ -140,3 +140,27 @@ describe("backendHeaders (sitemap and other visitor-less calls)", () => {
     expect(backendHeaders({} as NodeJS.ProcessEnv)).toEqual({});
   });
 });
+
+describe("fetchBackend caching", () => {
+  beforeEach(() => {
+    global.fetch = jest.fn().mockResolvedValue({ ok: true, status: 200, json: async () => ({}) });
+  });
+
+  it("does not cache per-visitor fetches", async () => {
+    process.env.INTERNAL_API_KEY = KEY;
+    const { fetchBackend } = await import("../lib/server-api");
+    await fetchBackend("/api/researchers/1", 60, { forVisitor: true });
+    const init = (global.fetch as jest.Mock).mock.calls[0][1];
+    expect(init.cache).toBe("no-store");
+    expect(init.next).toBeUndefined();
+  });
+
+  it("keeps time-based caching for visitor-less fetches", async () => {
+    process.env.INTERNAL_API_KEY = KEY;
+    const { fetchBackend } = await import("../lib/server-api");
+    await fetchBackend("/api/sitemap", 3600);
+    const init = (global.fetch as jest.Mock).mock.calls[0][1];
+    expect(init.next).toEqual({ revalidate: 3600 });
+    expect(init.cache).toBeUndefined();
+  });
+});

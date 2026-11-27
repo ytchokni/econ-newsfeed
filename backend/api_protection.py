@@ -30,11 +30,13 @@ Tiers
 ``visitor``   valid key, visitor named, proxied browser call: per-visitor limits.
 ``user``      valid NextAuth JWT: higher limits, no paging caps.
 ``direct``    key configured, request did not carry it: ``API_DIRECT_ACCESS``
-              decides (``open`` = visitor limits, ``limited`` = strict limits,
-              ``deny`` = 403 on data endpoints).
-``legacy``    ``INTERNAL_API_KEY`` not configured: fail open with per-edge-IP
-              per-minute limits close to the old behaviour, so a deploy before
-              the secret is set keeps the site working.
+              decides (``open`` = the ``legacy`` limits below, ``limited`` =
+              strict limits, ``deny`` = 403 on data endpoints).
+``legacy``    ``INTERNAL_API_KEY`` not configured, or configured here but not
+              sent while ``API_DIRECT_ACCESS=open``: fail open with per-edge-IP
+              per-minute limits close to the old behaviour. All site traffic
+              arrives from a few Vercel IPs when the frontend lacks the key, so
+              anything stricter would rate-limit the whole site.
 
 Limits are kept in process memory by slowapi, so each gunicorn worker counts
 separately (effective ceiling = limit x WEB_CONCURRENCY).
@@ -279,10 +281,8 @@ def resolve_client(request: Request) -> ClientInfo:
             info = ClientInfo(SSR, ip, ip)
         else:
             info = ClientInfo(VISITOR, ip, ip)
-    elif not settings.internal_key:
+    elif not settings.internal_key or settings.direct_access == "open":
         info = ClientInfo(LEGACY, ip, ip)
-    elif settings.direct_access == "open":
-        info = ClientInfo(VISITOR, ip, ip)
     else:
         info = ClientInfo(DIRECT, ip, ip)
 

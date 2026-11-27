@@ -101,7 +101,7 @@ class TestClientIp:
         protection_env(INTERNAL_API_KEY=KEY)
         info = _resolve({"X-Forwarded-For": "203.0.113.9", "X-Visitor-IP": "6.6.6.6"})
         assert info.ip == "203.0.113.9"
-        assert info.tier == api_protection.VISITOR  # API_DIRECT_ACCESS=open default
+        assert info.tier == api_protection.LEGACY  # API_DIRECT_ACCESS=open default
 
     def test_spoofed_visitor_ip_with_wrong_key_is_ignored(self, protection_env):
         protection_env(INTERNAL_API_KEY=KEY, API_DIRECT_ACCESS="limited")
@@ -211,10 +211,17 @@ class TestRateLimits:
         assert client.get("/api/publications", headers=a).status_code == 429
 
     def test_spoofed_visitor_ips_share_the_real_ip_budget(self, client, protection_env):
-        protection_env(INTERNAL_API_KEY=KEY, RATE_LIMIT_DATA="1/minute")
+        protection_env(INTERNAL_API_KEY=KEY, RATE_LIMIT_DATA_LEGACY="1/minute")
         base = {"X-Forwarded-For": "203.0.113.9"}
         assert client.get("/api/publications", headers={**base, "X-Visitor-IP": "1.1.1.1"}).status_code == 200
         assert client.get("/api/publications", headers={**base, "X-Visitor-IP": "2.2.2.2"}).status_code == 429
+
+    def test_key_only_on_backend_keeps_the_site_on_fail_open_limits(self, client, protection_env):
+        # Frontend without the key: every visitor arrives from one Vercel IP.
+        protection_env(INTERNAL_API_KEY=KEY, RATE_LIMIT_DATA="1/minute", RATE_LIMIT_DATA_LEGACY="3/minute")
+        vercel = {"X-Forwarded-For": "76.76.21.21"}
+        codes = [client.get("/api/publications", headers=vercel).status_code for _ in range(4)]
+        assert codes == [200, 200, 200, 429]
 
     def test_direct_limited_is_stricter(self, client, protection_env):
         protection_env(INTERNAL_API_KEY=KEY, API_DIRECT_ACCESS="limited",

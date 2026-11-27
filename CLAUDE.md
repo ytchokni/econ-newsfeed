@@ -129,8 +129,11 @@ researcher lists/details share one "data" budget. Anonymous callers get
 scraper/HTTP-library User-Agents and empty UAs get 403 on data endpoints.
 `API_DIRECT_ACCESS` (open/limited/deny) sets the policy for calls straight to
 the duckdns host. 429s carry `Retry-After` and log `rate_limited ip=... path=...`;
-the monitor's `api_traffic` check counts them. Without `INTERNAL_API_KEY` the
-API fails open to per-edge-IP per-minute limits. New server-side calls from
+the monitor's `api_traffic` check counts them. Without `INTERNAL_API_KEY`, and
+for keyless calls while `API_DIRECT_ACCESS=open`, the API fails open to
+per-edge-IP per-minute limits. Roll the key out on Vercel (redeploy) before the
+API, and switch `API_DIRECT_ACCESS` away from `open` only once the frontend
+sends it: otherwise all site traffic shares a few Vercel IPs and gets 429s. New server-side calls from
 the frontend to the backend should go through `fetchBackend` or send
 `internalApiHeaders()` from `app/src/lib/internal-api.ts`.
 
