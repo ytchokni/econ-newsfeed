@@ -259,6 +259,40 @@ class TestExtractOneUrl:
         mocks["researcher_snap"].assert_called_once_with(
             10, "Prof", "MIT", "An economist.", source_url="https://example.com/pubs")
 
+    @pytest.mark.parametrize("page_type", ["home", "Home", "HOMEPAGE", "homepage"])
+    def test_home_page_type_is_case_insensitive(self, page_type):
+        """Older rows store page_type 'home' (lowercase); the description must
+        still refresh for them, or bios go stale forever (Thomas Rieger)."""
+        from backend.pipeline.extraction import extract_one_url
+        patches = _patches(pubs=[])
+        patches["extract_desc"] = patch(
+            "backend.pipeline.extraction.HTMLFetcher.extract_description", return_value="Updated bio.")
+        patches["fetch_one"] = patch(
+            "backend.pipeline.extraction.fetch_one",
+            return_value={"position": "PhD", "affiliation": "DIW"})
+        mocks = {k: p.start() for k, p in patches.items()}
+        try:
+            outcome = extract_one_url(_row(page_type=page_type))
+        finally:
+            for p in patches.values():
+                p.stop()
+        assert outcome.ok
+        mocks["researcher_snap"].assert_called_once_with(
+            10, "PhD", "DIW", "Updated bio.", source_url="https://example.com/pubs")
+
+    def test_empty_description_keeps_existing_bio(self):
+        """An LLM 'null'/empty answer must not overwrite the stored bio."""
+        from backend.pipeline.extraction import extract_one_url
+        patches = _patches(pubs=[])  # extract_description returns None
+        mocks = {k: p.start() for k, p in patches.items()}
+        try:
+            extract_one_url(_row(page_type="home"))
+        finally:
+            for p in patches.values():
+                p.stop()
+        mocks["extract_desc"].assert_called_once()
+        mocks["researcher_snap"].assert_not_called()
+
     def test_description_failure_does_not_fail_extraction(self):
         from backend.pipeline.extraction import extract_one_url
         patches = _patches(pubs=[])
@@ -300,3 +334,14 @@ class TestExtractOneUrl:
             for p in patches.values():
                 p.stop()
         mocks["mark"].assert_not_called()
+
+
+class TestIsHomePage:
+    @pytest.mark.parametrize("page_type,expected", [
+        ("HOME", True), ("home", True), (" Home ", True), ("homepage", True),
+        ("PUBLICATIONS", False), ("research", False), ("personal", False),
+        (None, False), ("", False),
+    ])
+    def test_is_home_page(self, page_type, expected):
+        from backend.pipeline.extraction import is_home_page
+        assert is_home_page(page_type) is expected

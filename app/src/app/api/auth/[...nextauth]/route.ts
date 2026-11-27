@@ -1,6 +1,11 @@
 import NextAuth from "next-auth";
 import GoogleProvider from "next-auth/providers/google";
 import { encodeBackendJwt } from "@/lib/backend-jwt";
+import { preferRequestHostForAuth } from "@/lib/auth-origin";
+
+// Must run before NextAuth handles a request: a NEXTAUTH_URL naming one
+// domain broke sign-in on every other domain the app is served from.
+preferRequestHostForAuth();
 
 const NEXTAUTH_SECRET = process.env.NEXTAUTH_SECRET || "";
 
