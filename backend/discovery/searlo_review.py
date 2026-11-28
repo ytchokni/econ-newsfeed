@@ -1,7 +1,7 @@
 """Apply a human review of paid-search (Searlo) discoveries through the miner's store.
 
-The legacy admin actions (``approve_discovery`` / ``bulk_approve_discoveries``)
-write ``researcher_urls`` one statement at a time and skip every miner guard:
+The legacy admin actions (the old ``approve_discovery`` / ``bulk_approve_discoveries``)
+wrote ``researcher_urls`` one statement at a time and skip every miner guard:
 identity holds, URL ownership, scope, inactive rows, prior rejections.  This
 module applies reviewed decisions the same way the site miner applies a verified
 bundle: one transaction per researcher (``MiningStore.approve_bundle``) that
@@ -73,10 +73,14 @@ def apply_decisions(decisions: list[dict], *, apply: bool = False,
     """Apply approve/reject decisions; dry run (default) writes nothing."""
     if apply and not manifest_path:
         raise ValueError("--apply requires a manifest path so the change can be undone")
+    return _run(decisions, apply=apply, manifest_path=manifest_path)
+
+
+def _run(decisions: list[dict], *, apply: bool, manifest_path) -> dict:
     stats = {"apply": apply, "approved": 0, "rejected": 0, "held": 0, "skipped": 0,
              "stale": 0, "urls_inserted": 0, "urls_existing": 0}
     held: list[dict] = []
-    manifest = open(manifest_path, "a", encoding="utf-8") if apply else None
+    manifest = open(manifest_path, "a", encoding="utf-8") if apply and manifest_path else None
     try:
         with MiningStore(apply=apply) as store:
             if not store.acquired:
@@ -141,8 +145,53 @@ def apply_decisions(decisions: list[dict], *, apply: bool = False,
     return stats
 
 
+_SUBPAGE_TYPES = {"research": "RESEARCH", "publications": "PUBLICATIONS",
+                  "working_papers": "WORKING_PAPERS"}
+
+
+def approve_one(discovery_id: int) -> dict:
+    """Approve one pending discovery through the miner's guarded path (admin button).
+
+    Returns {"approved": bool, "reason": str | None}. A bundle the preflight
+    refuses stays pending and the reason is returned, never forced.
+    """
+    from backend.database.connection import fetch_one
+    row = fetch_one(
+        """SELECT ud.id, ud.researcher_id, ud.url, ud.subpages, ud.status,
+                  r.first_name, r.last_name
+           FROM url_discoveries ud JOIN researchers r ON r.id = ud.researcher_id
+           WHERE ud.id = %s""", (discovery_id,))
+    if not row or row["status"] != "pending" or not row["url"]:
+        return {"approved": False, "reason": "Discovery is not pending"}
+    subpages = row["subpages"]
+    if isinstance(subpages, (str, bytes)):
+        try:
+            subpages = json.loads(subpages)
+        except ValueError:
+            subpages = []
+    bundle = [{"url": row["url"], "page_type": "HOME"}]
+    for sp in subpages or []:
+        page_type = _SUBPAGE_TYPES.get(str(sp.get("page_type", "")).lower())
+        if page_type and sp.get("url"):
+            bundle.append({"url": sp["url"], "page_type": page_type})
+    result = _run([{"discovery_id": row["id"], "researcher_id": row["researcher_id"],
+                    "first_name": row["first_name"], "last_name": row["last_name"],
+                    "decision": "approve", "bundle": bundle, "evidence": "Admin approval"}],
+                  apply=True, manifest_path=None)
+    if result.get("skipped_reason"):
+        return {"approved": False, "reason": "The site miner is running; try again shortly"}
+    if result["approved"]:
+        return {"approved": True, "reason": None}
+    held = result.get("held_details") or [{}]
+    return {"approved": False, "reason": held[0].get("reason", "Not approved")}
+
+
 def undo(manifest_path: str | Path, *, apply: bool = False) -> dict:
     """Delete URL rows a manifest inserted and reopen its discoveries.
+
+    Clean only until the next scrape/extraction picks the pages up: deleting a
+    URL cascades to its stored HTML, so anything fetched or extracted from it
+    since the apply is lost with it (papers and feed events are kept).
 
     A row is deleted only if id, researcher and URL still match what was
     inserted, so rows that changed since are left alone and reported.

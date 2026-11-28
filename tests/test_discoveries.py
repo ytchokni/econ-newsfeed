@@ -21,7 +21,6 @@ from backend.database.discoveries import (
     get_pending_discoveries,
     approve_discovery,
     reject_discovery,
-    bulk_approve_discoveries,
     get_discovery_stats,
     get_recent_discoveries,
 )
@@ -114,26 +113,12 @@ def test_get_recent_discoveries_parses_subpages_json():
     ]
 
 
-def test_approve_discovery_copies_urls():
-    """approve_discovery inserts root + subpages into researcher_urls."""
-    mock_row = {
-        "researcher_id": 42,
-        "url": "https://example.com",
-        "subpages": json.dumps([
-            {"page_type": "research", "url": "https://example.com/research"},
-        ]),
-    }
-    mock_add_url = MagicMock()
-    mock_execute = MagicMock()
-
-    with patch("backend.database.discoveries.fetch_one", return_value=mock_row), \
-         patch("backend.database.discoveries.add_researcher_url", mock_add_url), \
-         patch("backend.database.discoveries.execute_query", mock_execute):
-        approve_discovery(1)
-
-    assert mock_add_url.call_count == 2
-    mock_add_url.assert_any_call(42, "personal", "https://example.com")
-    mock_add_url.assert_any_call(42, "research", "https://example.com/research")
+def test_approve_discovery_goes_through_the_guarded_path():
+    """approve_discovery delegates to the miner-store approval, not add_researcher_url."""
+    with patch("backend.discovery.searlo_review.approve_one",
+               return_value={"approved": True, "reason": None}) as approve_one:
+        assert approve_discovery(7) == {"approved": True, "reason": None}
+    approve_one.assert_called_once_with(7)
 
 
 def test_reject_discovery():
