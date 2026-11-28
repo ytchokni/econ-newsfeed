@@ -224,9 +224,10 @@ def main() -> None:
     newsletter_parser.add_argument('--max-emails', type=int, default=50, help='Max emails to process')
     discover_parser = subparsers.add_parser('discover-urls', help='Search for personal websites for researchers without URLs')
     discover_parser.add_argument('--limit', type=int, default=None, help='Max researchers to search (default: DISCOVERY_DAILY_LIMIT)')
-    mining_parser = subparsers.add_parser('mine-urls', help='Mine cached links and department directories without paid search')
+    mining_parser = subparsers.add_parser('mine-urls', help='Mine cached links, department directories and ORCID/RePEc registries without paid search')
     mining_parser.add_argument('--apply', action='store_true', help='Persist queue/checkpoints and add verified crawl URLs (default: dry run)')
-    mining_parser.add_argument('--mode', choices=['all', 'cached', 'directories'], default='all')
+    mining_parser.add_argument('--mode', choices=['all', 'cached', 'directories', 'registries'], default='all',
+                               help='registries: ORCID (via OpenAlex) and RePEc/IDEAS homepages for researchers without URLs')
     mining_parser.add_argument('--source-limit', type=int, default=None)
     mining_parser.add_argument('--limit', type=int, default=None, help='Maximum candidates to verify')
     mining_parser.add_argument('--max-requests', type=int, default=None)

@@ -6,6 +6,7 @@ or approve crawl URLs; the mining queue performs those checks separately.
 from __future__ import annotations
 
 import ipaddress
+import json
 import queue
 import re
 import threading
@@ -18,6 +19,7 @@ import requests
 from bs4 import BeautifulSoup, Tag
 from urllib3.util import Timeout
 
+from backend.discovery.mining_policy import norm_name
 from backend.pipeline.html_fetcher import HTMLFetcher, _pin_dns
 
 
@@ -60,10 +62,14 @@ class MiningFetcher:
     Successful robots policies are cached for this bounded run only.
     """
 
-    def __init__(self, max_requests: int = 200, max_seconds: float = 600):
+    def __init__(self, max_requests: int = 200, max_seconds: float = 600,
+                 host_delays: dict[str, float] | None = None):
         if max_requests < 0 or max_seconds <= 0:
             raise ValueError("Invalid mining fetch budget")
         self.max_requests = max_requests
+        # Per-host minimum spacing (seconds) on top of the 1 s floor and any
+        # robots.txt Crawl-delay, e.g. for registries queried many times a run.
+        self.host_delays = {h.lower(): float(d) for h, d in (host_delays or {}).items()}
         self.deadline = time.monotonic() + max_seconds
         self.requests = 0
         self._exhausted = False
@@ -121,7 +127,8 @@ class MiningFetcher:
             raise _FetchFailure("unsafe_or_unresolved_url") from None
         return address
 
-    def _get(self, url: str, *, robots: bool = False) -> dict:
+    def _get(self, url: str, *, robots: bool = False, accept: str = "html",
+             headers: dict | None = None) -> dict:
         url = _public_url(url)
         self._request_budget()
         address = self._validated_ip(url)
@@ -131,7 +138,7 @@ class MiningFetcher:
         if not lock.acquire(timeout=self._remaining()):
             self._stop("Mining time budget exhausted waiting for host")
         try:
-            delay = max(1.0, self._crawl_delays.get(host, 1.0))
+            delay = max(1.0, self._crawl_delays.get(host, 1.0), self.host_delays.get(host.lower(), 0.0))
             self._sleep(max(0.0, delay - (time.monotonic() - _HOST_LAST.get(host, -float("inf")))))
             self._request_budget()
             remaining = self._remaining()
@@ -143,7 +150,7 @@ class MiningFetcher:
                     self.requests += 1
                     _HOST_LAST[host] = time.monotonic()
                     with session.get(
-                        url, headers={"User-Agent": USER_AGENT}, stream=True,
+                        url, headers={**(headers or {}), "User-Agent": USER_AGENT}, stream=True,
                         allow_redirects=False,
                         timeout=Timeout(total=remaining, connect=min(8.0, remaining), read=min(15.0, remaining)),
                     ) as response:
@@ -156,7 +163,11 @@ class MiningFetcher:
                             return record
                         if status != 200:
                             return record
-                        if not robots and ctype.split(";", 1)[0].strip().lower() not in {"text/html", "application/xhtml+xml"}:
+                        mime = ctype.split(";", 1)[0].strip().lower()
+                        if not robots and accept == "json" and not (mime == "application/json" or mime.endswith("+json")):
+                            record["error"] = "not_json"
+                            return record
+                        if not robots and accept != "json" and mime not in {"text/html", "application/xhtml+xml"}:
                             record["error"] = "not_html"
                             return record
                         try:
@@ -180,10 +191,11 @@ class MiningFetcher:
         finally:
             lock.release()
 
-    def _get_with_retry(self, url: str, *, robots: bool = False) -> dict:
+    def _get_with_retry(self, url: str, *, robots: bool = False, accept: str = "html",
+                        headers: dict | None = None) -> dict:
         for attempt in range(2):
             try:
-                result = self._get(url, robots=robots)
+                result = self._get(url, robots=robots, accept=accept, headers=headers)
             except requests.RequestException:
                 if attempt:
                     raise _FetchFailure("network_error") from None
@@ -230,16 +242,23 @@ class MiningFetcher:
         policy = self._robots[origin]
         return policy if isinstance(policy, bool) else policy.can_fetch(USER_AGENT, url)
 
-    def fetch(self, url: str) -> dict:
-        """Return a final-URL HTML result or a classified failure; never writes DB."""
+    def fetch(self, url: str, *, accept: str = "html", headers: dict | None = None) -> dict:
+        """Return a final-URL HTML result or a classified failure; never writes DB.
+
+        ``accept="json"`` admits JSON bodies instead of HTML. ``headers`` (an
+        API key, say) are sent only to the original host, never after a
+        redirect to another one.
+        """
         current = url
         try:
             current = _public_url(current)
+            origin_host = urlparse(current).hostname
             self._request_budget()
             for redirects in range(6):
                 if not self._allowed(current):
                     return {"url": current, "status": "robots_disallowed", "html": "", "content_type": "", "error": "robots_disallowed"}
-                result = self._get_with_retry(current)
+                same_host = urlparse(current).hostname == origin_host
+                result = self._get_with_retry(current, accept=accept, headers=headers if same_host else None)
                 if result["status"] in _REDIRECTS:
                     if redirects == 5 or not result["location"]:
                         raise _FetchFailure("redirect_error")
@@ -254,10 +273,28 @@ class MiningFetcher:
             return {"url": current, "status": "error", "html": "", "content_type": "", "error": str(exc)}
         raise AssertionError("Unreachable redirect state")
 
+    def fetch_json(self, url: str, *, headers: dict | None = None) -> dict:
+        """Like ``fetch`` for a JSON API; a parsed body is under ``"json"``."""
+        result = self.fetch(url, accept="json", headers=headers)
+        if result["status"] == 200 and not result.get("error"):
+            try:
+                result["json"] = json.loads(result.pop("html") or "null")
+            except ValueError:
+                result.update(status="error", error="invalid_json")
+            result.setdefault("html", "")
+        return result
+
 
 # The October 2026 trial verified these directory URLs and card selectors.
 # Oxford and Toulouse are the candidate listings linked from their people pages;
 # their general directories are JS-driven or do not expose personal sites.
+# Re-checked November 2026: all eight URLs still answer 200 and allow our
+# robots.txt user agent, but four had changed their markup and returned no
+# links. Stanford labels links "<Surname> website", Oxford "Visit <First>'s
+# personal website", Toulouse cards are `.card-job-market` divs, and Bonn's
+# rows link profiles with icon-only anchors (its profiles name the person in
+# `.contact-name .name` rather than a heading). Recorded fixtures live in
+# tests/fixtures/mining/.
 DIRECTORY_SEEDS = [
     {"name": "Stanford", "url": "https://economics.stanford.edu/people/faculty"},
     {"name": "MIT", "url": "https://economics.mit.edu/people/faculty"},
@@ -321,13 +358,41 @@ def _supervisor_link(anchor: Tag, boundary: Tag) -> bool:
     return False
 
 
-def _explicit_website(anchor: Tag) -> bool:
-    if _WEBSITE_LABEL.fullmatch(_text(anchor).strip(" :")):
+_OWNED_WEBSITE_LABEL = re.compile(
+    r"^(?:visit\s+)?(?P<who>[^\W\d_][\w.'’ -]{0,60}?)(?:['’]s|['’])?\s+"
+    r"(?:personal\s+)?(?:web\s*site|web\s*page|home\s*page)$", re.I)
+
+
+def _explicit_website(anchor: Tag, name: str | None = None) -> bool:
+    label = _text(anchor).strip(" :")
+    if _WEBSITE_LABEL.fullmatch(label):
         return True
+    # "Abramitzky website" (Stanford) or "Visit Carlos' personal website"
+    # (Oxford): the label names the card's own person, never a lab or centre.
+    match = _OWNED_WEBSITE_LABEL.fullmatch(label)
+    if match and name:
+        who = norm_name(match.group("who")).split()
+        tokens = norm_name(name).split()
+        # "Chris" on Christopher's own card: a prefix of at least 3 letters.
+        if who and all(any(t == w or (len(w) >= 3 and t.startswith(w)) for t in tokens) for w in who):
+            return True
     parent = anchor.find_parent(class_="contact-info__item")
     if parent and len(_text(parent)) < 350 and re.search(r"\bPersonal Website\b", _text(parent), re.I):
         return True
     return False
+
+
+_GERMAN_TRANSLIT = str.maketrans({"ä": "ae", "ö": "oe", "ü": "ue", "Ä": "Ae", "Ö": "Oe", "Ü": "Ue", "ß": "ss"})
+
+
+def _slug_names(href: str, name: str) -> bool:
+    """True if the URL's last path segment is the person's name ("olga-balakina")."""
+    cleaned = _name(name)
+    slug = urlparse(href).path.rstrip("/").rsplit("/", 1)[-1]
+    if not cleaned or not re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)+", slug, re.I):
+        return False
+    key = _name_key(slug.replace("-", " "))
+    return key in {_name_key(cleaned), _name_key(cleaned.translate(_GERMAN_TRANSLIT))}
 
 
 def directory_links(seed: dict | str, html: str, url: str) -> list[dict]:
@@ -355,13 +420,14 @@ def directory_links(seed: dict | str, html: str, url: str) -> list[dict]:
         found[(name, target, kind)] = record
 
     if department in {"Stanford", "Princeton", "Oxford", "Toulouse"}:
-        selectors = {"Stanford": ".hb-card", "Princeton": ".person", "Oxford": "article", "Toulouse": "article, .job-market-candidate, .candidate"}
+        selectors = {"Stanford": ".hb-card", "Princeton": ".person", "Oxford": "article",
+                     "Toulouse": "article, .card-job-market, .job-market-candidate, .candidate"}
         for card in main.select(selectors[department]):
             heading = card.select_one("h2,h3")
             if not heading:
                 continue
             for anchor in card.select("a[href]"):
-                if _explicit_website(anchor) and not _supervisor_link(anchor, card):
+                if _explicit_website(anchor, _name(_text(heading))) and not _supervisor_link(anchor, card):
                     add(_text(heading), anchor, "website")
     elif department == "MIT":
         for anchor in main.select("a.profile-teaser[href]"):
@@ -382,7 +448,12 @@ def directory_links(seed: dict | str, html: str, url: str) -> list[dict]:
                 # Prefer the named profile anchor, never a supervisor or generic
                 # neighbouring link that happens to be first in the row.
                 for anchor in card.select("a[href]"):
-                    if _name_key(_text(anchor)) == _name_key(_text(heading)) and not _supervisor_link(anchor, card):
+                    if _supervisor_link(anchor, card):
+                        continue
+                    # Since late 2026 the row links its profile with an
+                    # icon-only "Show details" anchor whose slug is the name.
+                    if (_name_key(_text(anchor)) == _name_key(_text(heading))
+                            or (not _text(anchor) and _slug_names(anchor.get("href", ""), _text(heading)))):
                         add(_text(heading), anchor, "profile")
                         break
     return list(found.values())
@@ -396,11 +467,12 @@ def profile_websites(name: str, html: str, url: str) -> list[dict]:
     soup = BeautifulSoup(html, "html.parser")
     main = soup.find("main") or soup
     key = _name_key(cleaned)
-    if not any(_name_key(_text(h)) == key for h in main.select("h1,h2,h3")):
+    # Bonn's business-card profiles name the person in `.contact-name .name`.
+    if not any(_name_key(_text(h)) == key for h in main.select("h1,h2,h3,.contact-name .name")):
         return []
     found = {}
     for anchor in main.select("a[href]"):
-        if not _explicit_website(anchor) or _supervisor_link(anchor, main):
+        if not _explicit_website(anchor, cleaned) or _supervisor_link(anchor, main):
             continue
         # Related-person cards inside a profile are independent people.
         wrong_card = False

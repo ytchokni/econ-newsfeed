@@ -182,6 +182,49 @@ class MiningStore:
         self._require_lock()
         return self._all("SELECT id,first_name,last_name,affiliation FROM researchers")
 
+    _UNLINKED = """FROM researchers r {join}
+        WHERE NOT EXISTS (SELECT 1 FROM researcher_urls u WHERE u.researcher_id = r.id)
+          AND EXISTS (SELECT 1 FROM authorship a WHERE a.researcher_id = r.id) {where}"""
+
+    def unlinked_researchers(self) -> list[dict]:
+        """Researchers with at least one paper and no researcher_urls row at all.
+
+        Registry sources look only for these: an inactive URL still means the
+        person is known to the crawl and needs review, not a new homepage.
+        """
+        self._require_lock()
+        return self._all("SELECT r.id,r.first_name,r.last_name,r.openalex_author_id "
+                         + self._UNLINKED.format(join="", where="") + " ORDER BY r.id")
+
+    def orcid_lookup_targets(self, limit: int) -> list[dict]:
+        """Unlinked researchers with an OpenAlex author ID whose ORCID lookup is due.
+
+        The lookup checkpoint is ``site_mining_sources`` kind ``openalex_orcid``
+        with url ``openalex:<author id>``, so the SHA2 key is computed in MySQL
+        as ``cached_sources`` does.
+        """
+        self._require_lock()
+        limit = max(0, int(limit))
+        if not limit:
+            return []
+        join = where = ""
+        if "site_mining_sources" in self._tables:
+            join = """LEFT JOIN site_mining_sources s ON s.source_key =
+                SHA2(CONCAT('openalex_orcid',CHAR(10),'openalex:',r.openalex_author_id),256)"""
+            where = "AND (s.source_key IS NULL OR s.next_check_at <= UTC_TIMESTAMP())"
+        where = "AND r.openalex_author_id IS NOT NULL AND r.openalex_author_id <> '' " + where
+        # Dry runs keep checkpoints in memory; over-read and filter them here.
+        rows = self._all("SELECT r.id,r.first_name,r.last_name,r.openalex_author_id "
+                         + self._UNLINKED.format(join=join, where=where)
+                         + " ORDER BY r.id LIMIT %s", (limit + len(self._sources),))
+        now = _utcnow()
+
+        def due(row):
+            memo = self._sources.get(source_key("openalex_orcid", "openalex:" + row["openalex_author_id"]))
+            return memo is None or memo["next_check_at"] <= now
+
+        return [r for r in rows if due(r)][:limit]
+
     def known_urls(self) -> list[dict]:
         self._require_lock()
         return self._all(

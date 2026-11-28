@@ -493,3 +493,43 @@ def test_directory_generation_refreshes_late_verified_profile_once_per_visit(db)
         db.candidates[row["id"]]["updated_at"] -= timedelta(days=9)
         assert not store.enqueue(new)
         assert not store.enqueue(candidate("directory_profile"))
+
+
+def _bare_store(tables=()):
+    store = MiningStore(apply=False)
+    store.acquired = True
+    store._tables = set(tables)
+    return store
+
+
+def test_orcid_lookup_targets_skip_dry_run_checkpoints_and_use_sql_source_key(monkeypatch):
+    store = _bare_store(module._TABLES)
+    seen = []
+    rows = [{"id": i, "first_name": "A", "last_name": "B", "openalex_author_id": f"A{i}"} for i in (1, 2, 3)]
+    monkeypatch.setattr(store, "_all", lambda sql, params=None: seen.append((sql, params)) or rows)
+    store.checkpoint("openalex_orcid", "openalex:A1", "")
+    assert [r["id"] for r in store.orcid_lookup_targets(2)] == [2, 3]
+    sql, params = seen[0]
+    # Same key as mining_store.source_key(kind, url), computed in MySQL.
+    assert "SHA2(CONCAT('openalex_orcid',CHAR(10),'openalex:',r.openalex_author_id),256)" in sql
+    assert "NOT EXISTS (SELECT 1 FROM researcher_urls" in sql and "EXISTS (SELECT 1 FROM authorship" in sql
+    assert params == (3,)  # over-reads by the number of in-memory checkpoints
+    assert module.source_key("openalex_orcid", "openalex:A1") == hashlib.sha256(b"openalex_orcid\nopenalex:A1").hexdigest()
+
+
+def test_orcid_lookup_targets_without_mining_tables_and_zero_limit(monkeypatch):
+    store = _bare_store()
+    seen = []
+    monkeypatch.setattr(store, "_all", lambda sql, params=None: seen.append(sql) or [])
+    assert store.orcid_lookup_targets(0) == [] and seen == []
+    store.orcid_lookup_targets(5)
+    assert "site_mining_sources" not in seen[0] and "openalex_author_id IS NOT NULL" in seen[0]
+
+
+def test_unlinked_researchers_require_papers_and_no_url_row(monkeypatch):
+    store = _bare_store()
+    seen = []
+    monkeypatch.setattr(store, "_all", lambda sql, params=None: seen.append(sql) or [])
+    store.unlinked_researchers()
+    assert "NOT EXISTS (SELECT 1 FROM researcher_urls u WHERE u.researcher_id = r.id)" in seen[0]
+    assert "EXISTS (SELECT 1 FROM authorship a WHERE a.researcher_id = r.id)" in seen[0]

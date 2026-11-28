@@ -23,6 +23,12 @@ from backend.discovery.mining_sources import (
     profile_websites,
 )
 from backend.discovery.mining_store import MiningStore
+from backend.discovery.registry_sources import (
+    IDEAS_INDEX_URLS, ideas_name_key, openalex_authors_url, openalex_headers,
+    orcid_profile_url, orcid_record_url, orcid_websites, parse_ideas_author,
+    parse_ideas_index, parse_openalex_authors,
+)
+from backend.database.identity import same_person
 
 logger = logging.getLogger(__name__)
 MINER_VERSION = "1"
@@ -109,6 +115,188 @@ def _mine_directories(store, fetcher, names, known, stats):
                          retry_hours=168 if links else 24)
 
 
+def _registry_settings(overrides=None):
+    """Per-batch registry budget; it is a share of SITE_MINING_MAX_REQUESTS."""
+    values = {
+        "max_requests": int(os.getenv("SITE_MINING_REGISTRY_MAX_REQUESTS", "60")),
+        "orcid_authors": int(os.getenv("SITE_MINING_ORCID_AUTHORS", "50")),
+        "repec_index_pages": int(os.getenv("SITE_MINING_REPEC_INDEX_PAGES", "1")),
+        "delay_seconds": float(os.getenv("SITE_MINING_REGISTRY_DELAY_SECONDS", "2")),
+        "openalex_daily_budget": int(os.getenv("OPENALEX_DAILY_BUDGET", "1000")),
+        "openalex_mailto": os.getenv("OPENALEX_MAILTO", ""),
+    }
+    values.update({k: v for k, v in (overrides or {}).items() if v is not None})
+    if min(values["max_requests"], values["orcid_authors"], values["repec_index_pages"],
+           values["delay_seconds"]) < 0:
+        raise ValueError("Registry limits must be nonnegative")
+    return values
+
+
+def registry_host_delays(settings):
+    delay = settings["delay_seconds"]
+    return {"orcid.org": delay, "ideas.repec.org": delay}
+
+
+def _openalex_request_allowed(store, settings):
+    """OpenAlex requests share the enrichment worker's per-UTC-day budget.
+
+    Apply runs reserve a request; dry runs only check, so they stay read-only.
+    """
+    from backend.database.enrichment_budget import has_budget_remaining, reserve_request
+    limit = settings["openalex_daily_budget"]
+    return reserve_request("openalex", limit) if store.apply else has_budget_remaining("openalex", limit)
+
+
+class _RegistryRoom:
+    """The registry share of this batch's request budget."""
+
+    def __init__(self, fetcher, limit):
+        self.fetcher, self.stop_at = fetcher, fetcher.requests + limit
+
+    def __call__(self, needed=1):
+        return not self.fetcher.budget_exhausted and self.fetcher.requests + needed <= self.stop_at
+
+
+def _registry_candidate(store, person, url, source_url, kind, evidence, names, known, stats):
+    candidate = {"researcher_id": person["id"], "name": _name(person), "url": url,
+                 "source_url": source_url, "source_kind": kind, "evidence": evidence}
+    queued = bool(_enqueue(store, candidate, names, known))
+    stats["queued"] += queued
+    stats[f"{kind}_queued"] += queued
+    return queued
+
+
+def _mine_orcid(store, fetcher, room, names, known, stats, settings):
+    """OpenAlex author -> ORCID iD -> websites on the ORCID record."""
+    targets = store.orcid_lookup_targets(settings["orcid_authors"])
+    for offset in range(0, len(targets), 50):
+        chunk = targets[offset:offset + 50]
+        # Robots + the batch request; then at least one ORCID record.
+        if not room(3) or not _openalex_request_allowed(store, settings):
+            return
+        response = fetcher.fetch_json(openalex_authors_url([t["openalex_author_id"] for t in chunk],
+                                                           settings["openalex_mailto"]),
+                                      headers=openalex_headers())
+        stats["openalex_requests"] += 1
+        if response["status"] != 200 or "json" not in response:
+            # Nothing is checkpointed, so the same authors are retried next batch.
+            stats["registry_errors"] += 1
+            return
+        found = parse_openalex_authors(response["json"])
+        for person in chunk:
+            author = person["openalex_author_id"]
+            key = "openalex:" + author
+            info = found.get(author.upper())
+            if not info:
+                store.checkpoint("openalex_orcid", key, "", retry_hours=24 * 30)
+                continue
+            if not room(2):
+                return
+            orcid = info["orcid"]
+            record = fetcher.fetch_json(orcid_record_url(orcid))
+            stats["orcid_records"] += 1
+            if record["status"] != 200 or "json" not in record:
+                store.checkpoint("openalex_orcid", key, "", error=str(record.get("error") or record["status"]),
+                                 retry_hours=24)
+                stats["registry_errors"] += 1
+                continue
+            sites, reason = orcid_websites(record["json"], orcid, person["first_name"], person["last_name"])
+            if reason:
+                stats[reason] += 1
+            for site in sites[:3]:
+                _registry_candidate(store, person, site["url"], orcid_profile_url(orcid), "orcid", {
+                    "orcid": orcid, "openalex_author_id": author, "orcid_label": site["label"],
+                    "self_asserted": site["self_asserted"], "orcid_name": site["orcid_name"],
+                }, names, known, stats)
+            store.checkpoint("openalex_orcid", key, _hash(orcid + "\n" + "\n".join(s["url"] for s in sites)),
+                             error=reason if reason == "orcid_name_mismatch" else None, retry_hours=24 * 90)
+
+
+def _mine_repec(store, fetcher, room, unlinked, known, stats, settings):
+    """IDEAS author index -> unique exact-name match -> registered homepage."""
+    by_name = defaultdict(list)
+    for person in unlinked:
+        key = norm_name(_name(person))
+        if len(key.split()) >= 2:
+            by_name[key].append(person)
+    pages = 0
+    for index_url in IDEAS_INDEX_URLS:
+        if pages >= settings["repec_index_pages"] or not room(3):
+            return
+        if not store.source_due("repec_index", index_url):
+            continue
+        pages += 1
+        response = fetcher.fetch(index_url)
+        stats["repec_index_pages"] += 1
+        if response["status"] != 200 or not response.get("html"):
+            store.checkpoint("repec_index", index_url, "", error=response.get("error") or str(response["status"]),
+                             retry_hours=24)
+            stats["registry_errors"] += 1
+            continue
+        entries = parse_ideas_index(response["html"], response["url"])
+        entries_by_name = defaultdict(list)
+        for entry in entries:
+            entries_by_name[ideas_name_key(entry["first_name"], entry["last_name"])].append(entry)
+        finished = True
+        for key, matches in entries_by_name.items():
+            people = by_name.get(key, [])
+            if not people:
+                continue
+            # Homonyms on either side stay with the other discovery sources.
+            if len(matches) != 1 or len(people) != 1:
+                stats["repec_ambiguous"] += 1
+                continue
+            entry, person = matches[0], people[0]
+            if not store.source_due("repec_author", entry["url"]):
+                continue
+            if not room(1):
+                finished = False
+                break
+            page = fetcher.fetch(entry["url"])
+            stats["repec_author_pages"] += 1
+            if page["status"] != 200 or not page.get("html"):
+                store.checkpoint("repec_author", entry["url"], "", error=page.get("error") or str(page["status"]),
+                                 retry_hours=24)
+                stats["registry_errors"] += 1
+                continue
+            author = parse_ideas_author(page["html"], page["url"]) or {}
+            reason = None
+            if not author.get("last_name") or not same_person(
+                    person["first_name"], person["last_name"], author["first_name"], author["last_name"]):
+                reason = "repec_name_mismatch"
+            elif not author.get("homepage"):
+                reason = "repec_no_homepage"
+            elif not paper_overlap(author["research_text"], store.paper_titles(person["id"])):
+                # IDEAS lists the author's RePEc works: requiring one of our
+                # titles there keeps homonyms out of the verification queue.
+                reason = "repec_no_title_match"
+            if reason:
+                stats[reason] += 1
+            else:
+                _registry_candidate(store, person, author["homepage"], page["url"], "repec", {
+                    "repec_short_id": author.get("short_id") or entry["short_id"],
+                    "ideas_index": index_url, "repec_title_match": True,
+                }, {}, known, stats)
+            store.checkpoint("repec_author", entry["url"], _hash(page["html"]),
+                             error=reason if reason == "repec_name_mismatch" else None, retry_hours=24 * 90)
+        if finished:
+            # A letter with more matches than one batch can fetch is read again
+            # next batch; author pages already checkpointed are skipped.
+            store.checkpoint("repec_index", index_url, _hash(response["html"]), retry_hours=168)
+
+
+def _mine_registries(store, fetcher, names, known, stats, settings):
+    if not settings["max_requests"]:
+        return
+    unlinked = store.unlinked_researchers()
+    stats["unlinked_researchers"] = len(unlinked)
+    start = fetcher.requests
+    # ORCID may use half the registry share; RePEc gets whatever is left.
+    _mine_orcid(store, fetcher, _RegistryRoom(fetcher, settings["max_requests"] // 2), names, known, stats, settings)
+    remaining = settings["max_requests"] - (fetcher.requests - start)
+    _mine_repec(store, fetcher, _RegistryRoom(fetcher, remaining), unlinked, known, stats, settings)
+
+
 def _retry(store, candidate, reason, stats):
     exhausted = candidate.get("attempts", 0) >= 2
     status = "review" if exhausted else "retry"
@@ -130,7 +318,12 @@ def _verify(store, fetcher, candidate, people, names, known, stats):
     if candidate["source_kind"] == "directory_profile":
         # Profiles are durable tasks, so a large department resumes next batch.
         # Only the directory's named profile can supply personal-website links.
-        if validate_identity(response["html"], name)["confirmed"]:
+        # A business-card profile (Bonn) names the person but is too short for
+        # the academic-content rule; error, multi-person and directory pages
+        # are refused before that rule. Each linked website is then verified
+        # in full on its own, so the profile only supplies candidates.
+        profile = validate_identity(response["html"], name)
+        if profile["confirmed"] or profile["reason"] == "insufficient_academic_content":
             for child in profile_websites(name, response["html"], response["url"]):
                 child["evidence"] = dict(candidate.get("evidence") or {}, **child.get("evidence", {}))
                 stats["queued"] += bool(_enqueue(store, child, names, known))
@@ -246,21 +439,27 @@ def _verify(store, fetcher, candidate, people, names, known, stats):
 
 
 def run_site_mining_batch(*, apply=False, mode="all", source_limit=None,
-                          candidate_limit=None, max_requests=None, max_seconds=None):
-    """Run a bounded batch; default is a database-read-only network dry run."""
-    if mode not in {"all", "cached", "directories"}:
-        raise ValueError("mode must be all, cached, or directories")
+                          candidate_limit=None, max_requests=None, max_seconds=None,
+                          registry=None):
+    """Run a bounded batch; default is a database-read-only network dry run.
+
+    ``registry`` overrides ``_registry_settings`` (SITE_MINING_REGISTRY_*).
+    """
+    if mode not in {"all", "cached", "directories", "registries"}:
+        raise ValueError("mode must be all, cached, directories, or registries")
+    registry = _registry_settings(registry)
     source_limit = int(source_limit if source_limit is not None else os.getenv("SITE_MINING_SOURCE_LIMIT", "500"))
     candidate_limit = int(candidate_limit if candidate_limit is not None else os.getenv("SITE_MINING_CANDIDATE_LIMIT", "30"))
     max_requests = int(max_requests if max_requests is not None else os.getenv("SITE_MINING_MAX_REQUESTS", "200"))
     max_seconds = int(max_seconds if max_seconds is not None else os.getenv("SITE_MINING_MAX_SECONDS", "600"))
     if min(source_limit, candidate_limit, max_requests, max_seconds) < 0 or max_seconds == 0:
         raise ValueError("Limits must be nonnegative and max_seconds must be positive")
-    stats = dict(apply=apply, mode=mode, cached_pages=0, directories=0, queued=0,
-                 verified=0, approved_sites=0, added_urls=0, review=0, retry=0,
-                 requests=0, budget_exhausted=False)
+    stats = defaultdict(int, apply=apply, mode=mode, cached_pages=0, directories=0, queued=0,
+                        verified=0, approved_sites=0, added_urls=0, review=0, retry=0,
+                        requests=0, budget_exhausted=False)
     started = time.monotonic()
-    fetcher = MiningFetcher(max_requests=max_requests, max_seconds=max_seconds)
+    fetcher = MiningFetcher(max_requests=max_requests, max_seconds=max_seconds,
+                            host_delays=registry_host_delays(registry))
     with MiningStore(apply=apply) as store:
         if not store.acquired:
             return dict(stats, skipped="another_mining_job_is_running")
@@ -278,6 +477,8 @@ def run_site_mining_batch(*, apply=False, mode="all", source_limit=None,
                 _mine_cached(store, people, names, known, source_limit, stats, started + max_seconds)
             if mode in {"all", "directories"}:
                 _mine_directories(store, fetcher, names, known, stats)
+            if mode in {"all", "registries"}:
+                _mine_registries(store, fetcher, names, known, stats, registry)
             for candidate in store.due_candidates(candidate_limit) if candidate_limit else []:
                 try:
                     _verify(store, fetcher, candidate, people, names, known, stats)
@@ -295,5 +496,6 @@ def run_site_mining_batch(*, apply=False, mode="all", source_limit=None,
             raise
         stats.update(requests=fetcher.requests, elapsed_seconds=round(time.monotonic() - started, 2))
         store.finish_run(run_id, stats)
+    stats = dict(stats)
     logger.info("Site mining completed: %s", json.dumps(stats))
     return stats
