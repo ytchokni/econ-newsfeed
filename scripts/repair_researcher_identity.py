@@ -500,6 +500,7 @@ def strip_repeated_surnames() -> dict:
            WHERE first_name LIKE CONCAT('% ', last_name)
               OR first_name LIKE CONCAT('% ', REPLACE(last_name, '-', ' '))""")
     renames, merges, conflicts = [], [], []
+    held: dict[str, list[list[dict]]] = collections.defaultdict(list)
     # Union rows that share an id or a corrected name into one cluster:
     # "Ana Cozzi" Cozzi x2 + "Ana" Cozzi is one merge, not two overlapping ones.
     parent: dict[int, int] = {}
@@ -541,6 +542,21 @@ def strip_repeated_surnames() -> dict:
         if len(ids) > 1:
             conflicts.append(sorted(weights.values(), key=lambda w: w["id"]))
             continue
+        clean = [i for i in members if i not in doubled]
+        # The corrected name alone is weak evidence: two doubled "Bo Li" rows
+        # (MIT, Tsinghua) are not one person, and one doubled row must not pull
+        # together homonyms the database kept apart (two clean "Miklos Koren").
+        # Rename the doubled rows, merge nothing, list the group for review;
+        # merge_openalex_twins / merge_shared_url_twins catch true duplicates.
+        hold = ("same_name_no_twin" if not clean
+                else "several_clean_records" if len(clean) > 1 else None)
+        if hold:
+            for i in sorted(members):
+                if i in doubled:
+                    r = doubled[i]
+                    renames.append((r, strip_repeated_surname(r["first_name"], r["last_name"])))
+            held[hold].append(sorted(weights.values(), key=lambda w: w["id"]))
+            continue
         ranked = sorted(weights.values(), key=canonical_order)
         keep = ranked[0]
         merges.append((keep, ranked[1:], strip_repeated_surname(keep["first_name"], keep["last_name"])))
@@ -551,6 +567,13 @@ def strip_repeated_surnames() -> dict:
                  "; ".join(f"{w['id']} {_name(w)} {w['openalex_author_id']}" for w in group))
         REPORT["strip_repeated_surnames_review"].append(
             [{"id": w["id"], "name": _name(w), "openalex_author_id": w["openalex_author_id"]} for w in group])
+    for reason, groups in held.items():
+        for group in groups[:SAMPLES]:
+            log.info("  review (%s; doubled rows renamed, nothing merged): %s", reason,
+                     "; ".join(f"{w['id']} {_name(w)}" for w in group))
+        REPORT[f"strip_repeated_surnames_review_{reason}"].extend(
+            [{"id": w["id"], "name": _name(w), "openalex_author_id": w["openalex_author_id"]} for w in group]
+            for group in groups)
     for r, fixed in renames[:SAMPLES]:
         log.info("  rename %s: %r -> %r (%s)", r["id"], r["first_name"], fixed, r["last_name"])
     _log_plan([(c, d) for c, d, _ in merges])
@@ -572,6 +595,8 @@ def strip_repeated_surnames() -> dict:
     return {"renamed": len(renames), "merged_into_existing": sum(len(d) for _, d, _ in merges),
             "survivors_renamed": sum(1 for c, _, fixed in merges if c["first_name"] != fixed),
             "left_for_review_conflicting_openalex_ids": len(conflicts),
+            "left_for_review_same_name_no_twin": len(held["same_name_no_twin"]),
+            "left_for_review_several_clean_records": len(held["several_clean_records"]),
             "applied_renames": applied, "applied_merges": merged if APPLY else 0}
 
 

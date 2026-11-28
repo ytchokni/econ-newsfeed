@@ -358,19 +358,40 @@ def test_strip_repeated_surnames_unions_overlapping_groups(monkeypatch):
          "merge": [{"id": 601, "name": "Ana Cozzi"}, {"id": 602, "name": "Ana Cozzi Cozzi"}]}]
 
 
-def test_strip_repeated_surnames_merges_doubled_rows_without_a_twin(monkeypatch):
-    """Two "Ana Cozzi" Cozzi rows and no "Ana": merged, not renamed into duplicates."""
+def test_strip_repeated_surnames_holds_doubled_rows_without_a_clean_twin(monkeypatch):
+    """700 "Bo Li" Li (MIT) and 701 "Bo Li" Li (Tsinghua): renamed, not merged."""
     _fake_fetch(monkeypatch, [
-        ("LIKE CONCAT", [{"id": 600, "first_name": "Ana Cozzi", "last_name": "Cozzi"},
-                         {"id": 602, "first_name": "Ana Cozzi", "last_name": "Cozzi"}]),
+        ("LIKE CONCAT", [{"id": 700, "first_name": "Bo Li", "last_name": "Li"},
+                         {"id": 701, "first_name": "Bo Li", "last_name": "Li"}]),
         ("WHERE first_name = %s", []),
         ("FROM researchers r WHERE r.id IN",
-         lambda sql, params: [_rec(600, "Ana Cozzi", "Cozzi", None, pubs=5),
-                              _rec(602, "Ana Cozzi", "Cozzi", None, pubs=1)]),
+         lambda sql, params: [_rec(700, "Bo Li", "Li", None, pubs=5),
+                              _rec(701, "Bo Li", "Li", None, pubs=1)]),
     ])
     counts = repair.strip_repeated_surnames()
-    assert counts["renamed"] == 0 and counts["merged_into_existing"] == 1
-    assert counts["survivors_renamed"] == 1
+    assert counts["merged_into_existing"] == 0 and counts["renamed"] == 2
+    assert counts["left_for_review_same_name_no_twin"] == 1
+    assert repair.REPORT["strip_repeated_surnames"] == [
+        {"id": 700, "from": "Bo Li", "to": "Bo"}, {"id": 701, "from": "Bo Li", "to": "Bo"}]
+    assert [w["id"] for w in repair.REPORT["strip_repeated_surnames_review_same_name_no_twin"][0]] == [700, 701]
+
+
+def test_strip_repeated_surnames_holds_cluster_with_several_clean_records(monkeypatch):
+    """A doubled "Miklos Koren" must not pull clean 2088 and 19508 into one merge."""
+    _fake_fetch(monkeypatch, [
+        ("LIKE CONCAT", [{"id": 150000, "first_name": "Miklos Koren", "last_name": "Koren"}]),
+        ("WHERE first_name = %s", [{"id": 2088}, {"id": 19508}]),
+        ("FROM researchers r WHERE r.id IN",
+         lambda sql, params: [_rec(2088, "Miklos", "Koren", None, urls=2, pubs=40),
+                              _rec(19508, "Miklos", "Koren", None, pubs=3),
+                              _rec(150000, "Miklos Koren", "Koren", None, pubs=1)]),
+    ])
+    counts = repair.strip_repeated_surnames()
+    assert counts["merged_into_existing"] == 0 and counts["renamed"] == 1
+    assert counts["left_for_review_several_clean_records"] == 1
+    assert repair.REPORT["strip_repeated_surnames"] == [{"id": 150000, "from": "Miklos Koren", "to": "Miklos"}]
+    assert [w["id"] for w in repair.REPORT["strip_repeated_surnames_review_several_clean_records"][0]] == [
+        2088, 19508, 150000]
 
 
 def test_merge_with_backup_raises_when_a_record_is_gone(monkeypatch):
