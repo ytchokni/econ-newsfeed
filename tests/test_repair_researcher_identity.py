@@ -338,3 +338,82 @@ def test_strip_repeated_surnames_apply_leaves_survivor_with_corrected_name(monke
     assert counts["applied_merges"] == 1
     assert merged == [(150529, 162052)]
     assert names == {150529: "Michèle"}
+
+
+def test_strip_repeated_surnames_unions_overlapping_groups(monkeypatch):
+    """600 and 602 "Ana Cozzi" Cozzi both twin 601 "Ana": one cluster, one merge unit."""
+    _fake_fetch(monkeypatch, [
+        ("LIKE CONCAT", [{"id": 600, "first_name": "Ana Cozzi", "last_name": "Cozzi"},
+                         {"id": 602, "first_name": "Ana Cozzi", "last_name": "Cozzi"}]),
+        ("WHERE first_name = %s", lambda sql, params: [{"id": 601}]),
+        ("FROM researchers r WHERE r.id IN",
+         lambda sql, params: [_rec(600, "Ana Cozzi", "Cozzi", None, urls=1, pubs=5),
+                              _rec(601, "Ana", "Cozzi", None, pubs=2),
+                              _rec(602, "Ana Cozzi", "Cozzi", None, pubs=1)]),
+    ])
+    counts = repair.strip_repeated_surnames()
+    assert counts["renamed"] == 0 and counts["merged_into_existing"] == 2
+    assert repair.REPORT["strip_repeated_surnames"] == [
+        {"keep": 600, "name": "Ana Cozzi Cozzi", "rename_to": "Ana",
+         "merge": [{"id": 601, "name": "Ana Cozzi"}, {"id": 602, "name": "Ana Cozzi Cozzi"}]}]
+
+
+def test_strip_repeated_surnames_merges_doubled_rows_without_a_twin(monkeypatch):
+    """Two "Ana Cozzi" Cozzi rows and no "Ana": merged, not renamed into duplicates."""
+    _fake_fetch(monkeypatch, [
+        ("LIKE CONCAT", [{"id": 600, "first_name": "Ana Cozzi", "last_name": "Cozzi"},
+                         {"id": 602, "first_name": "Ana Cozzi", "last_name": "Cozzi"}]),
+        ("WHERE first_name = %s", []),
+        ("FROM researchers r WHERE r.id IN",
+         lambda sql, params: [_rec(600, "Ana Cozzi", "Cozzi", None, pubs=5),
+                              _rec(602, "Ana Cozzi", "Cozzi", None, pubs=1)]),
+    ])
+    counts = repair.strip_repeated_surnames()
+    assert counts["renamed"] == 0 and counts["merged_into_existing"] == 1
+    assert counts["survivors_renamed"] == 1
+
+
+def test_merge_with_backup_raises_when_a_record_is_gone(monkeypatch):
+    monkeypatch.setattr(repair, "_capture_merge", lambda cur, a, b: [])
+    monkeypatch.setattr(repair, "merge_researcher_into", lambda cur, a, b: False)
+    with pytest.raises(RuntimeError):
+        repair._merge_with_backup(object(), 600, 601)
+
+
+def test_strip_merge_rolls_back_when_survivor_changed_since_plan(monkeypatch):
+    _belot_routes(monkeypatch)
+
+    class Cursor:
+        def execute(self, sql, params=()):
+            assert not sql.startswith("UPDATE"), "must not write after a changed survivor"
+
+        def fetchone(self):
+            return {"first_name": "Michèle Anne Belot"}
+
+        def close(self):
+            pass
+
+    class Conn:
+        rolled_back = False
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def cursor(self, **kw):
+            return Cursor()
+
+        def commit(self):
+            raise AssertionError("must not commit")
+
+        def rollback(self):
+            Conn.rolled_back = True
+
+    monkeypatch.setattr(repair, "APPLY", True)
+    monkeypatch.setattr(repair, "BACKUP", None)
+    monkeypatch.setattr(repair, "get_connection", lambda: Conn())
+    monkeypatch.setattr(repair, "_merge_with_backup", lambda *a: pytest.fail("merged"))
+    counts = repair.strip_repeated_surnames()
+    assert counts["applied_merges"] == 0 and Conn.rolled_back

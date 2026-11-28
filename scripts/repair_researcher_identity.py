@@ -178,7 +178,10 @@ def _group() -> list:
 def _merge_with_backup(cur, canonical_id: int, duplicate_id: int) -> None:
     """merge_researcher_into, recording what it changes and how it left the survivor."""
     researchers_op = _capture_merge(cur, canonical_id, duplicate_id)
-    merge_researcher_into(cur, canonical_id, duplicate_id)
+    if not merge_researcher_into(cur, canonical_id, duplicate_id):
+        # A record already gone (merged by another unit): roll this unit back
+        # rather than count a merge that did not happen.
+        raise RuntimeError(f"merge {duplicate_id} -> {canonical_id} found a missing record")
     researchers_op.append({str(r["id"]): r for r in _select(cur, "researchers", "id", [canonical_id])})
 
 
@@ -497,24 +500,52 @@ def strip_repeated_surnames() -> dict:
            WHERE first_name LIKE CONCAT('% ', last_name)
               OR first_name LIKE CONCAT('% ', REPLACE(last_name, '-', ' '))""")
     renames, merges, conflicts = [], [], []
+    # Union rows that share an id or a corrected name into one cluster:
+    # "Ana Cozzi" Cozzi x2 + "Ana" Cozzi is one merge, not two overlapping ones.
+    parent: dict[int, int] = {}
+
+    def find(i: int) -> int:
+        while parent.setdefault(i, i) != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    doubled: dict[int, dict] = {}
+    by_name: dict[tuple[str, str], int] = {}
     for r in rows:
         fixed = strip_repeated_surname(r["first_name"], r["last_name"])
         if fixed == r["first_name"]:
             continue
-        twins = fetch_all("SELECT id FROM researchers WHERE first_name = %s AND last_name = %s AND id != %s",
-                          (fixed, r["last_name"], r["id"]))
-        if twins:
-            weights = _weights([r["id"], *(t["id"] for t in twins)])
-            # Different OpenAlex authors behind one name (two Markus Goldsteins):
-            # neither merge nor rename; list the pair for review.
-            ids = {w["openalex_author_id"] for w in weights.values() if w["openalex_author_id"]}
-            if len(ids) > 1:
-                conflicts.append(sorted(weights.values(), key=lambda w: w["id"]))
-                continue
-            ranked = sorted(weights.values(), key=canonical_order)
-            merges.append((ranked[0], ranked[1:], fixed))
+        doubled[r["id"]] = r
+        find(r["id"])
+        key = (fixed.casefold(), r["last_name"].casefold())
+        if key in by_name:
+            parent[find(r["id"])] = find(by_name[key])
         else:
-            renames.append((r, fixed))
+            by_name[key] = r["id"]
+        for t in fetch_all("SELECT id FROM researchers WHERE first_name = %s AND last_name = %s AND id != %s",
+                           (fixed, r["last_name"], r["id"])):
+            parent[find(t["id"])] = find(r["id"])
+    clusters: dict[int, list[int]] = collections.defaultdict(list)
+    for i in list(parent):
+        clusters[find(i)].append(i)
+    for members in clusters.values():
+        if len(members) == 1:
+            r = doubled[members[0]]
+            renames.append((r, strip_repeated_surname(r["first_name"], r["last_name"])))
+            continue
+        weights = _weights(members)
+        # Different OpenAlex authors behind one name (two Markus Goldsteins):
+        # neither merge nor rename; list the group for review.
+        ids = {w["openalex_author_id"] for w in weights.values() if w["openalex_author_id"]}
+        if len(ids) > 1:
+            conflicts.append(sorted(weights.values(), key=lambda w: w["id"]))
+            continue
+        ranked = sorted(weights.values(), key=canonical_order)
+        keep = ranked[0]
+        merges.append((keep, ranked[1:], strip_repeated_surname(keep["first_name"], keep["last_name"])))
+    renames.sort(key=lambda rf: rf[0]["id"])
+    merges.sort(key=lambda m: m[0]["id"])
     for group in conflicts:
         log.info("  review (different OpenAlex IDs, left unchanged): %s",
                  "; ".join(f"{w['id']} {_name(w)} {w['openalex_author_id']}" for w in group))
@@ -560,11 +591,14 @@ def _apply_strip_merges(merges: list[tuple[dict, list[dict], str]]) -> int:
             # Rename first (undone last), so the merge compares corrected names.
             cur.execute("SELECT first_name FROM researchers WHERE id = %s", (canonical["id"],))
             row = cur.fetchone()
-            if row and row["first_name"] != fixed:
+            if not row or row["first_name"] != canonical["first_name"]:
+                raise RuntimeError(f"researcher {canonical['id']} changed since the plan "
+                                   f"({canonical['first_name']!r} -> {row and row['first_name']!r})")
+            if canonical["first_name"] != fixed:
                 _group().append(["set", "researchers", "first_name",
-                                 [[canonical["id"], row["first_name"], fixed]]])
+                                 [[canonical["id"], canonical["first_name"], fixed]]])
                 cur.execute("UPDATE researchers SET first_name = %s WHERE id = %s AND first_name = %s",
-                            (fixed, canonical["id"], row["first_name"]))
+                            (fixed, canonical["id"], canonical["first_name"]))
             for d in dups:
                 _merge_with_backup(cur, canonical["id"], d["id"])
         if _write(f"strip_repeated_surnames {canonical['id']}", writes):
