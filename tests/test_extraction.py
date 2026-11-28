@@ -57,7 +57,7 @@ class TestExtractOneUrl:
         assert outcome.pubs_count == 2
         assert outcome.ok
         mocks["persist"].assert_called_once_with(
-            "https://example.com/pubs", 1, pubs, is_seed=False, event_date=None,
+            "https://example.com/pubs", 1, pubs, is_seed=False, event_date=None, existing_status_events=False,
         )
         mocks["mark"].assert_called_once_with(1, "h1")
 
