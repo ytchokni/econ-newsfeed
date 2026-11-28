@@ -46,6 +46,9 @@ services:
       LLM_REQUESTS_PER_MINUTE: ${LLM_REQUESTS_PER_MINUTE:-25}
       SCRAPE_INTERVAL_HOURS: ${SCRAPE_INTERVAL_HOURS:-24}
       SCRAPE_ON_STARTUP: ${SCRAPE_ON_STARTUP:-false}
+      # false once the `scraper` service (profile "scraper") runs the fetch pass.
+      SCRAPE_IN_API: ${SCRAPE_IN_API:-true}
+      SCRAPE_CONCURRENCY: ${SCRAPE_CONCURRENCY:-6}
       SCRAPE_API_KEY: ${SCRAPE_API_KEY:?SCRAPE_API_KEY is required}
       SCRAPE_RATE_LIMIT_SECONDS: ${SCRAPE_RATE_LIMIT_SECONDS:-2}
       CONTENT_MAX_CHARS: ${CONTENT_MAX_CHARS:?CONTENT_MAX_CHARS is required}
@@ -126,6 +129,50 @@ services:
       SITE_MINING_CANDIDATE_LIMIT: ${SITE_MINING_CANDIDATE_LIMIT:-30}
       SITE_MINING_MAX_REQUESTS: ${SITE_MINING_MAX_REQUESTS:-200}
       SITE_MINING_MAX_SECONDS: ${SITE_MINING_MAX_SECONDS:-600}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  # Fetch-only scrape outside the API, so API deploys never cut a pass off
+  # (backend/pipeline/scrape_worker.py). Enable with COMPOSE_PROFILES=...,scraper
+  # and set SCRAPE_IN_API=false for the api. SIGTERM finishes in-flight fetches
+  # and saves progress; the next start resumes the pass.
+  scraper:
+    profiles: [scraper]
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    command: [python, -m, backend.pipeline.scrape_worker]
+    restart: unless-stopped
+    # Fetch-only: peaks ~200-350 MB (6 workers, pages capped at 10 MB and
+    # compacted to 1 MB). The 4 GB host also runs api 1 GB, db 1.5 GB, miner 512 MB.
+    mem_limit: 512m
+    cpus: 1.0
+    stop_grace_period: 120s
+    logging:
+      driver: json-file
+      options:
+        max-size: "50m"
+        max-file: "3"
+    environment:
+      DB_HOST: db
+      DB_USER: ${DB_USER:-econ_app}
+      DB_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD is required}
+      DB_NAME: ${DB_NAME:-econ_newsfeed}
+      # SCRAPE_CONCURRENCY fetch workers + progress flushes; queries are short.
+      DB_POOL_SIZE: ${SCRAPER_DB_POOL_SIZE:-8}
+      GOOGLE_API_KEY: ${GOOGLE_API_KEY:?GOOGLE_API_KEY is required}
+      SCRAPE_API_KEY: ${SCRAPE_API_KEY:?SCRAPE_API_KEY is required}
+      CONTENT_MAX_CHARS: ${CONTENT_MAX_CHARS:?CONTENT_MAX_CHARS is required}
+      SCRAPE_INTERVAL_HOURS: ${SCRAPE_INTERVAL_HOURS:-24}
+      SCRAPE_CONCURRENCY: ${SCRAPE_CONCURRENCY:-6}
+      SCRAPE_RATE_LIMIT_SECONDS: ${SCRAPE_RATE_LIMIT_SECONDS:-2}
+      SCRAPE_RATE_LIMIT_FAST_SECONDS: ${SCRAPE_RATE_LIMIT_FAST_SECONDS:-0.5}
+      FETCH_MAX_BYTES: ${FETCH_MAX_BYTES:-10000000}
+      # Unset/empty: the fetcher's default User-Agent. FRONTEND_URL is for a
+      # crawler contact URL in the User-Agent (#256).
+      SCRAPER_USER_AGENT: ${SCRAPER_USER_AGENT:-}
+      FRONTEND_URL: ${FRONTEND_URL:-}
     depends_on:
       db:
         condition: service_healthy

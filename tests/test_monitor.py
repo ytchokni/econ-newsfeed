@@ -11,6 +11,7 @@ HEALTHY = {
     "scrape_age_h": 3, "stuck_scrapes": 0, "pending": 400,
     "extracted_6h": 300, "feed_recent": 250, "enrich_age_h": 12,
     "snapshot_guard": 1, "never_extracted": 350, "oldest_changed_h": 10, "stale_changed": 0,
+    "scrape_completed_h": 20,
 }
 
 
@@ -54,6 +55,9 @@ class TestEvaluatePipeline:
         ({"scrape_age_h": 37}, "scrape_recent"),
         ({"scrape_age_h": None}, "scrape_recent"),
         ({"stuck_scrapes": 1}, "scrape_not_stuck"),
+        # 2026-11-27: deploys kept restarting the scrape; passes started, none finished.
+        ({"scrape_completed_h": 37}, "scrape_completed"),
+        ({"scrape_completed_h": None}, "scrape_completed"),
         ({"feed_recent": 0}, "feed_fresh"),
         ({"enrich_age_h": 49}, "enrichment_active"),
         ({"enrich_age_h": None}, "enrichment_active"),
@@ -66,12 +70,12 @@ class TestEvaluatePipeline:
 
 class TestParsePipelineRow:
     def test_parses_integers_and_nulls(self):
-        row = monitor.parse_pipeline_row("3\t0\t14658\t17\t29\tNULL\t1\t11594\tNULL\t0\n")
+        row = monitor.parse_pipeline_row("3\t0\t14658\t17\t29\tNULL\t1\t11594\tNULL\t0\t26\n")
         assert row == {
             "scrape_age_h": 3, "stuck_scrapes": 0, "pending": 14658,
             "extracted_6h": 17, "feed_recent": 29, "enrich_age_h": None,
             "snapshot_guard": 1, "never_extracted": 11594, "oldest_changed_h": None,
-            "stale_changed": 0,
+            "stale_changed": 0, "scrape_completed_h": 26,
         }
 
     def test_rejects_unexpected_shape(self):
@@ -350,3 +354,20 @@ class TestReportFlow:
         issue = {"number": 7, "body": '<!-- monitor-state: {"failing": ["backup"], "stage": "alerted"} -->'}
         (close,) = self._run(tmp_path, monkeypatch, failing=False, open_issue=issue)
         assert close[2][:3] == ("issue", "close", "7")
+
+
+class TestOptionalContainer:
+    def test_skipped_until_the_service_exists(self, monkeypatch):
+        class Result:
+            def __init__(self, code, out=""):
+                self.returncode, self.stdout = code, out
+        monkeypatch.setattr(monitor, "run", lambda cmd, **kw: Result(1))
+        assert monitor.optional_container_check(monitor.SCRAPER_CONTAINER) == []
+
+    def test_checked_once_created(self, monkeypatch):
+        class Result:
+            def __init__(self, code, out=""):
+                self.returncode, self.stdout = code, out
+        monkeypatch.setattr(monitor, "run", lambda cmd, **kw: Result(0, "false\n"))
+        [result] = monitor.optional_container_check(monitor.SCRAPER_CONTAINER)
+        assert result["name"] == "container_scraper" and result["ok"] is False

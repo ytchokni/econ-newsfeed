@@ -56,6 +56,7 @@ def _base_patches():
         "validate": patch("backend.pipeline.scheduler._validate_draft_urls"),
         "fetch": patch("backend.pipeline.scheduler.HTMLFetcher.fetch_and_save_if_changed", return_value=False),
         "fetch_one": patch("backend.pipeline.scheduler.fetch_one", return_value=None),
+        "mark_checked": patch("backend.pipeline.scheduler._mark_urls_checked"),
     }
 
 
@@ -303,7 +304,7 @@ class TestLockReleaseOnError:
         original_conn = MagicMock(name="original_lock_conn")
         replacement_conn = MagicMock(name="replacement_lock_conn")
 
-        def replace_lock_conn():
+        def replace_lock_conn(**_kwargs):
             backend.pipeline.scheduler._lock_conn = replacement_conn
             return []
 

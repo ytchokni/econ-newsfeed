@@ -180,6 +180,7 @@ _TABLE_DEFINITIONS = {
             deactivation_reason VARCHAR(255) DEFAULT NULL,
             ownership_flag VARCHAR(32) DEFAULT NULL,
             ownership_flagged_at DATETIME DEFAULT NULL,
+            scrape_checked_at DATETIME DEFAULT NULL,
             UNIQUE KEY uq_researcher_url (researcher_id, url(500)),
             FOREIGN KEY (researcher_id) REFERENCES researchers(id) ON DELETE CASCADE,
             INDEX idx_is_active (is_active)
@@ -352,7 +353,9 @@ _TABLE_DEFINITIONS = {
             id INT AUTO_INCREMENT PRIMARY KEY,
             started_at DATETIME NOT NULL,
             finished_at DATETIME,
-            status ENUM('running', 'completed', 'failed') DEFAULT 'running',
+            status ENUM('running', 'completed', 'failed', 'interrupted') DEFAULT 'running',
+            is_fetch_run BOOLEAN NOT NULL DEFAULT FALSE,
+            resumed_count INT NOT NULL DEFAULT 0,
             urls_checked INT DEFAULT 0,
             urls_changed INT DEFAULT 0,
             pubs_extracted INT DEFAULT 0,
@@ -645,6 +648,11 @@ def create_tables() -> None:
                         # When content_hash last changed (html_content.timestamp moves on
                         # every fetch). Orders the extraction queue; NULL on older rows.
                         ("html_content", "content_changed_at", "DATETIME DEFAULT NULL"),
+                        # Resumable fetch passes (scheduler.run_scrape_job): a run
+                        # restarted after a deploy skips URLs it already checked.
+                        ("researcher_urls", "scrape_checked_at", "DATETIME DEFAULT NULL"),
+                        ("scrape_log", "is_fetch_run", "BOOLEAN NOT NULL DEFAULT FALSE"),
+                        ("scrape_log", "resumed_count", "INT NOT NULL DEFAULT 0"),
                     ]
                     for table, col, definition in _migrations:
                         try:
@@ -731,6 +739,23 @@ def create_tables() -> None:
                             conn.commit()
                         except Exception as e:
                             logging.warning("Migration: CASCADE for %s.%s: %s", table, col, e)
+
+                    # 'interrupted': a fetch pass stopped on SIGTERM, resumed by the next run.
+                    try:
+                        cursor.execute(
+                            "SELECT COLUMN_TYPE FROM information_schema.COLUMNS "
+                            "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = 'scrape_log' "
+                            "AND COLUMN_NAME = 'status'"
+                        )
+                        row = cursor.fetchone()
+                        if row is not None and "'interrupted'" not in str(row[0]):
+                            cursor.execute(
+                                "ALTER TABLE scrape_log MODIFY COLUMN status "
+                                "ENUM('running', 'completed', 'failed', 'interrupted') DEFAULT 'running'"
+                            )
+                            conn.commit()
+                    except Exception as e:
+                        logging.warning("Migration: scrape_log.status interrupted: %s", e)
 
                     try:
                         cursor.execute("ALTER TABLE scrape_log ADD INDEX idx_scrape_status (status)")

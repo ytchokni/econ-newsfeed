@@ -57,6 +57,10 @@ def is_login_redirect(url: str) -> bool:
 # Per-hostname locking allows concurrent fetches to different hosts.
 _pin_dns_lock = threading.Lock()
 _pin_dns_pins: dict[str, str] = {}  # hostname -> resolved_ip
+# hostname -> number of active pins. Parallel fetch workers can pin the same
+# host at once (one fetches it, another is redirected to it); the pin must
+# outlive both, or the second request would connect unpinned.
+_pin_dns_host_refs: dict[str, int] = {}
 _pin_dns_refcount = 0
 _original_create_connection = None
 
@@ -74,6 +78,7 @@ def _pin_dns(hostname: str, resolved_ip: str):
 
     with _pin_dns_lock:
         _pin_dns_pins[hostname] = resolved_ip
+        _pin_dns_host_refs[hostname] = _pin_dns_host_refs.get(hostname, 0) + 1
         _pin_dns_refcount += 1
         if _pin_dns_refcount == 1:
             _original_create_connection = _urllib3_cn.create_connection
@@ -90,7 +95,12 @@ def _pin_dns(hostname: str, resolved_ip: str):
         yield
     finally:
         with _pin_dns_lock:
-            _pin_dns_pins.pop(hostname, None)
+            refs = _pin_dns_host_refs.get(hostname, 1) - 1
+            if refs <= 0:
+                _pin_dns_host_refs.pop(hostname, None)
+                _pin_dns_pins.pop(hostname, None)
+            else:
+                _pin_dns_host_refs[hostname] = refs
             _pin_dns_refcount -= 1
             if _pin_dns_refcount == 0:
                 _urllib3_cn.create_connection = _original_create_connection
@@ -110,8 +120,8 @@ CONTENT_MAX_BYTES = 1_000_000
 FETCH_MAX_BYTES = int(os.environ.get('FETCH_MAX_BYTES', '10000000'))
 _STREAM_CHUNK_BYTES = 64 * 1024
 _CURL_FILESIZE_EXCEEDED = 63  # curl exit code for --max-filesize
-SCRAPER_USER_AGENT = os.environ.get(
-    'SCRAPER_USER_AGENT',
+# Empty counts as unset: compose passes ${SCRAPER_USER_AGENT:-} through.
+SCRAPER_USER_AGENT = os.environ.get('SCRAPER_USER_AGENT') or (
     'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/125.0.0.0 Safari/537.36'
 )
 _ROBOTS_CACHE_MAX = 500
@@ -289,23 +299,32 @@ class HTMLFetcher:
     # Cache parsed robots.txt per origin (scheme://netloc).
     # Value is a RobotFileParser or None (fetch failed / non-200).
     # Capped at _ROBOTS_CACHE_MAX entries via LRU eviction (OrderedDict).
+    # Guarded by _robots_lock: the scrape fetches from parallel workers.
     _robots_cache: OrderedDict = OrderedDict()
+    _robots_lock = threading.Lock()
+
+    @staticmethod
+    def clear_robots_cache() -> None:
+        with HTMLFetcher._robots_lock:
+            HTMLFetcher._robots_cache.clear()
 
     @staticmethod
     def _set_robots_cache(origin: str, value):
         """Store a robots parser (or None) and evict the oldest entry if over capacity."""
-        HTMLFetcher._robots_cache[origin] = value
-        if len(HTMLFetcher._robots_cache) > _ROBOTS_CACHE_MAX:
-            HTMLFetcher._robots_cache.popitem(last=False)
+        with HTMLFetcher._robots_lock:
+            HTMLFetcher._robots_cache[origin] = value
+            if len(HTMLFetcher._robots_cache) > _ROBOTS_CACHE_MAX:
+                HTMLFetcher._robots_cache.popitem(last=False)
 
     @staticmethod
     def _get_robots_parser(url: str) -> "RobotFileParser | None":
         """Get or fetch the RobotFileParser for a URL's domain. Cached per origin."""
         parsed = urlparse(url)
         origin = f"{parsed.scheme}://{parsed.netloc}"
-        if origin in HTMLFetcher._robots_cache:
-            HTMLFetcher._robots_cache.move_to_end(origin)
-            return HTMLFetcher._robots_cache[origin]
+        with HTMLFetcher._robots_lock:
+            if origin in HTMLFetcher._robots_cache:
+                HTMLFetcher._robots_cache.move_to_end(origin)
+                return HTMLFetcher._robots_cache[origin]
         try:
             robots_url = f"{origin}/robots.txt"
             resp = requests.get(robots_url, timeout=10, headers={
