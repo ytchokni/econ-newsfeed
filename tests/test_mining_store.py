@@ -507,6 +507,7 @@ def test_orcid_lookup_targets_skip_dry_run_checkpoints_and_use_sql_source_key(mo
     seen = []
     rows = [{"id": i, "first_name": "A", "last_name": "B", "openalex_author_id": f"A{i}"} for i in (1, 2, 3)]
     monkeypatch.setattr(store, "_all", lambda sql, params=None: seen.append((sql, params)) or rows)
+    monkeypatch.setattr(store, "_one", lambda sql, params=None: {"found": 1})
     store.checkpoint("openalex_orcid", "openalex:A1", "")
     assert [r["id"] for r in store.orcid_lookup_targets(2)] == [2, 3]
     sql, params = seen[0]
@@ -521,6 +522,7 @@ def test_orcid_lookup_targets_without_mining_tables_and_zero_limit(monkeypatch):
     store = _bare_store()
     seen = []
     monkeypatch.setattr(store, "_all", lambda sql, params=None: seen.append(sql) or [])
+    monkeypatch.setattr(store, "_one", lambda sql, params=None: None)
     assert store.orcid_lookup_targets(0) == [] and seen == []
     store.orcid_lookup_targets(5)
     assert "site_mining_sources" not in seen[0] and "openalex_author_id IS NOT NULL" in seen[0]
@@ -543,3 +545,27 @@ def test_researcher_has_urls_sees_dry_run_inserts(monkeypatch):
     assert store.researcher_has_urls(5) is True
     monkeypatch.setattr(store, "_one", lambda sql, params=None: {"found": 1})
     assert store.researcher_has_urls(6) is True
+
+
+def test_orcid_targets_need_an_author_id_confirmed_by_a_checked_paper(monkeypatch):
+    """Pre-16-Oct author IDs can be wrong (#266): require a verified or later-enriched paper."""
+    store = _bare_store()
+    seen = []
+    monkeypatch.setattr(store, "_all", lambda sql, params=None: seen.append(sql) or [])
+    monkeypatch.setattr(store, "_one", lambda sql, params=None: {"found": 1})
+    store.orcid_lookup_targets(5)
+    sql = " ".join(seen[0].split())
+    assert "JOIN openalex_coauthors oc ON oc.paper_id = p.id AND oc.openalex_author_id = r.openalex_author_id" in sql
+    assert "WHERE a2.researcher_id = r.id" in sql
+    assert f"p.enrichment_attempted_at >= '{module.OPENALEX_VERIFIED_SINCE}'" in sql
+    assert "c.verdict = 'verified'" in sql and "c.openalex_id = p.openalex_id" in sql
+    # Without the #284 table only post-cutoff enrichment confirms an ID.
+    seen.clear()
+    monkeypatch.setattr(store, "_one", lambda sql, params=None: None)
+    store.orcid_lookup_targets(5)
+    assert "openalex_identifier_checks" not in seen[0] and "enrichment_attempted_at >=" in seen[0]
+
+
+def test_verified_since_matches_reverification_cutoff():
+    from backend.enrichment.identifier_verification import CUTOFF
+    assert module.OPENALEX_VERIFIED_SINCE == CUTOFF

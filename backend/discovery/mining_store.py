@@ -17,6 +17,9 @@ from backend.discovery.mining_policy import same_owner, scope_for, url_key
 
 
 _TABLES = ("site_mining_sources", "site_mining_candidates", "site_mining_runs")
+# Same date as identifier_verification.CUTOFF (#266): OpenAlex work IDs set
+# from this day on passed the #244 title check (test_mining_store pins it).
+OPENALEX_VERIFIED_SINCE = "2026-10-16"
 _DDL = (
     """CREATE TABLE IF NOT EXISTS site_mining_sources (
         source_key CHAR(64) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,
@@ -196,8 +199,19 @@ class MiningStore:
         return self._all("SELECT r.id,r.first_name,r.last_name,r.openalex_author_id "
                          + self._UNLINKED.format(join="", where="") + " ORDER BY r.id")
 
+    def _has_table(self, name: str) -> bool:
+        return bool(self._one(
+            """SELECT 1 AS found FROM information_schema.tables
+               WHERE table_schema = DATABASE() AND table_name = %s""", (name,)))
+
     def orcid_lookup_targets(self, limit: int) -> list[dict]:
-        """Unlinked researchers with an OpenAlex author ID whose ORCID lookup is due.
+        """Unlinked researchers with a confirmed OpenAlex author ID whose ORCID lookup is due.
+
+        Author IDs set before the 16 Oct 2026 title check can be wrong (#266).
+        An ID counts as confirmed only if it is an OpenAlex author of one of the
+        researcher's own papers whose work ID was either enriched on/after
+        ``OPENALEX_VERIFIED_SINCE`` or marked ``verified`` by the #284
+        re-verification (``openalex_identifier_checks``).
 
         The lookup checkpoint is ``site_mining_sources`` kind ``openalex_orcid``
         with url ``openalex:<author id>``, so the SHA2 key is computed in MySQL
@@ -212,7 +226,19 @@ class MiningStore:
             join = """LEFT JOIN site_mining_sources s ON s.source_key =
                 SHA2(CONCAT('openalex_orcid',CHAR(10),'openalex:',r.openalex_author_id),256)"""
             where = "AND (s.source_key IS NULL OR s.next_check_at <= UTC_TIMESTAMP())"
-        where = "AND r.openalex_author_id IS NOT NULL AND r.openalex_author_id <> '' " + where
+        verified = ("""OR EXISTS (SELECT 1 FROM openalex_identifier_checks c
+                         WHERE c.paper_id = p.id AND c.openalex_id = p.openalex_id
+                           AND c.verdict = 'verified')"""
+                    if self._has_table("openalex_identifier_checks") else "")
+        confirmed = f"""AND EXISTS (
+            SELECT 1 FROM authorship a2
+              JOIN papers p ON p.id = a2.publication_id
+              JOIN openalex_coauthors oc ON oc.paper_id = p.id
+                   AND oc.openalex_author_id = r.openalex_author_id
+             WHERE a2.researcher_id = r.id AND p.openalex_id IS NOT NULL
+               AND (p.enrichment_attempted_at >= '{OPENALEX_VERIFIED_SINCE}' {verified}))"""
+        where = ("AND r.openalex_author_id IS NOT NULL AND r.openalex_author_id <> '' "
+                 + confirmed + " " + where)
         # Dry runs keep checkpoints in memory; over-read and filter them here.
         rows = self._all("SELECT r.id,r.first_name,r.last_name,r.openalex_author_id "
                          + self._UNLINKED.format(join=join, where=where)

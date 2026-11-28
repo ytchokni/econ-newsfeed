@@ -119,7 +119,9 @@ def _registry_settings(overrides=None):
     """Per-batch registry budget; it is a share of SITE_MINING_MAX_REQUESTS."""
     values = {
         "max_requests": int(os.getenv("SITE_MINING_REGISTRY_MAX_REQUESTS", "60")),
-        "orcid_authors": int(os.getenv("SITE_MINING_ORCID_AUTHORS", "50")),
+        # Off by default: OpenAlex lookups spend the shared paid
+        # OPENALEX_DAILY_BUDGET, and the ORCID record endpoint needs sign-off.
+        "orcid_authors": int(os.getenv("SITE_MINING_ORCID_AUTHORS", "0")),
         "repec_index_pages": int(os.getenv("SITE_MINING_REPEC_INDEX_PAGES", "1")),
         "delay_seconds": float(os.getenv("SITE_MINING_REGISTRY_DELAY_SECONDS", "2")),
         "openalex_daily_budget": int(os.getenv("OPENALEX_DAILY_BUDGET", "1000")),

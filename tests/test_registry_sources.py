@@ -335,3 +335,14 @@ def test_registry_candidate_for_researcher_who_now_has_a_url_is_not_fetched():
     assert fetcher.requests == 0
     db.approve_bundle.assert_not_called()
     assert db.save_result.call_args.args[1] == "review" and stats["review"] == 1
+
+
+def test_orcid_is_off_by_default(monkeypatch):
+    monkeypatch.delenv("SITE_MINING_ORCID_AUTHORS", raising=False)
+    assert mining._registry_settings()["orcid_authors"] == 0
+    store = Store([INGRID])
+    fetcher = Fetcher(orcid_pages())
+    monkeypatch.setattr(mining, "_openalex_request_allowed", lambda store, settings: pytest.fail("budget touched"))
+    stats = defaultdict(int)
+    mining._mine_orcid(store, fetcher, mining._RegistryRoom(fetcher, 30), {}, set(), stats, mining._registry_settings())
+    assert fetcher.requests == 0
