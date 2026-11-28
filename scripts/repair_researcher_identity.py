@@ -178,7 +178,10 @@ def _group() -> list:
 def _merge_with_backup(cur, canonical_id: int, duplicate_id: int) -> None:
     """merge_researcher_into, recording what it changes and how it left the survivor."""
     researchers_op = _capture_merge(cur, canonical_id, duplicate_id)
-    merge_researcher_into(cur, canonical_id, duplicate_id)
+    if not merge_researcher_into(cur, canonical_id, duplicate_id):
+        # A record already gone (merged by another unit): roll this unit back
+        # rather than count a merge that did not happen.
+        raise RuntimeError(f"merge {duplicate_id} -> {canonical_id} found a missing record")
     researchers_op.append({str(r["id"]): r for r in _select(cur, "researchers", "id", [canonical_id])})
 
 
@@ -497,32 +500,86 @@ def strip_repeated_surnames() -> dict:
            WHERE first_name LIKE CONCAT('% ', last_name)
               OR first_name LIKE CONCAT('% ', REPLACE(last_name, '-', ' '))""")
     renames, merges, conflicts = [], [], []
+    held: dict[str, list[list[dict]]] = collections.defaultdict(list)
+    # Union rows that share an id or a corrected name into one cluster:
+    # "Ana Cozzi" Cozzi x2 + "Ana" Cozzi is one merge, not two overlapping ones.
+    parent: dict[int, int] = {}
+
+    def find(i: int) -> int:
+        while parent.setdefault(i, i) != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    doubled: dict[int, dict] = {}
+    by_name: dict[tuple[str, str], int] = {}
     for r in rows:
         fixed = strip_repeated_surname(r["first_name"], r["last_name"])
         if fixed == r["first_name"]:
             continue
-        twins = fetch_all("SELECT id FROM researchers WHERE first_name = %s AND last_name = %s AND id != %s",
-                          (fixed, r["last_name"], r["id"]))
-        if twins:
-            weights = _weights([r["id"], *(t["id"] for t in twins)])
-            # Different OpenAlex authors behind one name (two Markus Goldsteins):
-            # neither merge nor rename; list the pair for review.
-            ids = {w["openalex_author_id"] for w in weights.values() if w["openalex_author_id"]}
-            if len(ids) > 1:
-                conflicts.append(sorted(weights.values(), key=lambda w: w["id"]))
-                continue
-            ranked = sorted(weights.values(), key=canonical_order)
-            merges.append((ranked[0], ranked[1:]))
+        doubled[r["id"]] = r
+        find(r["id"])
+        key = (fixed.casefold(), r["last_name"].casefold())
+        if key in by_name:
+            parent[find(r["id"])] = find(by_name[key])
         else:
-            renames.append((r, fixed))
+            by_name[key] = r["id"]
+        for t in fetch_all("SELECT id FROM researchers WHERE first_name = %s AND last_name = %s AND id != %s",
+                           (fixed, r["last_name"], r["id"])):
+            parent[find(t["id"])] = find(r["id"])
+    clusters: dict[int, list[int]] = collections.defaultdict(list)
+    for i in list(parent):
+        clusters[find(i)].append(i)
+    for members in clusters.values():
+        if len(members) == 1:
+            r = doubled[members[0]]
+            renames.append((r, strip_repeated_surname(r["first_name"], r["last_name"])))
+            continue
+        weights = _weights(members)
+        # Different OpenAlex authors behind one name (two Markus Goldsteins):
+        # neither merge nor rename; list the group for review.
+        ids = {w["openalex_author_id"] for w in weights.values() if w["openalex_author_id"]}
+        if len(ids) > 1:
+            conflicts.append(sorted(weights.values(), key=lambda w: w["id"]))
+            continue
+        clean = [i for i in members if i not in doubled]
+        # The corrected name alone is weak evidence: two doubled "Bo Li" rows
+        # (MIT, Tsinghua) are not one person, and one doubled row must not pull
+        # together homonyms the database kept apart (two clean "Miklos Koren").
+        # Rename the doubled rows, merge nothing, list the group for review;
+        # merge_openalex_twins / merge_shared_url_twins catch true duplicates.
+        hold = ("same_name_no_twin" if not clean
+                else "several_clean_records" if len(clean) > 1 else None)
+        if hold:
+            for i in sorted(members):
+                if i in doubled:
+                    r = doubled[i]
+                    renames.append((r, strip_repeated_surname(r["first_name"], r["last_name"])))
+            held[hold].append(sorted(weights.values(), key=lambda w: w["id"]))
+            continue
+        ranked = sorted(weights.values(), key=canonical_order)
+        keep = ranked[0]
+        merges.append((keep, ranked[1:], strip_repeated_surname(keep["first_name"], keep["last_name"])))
+    renames.sort(key=lambda rf: rf[0]["id"])
+    merges.sort(key=lambda m: m[0]["id"])
     for group in conflicts:
         log.info("  review (different OpenAlex IDs, left unchanged): %s",
                  "; ".join(f"{w['id']} {_name(w)} {w['openalex_author_id']}" for w in group))
         REPORT["strip_repeated_surnames_review"].append(
             [{"id": w["id"], "name": _name(w), "openalex_author_id": w["openalex_author_id"]} for w in group])
+    for reason, groups in held.items():
+        for group in groups[:SAMPLES]:
+            log.info("  review (%s; doubled rows renamed, nothing merged): %s", reason,
+                     "; ".join(f"{w['id']} {_name(w)}" for w in group))
+        REPORT[f"strip_repeated_surnames_review_{reason}"].extend(
+            [{"id": w["id"], "name": _name(w), "openalex_author_id": w["openalex_author_id"]} for w in group]
+            for group in groups)
     for r, fixed in renames[:SAMPLES]:
         log.info("  rename %s: %r -> %r (%s)", r["id"], r["first_name"], fixed, r["last_name"])
-    _log_plan(merges)
+    _log_plan([(c, d) for c, d, _ in merges])
+    for c, _, fixed in merges[:SAMPLES]:
+        if c["first_name"] != fixed:
+            log.info("  survivor %s renamed: %r -> %r (%s)", c["id"], c["first_name"], fixed, c["last_name"])
     applied = 0
     for r, fixed in renames:
         REPORT["strip_repeated_surnames"].append({"id": r["id"], "from": r["first_name"], "to": fixed})
@@ -534,10 +591,44 @@ def strip_repeated_surnames() -> dict:
             cur.execute("UPDATE researchers SET first_name = %s WHERE id = %s AND first_name = %s",
                         (fixed, r["id"], r["first_name"]))
         applied += _write(f"rename {r['id']}", writes)
-    merged = _apply_merges("strip_repeated_surnames", merges)
-    return {"renamed": len(renames), "merged_into_existing": sum(len(d) for _, d in merges),
+    merged = _apply_strip_merges(merges)
+    return {"renamed": len(renames), "merged_into_existing": sum(len(d) for _, d, _ in merges),
+            "survivors_renamed": sum(1 for c, _, fixed in merges if c["first_name"] != fixed),
             "left_for_review_conflicting_openalex_ids": len(conflicts),
+            "left_for_review_same_name_no_twin": len(held["same_name_no_twin"]),
+            "left_for_review_several_clean_records": len(held["several_clean_records"]),
             "applied_renames": applied, "applied_merges": merged if APPLY else 0}
+
+
+def _apply_strip_merges(merges: list[tuple[dict, list[dict], str]]) -> int:
+    """Merge each group into its survivor, which ends with the corrected first
+    name even when the survivor is the record stored with the repeated surname
+    ("Michèle Belot" + "Belot" keeps its URLs but becomes "Michèle")."""
+    done = 0
+    for canonical, dups, fixed in merges:
+        entry = {"keep": canonical["id"], "name": _name(canonical),
+                 "merge": [{"id": d["id"], "name": _name(d)} for d in dups]}
+        if canonical["first_name"] != fixed:
+            entry["rename_to"] = fixed
+        REPORT["strip_repeated_surnames"].append(entry)
+
+        def writes(cur, canonical=canonical, dups=dups, fixed=fixed):
+            # Rename first (undone last), so the merge compares corrected names.
+            cur.execute("SELECT first_name FROM researchers WHERE id = %s", (canonical["id"],))
+            row = cur.fetchone()
+            if not row or row["first_name"] != canonical["first_name"]:
+                raise RuntimeError(f"researcher {canonical['id']} changed since the plan "
+                                   f"({canonical['first_name']!r} -> {row and row['first_name']!r})")
+            if canonical["first_name"] != fixed:
+                _group().append(["set", "researchers", "first_name",
+                                 [[canonical["id"], canonical["first_name"], fixed]]])
+                cur.execute("UPDATE researchers SET first_name = %s WHERE id = %s AND first_name = %s",
+                            (fixed, canonical["id"], canonical["first_name"]))
+            for d in dups:
+                _merge_with_backup(cur, canonical["id"], d["id"])
+        if _write(f"strip_repeated_surnames {canonical['id']}", writes):
+            done += 1
+    return done
 
 
 # ---------------------------------------------------------------- #259
@@ -819,7 +910,6 @@ def _unnamed_pages(exclude: set[str]) -> dict[str, dict]:
            JOIN researchers r ON r.id = ru.researcher_id
            JOIN html_content hc ON hc.url_id = ru.id
            WHERE ru.is_active = TRUE
-             AND COALESCE(ru.ownership_flag, '') != 'owner_confirmed'
              AND (hc.content IS NOT NULL OR hc.raw_html IS NOT NULL)
              AND COALESCE(hc.content, '') NOT LIKE CONCAT('%', r.last_name, '%')
              AND COALESCE(hc.raw_html, '') NOT LIKE CONCAT('%', r.last_name, '%')""")
@@ -852,7 +942,7 @@ def flag_unowned_pages() -> dict:
             def writes(cur, chunk=chunk):
                 now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0, tzinfo=None)
                 rows = _select(cur, "researcher_urls", "url", chunk, "id, ownership_flag, ownership_flagged_at")
-                todo = [r for r in rows if r["ownership_flag"] not in (OWNER_NOT_NAMED, "owner_confirmed")]
+                todo = [r for r in rows if r["ownership_flag"] != OWNER_NOT_NAMED]
                 _group().append(["set", "researcher_urls", "ownership_flag",
                                  [[r["id"], r["ownership_flag"], OWNER_NOT_NAMED] for r in todo]])
                 _group().append(["set", "researcher_urls", "ownership_flagged_at",
