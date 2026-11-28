@@ -512,7 +512,7 @@ def strip_repeated_surnames() -> dict:
                 conflicts.append(sorted(weights.values(), key=lambda w: w["id"]))
                 continue
             ranked = sorted(weights.values(), key=canonical_order)
-            merges.append((ranked[0], ranked[1:]))
+            merges.append((ranked[0], ranked[1:], fixed))
         else:
             renames.append((r, fixed))
     for group in conflicts:
@@ -522,7 +522,10 @@ def strip_repeated_surnames() -> dict:
             [{"id": w["id"], "name": _name(w), "openalex_author_id": w["openalex_author_id"]} for w in group])
     for r, fixed in renames[:SAMPLES]:
         log.info("  rename %s: %r -> %r (%s)", r["id"], r["first_name"], fixed, r["last_name"])
-    _log_plan(merges)
+    _log_plan([(c, d) for c, d, _ in merges])
+    for c, _, fixed in merges[:SAMPLES]:
+        if c["first_name"] != fixed:
+            log.info("  survivor %s renamed: %r -> %r (%s)", c["id"], c["first_name"], fixed, c["last_name"])
     applied = 0
     for r, fixed in renames:
         REPORT["strip_repeated_surnames"].append({"id": r["id"], "from": r["first_name"], "to": fixed})
@@ -534,10 +537,39 @@ def strip_repeated_surnames() -> dict:
             cur.execute("UPDATE researchers SET first_name = %s WHERE id = %s AND first_name = %s",
                         (fixed, r["id"], r["first_name"]))
         applied += _write(f"rename {r['id']}", writes)
-    merged = _apply_merges("strip_repeated_surnames", merges)
-    return {"renamed": len(renames), "merged_into_existing": sum(len(d) for _, d in merges),
+    merged = _apply_strip_merges(merges)
+    return {"renamed": len(renames), "merged_into_existing": sum(len(d) for _, d, _ in merges),
+            "survivors_renamed": sum(1 for c, _, fixed in merges if c["first_name"] != fixed),
             "left_for_review_conflicting_openalex_ids": len(conflicts),
             "applied_renames": applied, "applied_merges": merged if APPLY else 0}
+
+
+def _apply_strip_merges(merges: list[tuple[dict, list[dict], str]]) -> int:
+    """Merge each group into its survivor, which ends with the corrected first
+    name even when the survivor is the record stored with the repeated surname
+    ("Michèle Belot" + "Belot" keeps its URLs but becomes "Michèle")."""
+    done = 0
+    for canonical, dups, fixed in merges:
+        entry = {"keep": canonical["id"], "name": _name(canonical),
+                 "merge": [{"id": d["id"], "name": _name(d)} for d in dups]}
+        if canonical["first_name"] != fixed:
+            entry["rename_to"] = fixed
+        REPORT["strip_repeated_surnames"].append(entry)
+
+        def writes(cur, canonical=canonical, dups=dups, fixed=fixed):
+            # Rename first (undone last), so the merge compares corrected names.
+            cur.execute("SELECT first_name FROM researchers WHERE id = %s", (canonical["id"],))
+            row = cur.fetchone()
+            if row and row["first_name"] != fixed:
+                _group().append(["set", "researchers", "first_name",
+                                 [[canonical["id"], row["first_name"], fixed]]])
+                cur.execute("UPDATE researchers SET first_name = %s WHERE id = %s AND first_name = %s",
+                            (fixed, canonical["id"], row["first_name"]))
+            for d in dups:
+                _merge_with_backup(cur, canonical["id"], d["id"])
+        if _write(f"strip_repeated_surnames {canonical['id']}", writes):
+            done += 1
+    return done
 
 
 # ---------------------------------------------------------------- #259
@@ -819,7 +851,6 @@ def _unnamed_pages(exclude: set[str]) -> dict[str, dict]:
            JOIN researchers r ON r.id = ru.researcher_id
            JOIN html_content hc ON hc.url_id = ru.id
            WHERE ru.is_active = TRUE
-             AND COALESCE(ru.ownership_flag, '') != 'owner_confirmed'
              AND (hc.content IS NOT NULL OR hc.raw_html IS NOT NULL)
              AND COALESCE(hc.content, '') NOT LIKE CONCAT('%', r.last_name, '%')
              AND COALESCE(hc.raw_html, '') NOT LIKE CONCAT('%', r.last_name, '%')""")
@@ -852,7 +883,7 @@ def flag_unowned_pages() -> dict:
             def writes(cur, chunk=chunk):
                 now = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0, tzinfo=None)
                 rows = _select(cur, "researcher_urls", "url", chunk, "id, ownership_flag, ownership_flagged_at")
-                todo = [r for r in rows if r["ownership_flag"] not in (OWNER_NOT_NAMED, "owner_confirmed")]
+                todo = [r for r in rows if r["ownership_flag"] != OWNER_NOT_NAMED]
                 _group().append(["set", "researcher_urls", "ownership_flag",
                                  [[r["id"], r["ownership_flag"], OWNER_NOT_NAMED] for r in todo]])
                 _group().append(["set", "researcher_urls", "ownership_flagged_at",

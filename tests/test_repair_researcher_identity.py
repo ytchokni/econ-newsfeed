@@ -269,3 +269,72 @@ def test_strip_repeated_surnames_merges_when_only_one_side_has_an_id(monkeypatch
     counts = repair.strip_repeated_surnames()
     assert counts["merged_into_existing"] == 1
     assert counts["left_for_review_conflicting_openalex_ids"] == 0
+
+
+def _belot_routes(monkeypatch):
+    """Prod 150529 "Michèle Belot Belot" (3 papers) outranks 162052 "Michèle Belot" (2)."""
+    _fake_fetch(monkeypatch, [
+        ("LIKE CONCAT", [{"id": 150529, "first_name": "Michèle Belot", "last_name": "Belot"}]),
+        ("WHERE first_name = %s", [{"id": 162052}]),
+        ("FROM researchers r WHERE r.id IN",
+         lambda sql, params: [_rec(150529, "Michèle Belot", "Belot", None, pubs=3),
+                              _rec(162052, "Michèle", "Belot", None, pubs=2)]),
+    ])
+
+
+def test_strip_repeated_surnames_plans_rename_of_doubled_survivor(monkeypatch):
+    _belot_routes(monkeypatch)
+    counts = repair.strip_repeated_surnames()
+    assert counts["merged_into_existing"] == 1 and counts["survivors_renamed"] == 1
+    assert repair.REPORT["strip_repeated_surnames"] == [
+        {"keep": 150529, "name": "Michèle Belot Belot", "rename_to": "Michèle",
+         "merge": [{"id": 162052, "name": "Michèle Belot"}]}]
+
+
+def test_strip_repeated_surnames_apply_leaves_survivor_with_corrected_name(monkeypatch):
+    """The surviving record must end as "Michèle Belot", not "Michèle Belot Belot"."""
+    _belot_routes(monkeypatch)
+    names = {150529: "Michèle Belot", 162052: "Michèle"}
+
+    class Cursor:
+        def execute(self, sql, params=()):
+            self.last = None
+            if sql.startswith("SELECT first_name"):
+                self.last = {"first_name": names[params[0]]}
+            elif sql.startswith("UPDATE researchers SET first_name"):
+                fixed, rid, old = params
+                if names[rid] == old:
+                    names[rid] = fixed
+
+        def fetchone(self):
+            return self.last
+
+        def close(self):
+            pass
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+        def cursor(self, **kw):
+            return Cursor()
+
+        def commit(self):
+            pass
+
+        def rollback(self):
+            pass
+
+    merged = []
+    monkeypatch.setattr(repair, "APPLY", True)
+    monkeypatch.setattr(repair, "BACKUP", None)
+    monkeypatch.setattr(repair, "get_connection", lambda: Conn())
+    monkeypatch.setattr(repair, "_merge_with_backup",
+                        lambda cur, keep, dup: (merged.append((keep, dup)), names.pop(dup)))
+    counts = repair.strip_repeated_surnames()
+    assert counts["applied_merges"] == 1
+    assert merged == [(150529, 162052)]
+    assert names == {150529: "Michèle"}
