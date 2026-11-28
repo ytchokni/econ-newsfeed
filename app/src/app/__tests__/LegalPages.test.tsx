@@ -47,11 +47,12 @@ describe("removal mailto links", () => {
 });
 
 describe("contact page (Impressum)", () => {
-  it("shows owner placeholders and the configured address", () => {
+  it("shows the owner, remaining placeholders and the configured address", () => {
     process.env.CONTACT_EMAIL = "owner@example.test";
     render(<ContactPage />);
     expect(screen.getByRole("heading", { name: /Impressum \(Angaben gemäß § 5 DDG\)/ })).toBeInTheDocument();
-    expect(screen.getAllByText(/TO BE COMPLETED BY SITE OWNER: full name/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Yogam Tchokni/).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/TO BE COMPLETED BY SITE OWNER: street/).length).toBeGreaterThan(0);
     expect(screen.getByRole("link", { name: "owner@example.test" })).toHaveAttribute(
       "href",
       "mailto:owner@example.test",

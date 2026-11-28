@@ -6,7 +6,7 @@
  * placeholders until replaced here. Do not guess them.
  */
 export const SITE_OWNER = {
-  name: "[TO BE COMPLETED BY SITE OWNER: full name]",
+  name: "Yogam Tchokni",
   street: "[TO BE COMPLETED BY SITE OWNER: street and number]",
   city: "[TO BE COMPLETED BY SITE OWNER: postcode and city]",
   country: "Germany",
