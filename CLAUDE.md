@@ -55,9 +55,12 @@ poetry run python scripts/merge_renamed_papers.py   # #265: merge renames sharin
 poetry run python scripts/repair_researcher_identity.py  # Merge split researchers, route page papers to owners, shared pages (dry-run; --apply --backup F; --undo F)
 poetry run python scripts/cleanup_spurious_feed_events.py  # Delete stale new_paper / bogus "published" events (dry-run; --apply backs up first; --undo RUN)
 poetry run python scripts/recheck_too_large_urls.py   # Queue response_too_large URLs for a recheck on the next scrape (dry-run; --apply)
+poetry run python scripts/backfill_lost_status_events.py  # Status changes the #283 long-page backfill swallowed (dry-run; --apply --backup F; --undo F)
 
 # Docker
 docker compose up         # Full stack (db + api + frontend)
+docker compose --profile scraper up scraper  # Fetch pass in its own process (set SCRAPE_IN_API=false for the api)
+poetry run python -m backend.pipeline.scrape_worker  # Same, outside Docker
 
 # Production (Hetzner)
 ./scripts/deploy.sh       # Pull latest; rebuild API + miner; verify revision and DB readiness
@@ -72,7 +75,9 @@ docker compose up         # Full stack (db + api + frontend)
 
 Extraction is owned by the extraction worker (below) — the scrape job only refreshes stored HTML and the `content_hash ≠ extracted_hash` queue.
 
-**Large pages:** downloads are streamed and capped at `FETCH_MAX_BYTES` (10 MB). Pages over 1 MB are compacted (`compact_html`: inline CSS, SVG, comments, data: URIs and >1 KB attributes, then scripts) and stored if they fit 1 MB; smaller pages are stored byte-for-byte. Only pages still too large are deactivated as `response_too_large`. A redirect to a sign-in page (`accounts.google.com`: retired classic `sites.google.com/site/...` and private Google Sites) is not followed and deactivates the URL as `login_required`, so Google's 1.25 MB login screen is never stored as a researcher's page. Both reasons are rechecked by the scrape job after `TOO_LARGE_RECHECK_DAYS` (30) and reactivated when a fetch succeeds. The full page text is stored and hashed. Extraction splits text over `CONTENT_MAX_CHARS` into chunks between HTML blocks (`backend/pipeline/chunking.py`), carries the publication-section heading into each chunk's prompt, and merges results by title hash; the diff path sends only changed hunks. An unchanged long page re-queued by a hash change is extracted as seed (`_backfill_long_page`), so tails cut off by the old 20k truncation are saved without feed events.
+**Scraper service, resume and parallel fetch:** in production the fetch pass runs in the `scraper` Compose service (`python -m backend.pipeline.scrape_worker`, profile `scraper`, 512 MB / 1 CPU, own DB pool `SCRAPER_DB_POOL_SIZE`=8), not in the API, which sets `SCRAPE_IN_API=false`; API deploys therefore never cut a pass off. The worker reads its schedule from `scrape_log` (due `SCRAPE_INTERVAL_HOURS` after the last pass started, or at once when one can be resumed). Every processed URL gets `researcher_urls.scrape_checked_at`; an unfinished pass (`interrupted`, `failed` or a killed `running` row with `is_fetch_run`) younger than 18 h is resumed (`resumed_count`), skipping URLs checked since it started, and keeps its counters. SIGTERM (`docker stop`, a scraper redeploy; `stop_grace_period` 120 s) stops handing out URLs, lets in-flight fetches finish (up to 90 s), saves progress and marks the row `interrupted`; the post-pass merge then waits for the resumed pass. The API's `SCRAPE_ON_STARTUP` also resumes or starts only a due pass, and `shutdown_scheduler` interrupts an in-process pass the same way. `SCRAPE_CONCURRENCY` (6) workers fetch in parallel from per-host lanes (`backend/pipeline/fetch_lanes.py`): one request per host at a time, lowest `researcher_urls.id` first, with the unchanged per-host spacing (2 s, 0.5 s for `FAST_DOMAINS`), robots.txt, User-Agent, 10 MB streaming cap, compaction and login-redirect handling. Measured on prod logs (37.5k URLs, ~1.6 s per real fetch), a full pass takes ~17 h serially and ~3 h with 6 workers; the sites.google.com lane (15.6k URLs at 0.5 s) is the ~2.2–2.5 h floor, so more than 8 workers gains nothing. The scrape advisory lock still guards every pass, so the API (`/api/scrape`, `SCRAPE_IN_API=true`) and the service never fetch at once.
+
+**Large pages:** downloads are streamed and capped at `FETCH_MAX_BYTES` (10 MB). Pages over 1 MB are compacted (`compact_html`: inline CSS, SVG, comments, data: URIs and >1 KB attributes, then scripts) and stored if they fit 1 MB; smaller pages are stored byte-for-byte. Only pages still too large are deactivated as `response_too_large`. A redirect to a sign-in page (`accounts.google.com`: retired classic `sites.google.com/site/...` and private Google Sites) is not followed and deactivates the URL as `login_required`, so Google's 1.25 MB login screen is never stored as a researcher's page. Both reasons are rechecked by the scrape job after `TOO_LARGE_RECHECK_DAYS` (30) and reactivated when a fetch succeeds. The full page text is stored and hashed. Extraction splits text over `CONTENT_MAX_CHARS` into chunks between HTML blocks (`backend/pipeline/chunking.py`), carries the publication-section heading into each chunk's prompt, and merges results by title hash; the diff path sends only changed hunks. An unchanged long page re-queued by a hash change is extracted as seed (`_backfill_long_page`), so tails cut off by the old 20k truncation are saved without new_paper events; papers the database already had still get status_change events under the usual rules.
 
 **Enrichment worker:** When `ENRICHMENT_WORKER_ENABLED=true`, a background thread in the API process continuously enriches unenriched papers via OpenAlex. Polls every 5 minutes, processes batches of 50, respects the daily budget. Backs off to 10-minute sleep after 5 consecutive failures. In local dev (worker disabled), run `python -m backend.main enrich` manually after scraping.
 
@@ -108,7 +113,7 @@ once the extraction backlog has cleared:
 
 **Paper merge:** `merge_duplicate_papers()` dedupes papers post-run. A page renaming a paper to a title another paper already has (`PaperSaver.apply_title_rename`) merges the two via `merge_paper_group(as_title=...)` when their authors match (or they share an identifier), otherwise keeps both and logs `Skipped title rename` at WARNING; neither emits a feed event, and the page is still marked extracted.
 
-**Zombie scrape_log cleanup:** On scheduler start and hourly thereafter, `scrape_log` entries stuck in `'running'` are marked `'failed'` based on the scrape advisory lock: if no connection holds the lock, all running rows older than 5 minutes are zombies; if the lock is held, all but the newest running row are. Deploys that restart the container mid-scrape are swept on the next boot.
+**Zombie scrape_log cleanup:** On scheduler start and hourly thereafter, `scrape_log` entries stuck in `'running'` are marked `'failed'` based on the scrape advisory lock: if no connection holds the lock, all running rows older than 5 minutes are zombies; if the lock is held, all but the newest running row are. Deploys that restart the container mid-scrape are swept on the next boot. The sweep runs in the API and also covers the scraper service's passes (the lock is per database, not per process); a swept fetch pass is still resumed.
 
 **Researcher identity:** `backend/database/identity.py` decides when two names are one person (`same_person`: initials, nicknames, accents, hyphen/space, repeated surnames; `strong=True` adds typos, compound surnames and reversed order and is used only by the backed-up repair script, byline routing to a page's owner and the shared-page check; merges during the pipeline use default strength). An OpenAlex author ID stays on one record: `assign_openalex_author_id` merges a compatible holder or refuses. `merge_researcher_into` moves authorship, URLs, follows, JEL codes and the rest; feed events belong to papers and are never touched. When papers are saved from a page, a byline name that matches the page owner resolves to the owner. A page tracked for unrelated researchers is deactivated at extraction (`shared_page`). A page that never names its owner keeps being crawled but gets `researcher_urls.ownership_flag = 'owner_not_named'` (admin Health tab) and its owner is not attached at author_order 0; Google Sites/github.io/`/~x`/`/people/x` pages, home pages, short pages and profile registries are not judged. `scripts/repair_researcher_identity.py` runs one step at a time with its own `--backup`; in production mount `/backups` into a one-off container (`docker compose -f docker-compose.yml -f docker-compose.prod.yml run --rm -v /backups:/backups api python scripts/repair_researcher_identity.py --steps <step> --apply --backup /backups/identity-<step>.jsonl`), and `--undo FILE [--steps/--units] --apply` restores.
 
@@ -124,7 +129,9 @@ per UTC day in `enrichment_daily_budget` and survive restarts.
 (07:17 UTC) and sends at most one email per run. It probes
 the public API, frontend and TLS certificate from the runner, then streams
 `scripts/monitor.py` to the server over SSH (the deploy secrets) to check
-containers, disk, backups, scrape recency, extraction throughput against the
+containers (the `scraper` container once it exists), disk, backups, scrape
+recency (a pass started within 36 h, and a full pass *finished* within 36 h:
+`scrape_completed`), extraction throughput against the
 backlog, feed freshness, enrichment, and LLM calls rejected for billing or
 credentials. A failure opens one GitHub issue labelled `monitor-alert` and asks
 Claude to fix it with an `@claude` comment (handled by `claude.yml`). The
@@ -312,6 +319,7 @@ Live MVP: **Vercel** (free frontend) + **Hetzner** (4GB VPS backend).
 - Caddy runs on Hetzner host (not Docker), auto-provisions Let's Encrypt SSL, reverse-proxies to `localhost:8000`
 - Docker Compose on Hetzner runs FastAPI API + MySQL (no frontend container)
 - Scheduler runs inside the API process; MySQL advisory lock prevents duplicate scrapes across workers
+- The fetch pass runs in the separate `scraper` service (profile `scraper`, `SCRAPE_IN_API=false` on the API); `deploy.sh` leaves it running unless files in its `SCRAPER_PATHS` changed since its image's revision (then it rebuilds it and the restarted pass resumes; `RESTART_SCRAPER=1 ./scripts/deploy.sh` forces it). Stop it with `docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile scraper stop scraper` (graceful; the pass resumes on start). `deploy.sh` never creates the service: the first start is manual (`docker compose -f docker-compose.yml -f docker-compose.prod.yml --profile scraper up -d --build scraper`, with `scraper` in `COMPOSE_PROFILES`), and only after that is `SCRAPE_IN_API=false` set and the api recreated. An image built that way has no revision label, so the next deploy restarts the scraper once to label it
 
 **Deploy to production:**
 ```bash
@@ -321,7 +329,7 @@ cd /opt/econ-newsfeed && ./scripts/deploy.sh
 git pull origin main && docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 ```
 
-**Env vars:** Production `.env` lives on the server at `/opt/econ-newsfeed/.env`. Key differences from dev: `DB_HOST=db`, `FRONTEND_URL=https://econ-newsfeed.vercel.app`, `WEB_CONCURRENCY=3`, `EXTRACTION_WORKER_ENABLED=true` (required in prod — the scrape job is fetch-only, so without the worker extraction stops).
+**Env vars:** Production `.env` lives on the server at `/opt/econ-newsfeed/.env`. Key differences from dev: `DB_HOST=db`, `FRONTEND_URL=https://econ-newsfeed.vercel.app`, `WEB_CONCURRENCY=3`, `EXTRACTION_WORKER_ENABLED=true` (required in prod — the scrape job is fetch-only, so without the worker extraction stops), `COMPOSE_PROFILES=mining,scraper` with `SCRAPE_IN_API=false`.
 
 ## Configuration
 
@@ -353,6 +361,32 @@ settings in `.env.example` control those budgets. Raw-HTML hashes avoid repeatin
 unchanged pages and detect href-only changes. The `econ_site_mining` MySQL lock
 also protects simultaneous CLI runs. Each URL bundle and its approval commit
 together; existing URLs are never reassigned or reactivated.
+
+Reviewed paid-search (Searlo) discoveries are applied through the same store, never
+through the legacy admin approve/bulk-approve (which write `researcher_urls` without
+the miner's guards). `python -m backend.main apply-searlo-review --decisions F.json`
+is a dry run; `--apply --manifest M.jsonl` runs one `approve_bundle` transaction per
+researcher (URL inserts + `url_discoveries.status` together; identity holds, URL
+ownership and prior rejections still hold a bundle back), and `--undo --manifest M.jsonl
+[--apply]` deletes the inserted URL rows and reopens the discoveries (clean only until the
+next scrape/extraction picks the pages up: deleting a URL cascades to its stored HTML).
+A rejected discovery also blocks that URL for the miner (`MiningStore._rejected_urls`
+reads `url_discoveries.status='rejected'`), so reject wrong-person and not-a-homepage
+pages but leave dead pages pending. The admin approve button runs the same guarded
+path (a refused bundle answers 409 with the reason); bulk-approve answers 410.
+A reviewed bundle gets its own queue row (`source_kind='searlo_review'`, its own
+`candidate_key`), so it never overwrites the miner's pending/retry candidate for the
+same site. If the miner already put that researcher+home page in `review`/`rejected`,
+the miner's verdict stands (held as "Candidate already review"). If the miner already
+approved it, our pages that match its approved URLs (same `url_key`) take its exact
+spelling and become existing rows; only the missing pages are inserted, through the
+same preflight. The dry run reads the real queue, so its counts match the apply.
+A hold on our own row is permanent: it stays `review` and later runs report
+"Candidate already review" without re-checking, so delete the row once the cause
+is fixed. `scripts/cleanup_searlo_candidates.py` (dry run; `--apply --backup F`;
+`--undo F`) repairs what the first apply (#299) wrote: it restores the miner
+candidates that run overwrote from the pre-apply backup (`--dump`), moves approved
+`searlo_review` rows to the suffixed key and deletes the ones left in `review`.
 
 Alternatively, `SITE_MINING_ENABLED=true` schedules the same bounded job inside
 the API hourly and after a scrape. Use one scheduling mechanism at a time. The

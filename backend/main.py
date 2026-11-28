@@ -236,6 +236,11 @@ def main() -> None:
     top5_parser = subparsers.add_parser('top5-coverage', help='Compare top-5 journal articles (Crossref) with our papers; store the result for /about')
     top5_parser.add_argument('--dry-run', action='store_true', help='Print the summary without storing it')
     top5_parser.add_argument('--force', action='store_true', help='Run even if a result from the last week is stored')
+    searlo_parser = subparsers.add_parser('apply-searlo-review', help='Apply reviewed paid-search (Searlo) discoveries through the miner store; dry run unless --apply')
+    searlo_parser.add_argument('--decisions', help='JSON file of reviewed decisions (approve/reject/unsure per discovery)')
+    searlo_parser.add_argument('--apply', action='store_true', help='Write: insert URLs / reject discoveries (requires --manifest)')
+    searlo_parser.add_argument('--manifest', help='JSONL file recording every applied change; required with --apply, used by --undo')
+    searlo_parser.add_argument('--undo', action='store_true', help='Reverse the changes recorded in --manifest (dry run unless --apply)')
 
     review_parser = subparsers.add_parser('review', help='LLM quality review of feed events (GPT 5.4 Mini)')
     review_parser.add_argument('--limit', type=int, default=None, help='Max events to review')
@@ -294,6 +299,20 @@ def main() -> None:
         from backend.coverage.top5_job import run_top5_coverage_job
         summary = run_top5_coverage_job(force=args.force or args.dry_run, store=not args.dry_run)
         print(json.dumps((summary or {}).get('overall'), indent=2))
+    elif args.command == 'apply-searlo-review':
+        from backend.discovery import searlo_review
+        if args.undo:
+            if not args.manifest:
+                parser.error('--undo requires --manifest')
+            result = searlo_review.undo(args.manifest, apply=args.apply)
+        else:
+            if not args.decisions:
+                parser.error('--decisions is required')
+            if args.apply and not args.manifest:
+                parser.error('--apply requires --manifest')
+            result = searlo_review.apply_decisions(
+                searlo_review.load_decisions(args.decisions), apply=args.apply, manifest_path=args.manifest)
+        print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
     elif args.command == 'review':
         create_tables()
         from backend.enrichment.quality_review import review_events

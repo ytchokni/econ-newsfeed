@@ -46,6 +46,25 @@ PUBLISHED_MAX_AGE_YEARS = int(os.environ.get("FEED_PUBLISHED_MAX_AGE_YEARS", "1"
 # which can legitimately be several years old.
 STATUS_CHANGE_MAX_AGE_YEARS = 10
 
+# The long-page backfill (#283) reads page entries no extraction saw before:
+# an "accepted" or R&R there may be years old, so every status it announces
+# must be as recent as a "published" one.
+BACKFILL_STATUS_CHANGE_MAX_AGE_YEARS = PUBLISHED_MAX_AGE_YEARS
+
+# Status transitions that earn a status_change event. Accepted -> published
+# is not news (the acceptance was), and the feed hides any such event
+# (backend.database.papers.feed_visible_event_sql).
+INTERESTING_STATUS_TRANSITIONS: frozenset[tuple[str, str]] = frozenset({
+    ("working_paper", "revise_and_resubmit"),
+    ("working_paper", "accepted"),
+    ("working_paper", "published"),
+    ("work_in_progress", "revise_and_resubmit"),
+    ("work_in_progress", "accepted"),
+    ("work_in_progress", "published"),
+    ("revise_and_resubmit", "accepted"),
+    ("revise_and_resubmit", "published"),
+})
+
 # Statuses that claim a journal outcome and so must name a journal venue.
 JOURNAL_STATUSES = frozenset({"accepted", "published"})
 
@@ -114,11 +133,18 @@ def is_journal_venue(venue: str | None) -> bool:
 
 def status_change_suppression_reason(new_status: str | None, venue: str | None,
                                      year, reference_year: int,
-                                     published_max_age_years: int | None = None) -> str | None:
-    """Why a forward status_change event would be spurious, or None if plausible."""
+                                     published_max_age_years: int | None = None,
+                                     max_age_years: int | None = None) -> str | None:
+    """Why a forward status_change event would be spurious, or None if plausible.
+
+    max_age_years, when given, bounds every status (the long-page backfill,
+    whose entries may have sat unread on the page for years).
+    """
     if new_status in JOURNAL_STATUSES and not is_journal_venue(venue):
         return "no journal venue"
-    if new_status == "published":
+    if max_age_years is not None:
+        max_age = max_age_years
+    elif new_status == "published":
         max_age = PUBLISHED_MAX_AGE_YEARS if published_max_age_years is None else published_max_age_years
     else:
         max_age = STATUS_CHANGE_MAX_AGE_YEARS

@@ -115,6 +115,17 @@ class FakeCursor:
             self.rows = [{field: t} for t in self.db.tables]
         elif q.startswith("select") and "from researchers" in q:
             self.rows = [self.db.people[p[0]]] if p and p[0] in self.db.people else list(self.db.people.values()) if not p else []
+        elif "from researcher_urls where id=%s and researcher_id=%s and url=%s" in q:
+            self.rows = [r for r in self.db.urls if (r["id"], r["researcher_id"], r["url"]) == tuple(p)]
+        elif q.startswith("delete from researcher_urls"):
+            self.db.urls = [r for r in self.db.urls if r["id"] != p[0]]
+        elif q.startswith("update url_discoveries"):
+            new_status = p[0] if "set status=%s" in q else "pending"
+            target = p[-1]
+            for r in self.db.discoveries:
+                if r.get("id") == target and (r["status"] == "pending" or new_status == "pending"):
+                    r["status"] = new_status
+                    self.rowcount = 1
         elif "from researcher_urls ru join html_content" in q:
             if "where ru.id = %s" in q:
                 rows = [r for r in self.db.cached if r["url_id"] == p[0]]
@@ -132,9 +143,22 @@ class FakeCursor:
             self.rows = [{"equal_prefix": mysql_prefix(p[0]) == mysql_prefix(p[1])}]
         elif "from url_discoveries" in q:
             self.rows = self.db.discoveries
+            if "where id=%s" in q:
+                self.rows = [r for r in self.db.discoveries if r.get("id") == p[0]]
+            elif "status = 'rejected'" in q:
+                self.rows = [r for r in self.db.discoveries if r.get("status", "rejected") == "rejected"]
+        elif q.startswith("delete from site_mining_candidates"):
+            row = self.db.candidates.get(p[0])
+            if row and row["source_kind"] == p[1] and row["status"] == "review" and row["updated_at"] == p[2]:
+                del self.db.candidates[p[0]]
+                self.rowcount = 1
         elif "from site_mining_candidates" in q:
             rows = list(self.db.candidates.values())
-            if "candidate_key = %s" in q:
+            if "evidence like" in q:
+                rows = [r for r in rows if r["source_kind"] != p[0] and p[1].strip("%") in r["evidence"]]
+            elif "where source_kind=%s" in q:
+                rows = [r for r in rows if r["source_kind"] == p[0]]
+            elif "candidate_key = %s" in q:
                 rows = [r for r in rows if r["candidate_key"] == p[0]]
             elif "where id=%s" in q:
                 rows = [r for r in rows if r["id"] == p[0]]
@@ -148,7 +172,7 @@ class FakeCursor:
                         and r["next_attempt_at"] <= module._utcnow()
                         and r["id"] not in p[:-1]][:p[-1]]
             self.rows = rows
-        elif q.startswith("insert into site_mining_candidates"):
+        elif q.startswith("insert into site_mining_candidates") and "(id,candidate_key" not in q:
             self.lastrowid = max(self.db.candidates, default=0) + 1
             self.db.candidates[self.lastrowid] = dict(
                 id=self.lastrowid, candidate_key=p[0], researcher_id=p[1], name=p[2],
@@ -157,8 +181,36 @@ class FakeCursor:
                 next_attempt_at=module._utcnow(), urls=None,
             )
             self.rowcount = 1
+        elif q.startswith("update site_mining_candidates set candidate_key=%s"):
+            row = self.db.candidates.get(p[1])
+            if row and row["candidate_key"] == p[2] and (len(p) < 4 or row["source_kind"] == p[3]):
+                row["candidate_key"] = p[0]
+                self.rowcount = 1
+        elif q.startswith("update site_mining_candidates") and "attempts=%s" in q and "coalesce(%s" in q:
+            row = self.db.candidates.get(p[6])
+            if row and row["updated_at"] == p[7] and row["source_kind"] != p[8]:
+                row.update(status=p[0], reason=p[1], urls=p[2], evidence=p[3], attempts=p[4],
+                           next_attempt_at=p[5] or module._utcnow(), updated_at=module._utcnow() + timedelta(seconds=1))
+                self.rowcount = 1
+        elif q.startswith("update site_mining_candidates") and "cast(%s as json)" in q:
+            row = self.db.candidates.get(p[7])
+            if row and json.loads(row["evidence"]) == json.loads(p[8]):
+                row.update(status=p[0], reason=p[1], urls=p[2], evidence=p[3], attempts=p[4],
+                           next_attempt_at=p[5], updated_at=p[6])
+                self.rowcount = 1
+        elif q.startswith("insert into site_mining_candidates") and "(id,candidate_key" in q:
+            self.db.candidates[p[0]] = dict(zip(
+                ("id", "candidate_key", "researcher_id", "name", "url", "source_url", "source_kind", "evidence",
+                 "status", "reason", "urls", "attempts", "next_attempt_at", "created_at", "updated_at"), p))
+            self.rowcount = 1
         elif q.startswith("update site_mining_candidates"):
-            if "set status='pending'" in q:
+            if "set status='review',reason" in q:
+                row = self.db.candidates[p[-1]]
+                if row["status"] == "approved" and ("source_kind='searlo_review'" not in q
+                                                    or row["source_kind"] == "searlo_review"):
+                    row.update(status="review", reason=p[0])
+                    self.rowcount = 1
+            elif "set status='pending'" in q:
                 row = self.db.candidates[p[2]]
                 if row["status"] in {"approved", "review"}:
                     row.update(status="pending", evidence=p[0], source_url=p[1], attempts=0,

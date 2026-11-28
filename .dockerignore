@@ -9,9 +9,11 @@
 !scripts/backfill_page_owner_authorship.py
 !scripts/cleanup_data_quality.py
 !scripts/cleanup_spurious_feed_events.py
+!scripts/backfill_lost_status_events.py
 !scripts/recompute_has_top5.py
 !scripts/recheck_too_large_urls.py
 !scripts/repair_researcher_identity.py
+!scripts/cleanup_searlo_candidates.py
 !scripts/merge_fuzzy_duplicates.py
 !scripts/merge_renamed_papers.py
 !scripts/reverify_openalex_ids.py
