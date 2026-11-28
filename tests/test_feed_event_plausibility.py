@@ -85,6 +85,16 @@ class TestStatusChangeSuppression:
     def test_revise_and_resubmit_needs_no_venue(self):
         assert status_change_suppression_reason("revise_and_resubmit", None, "2024", 2026) is None
 
+    def test_max_age_years_bounds_every_status(self):
+        """The long-page backfill passes one bound for all statuses."""
+        assert status_change_suppression_reason(
+            "accepted", "Review of Financial Studies", "2020", 2026, max_age_years=1) == "year 2020 older than 1y"
+        assert status_change_suppression_reason("revise_and_resubmit", None, "2023", 2026, max_age_years=1)
+        assert status_change_suppression_reason("revise_and_resubmit", None, "2025", 2026, max_age_years=1) is None
+        assert status_change_suppression_reason("accepted", "Econometrica", None, 2026, max_age_years=1) is None
+        assert status_change_suppression_reason("accepted", "NBER Working Paper", "2026", 2026,
+                                                max_age_years=1) == "no journal venue"
+
 
 class TestNewPaperSuppression:
     def _reason(self, **kw):
