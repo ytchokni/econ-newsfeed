@@ -85,8 +85,8 @@ def top5_coverage() -> dict | None:
 
     try:
         row = latest_run()
-    except Exception:  # table missing before the first migration, etc.
-        logger.exception("Could not read top5_coverage_runs")
+    except Exception as exc:  # table missing before the first migration, etc.
+        logger.warning("Could not read top5_coverage_runs (no run yet?): %s", exc)
         return None
     if not row:
         return None
@@ -138,10 +138,7 @@ def get_site_stats(now: datetime | None = None) -> dict:
                (SELECT COUNT(DISTINCT researcher_id) FROM researcher_urls
                  WHERE is_active = TRUE) AS researchers_tracked,
                (SELECT COUNT(*) FROM researcher_urls WHERE is_active = TRUE) AS pages_tracked,
-               (SELECT COUNT(*) FROM papers) AS papers_total,
-               (SELECT COUNT(DISTINCT rj.researcher_id) FROM researcher_jel_codes rj
-                  JOIN researcher_urls ru ON ru.researcher_id = rj.researcher_id
-                   AND ru.is_active = TRUE) AS tracked_with_fields"""
+               (SELECT COUNT(*) FROM papers) AS papers_total"""
     )
     by_status: dict[str, int] = {"working_paper": 0, "under_review": 0, "accepted": 0,
                                  "published": 0, "unknown": 0}
@@ -161,7 +158,6 @@ def get_site_stats(now: datetime | None = None) -> dict:
             "total": _int(counts, "researchers_total"),
             "tracked": _int(counts, "researchers_tracked"),
             "pages_tracked": _int(counts, "pages_tracked"),
-            "with_fields": _int(counts, "tracked_with_fields"),
         },
         "papers": {"total": _int(counts, "papers_total"), "by_status": by_status},
         "activity": {

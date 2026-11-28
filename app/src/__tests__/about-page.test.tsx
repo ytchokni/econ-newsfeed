@@ -4,7 +4,7 @@ import type { SiteStats } from "@/lib/site-stats";
 
 const stats: SiteStats = {
   generated_at: "2026-11-27T23:59:00Z",
-  researchers: { total: 166174, tracked: 41250, pages_tracked: 52310, with_fields: 9000 },
+  researchers: { total: 166174, tracked: 41250, pages_tracked: 52310 },
   papers: {
     total: 259794,
     by_status: { working_paper: 120000, under_review: 9000, accepted: 8000, published: 110000, unknown: 12794 },
@@ -148,8 +148,9 @@ it("still renders the text when the backend fails", async () => {
   await renderAbout();
   expect(screen.getByText(/live numbers are temporarily unavailable/)).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "How it works" })).toBeInTheDocument();
-  expect(screen.getByRole("link", { name: "privacy policy" })).toHaveAttribute("href", "/privacy");
-  expect(screen.getByRole("link", { name: "Contact" })).toHaveAttribute("href", "/contact");
+  expect(screen.getByRole("heading", { name: "Corrections and removal" })).toBeInTheDocument();
+  // /contact and /privacy arrive with #256; until then the page links to neither.
+  expect(document.querySelector('a[href="/contact"], a[href="/privacy"]')).toBeNull();
 });
 
 it("has its own canonical URL", () => {

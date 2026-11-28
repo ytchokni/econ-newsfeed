@@ -35,7 +35,7 @@ export interface Top5Coverage {
 
 export interface SiteStats {
   generated_at: string;
-  researchers: { total: number; tracked: number; pages_tracked: number; with_fields: number };
+  researchers: { total: number; tracked: number; pages_tracked: number };
   papers: {
     total: number;
     by_status: {

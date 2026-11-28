@@ -249,13 +249,10 @@ export default async function AboutPage() {
           <Top5Section top5={top5} />
         </Section>
 
-        <Section title="Corrections, removal and contact" id="contact">
+        <Section title="Corrections and removal" id="contact">
           <p>
-            If you are listed and something is wrong, or you would rather not be listed, please get in
-            touch: see <Link href="/contact" className={link}>Contact</Link>. How we handle the data,
-            and how to have your profile removed, is described in the{" "}
-            <Link href="/privacy" className={link}>privacy policy</Link>. Website owners can also block
-            our crawler in <code className="text-[13px]">robots.txt</code>.
+            A contact page for corrections and removal requests is coming soon. Website owners can
+            also block our crawler in <code className="text-[13px]">robots.txt</code>.
           </p>
           <p>
             New papers are in the <Link href="/" className={link}>feed</Link>, also available as an{" "}

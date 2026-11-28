@@ -80,7 +80,7 @@ class TestTop5Coverage:
 def _fake_fetch_one(sql, params=None):
     if "researchers_total" in sql:
         return {"researchers_total": 166174, "researchers_tracked": 41000, "pages_tracked": 52000,
-                "papers_total": 259794, "tracked_with_fields": 30000}
+                "papers_total": 259794}
     if "scrape_log" in sql:
         return {"t": datetime(2026, 11, 26, 6, 0)}
     if "html_content" in sql:
@@ -107,7 +107,7 @@ class TestGetSiteStats:
               patch.object(ss, "_fetch_interval_hours", return_value=48)):
             s = ss.get_site_stats(NOW)
         assert s["generated_at"] == "2026-11-27T15:00:00Z"
-        assert s["researchers"] == {"total": 166174, "tracked": 41000, "pages_tracked": 52000, "with_fields": 30000}
+        assert s["researchers"] == {"total": 166174, "tracked": 41000, "pages_tracked": 52000}
         assert s["papers"] == {"total": 259794, "by_status": {
             "working_paper": 54, "under_review": 6, "accepted": 10, "published": 100, "unknown": 3}}
         assert len(s["activity"]["weeks"]) == ss.WEEKS
