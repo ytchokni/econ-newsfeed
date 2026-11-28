@@ -360,6 +360,12 @@ the miner's verdict stands (held as "Candidate already review"). If the miner al
 approved it, our pages that match its approved URLs (same `url_key`) take its exact
 spelling and become existing rows; only the missing pages are inserted, through the
 same preflight. The dry run reads the real queue, so its counts match the apply.
+A hold on our own row is permanent: it stays `review` and later runs report
+"Candidate already review" without re-checking, so delete the row once the cause
+is fixed. `scripts/cleanup_searlo_candidates.py` (dry run; `--apply --backup F`;
+`--undo F`) repairs what the first apply (#299) wrote: it restores the miner
+candidates that run overwrote from the pre-apply backup (`--dump`), moves approved
+`searlo_review` rows to the suffixed key and deletes the ones left in `review`.
 
 Alternatively, `SITE_MINING_ENABLED=true` schedules the same bounded job inside
 the API hourly and after a scrape. Use one scheduling mechanism at a time. The

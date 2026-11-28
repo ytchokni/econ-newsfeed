@@ -18,8 +18,15 @@ Decisions come from a JSON file (a list of objects)::
      "evidence": "full name in h1; 2 known titles on /research"}
 
 ``decision`` is ``approve`` or ``reject`` (anything else, e.g. ``unsure``, is
-skipped).  Every applied change is appended to a JSONL manifest, which
-``undo`` uses to delete the inserted URL rows and reopen the discoveries.
+skipped); at most one approve per researcher and home page.  Every applied
+change is appended to a JSONL manifest, which ``undo`` uses to delete the
+inserted URL rows and reopen the discoveries.
+
+Each reviewed bundle has its own queue row (``source_kind='searlo_review'``).
+A hold on that row is permanent: its status stays ``review`` and every later run
+reports "Candidate already review" without re-checking.  After fixing the cause
+(e.g. an inactive URL), delete the row (``scripts/cleanup_searlo_candidates.py
+--steps rekey`` does so for rows left from #299) and re-run.
 """
 from __future__ import annotations
 
@@ -41,7 +48,7 @@ def load_decisions(path: str | Path) -> list[dict]:
     decisions = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(decisions, list):
         raise ValueError("decisions file must contain a JSON list")
-    seen = set()
+    seen, sites = set(), set()
     for d in decisions:
         for key in ("discovery_id", "researcher_id", "first_name", "last_name", "decision"):
             if key not in d:
@@ -53,6 +60,13 @@ def load_decisions(path: str | Path) -> list[dict]:
             bundle = d.get("bundle") or []
             if not bundle or any(p.get("page_type") not in _PAGE_TYPES or not p.get("url") for p in bundle):
                 raise ValueError(f"approve decision needs a bundle with page types {sorted(_PAGE_TYPES)}: {d}")
+            home = next((p["url"] for p in bundle if p["page_type"] == "HOME"), bundle[0]["url"])
+            site = (d["researcher_id"], url_key(home))
+            if site in sites:
+                # Both share one queue row; the dry run would approve each, the
+                # apply only the first and hold the second.
+                raise ValueError(f"two approve decisions for researcher {d['researcher_id']} and home page {home}")
+            sites.add(site)
     return decisions
 
 
@@ -282,7 +296,10 @@ def undo(manifest_path: str | Path, *, apply: bool = False) -> dict:
                     stats["urls_deleted"] += 1
                 if apply:
                     if e["op"] == "approve":
-                        store._execute("UPDATE site_mining_candidates SET status='review',reason=%s WHERE id=%s AND status='approved'",
+                        # Only our own queue row: manifests written before #303 name
+                        # miner rows too, and those must keep the miner's status.
+                        store._execute("UPDATE site_mining_candidates SET status='review',reason=%s "
+                                       "WHERE id=%s AND status='approved' AND source_kind='searlo_review'",
                                        ("Searlo review undone", e["candidate_id"]))
                     store._execute("UPDATE url_discoveries SET status='pending',reviewed_at=NULL WHERE id=%s",
                                    (e["discovery_id"],))

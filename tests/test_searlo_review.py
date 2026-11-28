@@ -288,3 +288,29 @@ def test_undo_leaves_miner_candidates_alone(db, tmp_path):
     searlo_review.undo(manifest, apply=True)
     assert snapshot(db.candidates[50]) == before
     assert not db.urls and db.discoveries[0]["status"] == "pending"
+
+
+def test_undo_does_not_flip_miner_rows_named_by_an_old_manifest(db, tmp_path):
+    # Manifests written by the first apply (#299) carry the miner's row as candidate_id.
+    miner = miner_candidate(db, status="approved", reason="Verified identity and crawl bundle",
+                            urls=[{"url": HOME, "page_type": "HOME"}])
+    db.urls.append(url_row(HOME))
+    manifest = tmp_path / "old.jsonl"
+    manifest.write_text(json.dumps({"op": "approve", "discovery_id": 11, "researcher_id": 7, "candidate_id": 50,
+                                    "inserted": [{"id": 100, "url": HOME, "page_type": "HOME"}], "existing": []}) + "\n")
+    before = snapshot(miner)
+    searlo_review.undo(manifest, apply=True)
+    assert snapshot(db.candidates[50]) == before
+    assert not db.urls and db.discoveries[0]["status"] == "pending"
+
+
+def test_load_decisions_rejects_two_approvals_for_one_researcher_and_home(tmp_path):
+    other = approve_decision(discovery_id=12, bundle=[{"url": "https://www.alice-economist.example", "page_type": "HOME"}])
+    path = tmp_path / "d.json"
+    path.write_text(json.dumps([approve_decision(), other]))
+    with pytest.raises(ValueError, match="two approve decisions"):
+        searlo_review.load_decisions(path)
+    # A reject for the same site, or an approve for another researcher, is fine.
+    path.write_text(json.dumps([approve_decision(), dict(other, decision="reject"),
+                                dict(other, discovery_id=13, researcher_id=8)]))
+    assert len(searlo_review.load_decisions(path)) == 3
