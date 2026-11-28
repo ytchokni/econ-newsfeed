@@ -533,3 +533,13 @@ def test_unlinked_researchers_require_papers_and_no_url_row(monkeypatch):
     store.unlinked_researchers()
     assert "NOT EXISTS (SELECT 1 FROM researcher_urls u WHERE u.researcher_id = r.id)" in seen[0]
     assert "EXISTS (SELECT 1 FROM authorship a WHERE a.researcher_id = r.id)" in seen[0]
+
+
+def test_researcher_has_urls_sees_dry_run_inserts(monkeypatch):
+    store = _bare_store()
+    monkeypatch.setattr(store, "_one", lambda sql, params=None: None)
+    assert store.researcher_has_urls(5) is False
+    store._dry_url_rows.append({"id": -1, "researcher_id": 5, "url": "https://x.example/", "page_type": "HOME", "is_active": 1})
+    assert store.researcher_has_urls(5) is True
+    monkeypatch.setattr(store, "_one", lambda sql, params=None: {"found": 1})
+    assert store.researcher_has_urls(6) is True

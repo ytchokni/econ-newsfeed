@@ -299,6 +299,7 @@ def test_registry_candidate_still_needs_full_verification(monkeypatch):
                  "source_url": "https://orcid.org/" + ORCID, "source_kind": "orcid",
                  "evidence": {"orcid": ORCID}, "attempts": 0}
     db = MagicMock()
+    db.researcher_has_urls.return_value = False
     db.paper_titles.return_value = [TITLE]
     db.approve_bundle.side_effect = lambda c, urls, name: {"held": False, "inserted": urls}
     stats = defaultdict(int)
@@ -307,6 +308,7 @@ def test_registry_candidate_still_needs_full_verification(monkeypatch):
     assert db.approve_bundle.call_args.args[2] == ("Ingrid", "Sandberg")
     # Without one of the researcher's titles on the page it is held for review.
     db2 = MagicMock()
+    db2.researcher_has_urls.return_value = False
     db2.paper_titles.return_value = [TITLE]
     mining._verify(db2, Fetcher({SITE: page.replace(TITLE, "Something else")}), candidate,
                    {11: person}, {}, set(), defaultdict(int))
@@ -318,3 +320,18 @@ def test_registry_settings_reject_negative_limits():
     with pytest.raises(ValueError):
         mining._registry_settings({"max_requests": -1})
     assert mining.registry_host_delays(settings(delay_seconds=3)) == {"orcid.org": 3, "ideas.repec.org": 3}
+
+
+def test_registry_candidate_for_researcher_who_now_has_a_url_is_not_fetched():
+    """ORCID may list a blog and two staff pages: only the first approved one is added."""
+    from unittest.mock import MagicMock
+    db = MagicMock()
+    db.researcher_has_urls.return_value = True
+    candidate = {"id": 6, "researcher_id": 11, "name": "Ingrid Sandberg", "url": "https://second.example/",
+                 "source_url": "https://orcid.org/" + ORCID, "source_kind": "orcid", "evidence": {}, "attempts": 0}
+    fetcher = Fetcher({})
+    stats = defaultdict(int)
+    mining._verify(db, fetcher, candidate, {11: {"id": 11}}, {}, set(), stats)
+    assert fetcher.requests == 0
+    db.approve_bundle.assert_not_called()
+    assert db.save_result.call_args.args[1] == "review" and stats["review"] == 1

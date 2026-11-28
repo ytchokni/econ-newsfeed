@@ -225,6 +225,13 @@ class MiningStore:
 
         return [r for r in rows if due(r)][:limit]
 
+    def researcher_has_urls(self, rid: int) -> bool:
+        """True once the researcher has any researcher_urls row (or a dry-run insert)."""
+        self._require_lock()
+        if any(row["researcher_id"] == rid for row in self._dry_url_rows):
+            return True
+        return bool(self._one("SELECT 1 AS found FROM researcher_urls WHERE researcher_id=%s LIMIT 1", (rid,)))
+
     def known_urls(self) -> list[dict]:
         self._require_lock()
         return self._all(

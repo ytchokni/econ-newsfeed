@@ -203,7 +203,8 @@ def _mine_orcid(store, fetcher, room, names, known, stats, settings):
             sites, reason = orcid_websites(record["json"], orcid, person["first_name"], person["last_name"])
             if reason:
                 stats[reason] += 1
-            for site in sites[:3]:
+            # Links the iD holder added themselves come first.
+            for site in sorted(sites, key=lambda site: not site["self_asserted"])[:3]:
                 _registry_candidate(store, person, site["url"], orcid_profile_url(orcid), "orcid", {
                     "orcid": orcid, "openalex_author_id": author, "orcid_label": site["label"],
                     "self_asserted": site["self_asserted"], "orcid_name": site["orcid_name"],
@@ -309,7 +310,17 @@ def _review(store, candidate, reason, stats, urls=None):
     stats["review"] += 1
 
 
+REGISTRY_KINDS = {"orcid", "repec"}
+
+
 def _verify(store, fetcher, candidate, people, names, known, stats):
+    # Registry sources look for a first homepage. Once one of a researcher's
+    # registry links is approved (or the crawl gains a URL some other way),
+    # the rest are left for review instead of adding more HOME pages.
+    if (candidate["source_kind"] in REGISTRY_KINDS and candidate.get("researcher_id")
+            and store.researcher_has_urls(candidate["researcher_id"])):
+        _review(store, candidate, "Researcher already has a tracked URL; extra registry website not added", stats)
+        return
     response = fetcher.fetch(candidate["url"])
     if response["status"] != 200 or not response.get("html"):
         _retry(store, candidate, "Destination unavailable: " + str(response.get("error") or response["status"]), stats)
