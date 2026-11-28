@@ -95,7 +95,6 @@ from backend.database.discoveries import (
     get_pending_discoveries,
     approve_discovery,
     reject_discovery,
-    bulk_approve_discoveries,
     get_discovery_stats,
     get_recent_discoveries,
 )
@@ -212,7 +211,6 @@ class Database:
     get_pending_discoveries = staticmethod(get_pending_discoveries)
     approve_discovery = staticmethod(approve_discovery)
     reject_discovery = staticmethod(reject_discovery)
-    bulk_approve_discoveries = staticmethod(bulk_approve_discoveries)
     get_discovery_stats = staticmethod(get_discovery_stats)
     get_recent_discoveries = staticmethod(get_recent_discoveries)
 

@@ -421,8 +421,27 @@ class MiningStore:
             return tuple(expected_name)
         raise ValueError("expected_name must contain exact first_name and last_name")
 
-    def approve_bundle(self, candidate, urls, expected_name) -> dict:
+    def resolve_discovery(self, discovery_id: int, status: str) -> None:
+        """Mark one pending paid-search discovery approved/rejected (apply mode only).
+
+        Runs on the store's connection, so inside ``approve_bundle``'s
+        ``in_transaction`` hook it commits or rolls back with the URL inserts.
+        """
+        self._require_lock()
+        if status not in {"approved", "rejected"}:
+            raise ValueError("Unknown discovery status")
+        _, count = self._execute(
+            "UPDATE url_discoveries SET status=%s,reviewed_at=NOW() WHERE id=%s AND status='pending'",
+            (status, discovery_id),
+        )
+        if count != 1:
+            raise RuntimeError(f"Discovery {discovery_id} is not pending")
+
+    def approve_bundle(self, candidate, urls, expected_name, *, in_transaction=None) -> dict:
         """Approve all URLs together, or persist a review hold without URL writes.
+
+        ``in_transaction(store, result)`` runs after the inserts and before the
+        commit, so a caller's bookkeeping writes succeed or fail with the bundle.
 
         Known URL rows are locked during the brief apply transaction. This also
         serializes the preflight with other URL writers that do not use our
@@ -453,6 +472,8 @@ class MiningStore:
                         self._dry_url_rows.append(row)
                     result["inserted"].append(row)
                 self._save_result(candidate, "approved", "Verified identity and crawl bundle", urls)
+                if in_transaction is not None:
+                    in_transaction(self, result)
             if self.apply:
                 self.conn.commit()
             return result

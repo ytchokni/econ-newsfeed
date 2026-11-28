@@ -61,7 +61,6 @@ from backend.database import (
     get_pending_discoveries as db_get_pending_discoveries,
     approve_discovery as db_approve_discovery,
     reject_discovery as db_reject_discovery,
-    bulk_approve_discoveries as db_bulk_approve_discoveries,
     get_recent_discoveries as db_get_recent_discoveries,
 )
 from backend.auth import get_current_user, get_optional_user
@@ -671,8 +670,10 @@ def get_discoveries(request: Request):
 def approve_discovery_endpoint(discovery_id: int, request: Request):
     """Approve a URL discovery — copies to researcher_urls."""
     _require_api_key(request)
-    db_approve_discovery(discovery_id)
+    result = db_approve_discovery(discovery_id)
     _admin_dashboard_cache.clear()
+    if not result["approved"]:
+        raise HTTPException(status_code=409, detail=result["reason"])
     return {"status": "ok"}
 
 
@@ -687,11 +688,14 @@ def reject_discovery_endpoint(discovery_id: int, request: Request):
 
 @app.post("/api/admin/discoveries/bulk-approve")
 def bulk_approve_discoveries_endpoint(request: Request):
-    """Approve all high-confidence discoveries."""
+    """Disabled: search-confidence scores are not an identity check (a manual
+    review found wrong-person pages at confidence 1.0). Review and approve one
+    at a time, or apply a reviewed file with `apply-searlo-review`."""
     _require_api_key(request)
-    count = db_bulk_approve_discoveries(min_confidence=0.8)
-    _admin_dashboard_cache.clear()
-    return {"status": "ok", "approved_count": count}
+    raise HTTPException(
+        status_code=410,
+        detail="Bulk approval is disabled; approve individually or use apply-searlo-review",
+    )
 
 
 @app.get("/api/admin/reviews")

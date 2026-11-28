@@ -366,12 +366,6 @@ export async function rejectDiscovery(discoveryId: number): Promise<void> {
   });
 }
 
-export async function bulkApproveDiscoveries(): Promise<{ approved_count: number }> {
-  return fetchJsonWithAuth("/api/admin/discoveries/bulk-approve", {
-    method: "POST",
-  });
-}
-
 export interface ReviewItem {
   id: number;
   feed_event_id: number;
