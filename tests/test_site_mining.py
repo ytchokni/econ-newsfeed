@@ -19,6 +19,8 @@ def html(name="Alice Smith", paper=TITLE, links=""):
 
 
 class Fetcher:
+    budget_exhausted = False
+
     def __init__(self, pages):
         self.pages = pages
         self.requests = 0
@@ -227,3 +229,55 @@ def test_zero_limits_do_not_fall_back_to_large_defaults(monkeypatch):
     mining.run_site_mining_batch(mode="cached", source_limit=0, candidate_limit=0, max_requests=0)
     db.cached_sources.assert_not_called()
     db.due_candidates.assert_not_called()
+
+
+def test_business_card_profile_still_supplies_website_candidates():
+    """Bonn profiles are too short for the academic-content rule but name the person."""
+    profile = "https://www.econ.uni-bonn.de/en/people/professors/alice-smith"
+    card = """<html><title>Alice Smith</title><body><main><div class="contact-name">
+      <span class="name">Prof. Alice Smith Ph.D.</span></div>
+      <p class="website"><a href="https://alice.example/">Website</a></p></main></body></html>"""
+    db = store()
+    db.enqueue.return_value = True
+    c = candidate(url=profile, source_url="https://www.econ.uni-bonn.de/en/people/professors",
+                  source_kind="directory_profile", evidence={"department": "Bonn"})
+    counts = stats()
+    mining._verify(db, Fetcher({profile: card}), c, {2: PERSON}, {"alice smith": [PERSON]}, set(), counts)
+    child = db.enqueue.call_args_list[0].args[0]
+    assert child["url"] == "https://alice.example/" and child["source_kind"] == "directory"
+    assert counts["queued"] == 1
+
+
+def test_error_profile_supplies_no_website_candidates():
+    profile = "https://www.econ.uni-bonn.de/en/people/professors/alice-smith"
+    page = """<html><title>Page not found</title><body><main><h1>Page not found</h1>
+      <div class="contact-name"><span class="name">Alice Smith</span></div>
+      <a href="https://alice.example/">Website</a></main></body></html>"""
+    db = store()
+    c = candidate(url=profile, source_kind="directory_profile", evidence={})
+    mining._verify(db, Fetcher({profile: page}), c, {2: PERSON}, {"alice smith": [PERSON]}, set(), stats())
+    db.enqueue.assert_not_called()
+
+
+def test_registries_mode_runs_only_the_registry_step(monkeypatch):
+    db = store()
+    db.acquired = True
+    db.apply = False
+    db.researchers.return_value = [PERSON]
+    db.known_urls.return_value = []
+    db.unlinked_researchers.return_value = []
+    db.orcid_lookup_targets.return_value = []
+    db.source_due.return_value = False
+    db.due_candidates.return_value = []
+    factory = MagicMock()
+    factory.return_value.__enter__.return_value = db
+    monkeypatch.setattr(mining, "MiningStore", factory)
+    seen = {}
+    monkeypatch.setattr(mining, "MiningFetcher", lambda **kwargs: seen.update(kwargs) or Fetcher({}))
+    result = mining.run_site_mining_batch(mode="registries", registry={"delay_seconds": 4})
+    assert seen["host_delays"] == {"orcid.org": 4, "ideas.repec.org": 4}
+    db.cached_sources.assert_not_called()
+    db.unlinked_researchers.assert_called_once()
+    assert result["unlinked_researchers"] == 0 and isinstance(result, dict)
+    with pytest.raises(ValueError):
+        mining.run_site_mining_batch(mode="bogus")

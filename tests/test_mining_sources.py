@@ -287,3 +287,125 @@ def test_bonn_profiles_can_use_institution_subdomains_not_unrelated_domains():
     card = '<div class="table-row content-row"><span class="fullname"><a href="{url}">Alice Smith</a></span></div>'
     html = card.format(url="https://micro.uni-bonn.de/alice") + card.format(url="https://uni-bonn.de.attacker.example/alice")
     assert sources.directory_links(seed, html, seed["url"]) == [{"name": "Alice Smith", "url": "https://micro.uni-bonn.de/alice", "kind": "profile"}]
+
+
+# --- JSON registries, per-host delays and recorded directory fixtures --------
+
+from pathlib import Path
+
+FIXTURES = Path(__file__).parent / "fixtures" / "mining"
+
+
+def fixture(name):
+    return (FIXTURES / name).read_text(encoding="utf-8")
+
+
+def test_fetch_json_parses_body_and_rejects_html(network):
+    allow(network)
+    network["replies"]["https://example.org/api"] = Response(body='{"results": [1]}', ctype="application/json;charset=UTF-8")
+    network["replies"]["https://example.org/page"] = Response()
+    fetcher = sources.MiningFetcher()
+    assert fetcher.fetch_json("https://example.org/api")["json"] == {"results": [1]}
+    assert fetcher.fetch_json("https://example.org/page")["error"] == "not_json"
+    # HTML fetches still refuse JSON bodies.
+    network["replies"]["https://example.org/api2"] = Response(body="{}", ctype="application/json")
+    assert fetcher.fetch("https://example.org/api2")["error"] == "not_html"
+
+
+def test_fetch_json_invalid_body_is_a_classified_failure(network):
+    allow(network)
+    network["replies"]["https://example.org/api"] = Response(body="{oops", ctype="application/json")
+    result = sources.MiningFetcher().fetch_json("https://example.org/api")
+    assert result["status"] == "error" and result["error"] == "invalid_json" and "json" not in result
+
+
+def test_api_headers_are_not_forwarded_across_hosts(network):
+    allow(network)
+    allow(network, "other.example")
+    network["replies"]["https://example.org/api"] = Response(302, location="https://other.example/api")
+    network["replies"]["https://other.example/api"] = Response(body="{}", ctype="application/json")
+    sources.MiningFetcher().fetch_json("https://example.org/api", headers={"Authorization": "Bearer k"})
+    sent = {url: kwargs["headers"] for url, _, kwargs in network["calls"]}
+    assert sent["https://example.org/api"]["Authorization"] == "Bearer k"
+    assert "Authorization" not in sent["https://other.example/api"]
+    assert all(h["User-Agent"] == sources.USER_AGENT for h in sent.values())
+
+
+def test_registry_host_delay_spaces_requests_beyond_one_second_floor(network):
+    allow(network, "ideas.repec.org")
+    network["replies"]["https://ideas.repec.org/e/p1.html"] = Response()
+    network["replies"]["https://ideas.repec.org/e/p2.html"] = Response()
+    fetcher = sources.MiningFetcher(host_delays={"ideas.repec.org": 2.5})
+    fetcher.fetch("https://ideas.repec.org/e/p1.html")
+    fetcher.fetch("https://ideas.repec.org/e/p2.html")
+    times = [t for _, t, _ in network["calls"]]
+    assert all(b - a >= 2.5 for a, b in zip(times, times[1:]))
+
+
+def _seed(name):
+    return next(seed for seed in sources.DIRECTORY_SEEDS if seed["name"] == name)
+
+
+def test_stanford_fixture_reads_surname_website_labels_not_lab_links():
+    seed = _seed("Stanford")
+    links = sources.directory_links(seed, fixture("stanford_faculty.html"), seed["url"])
+    assert links == [
+        {"name": "Ada Brennan", "url": "http://web.stanford.edu/~abrennan/", "kind": "website"},
+        {"name": "Lars Dahl", "url": "https://www.larsdahl.example/", "kind": "website"},
+    ]
+
+
+def test_oxford_fixture_reads_visit_personal_website_buttons_without_main():
+    seed = _seed("Oxford")
+    links = sources.directory_links(seed, fixture("oxford_job_market.html"), seed["url"])
+    assert links == [
+        {"name": "Elena Fischer-Moreau", "url": "https://elena-fm.github.io/", "kind": "website"},
+        {"name": "Christopher Lindqvist", "url": "https://chrislindqvist.github.io/", "kind": "website"},
+    ]
+
+
+def test_toulouse_fixture_reads_job_market_cards_not_thesis_directors():
+    seed = _seed("Toulouse")
+    links = sources.directory_links(seed, fixture("toulouse_job_market.html"), seed["url"])
+    assert links == [
+        {"name": "Noor HADDAD", "url": "http://noor-haddad.github.io/", "kind": "website"},
+        {"name": "Pau RIBAS SOLER", "url": "https://sites.google.com/view/pauribas", "kind": "website"},
+    ]
+
+
+def test_bonn_fixture_binds_icon_only_profile_anchor_by_name_slug():
+    seed = _seed("Bonn")
+    links = sources.directory_links(seed, fixture("bonn_professors.html"), seed["url"])
+    assert links == [
+        {"name": "Hanna Grüner", "url": "https://www.econ.uni-bonn.de/en/people/professors/hanna-gruener", "kind": "profile"},
+        {"name": "Ines Vogt", "url": "https://www.econ.uni-bonn.de/en/people/professors/ines-vogt", "kind": "profile"},
+    ]
+
+
+def test_bonn_icon_anchor_with_another_persons_slug_is_ignored():
+    seed = _seed("Bonn")
+    html = ('<div class="table-row content-row"><span class="fullname">Prof. Alice Smith</span>'
+            '<a href="https://www.econ.uni-bonn.de/en/people/professors/bob-jones"><i></i></a></div>')
+    assert sources.directory_links(seed, html, seed["url"]) == []
+
+
+def test_bonn_business_card_profile_names_person_outside_headings():
+    url = "https://www.econ.uni-bonn.de/en/people/professors/hanna-gruener"
+    html = fixture("bonn_profile.html")
+    assert [r["url"] for r in sources.profile_websites("Prof. Hanna Grüner Ph.D.", html, url)] == ["https://hannagruener.example/"]
+    assert sources.profile_websites("Ines Vogt", html, url) == []
+
+
+@pytest.mark.parametrize("label,name,ok", [
+    ("Abramitzky website", "Ran Abramitzky", True),
+    ("Visit Carlos' personal website", "Carlos Gonzalez-Perez", True),
+    ("Visit Chris' personal website", "Christopher Hyland", True),
+    ("Lab website", "Ran Abramitzky", False),
+    ("Visit Bob's personal website", "Alice Smith", False),
+    ("Health Inequality Lab", "Marcella Alsan", False),
+    ("Abramitzky website", None, False),
+])
+def test_owned_website_labels_must_name_the_cards_person(label, name, ok):
+    from bs4 import BeautifulSoup
+    anchor = BeautifulSoup(f'<a href="https://x.example/">{label}</a>', "html.parser").a
+    assert sources._explicit_website(anchor, name) is ok

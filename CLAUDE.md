@@ -344,8 +344,28 @@ and uncertain pages remain in `site_mining_candidates` for review. Explicit
 `evidence.identity_hold` records block unresolved researcher identities, including
 later candidates. Do not bypass the transactional miner to bulk-approve holds.
 
+Registry sources (`backend/discovery/registry_sources.py`, mode `registries`) look
+only at researchers with papers and no `researcher_urls` row: the RePEc/IDEAS
+author index → a unique exact-name match whose IDEAS page lists one of our titles
+→ its registered homepage, and (off by default, `SITE_MINING_ORCID_AUTHORS=0`)
+OpenAlex author → ORCID iD → websites on `orcid.org/<iD>/public-record.json`, an
+undocumented ORCID web-UI endpoint (pub.orcid.org's robots.txt disallows all
+robots; orcid.org's allows this path). ORCID needs sign-off before it is enabled,
+spends the shared `OPENALEX_DAILY_BUDGET`, and only looks up researchers whose
+author ID is an OpenAlex author of one of their papers whose work ID was verified
+by the #266 re-verification or enriched on/after 16 Oct 2026. They only queue `orcid`/`repec` candidates, which pass
+the same `_verify` and `approve_bundle`. Lookups are checkpointed in
+`site_mining_sources` (`openalex_orcid` 90 days, `repec_author` 90 days, IDEAS
+letter pages weekly). Per batch they use at most `SITE_MINING_REGISTRY_MAX_REQUESTS`
+(60) of `SITE_MINING_MAX_REQUESTS`, `SITE_MINING_ORCID_AUTHORS` (0; per 50 authors one OpenAlex
+request, counted in `OPENALEX_DAILY_BUDGET`; dry runs only check it),
+`SITE_MINING_REPEC_INDEX_PAGES` (1), and space orcid.org and ideas.repec.org
+requests `SITE_MINING_REGISTRY_DELAY_SECONDS` (2) apart. Directory adapters were
+re-recorded in November 2026 (fixtures in `tests/fixtures/mining/`).
+
 ```bash
 poetry run python -m backend.main mine-urls --mode cached --limit 10  # read-only dry run; fetches candidates
+poetry run python -m backend.main mine-urls --mode registries --limit 10  # ORCID/RePEc dry run
 poetry run python -m backend.main mine-urls --apply                  # bounded persistent run
 poetry run python -m backend.main mine-urls --status                 # runs, counts, review evidence
 ```

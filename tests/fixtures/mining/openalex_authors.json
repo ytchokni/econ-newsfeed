@@ -1,0 +1,7 @@
+{"meta": {"count": 3, "db_response_time_ms": 21, "page": 1, "per_page": 50},
+ "results": [
+  {"id": "https://openalex.org/A5000000001", "orcid": "https://orcid.org/0000-0002-1825-0097", "display_name": "Ingrid Sandberg"},
+  {"id": "https://openalex.org/A5000000002", "orcid": null, "display_name": "Kenji Sato"},
+  {"id": "https://openalex.org/A5000000003", "orcid": "https://orcid.org/0000-0002-1825-0098", "display_name": "Bad Checksum"}
+ ],
+ "group_by": []}
