@@ -11,26 +11,27 @@ export function niceMax(value: number): number {
 }
 
 function weekLabel(w: WeeklyActivity): string {
-  const base = `Week of ${formatShortDateUtc(w.week_start)}: ${formatCount(w.new_papers)} new papers, ${formatCount(w.status_changes)} status updates`;
-  return w.partial ? `${base} (so far)` : base;
+  return `Week of ${formatShortDateUtc(w.week_start)}: ${formatCount(w.new_papers)} new papers, ${formatCount(w.status_changes)} status updates`;
 }
 
 /**
  * New papers per week as plain HTML bars (server-rendered, no client JS), so
  * labels stay legible at phone width. One series: the caption names it.
- * Hovering a column shows the week's numbers; a table view is below.
+ * Hovering a column shows the week's numbers; a table view is below. The
+ * current, unfinished week is left out so it never reads as a drop.
  */
-export default function WeeklyActivityChart({ weeks }: { weeks: WeeklyActivity[] }) {
+export default function WeeklyActivityChart({ weeks: all }: { weeks: WeeklyActivity[] }) {
+  const weeks = all.filter((w) => !w.partial);
   if (weeks.length === 0) return null;
   const max = niceMax(Math.max(...weeks.map((w) => w.new_papers)));
-  const lastFull = weeks.reduce((last, w, i) => (w.partial ? last : i), -1);
+  const lastFull = weeks.length - 1;
   const showOnMobile = (i: number) => (weeks.length - 1 - i) % 3 === 0;
 
   return (
     <figure className="m-0">
       <figcaption className="text-sm font-semibold text-[var(--ink)] mb-3">
         New papers in the feed per week
-        <span className="font-normal text-[var(--muted)]"> · last {weeks.length} weeks, UTC</span>
+        <span className="font-normal text-[var(--muted)]"> · last {weeks.length} full weeks, UTC</span>
       </figcaption>
       <div className="flex gap-2" aria-hidden="true">
         {/* y-axis labels */}
@@ -60,11 +61,7 @@ export default function WeeklyActivityChart({ weeks }: { weeks: WeeklyActivity[]
                     </span>
                   )}
                   <div
-                    className={`w-full max-w-[34px] rounded-t-[4px] transition-opacity group-hover:opacity-80 ${
-                      w.partial
-                        ? "bg-[var(--accent)]/30 border border-b-0 border-dashed border-[var(--accent)]"
-                        : "bg-[var(--accent)]"
-                    }`}
+                    className="w-full max-w-[34px] rounded-t-[4px] bg-[var(--accent)] transition-opacity group-hover:opacity-80"
                     style={{ height: `${(100 * w.new_papers) / max}%`, minHeight: w.new_papers > 0 ? 2 : 0 }}
                   />
                 </div>
@@ -77,7 +74,7 @@ export default function WeeklyActivityChart({ weeks }: { weeks: WeeklyActivity[]
                 key={w.week_start}
                 className={`flex-1 min-w-0 text-center whitespace-nowrap ${showOnMobile(i) ? "" : "invisible sm:visible"}`}
               >
-                {w.partial ? "now" : formatShortDateUtc(w.week_start)}
+                {formatShortDateUtc(w.week_start)}
               </span>
             ))}
           </div>
@@ -96,10 +93,7 @@ export default function WeeklyActivityChart({ weeks }: { weeks: WeeklyActivity[]
           <tbody>
             {weeks.map((w) => (
               <tr key={w.week_start} className="border-t border-[var(--line)]">
-                <td className="py-1 pr-4">
-                  {formatShortDateUtc(w.week_start)}
-                  {w.partial ? " (so far)" : ""}
-                </td>
+                <td className="py-1 pr-4">{formatShortDateUtc(w.week_start)}</td>
                 <td className="py-1 pr-4 text-right">{formatCount(w.new_papers)}</td>
                 <td className="py-1 text-right">{formatCount(w.status_changes)}</td>
               </tr>

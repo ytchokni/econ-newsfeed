@@ -92,6 +92,7 @@ def top5_coverage() -> dict | None:
         return None
     s = row["summary"]
     overall = s.get("overall") or {}
+    by_journal = s.get("by_journal") or {}
 
     def pct(n: int, d: int) -> float | None:
         return round(100.0 * n / d, 1) if d else None
@@ -107,16 +108,18 @@ def top5_coverage() -> dict | None:
         "tracked_found": int(row["tracked_observed"]),
         "coverage_tracked_pct": pct(int(row["tracked_observed"]), int(row["tracked_articles"])),
         "correct_record_pct": pct(int(overall.get("observed_correct") or 0), int(row["articles"])),
+        # Exactly the five journals, in a fixed order, whatever else the summary holds.
         "by_journal": [
             {
                 "journal": key,
-                "name": JOURNAL_NAMES.get(key, key),
+                "name": name,
                 "articles": int(b.get("articles") or 0),
                 "found": int(b.get("observed") or 0),
                 "coverage_pct": b.get("coverage_pct"),
                 "coverage_tracked_pct": b.get("coverage_tracked_pct"),
             }
-            for key, b in (s.get("by_journal") or {}).items()
+            for key, name in JOURNAL_NAMES.items()
+            if (b := by_journal.get(key))
         ],
     }
 

@@ -76,37 +76,64 @@ it("renders dates in UTC", async () => {
   expect(screen.getByText(/Last compared on 29 November 2026/)).toBeInTheDocument();
 });
 
-it("charts one bar per week and labels the last full week", async () => {
+it("charts full weeks only and labels the last one", async () => {
   mockFetch({ ok: true, status: 200, json: async () => stats });
   await renderAbout();
   const bars = screen.getAllByTestId("week-bar");
-  expect(bars).toHaveLength(3);
+  // the current, unfinished week (23 Nov) is left out
+  expect(bars).toHaveLength(2);
   expect(bars[1]).toHaveAttribute("title", "Week of 16 Nov: 1,234 new papers, 51 status updates");
   expect(within(bars[1]).getByText("1,234")).toBeInTheDocument();
-  expect(bars[2].getAttribute("title")).toMatch(/\(so far\)$/);
-  // table view with the exact values
+  expect(screen.getByText(/last 2 full weeks/)).toBeInTheDocument();
   expect(screen.getByText("Show as table")).toBeInTheDocument();
 });
 
-it("lists per-journal coverage", async () => {
+it("leads with researchers tracked and new papers a week", async () => {
   mockFetch({ ok: true, status: 200, json: async () => stats });
   await renderAbout();
+  const labels = screen.getAllByText(/^(Researchers tracked|New papers a week|Papers in the database|Top-5 articles found)$/);
+  expect(labels.map((l) => l.textContent)).toEqual([
+    "Researchers tracked",
+    "New papers a week",
+    "Papers in the database",
+    "Top-5 articles found",
+  ]);
+});
+
+it("explains a dip week, but not the ramp-up or the current week", async () => {
+  const weeks = [
+    { week_start: "2026-09-14", partial: false, new_papers: 3, status_changes: 0, events: 3 },
+    ...[400, 380, 420, 46, 834].map((n, i) => ({
+      week_start: ["2026-10-19", "2026-10-26", "2026-11-02", "2026-11-09", "2026-11-16"][i],
+      partial: false, new_papers: n, status_changes: 0, events: n,
+    })),
+    { week_start: "2026-11-23", partial: true, new_papers: 10, status_changes: 0, events: 10 },
+  ];
+  mockFetch({ ok: true, status: 200, json: async () => ({ ...stats, activity: { ...stats.activity, weeks } }) });
+  await renderAbout();
+  expect(screen.getByText(/processing slowed \(week of 9 Nov\)/)).toBeInTheDocument();
+});
+
+it("adds no dip note in a normal period", async () => {
+  mockFetch({ ok: true, status: 200, json: async () => stats });
+  await renderAbout();
+  expect(screen.queryByText(/processing slowed/)).not.toBeInTheDocument();
+});
+
+it("lists the share found per journal", async () => {
+  mockFetch({ ok: true, status: 200, json: async () => stats });
+  await renderAbout();
+  expect(screen.getByRole("columnheader", { name: "Share found" })).toBeInTheDocument();
   const row = screen.getByRole("cell", { name: "American Economic Review" }).closest("tr")!;
   expect(within(row).getByText("72.2%")).toBeInTheDocument();
-  expect(within(row).getByText("79.1%")).toBeInTheDocument();
 });
 
-it("hides JEL field coverage while it is partial", async () => {
+it("keeps How it works short and links to the opt-out information", async () => {
   mockFetch({ ok: true, status: 200, json: async () => stats });
   await renderAbout();
+  expect(screen.getByRole("link", { name: "OpenAlex" })).toBeInTheDocument();
+  expect(screen.getByRole("link", { name: "corrections and removal" })).toHaveAttribute("href", "#contact");
   expect(screen.queryByText(/field tags/)).not.toBeInTheDocument();
-});
-
-it("mentions JEL field coverage once most tracked researchers have it", async () => {
-  const withFields = { ...stats, researchers: { ...stats.researchers, with_fields: 33000 } };
-  mockFetch({ ok: true, status: 200, json: async () => withFields });
-  await renderAbout();
-  expect(screen.getByText(/80\.0% of tracked researchers also have field tags/)).toBeInTheDocument();
 });
 
 it("explains a missing top-5 comparison", async () => {

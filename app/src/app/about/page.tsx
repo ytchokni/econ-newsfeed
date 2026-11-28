@@ -6,10 +6,11 @@ import { fetchBackend } from "@/lib/server-api";
 import { openGraphFor, twitterFor } from "@/lib/seo";
 import {
   describeInterval,
-  fieldsCoverageShare,
   formatCount,
   formatDateUtc,
   formatPct,
+  formatShortDateUtc,
+  lowWeeks,
   type SiteStats,
   type Top5Coverage,
 } from "@/lib/site-stats";
@@ -50,10 +51,24 @@ function Section({ title, children, id }: { title: string; children: ReactNode; 
   );
 }
 
-function Stat({ value, label, note }: { value: string; label: string; note?: string }) {
+function Stat({
+  value,
+  label,
+  note,
+  primary = false,
+}: {
+  value: string;
+  label: string;
+  note?: string;
+  primary?: boolean;
+}) {
   return (
-    <div className="border-t-2 border-[var(--ink)] pt-3">
-      <div className="font-serif text-[28px] sm:text-[32px] font-bold leading-none text-[var(--ink)] tabular-nums">
+    <div className={primary ? "border-t-2 border-[var(--ink)] pt-3" : "border-t border-[var(--line2)] pt-3"}>
+      <div
+        className={`font-serif font-bold leading-none text-[var(--ink)] tabular-nums ${
+          primary ? "text-[34px] sm:text-[40px]" : "text-[22px] sm:text-[24px]"
+        }`}
+      >
         {value}
       </div>
       <div className="mt-2 text-[11px] font-semibold tracking-[0.12em] uppercase text-[var(--ink2)]">{label}</div>
@@ -115,16 +130,12 @@ function Top5Section({ top5 }: { top5: Top5Coverage | null }) {
         have not processed yet, papers that are not listed on the pages we track, and titles that
         changed too much to match.
       </p>
-      <table className="w-full border-collapse text-sm tabular-nums">
+      <table className="w-full max-w-lg border-collapse text-sm tabular-nums">
         <thead>
           <tr className="text-left text-[11px] uppercase tracking-[0.1em] text-[var(--muted)]">
             <th className="font-semibold py-1.5 pr-3">Journal</th>
             <th className="font-semibold py-1.5 pr-3 text-right">Articles</th>
-            <th className="font-semibold py-1.5 pr-3 text-right">Found</th>
-            <th className="font-semibold py-1.5 text-right">
-              <span className="hidden sm:inline">Found, tracked author</span>
-              <span className="sm:hidden">Tracked</span>
-            </th>
+            <th className="font-semibold py-1.5 text-right">Share found</th>
           </tr>
         </thead>
         <tbody>
@@ -132,8 +143,7 @@ function Top5Section({ top5 }: { top5: Top5Coverage | null }) {
             <tr key={j.journal} className="border-t border-[var(--line)]">
               <td className="py-1.5 pr-3 text-[var(--ink2)]">{j.name}</td>
               <td className="py-1.5 pr-3 text-right">{formatCount(j.articles)}</td>
-              <td className="py-1.5 pr-3 text-right text-[var(--ink)]">{formatPct(j.coverage_pct)}</td>
-              <td className="py-1.5 text-right">{formatPct(j.coverage_tracked_pct)}</td>
+              <td className="py-1.5 text-right text-[var(--ink)]">{formatPct(j.coverage_pct)}</td>
             </tr>
           ))}
         </tbody>
@@ -149,8 +159,8 @@ function Top5Section({ top5 }: { top5: Top5Coverage | null }) {
 export default async function AboutPage() {
   const stats = await loadStats();
   const top5 = stats?.top5 ?? null;
-  const fieldsShare = stats ? fieldsCoverageShare(stats) : null;
-  const interval = stats ? describeInterval(stats.fetch_interval_hours) : "every few days";
+  const interval = stats ? describeInterval(stats.fetch_interval_hours) : "regularly";
+  const dips = stats ? lowWeeks(stats.activity.weeks) : [];
 
   return (
     <article className="max-w-[800px] mx-auto px-6 py-10 font-sans text-[15px] leading-relaxed text-[var(--ink2)]">
@@ -165,21 +175,25 @@ export default async function AboutPage() {
       {stats ? (
         <section aria-labelledby="numbers" className="mb-12">
           <h2 id="numbers" className="sr-only">In numbers</h2>
-          <div className="grid grid-cols-2 sm:grid-cols-4 gap-x-6 gap-y-8">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-8">
             <Stat
+              primary
               value={formatCount(stats.researchers.tracked)}
               label="Researchers tracked"
               note={`${formatCount(stats.researchers.pages_tracked)} web pages; ${formatCount(stats.researchers.total)} researcher records in all`}
             />
             <Stat
-              value={formatCount(stats.papers.total)}
-              label="Papers"
-              note={`${formatCount(stats.papers.by_status.published + stats.papers.by_status.accepted)} published or accepted`}
-            />
-            <Stat
+              primary
               value={formatCount(stats.activity.new_papers_per_week)}
               label="New papers a week"
               note="Average of the last 4 full weeks"
+            />
+          </div>
+          <div className="mt-8 grid grid-cols-2 gap-x-6 gap-y-6">
+            <Stat
+              value={formatCount(stats.papers.total)}
+              label="Papers in the database"
+              note={`${formatCount(stats.papers.by_status.published + stats.papers.by_status.accepted)} published or accepted`}
             />
             <Stat
               value={top5 ? formatPct(top5.coverage_pct) : "–"}
@@ -194,6 +208,13 @@ export default async function AboutPage() {
           <div className="mt-10">
             <WeeklyActivityChart weeks={stats.activity.weeks} />
           </div>
+          {dips.length > 0 && (
+            <p className="mt-3 text-xs text-[var(--muted)]">
+              {`Weeks count papers by when we found them, so a week when our processing slowed (week of ${dips
+                .map((w) => formatShortDateUtc(w.week_start))
+                .join(", ")}) shows as a dip that the following weeks make up.`}
+            </p>
+          )}
           <p className="mt-4 text-xs text-[var(--muted)]">
             Figures as of {formatDateUtc(stats.generated_at)} (UTC)
             {stats.last_fetch_at ? `; last full crawl finished ${formatDateUtc(stats.last_fetch_at)}` : ""}.
@@ -208,33 +229,13 @@ export default async function AboutPage() {
       <div className="space-y-10">
         <Section title="How it works">
           <p>
-            <strong className="text-[var(--ink)]">Sources.</strong> We track the personal and
-            departmental web pages where economists list their research: home pages, research and
-            publication pages. Most were found automatically, by following links from pages we already
-            track and from public economics department and job-market directories, and are checked to
-            belong to the researcher before they are added.
-          </p>
-          <p>
-            <strong className="text-[var(--ink)]">Updates.</strong> Every page is downloaded {interval}.
-            When its text changes, a language model reads the page and lists the papers on it (title,
-            co-authors, status, venue and year). Comparing that list with the previous version tells us
-            what is new: a new working paper, or a paper that moved to accepted or published. Pages that
-            did not change are not read again.
-          </p>
-          <p>
-            <strong className="text-[var(--ink)]">Enrichment.</strong> Papers are matched with{" "}
+            We follow the websites where economists list their own research, such as home pages and
+            research pages, and download each page {interval}. When a page changes, a language model
+            reads it and lists the papers on it, which tells us when a new paper appears or an existing
+            one is accepted or published. Papers are then matched with{" "}
             <a href="https://openalex.org/" className={link} rel="noopener">OpenAlex</a>, an open
-            catalogue of scholarly works, for DOIs, abstracts and co-authors, and with links on the
-            researcher&rsquo;s page to SSRN, NBER, arXiv and journal sites.
-            {fieldsShare !== null && fieldsShare >= 0.5
-              ? ` ${formatPct(100 * fieldsShare)} of tracked researchers also have field tags (JEL codes) assigned from their papers and bio.`
-              : ""}
-          </p>
-          <p>
-            <strong className="text-[var(--ink)]">Limits.</strong> We only see what researchers post.
-            A paper that is not on any tracked page, or a page we cannot reach, is missing here.
-            Automated extraction makes occasional mistakes, such as a wrong status or a duplicated
-            paper; we run daily data-quality checks and fix what they find.
+            catalogue of scholarly works, for DOIs, abstracts and co-authors. To correct an entry or
+            opt out, see <a href="#contact" className={link}>corrections and removal</a> below.
           </p>
         </Section>
 

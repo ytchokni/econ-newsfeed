@@ -1,10 +1,10 @@
 import {
   describeInterval,
-  fieldsCoverageShare,
   formatCount,
   formatDateUtc,
   formatPct,
   formatShortDateUtc,
+  lowWeeks,
 } from "../site-stats";
 import { niceMax } from "@/components/WeeklyActivityChart";
 
@@ -31,9 +31,16 @@ describe("site-stats formatting", () => {
     expect(describeInterval(1)).toBe("every hour");
   });
 
-  it("computes the share of tracked researchers with field tags", () => {
-    expect(fieldsCoverageShare({ researchers: { total: 10, tracked: 4, pages_tracked: 5, with_fields: 3 } })).toBe(0.75);
-    expect(fieldsCoverageShare({ researchers: { total: 0, tracked: 0, pages_tracked: 0, with_fields: 0 } })).toBeNull();
+  it("finds dip weeks after the ramp-up, ignoring the current week", () => {
+    const w = (week_start: string, new_papers: number, partial = false) => ({
+      week_start, partial, new_papers, status_changes: 0, events: new_papers,
+    });
+    const weeks = [w("2026-09-07", 0), w("2026-09-14", 2), w("2026-09-21", 752), w("2026-09-28", 250),
+      w("2026-10-05", 208), w("2026-10-12", 337), w("2026-10-19", 396), w("2026-10-26", 440),
+      w("2026-11-02", 396), w("2026-11-09", 46), w("2026-11-16", 834), w("2026-11-23", 5, true)];
+    expect(lowWeeks(weeks).map((x) => x.week_start)).toEqual(["2026-11-09"]);
+    expect(lowWeeks(weeks.slice(2, 9))).toEqual([]);
+    expect(lowWeeks(weeks.slice(0, 3))).toEqual([]); // too few weeks to judge
   });
 
   it("rounds chart maxima to readable steps", () => {

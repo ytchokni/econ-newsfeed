@@ -46,8 +46,9 @@ LATEST = {
     "summary": {
         "overall": {"observed_correct": 2057},
         "by_journal": {
-            "aer": {"articles": 800, "observed": 600, "coverage_pct": 75.0, "coverage_tracked_pct": 80.0},
+            "other": {"articles": 5, "observed": 1, "coverage_pct": 20.0, "coverage_tracked_pct": None},
             "ecta": {"articles": 400, "observed": 280, "coverage_pct": 70.0, "coverage_tracked_pct": None},
+            "aer": {"articles": 800, "observed": 600, "coverage_pct": 75.0, "coverage_tracked_pct": 80.0},
         },
     },
 }
@@ -64,6 +65,8 @@ class TestTop5Coverage:
         assert t["by_journal"][0] == {"journal": "aer", "name": "American Economic Review", "articles": 800,
                                       "found": 600, "coverage_pct": 75.0, "coverage_tracked_pct": 80.0}
         assert t["by_journal"][1]["coverage_tracked_pct"] is None
+        # only the five journals, in the fixed AER, ECTA, JPE, QJE, REStud order
+        assert [j["journal"] for j in t["by_journal"]] == ["aer", "ecta"]
 
     def test_none_before_first_run(self):
         with patch("backend.coverage.top5_job.latest_run", return_value=None):

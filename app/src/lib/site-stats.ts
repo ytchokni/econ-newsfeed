@@ -102,8 +102,17 @@ export function describeInterval(hours: number): string {
   return hours === 1 ? "every hour" : `every ${hours} hours`;
 }
 
-/** JEL field tags are only worth mentioning once most tracked researchers have them. */
-export function fieldsCoverageShare(stats: Pick<SiteStats, "researchers">): number | null {
-  const { tracked, with_fields } = stats.researchers;
-  return tracked > 0 ? with_fields / tracked : null;
+/**
+ * Full weeks far below the usual count (under a quarter of the median), such as
+ * a week when processing slowed. Weeks before the feed reached its normal level
+ * are not dips, so counting starts at the first normal week.
+ */
+export function lowWeeks(weeks: WeeklyActivity[]): WeeklyActivity[] {
+  const full = weeks.filter((w) => !w.partial);
+  if (full.length < 4) return [];
+  const sorted = full.map((w) => w.new_papers).sort((a, b) => a - b);
+  const threshold = sorted[Math.floor(sorted.length / 2)] / 4;
+  if (threshold <= 0) return [];
+  const start = full.findIndex((w) => w.new_papers >= threshold);
+  return full.slice(start).filter((w) => w.new_papers < threshold);
 }
