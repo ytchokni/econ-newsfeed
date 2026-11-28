@@ -76,7 +76,11 @@ def candidate_key(candidate: dict) -> str:
     owner = f"id:{rid}" if rid is not None else f"name:{_name_key(candidate['name'])}"
     # A directory profile is a recurring source as well as a possible website.
     # Its weekly refresh must not inherit a terminal website-candidate decision.
-    kind = "\ndirectory_profile" if candidate.get("source_kind") == "directory_profile" else ""
+    # A reviewed paid-search bundle likewise gets its own queue row: sharing the
+    # miner's key would overwrite the miner's pending/retry candidate (reason,
+    # urls, evidence) or be blocked by its verdict.
+    source_kind = candidate.get("source_kind")
+    kind = f"\n{source_kind}" if source_kind in {"directory_profile", "searlo_review"} else ""
     return hashlib.sha256(f"{owner}\n{key}{kind}".encode()).hexdigest()
 
 

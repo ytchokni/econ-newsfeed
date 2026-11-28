@@ -353,6 +353,13 @@ A rejected discovery also blocks that URL for the miner (`MiningStore._rejected_
 reads `url_discoveries.status='rejected'`), so reject wrong-person and not-a-homepage
 pages but leave dead pages pending. The admin approve button runs the same guarded
 path (a refused bundle answers 409 with the reason); bulk-approve answers 410.
+A reviewed bundle gets its own queue row (`source_kind='searlo_review'`, its own
+`candidate_key`), so it never overwrites the miner's pending/retry candidate for the
+same site. If the miner already put that researcher+home page in `review`/`rejected`,
+the miner's verdict stands (held as "Candidate already review"). If the miner already
+approved it, our pages that match its approved URLs (same `url_key`) take its exact
+spelling and become existing rows; only the missing pages are inserted, through the
+same preflight. The dry run reads the real queue, so its counts match the apply.
 
 Alternatively, `SITE_MINING_ENABLED=true` schedules the same bounded job inside
 the API hourly and after a scrape. Use one scheduling mechanism at a time. The
