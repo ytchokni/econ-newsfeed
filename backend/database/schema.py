@@ -319,6 +319,26 @@ _TABLE_DEFINITIONS = {
             retry_after_seconds INT DEFAULT NULL
         ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
     """,
+    # Weekly top-5 journal coverage (backend/coverage/top5_job.py), shown on /about.
+    # One row per attempt; status 'failed' rows only throttle boot-time catch-ups.
+    "top5_coverage_runs": """
+        CREATE TABLE IF NOT EXISTS top5_coverage_runs (
+            id INT AUTO_INCREMENT PRIMARY KEY,
+            computed_at DATETIME NOT NULL,
+            status VARCHAR(16) NOT NULL DEFAULT 'ok',
+            error VARCHAR(500) DEFAULT NULL,
+            from_year SMALLINT NOT NULL,
+            until_year SMALLINT NOT NULL,
+            articles INT DEFAULT NULL,
+            observed INT DEFAULT NULL,
+            tracked_articles INT DEFAULT NULL,
+            tracked_observed INT DEFAULT NULL,
+            summary JSON DEFAULT NULL,
+            duration_seconds INT DEFAULT NULL,
+            INDEX idx_computed_at (computed_at),
+            INDEX idx_status_computed_at (status, computed_at)
+        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci
+    """,
     # Paced bio backfill (issue #258): last attempt per researcher, so a HOME
     # page with no usable bio is not sent to the LLM again until it changes.
     "researcher_bio_backfill": """

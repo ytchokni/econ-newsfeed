@@ -233,6 +233,9 @@ def main() -> None:
     mining_parser.add_argument('--max-seconds', type=int, default=None)
     mining_parser.add_argument('--status', action='store_true', help='Read recent runs, queue counts and held candidates; no network requests')
 
+    top5_parser = subparsers.add_parser('top5-coverage', help='Compare top-5 journal articles (Crossref) with our papers; store the result for /about')
+    top5_parser.add_argument('--dry-run', action='store_true', help='Print the summary without storing it')
+    top5_parser.add_argument('--force', action='store_true', help='Run even if a result from the last week is stored')
     searlo_parser = subparsers.add_parser('apply-searlo-review', help='Apply reviewed paid-search (Searlo) discoveries through the miner store; dry run unless --apply')
     searlo_parser.add_argument('--decisions', help='JSON file of reviewed decisions (approve/reject/unsure per discovery)')
     searlo_parser.add_argument('--apply', action='store_true', help='Write: insert URLs / reject discoveries (requires --manifest)')
@@ -291,6 +294,11 @@ def main() -> None:
                 source_limit=args.source_limit, candidate_limit=args.limit,
                 max_requests=args.max_requests, max_seconds=args.max_seconds)
         print(json.dumps(result, ensure_ascii=False, default=str, indent=2))
+    elif args.command == 'top5-coverage':
+        create_tables()
+        from backend.coverage.top5_job import run_top5_coverage_job
+        summary = run_top5_coverage_job(force=args.force or args.dry_run, store=not args.dry_run)
+        print(json.dumps((summary or {}).get('overall'), indent=2))
     elif args.command == 'apply-searlo-review':
         from backend.discovery import searlo_review
         if args.undo:

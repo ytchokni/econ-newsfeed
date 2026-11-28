@@ -82,6 +82,7 @@ from backend.database.researchers import (
     warm_researcher_index,
 )
 from backend.database.users import set_digest_enabled_by_token
+from backend.database.site_stats import get_site_stats
 from backend.database.sitemap import (
     count_sitemap_papers,
     count_sitemap_researchers,
@@ -1563,6 +1564,21 @@ def _build_sitemap_page(kind: str, page: int) -> dict:
             for r in rows
         ]
     }
+
+
+_site_stats_cache = _TTLCache(900)  # 15 minutes
+
+
+@app.get("/api/stats")
+@limiter.limit("30/minute", exempt_when=is_internal)
+def site_stats(request: Request, response: Response):
+    """Aggregate coverage and activity numbers for the About page (no per-item data)."""
+    def _fetch():
+        with connection_scope():
+            return get_site_stats()
+
+    response.headers["Cache-Control"] = "public, max-age=900"
+    return _site_stats_cache.get_or_set(_fetch)
 
 
 @app.get("/api/sitemap")

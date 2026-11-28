@@ -1,18 +1,11 @@
-"""Matching and classification logic of scripts/validate_top5_coverage.py (no network, no DB)."""
+"""Matching and classification logic of backend/coverage/top5_validation.py (no network, no DB)."""
 import gzip
-import importlib.util
 import json
-import sys
 from datetime import date
-from pathlib import Path
 
 import pytest
 
-_SCRIPT = Path(__file__).resolve().parent.parent / "scripts" / "validate_top5_coverage.py"
-_spec = importlib.util.spec_from_file_location("validate_top5_coverage", _SCRIPT)
-v = importlib.util.module_from_spec(_spec)
-sys.modules[_spec.name] = v  # dataclasses look the module up while the class is built
-_spec.loader.exec_module(v)
+import backend.coverage.top5_validation as v
 
 
 # ---------------------------------------------------------------------------

@@ -54,8 +54,8 @@ export default function Header() {
           <span className="hidden sm:inline text-[11px] font-semibold tracking-[0.14em] uppercase text-[var(--muted)]">
             {headerDate}
           </span>
-          <div className="flex items-center gap-[26px]">
-            <nav className="flex gap-[22px] text-[11px] font-semibold tracking-[0.14em] uppercase">
+          <div className="flex items-center gap-3 sm:gap-[26px]">
+            <nav className="flex gap-3 sm:gap-[22px] text-[11px] font-semibold tracking-[0.14em] uppercase">
               <Link
                 href="/"
                 className={`pb-[3px] border-b-2 transition-colors ${
@@ -75,6 +75,16 @@ export default function Header() {
                 }`}
               >
                 Researchers
+              </Link>
+              <Link
+                href="/about"
+                className={`pb-[3px] border-b-2 transition-colors ${
+                  pathname?.startsWith("/about")
+                    ? "text-[var(--ink)] border-[var(--accent)]"
+                    : "text-[var(--muted)] border-transparent hover:text-[var(--ink)]"
+                }`}
+              >
+                About
               </Link>
             </nav>
             {!isLoading && (

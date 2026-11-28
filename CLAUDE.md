@@ -31,6 +31,8 @@ poetry run python -m backend.main classify-jel      # One budgeted JEL batch (bi
 poetry run python -m backend.main classify-jel --until-done  # Repeat batches until nothing is due, a limit is hit, or extraction needs the key
 poetry run python -m backend.main backfill-bios     # Regenerate missing bios from stored HOME pages (paced, budgeted)
 poetry run python -m backend.main discover-domains  # Scan HTML for untrusted domains with paper-like links
+poetry run python -m backend.main top5-coverage [--dry-run] [--force]  # Top-5 journal coverage vs Crossref; stores the /about result
+poetry run python scripts/validate_top5_coverage.py  # Full read-only top-5 audit with miss diagnosis (prod over SSH; --source local)
 
 # Testing & validation
 poetry run python scripts/check_env.py && poetry run pytest && cd app && npx tsc --noEmit && npm run lint && npx jest  # Full suite
@@ -163,6 +165,23 @@ consecutive days. A fix that is merged but still waiting on its `--apply`
 cleanup is listed as one "cleanup pending" line, not a new bug. Claude is
 skipped when nothing new fails.
 
+**About page and top-5 coverage:** `/about` (server-rendered, revalidates every
+15 min) reads `GET /api/stats` (`backend/database/site_stats.py`; cached 15 min
+per worker, aggregates only, not a `DATA_PATHS` endpoint): researchers with an
+active page, papers by status, feed events per UTC week (12 weeks), last crawl,
+and the latest row of `top5_coverage_runs`. That row is written by the weekly
+`top5_coverage` job (`backend/coverage/top5_job.py`, every Sunday 04:30 UTC,
+plus a catch-up 15 min after boot when no result is newer than 8 days and no
+attempt, failed ones included (`status='failed'` rows), was made in 24 h;
+`TOP5_COVERAGE_ENABLED`, default true): Crossref research articles in
+AER/Econometrica/JPE/QJE/REStud since `TOP5_COVERAGE_FROM_YEAR` (2020) are
+matched with the classification of `backend/coverage/top5_validation.py` (the
+library behind `scripts/validate_top5_coverage.py`), but the database is
+streamed and only candidate papers/researchers are kept (~100 MB instead of
+~1 GB; same numbers). About 30 Crossref and 60 anonymous OpenAlex requests a
+run; page views never call Crossref. Keep the page's description of the method
+in sync with the matcher.
+
 **Search engines:** the canonical host is `https://www.econnewsfeed.org`
 (`SITE_URL` on Vercel overrides it). `next.config.mjs` 308-redirects pages on
 `econ-newsfeed.vercel.app` and the apex to it (not `/api/*`, so auth callbacks
@@ -249,6 +268,8 @@ Researcher URLs (DB) → HTMLFetcher (fetch + hash-based change detection)
 | `backend/enrichment/jel_job.py` | Incremental, budgeted JEL classification batch (scheduler job + `classify-jel` CLI) |
 | `backend/enrichment/jel_enrichment.py` | Maps OpenAlex topics to JEL codes (`enrich-jel` CLI; topic fallback for the JEL job) |
 | `backend/enrichment/paper_merge.py` | Deduplicates papers post-extraction |
+| `backend/coverage/top5_job.py` | Weekly top-5 journal coverage (streaming match against Crossref), stored for `/about` |
+| `backend/database/site_stats.py` | `/api/stats` numbers for the About page |
 | `backend/researcher.py` | Researcher data access layer |
 | `backend/config.py` | Env var validation + encoding guard — raises `EnvironmentError` on import if required vars missing |
 | `scripts/check_env.py` | Validates required env vars (used by the check suite) |
@@ -262,7 +283,7 @@ No ORM — direct parameterized SQL via `mysql-connector-python`. All code impor
 
 ### Frontend (Next.js — `app/` directory)
 
-- **Pages**: `/` (newsfeed with filters), `/researchers` (directory), `/researchers/[id]` (detail), `/admin` (password-protected dashboard)
+- **Pages**: `/` (newsfeed with filters), `/researchers` (directory), `/researchers/[id]` (detail), `/about` (method and live coverage numbers), `/admin` (password-protected dashboard)
 - **Data fetching**: SWR hooks with type-safe API client (`lib/api.ts`)
 - **Styling**: Tailwind CSS + Source Serif 4 / DM Sans fonts
 - **Tests**: Jest + React Testing Library (`src/__tests__/`)
