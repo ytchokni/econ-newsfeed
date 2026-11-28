@@ -18,8 +18,15 @@ Decisions come from a JSON file (a list of objects)::
      "evidence": "full name in h1; 2 known titles on /research"}
 
 ``decision`` is ``approve`` or ``reject`` (anything else, e.g. ``unsure``, is
-skipped).  Every applied change is appended to a JSONL manifest, which
-``undo`` uses to delete the inserted URL rows and reopen the discoveries.
+skipped); at most one approve per researcher and home page.  Every applied
+change is appended to a JSONL manifest, which ``undo`` uses to delete the
+inserted URL rows and reopen the discoveries.
+
+Each reviewed bundle has its own queue row (``source_kind='searlo_review'``).
+A hold on that row is permanent: its status stays ``review`` and every later run
+reports "Candidate already review" without re-checking.  After fixing the cause
+(e.g. an inactive URL), delete the row (``scripts/cleanup_searlo_candidates.py
+--steps rekey`` does so for rows left from #299) and re-run.
 """
 from __future__ import annotations
 
@@ -28,6 +35,7 @@ import logging
 import time
 from pathlib import Path
 
+from backend.discovery.mining_policy import url_key
 from backend.discovery.mining_store import MiningStore, candidate_key
 
 logger = logging.getLogger(__name__)
@@ -40,7 +48,7 @@ def load_decisions(path: str | Path) -> list[dict]:
     decisions = json.loads(Path(path).read_text(encoding="utf-8"))
     if not isinstance(decisions, list):
         raise ValueError("decisions file must contain a JSON list")
-    seen = set()
+    seen, sites = set(), set()
     for d in decisions:
         for key in ("discovery_id", "researcher_id", "first_name", "last_name", "decision"):
             if key not in d:
@@ -52,6 +60,13 @@ def load_decisions(path: str | Path) -> list[dict]:
             bundle = d.get("bundle") or []
             if not bundle or any(p.get("page_type") not in _PAGE_TYPES or not p.get("url") for p in bundle):
                 raise ValueError(f"approve decision needs a bundle with page types {sorted(_PAGE_TYPES)}: {d}")
+            home = next((p["url"] for p in bundle if p["page_type"] == "HOME"), bundle[0]["url"])
+            site = (d["researcher_id"], url_key(home))
+            if site in sites:
+                # Both share one queue row; the dry run would approve each, the
+                # apply only the first and hold the second.
+                raise ValueError(f"two approve decisions for researcher {d['researcher_id']} and home page {home}")
+            sites.add(site)
     return decisions
 
 
@@ -68,6 +83,52 @@ def _manifest(manifest, record: dict) -> None:
         manifest.flush()
 
 
+def _miner_candidates(store: MiningStore, rid: int, pages: list[dict]) -> list[dict]:
+    """The miner's own candidates (not ours) for this researcher's home page.
+
+    Read-only, and identical in dry run and apply, so both see the same
+    queue.  A candidate matches when its URL is the bundle's HOME page under
+    the miner's URL normalisation (trailing slash, ``www``, scheme, case).
+    """
+    if "site_mining_candidates" not in store._tables:
+        return []
+    homes = {url_key(p["url"]) for p in pages if p["page_type"] == "HOME"} or {url_key(pages[0]["url"])}
+    rows = store._all("SELECT id,researcher_id,status,url,urls,source_kind FROM site_mining_candidates "
+                      "WHERE researcher_id=%s AND source_kind<>%s", (rid, SOURCE_KIND))
+    found = []
+    for row in rows:
+        if row["researcher_id"] != rid or row["source_kind"] == SOURCE_KIND:
+            continue
+        if url_key(row["url"]) in homes:
+            row = dict(row)
+            if isinstance(row.get("urls"), (str, bytes, bytearray)):
+                row["urls"] = json.loads(row["urls"])
+            found.append(row)
+    return found
+
+
+def _reuse_approved_forms(pages: list[dict], miner: list[dict]) -> tuple[list[dict], bool]:
+    """Spell pages the miner already approved exactly as it stored them.
+
+    The miner's approved bundle was inserted under its own URL spelling; the
+    preflight refuses a differently spelled alias.  Pages that match by the
+    miner's URL normalisation take its spelling (and become existing rows);
+    only pages it did not approve remain to be inserted, still through the
+    full ``approve_bundle`` preflight.
+    """
+    approved = {url_key(p["url"]): p for c in miner if c["status"] == "approved"
+                for p in (c.get("urls") or []) if isinstance(p, dict) and p.get("url")}
+    approved.update({url_key(c["url"]): {"url": c["url"], "page_type": "HOME"}
+                     for c in miner if c["status"] == "approved"})
+    out, reused = [], False
+    for page in pages:
+        known = approved.get(url_key(page["url"]))
+        if known and known["url"] != page["url"]:
+            page, reused = dict(page, url=known["url"]), True
+        out.append(page)
+    return out, reused
+
+
 def apply_decisions(decisions: list[dict], *, apply: bool = False,
                     manifest_path: str | Path | None = None) -> dict:
     """Apply approve/reject decisions; dry run (default) writes nothing."""
@@ -78,7 +139,8 @@ def apply_decisions(decisions: list[dict], *, apply: bool = False,
 
 def _run(decisions: list[dict], *, apply: bool, manifest_path) -> dict:
     stats = {"apply": apply, "approved": 0, "rejected": 0, "held": 0, "skipped": 0,
-             "stale": 0, "urls_inserted": 0, "urls_existing": 0}
+             "stale": 0, "urls_inserted": 0, "urls_existing": 0,
+             "reused_miner_bundle": 0}
     held: list[dict] = []
     manifest = open(manifest_path, "a", encoding="utf-8") if apply and manifest_path else None
     try:
@@ -102,6 +164,17 @@ def _run(decisions: list[dict], *, apply: bool, manifest_path) -> dict:
                     stats["rejected"] += 1
                     continue
                 pages = [{"url": p["url"], "page_type": p["page_type"]} for p in d["bundle"]]
+                miner = _miner_candidates(store, rid, pages)
+                blocked = next((c for c in miner if c["status"] in {"review", "rejected"}), None)
+                if blocked:
+                    # The miner already looked at this researcher's site and its
+                    # verdict stands; a reviewed bundle does not overrule it.
+                    stats["held"] += 1
+                    held.append({"discovery_id": did, "researcher_id": rid,
+                                 "reason": f"Candidate already {blocked['status']}"})
+                    continue
+                pages, reused = _reuse_approved_forms(pages, miner)
+                stats["reused_miner_bundle"] += int(reused)
                 home = next((p["url"] for p in pages if p["page_type"] == "HOME"), pages[0]["url"])
                 name = f"{d['first_name']} {d['last_name']}".strip()
                 cand = {"researcher_id": rid, "name": name, "url": home,
@@ -109,16 +182,23 @@ def _run(decisions: list[dict], *, apply: bool, manifest_path) -> dict:
                         "evidence": {"page_type": "HOME", "searlo_discovery_id": did,
                                      "review": d.get("evidence", "")[:2000]}}
                 store.enqueue(cand)
+                own = store._one("SELECT * FROM site_mining_candidates WHERE candidate_key = %s",
+                                 (candidate_key(cand),)) if "site_mining_candidates" in store._tables else None
+                if own and own["status"] in {"review", "rejected"}:
+                    # Our own earlier attempt was held; report it the same way in
+                    # a dry run as the apply will.
+                    stats["held"] += 1
+                    held.append({"discovery_id": did, "researcher_id": rid,
+                                 "reason": f"Candidate already {own['status']}"})
+                    continue
                 if apply:
-                    current = store._one("SELECT * FROM site_mining_candidates WHERE candidate_key = %s",
-                                         (candidate_key(cand),))
-                    if not current:
+                    if not own:
                         stats["held"] += 1
                         held.append({"discovery_id": did, "reason": "candidate could not be queued"})
                         continue
-                    cand = dict(cand, id=current["id"])
+                    cand = dict(cand, id=own["id"])
                 else:
-                    cand["id"] = -did
+                    cand["id"] = own["id"] if own else -did
                     cand["candidate_key"] = candidate_key(cand)
                     cand["status"] = "pending"
                     cand["attempts"] = 0
@@ -216,7 +296,10 @@ def undo(manifest_path: str | Path, *, apply: bool = False) -> dict:
                     stats["urls_deleted"] += 1
                 if apply:
                     if e["op"] == "approve":
-                        store._execute("UPDATE site_mining_candidates SET status='review',reason=%s WHERE id=%s AND status='approved'",
+                        # Only our own queue row: manifests written before #303 name
+                        # miner rows too, and those must keep the miner's status.
+                        store._execute("UPDATE site_mining_candidates SET status='review',reason=%s "
+                                       "WHERE id=%s AND status='approved' AND source_kind='searlo_review'",
                                        ("Searlo review undone", e["candidate_id"]))
                     store._execute("UPDATE url_discoveries SET status='pending',reviewed_at=NULL WHERE id=%s",
                                    (e["discovery_id"],))

@@ -156,3 +156,161 @@ def test_admin_approve_one_keeps_working_papers_subpage(db, monkeypatch):
         subpages=json.dumps([{"page_type": "working_papers", "url": "https://alice-economist.example/research"}])))
     assert searlo_review.approve_one(11)["approved"] is True
     assert [u["page_type"] for u in db.urls] == ["HOME", "WORKING_PAPERS"]
+
+
+# --- existing miner candidates -------------------------------------------------
+
+HOME = "https://alice-economist.example/"
+RESEARCH = "https://alice-economist.example/research"
+
+
+def miner_candidate(db, cid=50, status="pending", url=HOME, urls=None, kind="cached_link",
+                    reason=None, evidence=None):
+    """A candidate the site miner queued earlier for researcher 7's home page."""
+    key = module.candidate_key({"researcher_id": 7, "url": url, "name": "Alice Economist",
+                                "source_kind": kind})
+    db.candidates[cid] = dict(
+        id=cid, candidate_key=key, researcher_id=7, name="Alice Economist", url=url,
+        source_url="https://source.example/", source_kind=kind, status=status, reason=reason,
+        evidence=json.dumps(evidence or {"miner": "original evidence"}),
+        urls=json.dumps(urls) if urls is not None else None, attempts=1,
+        updated_at=module._utcnow(), next_attempt_at=module._utcnow())
+    return db.candidates[cid]
+
+
+def snapshot(row):
+    return {k: row[k] for k in ("status", "reason", "evidence", "urls", "attempts", "url", "source_kind")}
+
+
+def own_candidates(db):
+    return [c for c in db.candidates.values() if c["source_kind"] == "searlo_review"]
+
+
+def run_both(db, decisions, tmp_path):
+    """Dry run first, then apply: the dry run must predict the apply's counts."""
+    dry = searlo_review.apply_decisions(decisions, apply=False)
+    applied = searlo_review.apply_decisions(decisions, apply=True, manifest_path=tmp_path / "m.jsonl")
+    keys = ("approved", "held", "urls_inserted", "urls_existing", "reused_miner_bundle")
+    assert {k: dry[k] for k in keys} == {k: applied[k] for k in keys}
+    assert [h["reason"] for h in dry["held_details"]] == [h["reason"] for h in applied["held_details"]]
+    return applied
+
+
+@pytest.mark.parametrize("status", ["pending", "retry"])
+def test_miner_pending_candidate_is_not_overwritten(db, tmp_path, status):
+    miner = miner_candidate(db, status=status)
+    before = snapshot(miner)
+    stats = run_both(db, [approve_decision()], tmp_path)
+    assert stats["approved"] == 1 and stats["urls_inserted"] == 2
+    assert snapshot(db.candidates[50]) == before            # reason, urls, evidence, attempts kept
+    [ours] = own_candidates(db)
+    assert ours["id"] != 50 and ours["status"] == "approved"
+    assert [u["url"] for u in db.urls] == [HOME, RESEARCH]
+
+
+def test_own_candidate_key_differs_from_miners():
+    base = {"researcher_id": 7, "url": HOME, "name": "Alice Economist"}
+    assert module.candidate_key(dict(base, source_kind="searlo_review")) != \
+        module.candidate_key(dict(base, source_kind="cached_link"))
+    assert module.candidate_key(dict(base, source_kind="cached_link")) == \
+        module.candidate_key(dict(base, source_kind="known_site"))
+
+
+def test_miner_approved_bundle_is_reused_and_only_missing_pages_added(db, tmp_path):
+    # The miner approved HOME + /research under its own spelling (no trailing slash).
+    miner = miner_candidate(db, status="approved", url="https://alice-economist.example",
+                            urls=[{"url": "https://alice-economist.example", "page_type": "HOME"},
+                                  {"url": RESEARCH, "page_type": "RESEARCH"}], reason="Verified identity")
+    db.urls += [url_row("https://alice-economist.example", identifier=100),
+                url_row(RESEARCH, identifier=101)]
+    before = snapshot(miner)
+    decision = approve_decision(bundle=[
+        {"url": HOME, "page_type": "HOME"},                     # alias of the miner's HOME spelling
+        {"url": RESEARCH, "page_type": "RESEARCH"},
+        {"url": "https://alice-economist.example/papers", "page_type": "PUBLICATIONS"}])
+    stats = run_both(db, [decision], tmp_path)
+    assert stats["approved"] == 1 and stats["held"] == 0 and stats["reused_miner_bundle"] == 1
+    assert stats["urls_inserted"] == 1 and stats["urls_existing"] == 2
+    assert [u["url"] for u in db.urls] == ["https://alice-economist.example", RESEARCH,
+                                           "https://alice-economist.example/papers"]
+    assert snapshot(db.candidates[50]) == before
+    assert db.discoveries[0]["status"] == "approved"
+
+
+def test_reuse_still_goes_through_preflight(db, tmp_path):
+    miner_candidate(db, status="approved", url="https://alice-economist.example",
+                    urls=[{"url": "https://alice-economist.example", "page_type": "HOME"}])
+    db.urls.append(url_row("https://alice-economist.example", identifier=100))
+    db.urls.append(url_row("https://alice-economist.example/papers", rid=8, identifier=101))
+    decision = approve_decision(bundle=[{"url": HOME, "page_type": "HOME"},
+                                        {"url": "https://alice-economist.example/papers", "page_type": "PUBLICATIONS"}])
+    stats = run_both(db, [decision], tmp_path)
+    assert stats["approved"] == 0 and stats["held"] == 1
+    assert "another researcher" in stats["held_details"][0]["reason"]
+    assert db.discoveries[0]["status"] == "pending"
+    assert len(db.urls) == 2
+
+
+@pytest.mark.parametrize("status", ["review", "rejected"])
+@pytest.mark.parametrize("spelling", [HOME, "https://alice-economist.example"])
+def test_miner_review_verdict_is_kept(db, tmp_path, status, spelling):
+    miner = miner_candidate(db, status=status, url=spelling, reason="No corroborating publication titles")
+    before = snapshot(miner)
+    stats = run_both(db, [approve_decision()], tmp_path)
+    assert stats["approved"] == 0 and stats["held"] == 1
+    assert stats["held_details"][0]["reason"] == f"Candidate already {status}"
+    assert snapshot(db.candidates[50]) == before
+    assert not db.urls and not own_candidates(db)
+    assert db.discoveries[0]["status"] == "pending"
+
+
+def test_other_researchers_candidates_are_ignored(db, tmp_path):
+    miner = miner_candidate(db, status="review")
+    miner["researcher_id"] = 8
+    stats = run_both(db, [approve_decision()], tmp_path)
+    assert stats["approved"] == 1
+
+
+def test_own_earlier_hold_is_reported_by_dry_run_and_apply(db, tmp_path):
+    db.urls.append(url_row(RESEARCH, rid=8))
+    first = searlo_review.apply_decisions([approve_decision()], apply=True, manifest_path=tmp_path / "a.jsonl")
+    assert first["held"] == 1 and own_candidates(db)[0]["status"] == "review"
+    db.urls.clear()                                         # the blocker is gone, the hold is ours
+    stats = run_both(db, [approve_decision()], tmp_path)
+    assert stats["held"] == 1 and stats["held_details"][0]["reason"] == "Candidate already review"
+
+
+def test_undo_leaves_miner_candidates_alone(db, tmp_path):
+    miner = miner_candidate(db, status="pending")
+    before = snapshot(miner)
+    manifest = tmp_path / "m.jsonl"
+    searlo_review.apply_decisions([approve_decision()], apply=True, manifest_path=manifest)
+    searlo_review.undo(manifest, apply=True)
+    assert snapshot(db.candidates[50]) == before
+    assert not db.urls and db.discoveries[0]["status"] == "pending"
+
+
+def test_undo_does_not_flip_miner_rows_named_by_an_old_manifest(db, tmp_path):
+    # Manifests written by the first apply (#299) carry the miner's row as candidate_id.
+    miner = miner_candidate(db, status="approved", reason="Verified identity and crawl bundle",
+                            urls=[{"url": HOME, "page_type": "HOME"}])
+    db.urls.append(url_row(HOME))
+    manifest = tmp_path / "old.jsonl"
+    manifest.write_text(json.dumps({"op": "approve", "discovery_id": 11, "researcher_id": 7, "candidate_id": 50,
+                                    "inserted": [{"id": 100, "url": HOME, "page_type": "HOME"}], "existing": []}) + "\n")
+    before = snapshot(miner)
+    searlo_review.undo(manifest, apply=True)
+    assert snapshot(db.candidates[50]) == before
+    assert not db.urls and db.discoveries[0]["status"] == "pending"
+
+
+def test_load_decisions_rejects_two_approvals_for_one_researcher_and_home(tmp_path):
+    other = approve_decision(discovery_id=12, bundle=[{"url": "https://www.alice-economist.example", "page_type": "HOME"}])
+    path = tmp_path / "d.json"
+    path.write_text(json.dumps([approve_decision(), other]))
+    with pytest.raises(ValueError, match="two approve decisions"):
+        searlo_review.load_decisions(path)
+    # A reject for the same site, or an approve for another researcher, is fine.
+    path.write_text(json.dumps([approve_decision(), dict(other, decision="reject"),
+                                dict(other, discovery_id=13, researcher_id=8)]))
+    assert len(searlo_review.load_decisions(path)) == 3
